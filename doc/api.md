@@ -16,6 +16,19 @@ interface WorldOptions {
   headless?:  boolean      // no RAF loop; world.step() drives ticks
   fixedStep?: number       // seconds; default 1/60
   idle?:      boolean      // default true; suspend RAF when no work
+  dev?:       DevOptions
+}
+
+// Dev-only diagnostics; stripped at prod build time.
+interface DevOptions {
+  // Emit on mutation-without-markChanged. Default 'warn' in dev, forced
+  // 'off' in prod. 'throw' is the CI setting.
+  markWarn?:    'warn' | 'throw' | 'off'
+
+  // Emit an info-level hint when markChanged is called but no mutation
+  // was recorded on that entity/type this tick. Off by default — flip on
+  // when profiling. Never fires in prod.
+  markOveruse?: 'hint' | 'off'
 }
 ```
 
@@ -61,6 +74,24 @@ interface World {
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
+  // Dev-only diagnostics surface. In prod, diag.markChanged.* counters
+  // remain addressable but stay at zero. See SPEC §2.9.
+  readonly diag: {
+    markChanged: {
+      mutations:   number               // writes observed by the I-1 proxy this tick
+      marks:       number               // markChanged calls this tick
+      unmarked:    number               // mutations without a corresponding mark
+      overmarked:  number               // marks without a corresponding mutation
+      recent(): ReadonlyArray<{
+        kind:   'unmarked' | 'overmarked'
+        entity: Entity
+        type:   string                  // ComponentType name
+        field?: string                  // for 'unmarked'
+        tick:   number
+      }>
+    }
+  }
+
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
 
@@ -96,9 +127,8 @@ interface World {
   // signals
   //
   // Listener-gated: a signal with no subscribers is a noop — the world skips
-  // the bookkeeping needed to fan out that event. Vanilla users (no adapter,
-  // no observer) pay zero for signals they do not consume. Adapters attach
-  // subscribers and opt in to the cost.
+  // the bookkeeping needed to fan out that event. Users who attach no
+  // subscribers pay zero for signals they do not consume.
   readonly signals: {
     entitySpawned:   Signal<Entity>
     entityDespawned: Signal<Entity>
@@ -450,41 +480,9 @@ interface InspectorOptions {
 
 ---
 
-## `@domecs/svelte`
+## Framework integration
 
-```ts
-function createReactiveWorld(options?: WorldOptions): World & {
-  $entities(query: QueryDef): { entities: EntityView[] }
-}
-```
-
-```svelte
-<script>
-  import { GameEngine, useQuery } from '@domecs/svelte'
-  import { Position, Sprite } from './components'
-
-  const q = useQuery([Position, Sprite])
-</script>
-
-<GameEngine {world} systems={[movement, ai]}>
-  {#each q.entities as e (e.id)}
-    <div style:transform={`translate(${e.Position.x}px, ${e.Position.y}px)`}>…</div>
-  {/each}
-</GameEngine>
-```
-
----
-
-## `@domecs/react`
-
-```tsx
-function createReactWorld(options?: WorldOptions): {
-  world:     World
-  useQuery:  (q: QueryDef) => EntityView[]
-  useEvent:  <T>(t: EventType<T>, fn: (e: T) => void) => void
-  GameEngine: React.FC<{ systems?: SystemRegistration[]; children?: React.ReactNode }>
-}
-```
+v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
 
 ---
 
@@ -543,4 +541,4 @@ world.spawn({
 world.start()
 ```
 
-Note: `world.markChanged` is explicit. Automatic change-detection via `$state` proxies is available in the Svelte adapter; vanilla requires the explicit mark so the core stays proxy-free and worker-ready.
+Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). Prod is proxy-free: `markChanged` is an O(1) ring append. Dev builds piggyback on the I-1 proxy to warn on **mutation-without-mark** (default `'warn'`, configurable to `'throw'` for CI or `'off'` for prototyping) and can optionally hint on **mark-without-mutation** for optimizers (`dev: { markOveruse: 'hint' }`). Counters and a recent-offenders ring live at `world.diag.markChanged` for the inspector or custom dashboards.

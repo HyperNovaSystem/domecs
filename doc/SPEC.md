@@ -26,8 +26,6 @@ domecs/input           — input collector: keyboard, pointer, touch, gamepad
 @domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
 @domecs/persist        — IndexedDB snapshot/restore, autosave, migrations
 @domecs/inspector      — devtools panel, entity browser, time-travel scrubber
-@domecs/svelte         — Svelte 5 reactive adapter
-@domecs/react          — React adapter via useSyncExternalStore
 @domecs/worker         — off-main-thread simulation host (v0.3)
 ```
 
@@ -40,8 +38,6 @@ domecs (core)
  │    ├── @domecs/sprites (depends: core, dom)
  │    └── @domecs/inspector (depends: core, dom; uses core reflection)
  ├── @domecs/persist      (depends: core)
- ├── @domecs/svelte       (depends: core; may use dom)
- ├── @domecs/react        (depends: core; may use dom)
  └── @domecs/worker       (depends: core)
 ```
 
@@ -159,6 +155,32 @@ interface TimeState {
 ### 2.8 PRNG
 
 `world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
+
+### 2.9 Change tracking
+
+`world.markChanged(entity, type)` is the input to `Changed(T)` queries.  It is **explicit**: the core does not auto-detect component mutations.  The contract is the same in dev and prod; the difference is observability.
+
+**Production builds.**  `markChanged` is an O(1) append to a per-archetype dirty ring.  `Changed(T)` reads from the ring at tick start (step 1).  No proxy, no write interception, no per-field version bookkeeping.
+
+**Dev builds.**  The Invariant-I-1 proxy (§2.2) also records writes.  At tick end, before step 8 (poison), the world diffs *recorded mutations* against *recorded marks* and emits two signals:
+
+- **`mutation-without-mark`** (default: `warn`).  A field on a component was written but `markChanged` was not called.  `Changed(T)` will miss this mutation.  Warning payload: `{ entity, type, field, systemName, stackHint }`.  Configurable to `'throw'` for CI, `'off'` for noisy prototyping.
+- **`mark-without-mutation`** (default: `off`).  `markChanged` was called but no mutation was recorded on that entity/type.  Emitted as an *info-level hint* for optimizers hunting wasted marks; never on by default because defensive marking is a valid style.
+
+Both signals also increment counters on `world.diag.markChanged` (`mutations`, `marks`, `unmarked`, `overmarked`, plus a bounded ring of recent offenders).  The inspector (§10) surfaces this tab; custom dashboards can read the same surface without scraping the console.
+
+**Configuration** (see `api.md`, `WorldOptions.dev`):
+
+```ts
+dev?: {
+  markWarn?:    'warn' | 'throw' | 'off'     // default: 'warn' in dev, forced 'off' in prod
+  markOveruse?: 'hint' | 'off'               // default: 'off'
+}
+```
+
+**Invariant (I-2 — explicit marks).**  `Changed(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; the dev-mode diagnostics exist to find them, not to paper over them.
+
+This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
 
 ---
 
@@ -306,18 +328,30 @@ interface WorldSnapshot {
 }
 ```
 
-Snapshot is a **synchronous** operation returning a structurally-cloned object. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies.
+`snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
-### 7.2 Write path
+### 7.2 Autosave — eventually consistent
+
+Autosave is **not** a repeated sync `snapshot()`. It is an incremental, eventually-consistent writer:
 
 ```
-snapshot() [sync, main thread]
-  → write to IndexedDB [async, microtask]
-  → resolve save promise
+per tick:
+  collect dirty archetypes (components with markChanged since last drain)
+  → enqueue a delta batch tagged { tick, archetype, entries }
+drain:
+  writer task [off-tick, microtask or idle]
+    → apply batches to IndexedDB in tick order
+    → commit partial batches atomically per archetype
 ```
 
-Autosave is debounced.
-A snapshot is captured every N ticks; the write is coalesced so two snapshots in the same frame produce one write.
+Consistency guarantees:
+
+- **Per-archetype atomicity.** Within one drained batch, an archetype is written whole or not at all. A partial batch at shutdown is either completed by the next session's writer on restore (if still in the queue) or dropped.
+- **No global coherence.** A persisted world may reflect archetype A at tick T and archetype B at tick T+k, for small k bounded by drain latency. Systems that require cross-archetype invariants across a save boundary must either (a) live in one archetype, or (b) use explicit `snapshot()` for that save point.
+- **Restore is forward-consistent.** `restore()` replays batches in tick order and discards any trailing partial tick, producing a coherent world at the last fully-drained tick.
+- **No tick stall.** Enqueue cost per tick is O(dirty archetypes), not O(entities). The structural clone happens on the writer task, off-tick.
+
+Explicit `snapshot()` remains the way to get a globally coherent world-at-T (manual save, export, determinism tests). Autosave trades global coherence for bounded per-tick cost, and that trade is not user-configurable at v0.1.
 
 ### 7.3 Migrations
 
@@ -442,38 +476,28 @@ The inspector is **not** part of core; production builds omit it.
 
 ---
 
-## 11. Framework adapters
+## 11. Framework integration
 
-Adapters are **opt-in**.  The core tick loop (§4) never calls adapter code.  Adapters layer above the renderer and attach subscribers to the world signals (see `api.md`, `World.signals`), which are listener-gated and cost nothing when unused.  Applications with no adapter pay zero.
+**v0.1 ships no first-party framework adapters.**  Vanilla is the only supported path, the reference implementation, and the shape the rest of the spec is optimized around.
 
-Adapters are also **asymmetric by design**; they are not interchangeable.  Tier labels below are normative.
+The integration surface is:
 
-### 11.1 Tier 1 — `@domecs/svelte` (recommended)
+- `World.signals` (listener-gated, see `api.md`) — subscribe from any reactive system to be notified of entity/component/tick events.
+- `world.markChanged(entity, type)` — explicit change tracking, the input to `Changed(T)` queries.
+- `WorldSnapshot` — structural clone suitable for any store that can hold a plain object.
 
-- `createReactiveWorld(worldOptions)` — wraps component stores in Svelte 5 `$state` proxies.  Mutating `e.Position.x` in a system triggers fine-grained reactivity in any `.svelte` consumer.
-- `<GameEngine>` — lifecycle component.  Registers provided systems, starts the world, tears down on unmount.
-- `useQuery(query)` — reactive entity array.
+Any framework (Svelte, React, Solid, Vue, Lit, or vanilla DOM) can layer on top by subscribing to signals and mapping them into its own reactivity model.  Such integrations are **user code**, not core, not blessed, not versioned in lockstep with DOMECS.
 
-Svelte's runes give fine-grained reactivity at mutation time, with no diff pass and no per-query subscription overhead.  This is the adapter the spec is optimized around.
+### 11.1 Why no adapters in v0.1
 
-### 11.2 Tier 2 — `@domecs/react` (compatibility)
+- **Scope.**  Two adapters × two reactivity models doubles the surface the spec has to defend.  v0.1 picks one path and proves it.
+- **Honesty.**  A Svelte `$state`-wrapped component store is not the same object as a vanilla component instance; systems written against one do not trivially port to the other.  Tiered adapters hid that asymmetry behind a marketing story.
+- **Invariant I-1.**  The cross-tick reference rule (§2.2) is uniform for vanilla.  Adapter-wrapped references introduce per-adapter lifetime questions; deferring them lets the invariant stay simple.
+- **`markChanged` is the API.**  With no "auto-detect in Svelte" alternative, explicit marking is not an ergonomics regression — it is the contract (see §2.9 for the full change-tracking contract and the dev-mode `mutation-without-mark` / `mark-without-mutation` diagnostics).  This closes the `Changed(T)` correctness question by removing the branch where discipline varies.
 
-- `createReactWorld(worldOptions)` — wraps world in a `useSyncExternalStore` store.
-- `useQuery(query)` — returns an array; subscribes the consumer to query-change notifications.
-- `<Entity id={}>` — renders a single entity with per-component subcomponents.
+### 11.2 What ships after v0.1
 
-React integration is **best-effort, not peer with Svelte**.  Known tradeoffs (see `critique.md` §7):
-
-- Reactivity is **coarse-grained**: each `useQuery` subscribes to whole-query change notifications via `useSyncExternalStore`, not per-field mutation.
-- Per-render cost is higher; React's reconciler runs on top of DOMECS's diff.
-- The fine-grained reactive story (`e.Position.x = 100` → one DOM write) does **not** transfer.  React consumers see re-renders at query granularity.
-- Adapter stability: consumers must still honor Invariant I-1 (§2.2); stashing `useQuery` results across ticks without copying fields will be caught by the dev-mode proxy.
-
-React is supported because the ecosystem demands it, not because the shape fits.  Applications that can pick either should pick Svelte.
-
-### 11.3 Tier 0 — vanilla (no adapter)
-
-The DOM renderer is directly usable with no framework.  Most exemplars in `doc/exemplars.md` work in vanilla.  Vanilla incurs no signal bookkeeping, no proxy overhead, and no adapter lifecycle.  It is the fastest path and the reference against which adapter costs are measured.
+Framework adapters are a **post-v0.1 question**, reopened once the core shape has stabilized through at least one exemplar and external users have shown which reactivity mapping is actually needed.  When they ship, they will be separate packages under `@domecs/*` and will honor the same invariants as vanilla — they cannot extend a component reference's lifetime, cannot bypass `markChanged`, and cannot pretend to be free.
 
 ---
 
