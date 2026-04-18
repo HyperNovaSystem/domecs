@@ -2,7 +2,12 @@ import { internal } from './component.js'
 import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
-import { createRng, type Rng, type RngState } from './rng.js'
+import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
+import {
+  cloneSerializable,
+  SNAPSHOT_VERSION,
+  type WorldSnapshot,
+} from './snapshot.js'
 import {
   createScheduler,
   type CompiledSystem,
@@ -60,6 +65,8 @@ export interface World {
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   use(plugin: Plugin, options?: unknown): () => void
   capability<K extends string>(name: K): Capability<K>
+  snapshot(): WorldSnapshot
+  restore(snap: WorldSnapshot): void
 }
 
 export interface WorldOptions {
@@ -88,7 +95,7 @@ interface CompiledQuery {
 
 export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
-  const rand = createRng(seed)
+  let rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
   const bus: EventBus = createEventBus()
@@ -137,7 +144,7 @@ export function createWorld(options: WorldOptions = {}): World {
   let nextQueryId = 0
 
   const EMPTY_ARCH_KEY = ''
-  const emptyArch = ensureArchetype(new Set<string>())
+  let emptyArch = ensureArchetype(new Set<string>())
 
   function archetypeKeyFor(types: Set<string>): string {
     if (types.size === 0) return EMPTY_ARCH_KEY
@@ -622,6 +629,92 @@ export function createWorld(options: WorldOptions = {}): World {
 
     capability<K extends string>(name: K): Capability<K> {
       return plugins.capability(name)
+    },
+
+    snapshot(): WorldSnapshot {
+      const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
+      const sortedAlive = Array.from(alive).sort((a, b) => a - b)
+      for (const id of sortedAlive) {
+        const arch = entityArchetype.get(id)
+        if (!arch) continue
+        const components: Record<string, unknown> = {}
+        for (const name of arch.types) {
+          const type = typeRegistry.get(name)
+          if (type && internal(type).__transient) continue
+          const store = stores.get(name)
+          if (!store) continue
+          const v = store.get(id)
+          if (v !== undefined) components[name] = cloneSerializable(v)
+        }
+        entities.push({ id, components })
+      }
+      let snap: WorldSnapshot = {
+        version: SNAPSHOT_VERSION,
+        seed: rand.seed(),
+        tick: time.tick,
+        entities,
+      }
+      for (const entry of plugins.list()) {
+        if (entry.handle?.onSnapshot) {
+          snap = entry.handle.onSnapshot(snap) as WorldSnapshot
+        }
+      }
+      return snap
+    },
+
+    restore(snap: WorldSnapshot): void {
+      let s = snap
+      for (const entry of plugins.list()) {
+        if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
+      }
+
+      // Wipe world state (preserve plugins, system registrations, signals).
+      alive.clear()
+      stores.clear()
+      archetypes.clear()
+      entityArchetype.clear()
+      tickAdded.clear()
+      tickRemoved.clear()
+      tickChanged.clear()
+      for (const q of queries) {
+        q.matchingArchetypes.clear()
+        q.structuralMembers.clear()
+      }
+      emptyArch = ensureArchetype(new Set<string>())
+
+      // PRNG state + tick.
+      rand = restoreRng(s.seed)
+      time.tick = s.tick
+      time.elapsed = 0
+      time.delta = 0
+      time.scaledDelta = 0
+      time.fixedAccumulator = 0
+      fixedStepCounter = 0
+
+      // Rehydrate entities + components (name-keyed; ComponentType objects
+      // attach lazily when callers mutate via addComponent/markChanged).
+      let maxId = -1
+      for (const rec of s.entities) {
+        alive.add(rec.id)
+        if (rec.id > maxId) maxId = rec.id
+        const types = new Set<string>()
+        for (const [name, value] of Object.entries(rec.components)) {
+          let store = stores.get(name)
+          if (!store) {
+            store = new Map()
+            stores.set(name, store)
+          }
+          store.set(rec.id, cloneSerializable(value))
+          types.add(name)
+        }
+        const arch = ensureArchetype(types)
+        arch.entities.add(rec.id)
+        entityArchetype.set(rec.id, arch)
+        for (const q of queries) {
+          if (q.matchingArchetypes.has(arch)) q.structuralMembers.add(rec.id)
+        }
+      }
+      nextId = maxId + 1
     },
   }
 
