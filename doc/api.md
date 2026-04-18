@@ -122,6 +122,7 @@ interface SystemDef {
   triggers?: EventType<unknown>[]          // event only
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
+  state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)
 }
 
 type System = (ctx: SystemContext) => void
@@ -133,6 +134,7 @@ interface SystemContext {
   events:   EventView
   world:    WorldAPI
   rand:     Rng
+  state:    unknown                        // system-local; read SystemDef.state
 }
 
 interface EntityView {
@@ -146,6 +148,7 @@ interface SystemHandle {
   enable():  void
   disable(): void
   remove():  void
+  replaceFn?(fn: System): void   // dev builds only; SPEC §9.5. Absent in prod.
 }
 
 interface Rng {

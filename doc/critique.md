@@ -1,162 +1,73 @@
-# DOMECS — Critical Evaluation of the Proposal
+# DOMECS — Critical Evaluation, Reconciled Against SPEC v0.1
 
-This is an adversarial reading of `README.md` as of 2026-04-17. The goal is to find the claims that are load-bearing, the claims that are wishful, and the claims that are internally inconsistent — *before* any code is written to defend them.
-
----
-
-## 1. The thesis is strong
-
-> "The DOM already solves layout, text, input, accessibility, and scaling."
-
-This is correct and it is the single most important sentence in the README. Any game genre whose hard problem is *"compose a huge, coherent, responsive, accessible UI over a live simulation"* — management sim, roguelike inventory, visual novel, board game, dashboard, editor — is fighting the wrong battle on canvas. DOMECS is right to lean here.
-
-However, the thesis has **two hidden dependencies** the README does not acknowledge:
-
-1. **Style recalc, not compositing, is usually the bottleneck.** "Sprites are `<div>`s with `background-image` + `transform`" is only GPU-composited if the mutation is confined to `transform` and `opacity`. Toggling classes, changing `background-position` for frame animation, or mutating any layout-affecting property (width, z-index, `display`) drops the element out of the compositor fast-path. The renderer spec must make this policy explicit.
-2. **DOM scales with *visible* elements, not *entities*.** A management sim can easily have 20,000 entities but only render 200 at a time. The README implies a 1:1 entity↔element mapping via `data-entity="…"`. That is wrong for two-thirds of the target genres. The renderer must support **unrendered entities** as a first-class concept.
+This file began as an adversarial reading of `README.md`. On 2026-04-17 it was re-evaluated against `SPEC.md` v0.1 and `api.md`. The original 11-point critique is reduced to a resolution table below; most objections are now baked into the spec. The live material is in *Still open* and *New issues*.
 
 ---
 
-## 2. The `<4KB` core budget is aspirational marketing, not a design constraint
+## 2. Still open from the original read
 
-The reqall context (#1466) carries this target over from `ecs-core`. A realistic component-store + archetype index + query cache + event bus + scheduler + input collector comes to ~8–12 KB min+gzip in TypeScript even with aggressive minification. Keeping it under 4 KB requires cutting features that the README then claims to have (archetype caching, event buffering, scheduling modes, input normalization).
+### 2.1 Snapshot cost at large N
 
-Recommendation: **drop the number from the public spec.** Replace with "tree-shakeable, pay-for-what-you-import." Publish size budgets per module in the package docs and let them be measured, not asserted.
-
----
-
-## 3. The tick order as written has a subtle ordering bug
-
-From the README:
-
-> 1. Collect input → snapshot
-> 2. Flush events buffered last tick
-> 3. Run `fixed` systems (zero or more accumulator steps)
-> 4. Run `tick` systems in priority order
-> 5. Run `event` systems for any events emitted in steps 3–4
-> 6. Renderer diffs and commits to DOM
-
-The problem: `event` systems run in step 5 and can mutate components, but the renderer in step 6 has no opportunity to re-enter the event loop. Any event system that emits a new event leaves it undelivered until next tick's step 2 — which is *fine and deterministic* but contradicts a naive reader's expectation. It must be documented explicitly, and the API must make it impossible to `await` event delivery within a tick.
-
-A second issue: step 5 runs after step 4, so a `tick` system cannot react to an event produced by a `fixed` system in the same tick. That may be desired for determinism but should be stated as a **rule**, not emerge as a surprise.
+SPEC §7.2 defers the *write* off-tick, but `snapshot()` itself remains a main-thread, O(entities × components) structural clone. At the 50k-entity scale flagged in the original §6, the sync snapshot is still the long pole. Candidates: archetype-chunked snapshotting, a streaming `snapshot(entityRange)` variant, or a published per-tick budget ceiling that autosave must respect. Ring-buffer diff snapshots (§7.4) do not solve this — they are about time-travel, not slot writes.
 
 ---
 
-## 4. "Same inputs → same state" is a promise the core cannot keep alone
+## 3. New issues surfaced during SPEC review
 
-Determinism requires:
+These were not in the README so they did not appear in the original critique. They appear now because they live in SPEC/`api.md`.
 
-- A seeded PRNG policy. `Math.random()` is not deterministic; the core must ship `world.rand()` with a documented algorithm (recommend **splitmix64** or **xoshiro128**\*\*) and seed it at world creation.
-- A policy on floating point. JS engines now converge on IEEE-754 semantics, but transcendentals (`Math.sin`, `Math.cos`) are *not* bit-identical across engines. A deterministic world must either avoid them in authoritative systems or ship a fixed-point trig table.
-- A policy on `Date.now()` and `performance.now()`. Authoritative systems see `time.tick` (integer) and `time.scaledDelta` (quantized). Wall-clock is forbidden.
-- A policy on iteration order. `Map`/`Set` are insertion-ordered; `Object.keys` is insertion-ordered for string keys. Archetype storage must not use `WeakMap` or `WeakSet` in the hot path.
+### 3.1 `world.markChanged` is explicit
 
-Without these, "replay, networked rollback, and time-travel debugging all become tractable" is marketing.
+`api.md` Quick-start note states: *"`world.markChanged` is explicit. Automatic change-detection via `$state` proxies is available in the Svelte adapter; vanilla requires the explicit mark so the core stays proxy-free and worker-ready."*
 
----
+Consequence: `Changed(T)` query correctness depends on caller discipline in vanilla and React paths. Miss a `markChanged` call and a dependent reactive system silently no-ops. This is an ergonomics regression vs Svelte and a correctness footgun outside it.
 
-## 5. Retained-mode renderer: the 1:1 mapping is too simple
+*Recommend:* add a dev-mode write-trap that wraps component stores in a proxy (reusing the I-1 machinery) and warns on mutation-without-mark, or downgrade `Changed` to "best-effort outside the Svelte adapter" and say so in §2.4.
 
-> "Each entity with a `Sprite` and `Position` becomes a `<div data-entity="…">`"
+### 3.2 `Signal<T>` subscription shape is undefined
 
-Real games need:
+`World.signals` is declared in `api.md`, but the `Signal<T>` type has no subscribe/unsubscribe surface in the reference. Consumers cannot write an adapter against it as written.
 
-- **Multi-element entities.** An NPC has a portrait, a nameplate, a status icon row, and a speech bubble — four DOM subtrees, one entity.
-- **Layer-aware rendering.** Tooltips sit in a document-level portal. Dialogue choices sit in the `<dialog>` stack. A sprite sits on the stage. Same entity may project into multiple layers.
-- **Unrendered entities.** Items in a merchant's 400-slot inventory, off-screen tiles, cached pathfinding graphs. These are entities but must never mount DOM.
+*Recommend:* declare `interface Signal<T> { subscribe(fn: (e: T) => void): () => void }` (or equivalent) in `api.md`, and state that subscribers run synchronously within the tick phase that emitted the signal.
 
-The renderer spec must model this as **entity → zero-or-more *views*** with named slots, not **entity → element**. Dismiss this now and it metastasizes into an unfixable wart by v0.3.
+### 3.3 Signals × Invariant I-1 is unspecified
 
----
+Can a subscriber stash a component reference received via `componentAdded` or read via `tickStart` and use it at `tickEnd`? The dev-mode proxy (§2.2) poisons at step 8 — does it poison signal-delivered references too? Answering "yes" implies proxy wrapping for signal payloads; "no" means signals carry data/ids only.
 
-## 6. IndexedDB persistence and tick-loop coupling is underspecified
+*Recommend:* state the rule in §2.2 or §9.4. The cheap answer is "signals carry entity id + component type only; consumers re-read via `getComponent` within the same tick." This keeps I-1 uniform.
 
-- IndexedDB transactions are async and auto-close on the next macrotask. A naive snapshot that walks 20k entities while the main thread yields will see a half-mutated world.
-- Autosave every 30 s is fine at 500 entities. At 50k it is a 200 ms jank.
-- Migrations need more than `(from, to, snapshot) => snapshot`. They need per-component codecs, because one component is rarely broken in isolation.
-- "Saves are entity snapshots — components only, no DOM, no closures" forbids storing function references in components, which is good, but also forbids `Map`/`Set` unless the serializer handles them. State this.
+### 3.4 `Where(T, predicate)` cannot be archetype-cached
 
-Recommendation: snapshot takes a **structural clone** of a frozen view of component stores synchronously, then writes to IndexedDB off-tick. Specify this.
+SPEC §2.4 claims queries are archetype-cached. A value-predicate requires O(n) scan over the archetype's entities each tick — no index can satisfy it without a user-provided hash.
 
----
+*Recommend:* note `Where` as O(matching-archetype-entities) in §2.4, and recommend modeling filterable state as a tag component so archetype caching applies. Otherwise users will reach for `Where` in hot paths.
 
-## 7. Svelte and React adapters are not symmetric and should not pretend to be
+### 3.5 `rateHz` vs world-level `fixedStep`
 
-- Svelte 5 runes wrap component stores in `$state` proxies → fine-grained reactivity with zero diffing.
-- React's `useSyncExternalStore` gives one coarse "world changed" notification. Using it per-query means one `useSyncExternalStore` per `useQuery` — workable, but the UX is worse.
+`api.md` `SystemDef.rateHz` implies per-system fixed rates; SPEC §4 step 3 runs *the* fixed accumulator against `TimeState.fixedStep`. If two fixed systems have `rateHz: 60` and `rateHz: 10`, do they share an accumulator (and the 10 Hz one simply runs every 6th step), or do they each carry their own accumulator?
 
-The README lists both as peers. The spec should be honest: **Svelte is the first-class adapter**; React is supported but has a higher per-render cost and loses the fine-grained reactive story.
+*Recommend:* pick one. "Shared accumulator + integer divisor" is simpler, preserves the single `fixedStep` story, and lines up with §8 determinism. Document the rule; reject non-divisor rates at registration time.
 
----
+### 3.6 `Capability<K>` surface is empty
 
-## 8. The plugin interface is too thin
+`api.md` declares `interface Capability<K>` as a marker; SPEC §9.3 says providers expose surfaces. No example shows how. The intent is module augmentation, but unwritten intent is a contract smell.
 
-`(world) => teardown?` is elegant but insufficient for plugins that need:
+*Recommend:* ship one worked example in `api.md` (e.g., `@domecs/physics` augments `Capability<'spatial-index'>` with `query(bounds): Entity[]`) so third-party plugin authors have a template.
 
-- **Schema-level extension** — the inspector needs to know *every* component type at mount.
-- **Lifecycle hooks beyond teardown** — `onTickStart`, `onRender`, `onSnapshot`, `onRestore`.
-- **Plugin-to-plugin dependencies** — physics needs a spatial index; pathfinding needs physics.
+### 3.7 Slot-collision policy unspecified
 
-A plugin is not a function; it is an object with metadata:
+`mountDOM` accepts a `slots` record and `views` keyed to slot names. If two plugins each register a view targeting `slot: 'chrome'`, does the renderer append, replace, or throw? SPEC §5.6 lists the standard slots but not conflict semantics.
 
-```ts
-interface Plugin {
-  name: string
-  depends?: string[]
-  provides?: string[]
-  install(world: World): void | (() => void)
-}
-```
+*Recommend:* append (multiple views per slot are already legal per §5.1 entity→multi-view), and state it in §5.6. Throw only on duplicate slot *mounting*, not on view registration.
 
-Ship this shape on day one; upgrading later breaks every plugin in the ecosystem.
+### 3.8 `reactive` debouncing is underspecified
+
+SPEC §3 calls reactive systems "debounced to tick" and §4 step 6 runs them. Unstated: does the debounce coalesce multiple hits per tick (expected: yes); and if a reactive system mutates state that would re-trigger a reactive system earlier in the priority order, does it fire this tick or next?
+
+*Recommend:* state that (a) multi-hit within a tick coalesces to one invocation per reactive system with a combined delta, and (b) re-triggers caused by step 6 execution are deferred to the next tick's step 6. This matches the event-buffering rule in §2.6 and keeps the tick free of fixed-point iteration.
 
 ---
 
-## 9. "Framework-agnostic" conflicts with "DOM-first"
+## 4. Verdict
 
-The README says framework-agnostic, then specifies a DOM renderer, then claims optional React/Svelte adapters. The actual layering is:
-
-```
-Core (framework-agnostic, renderer-agnostic)
- └─ DOM renderer (DOM-specific, framework-agnostic)
-     ├─ Vanilla (direct)
-     ├─ Svelte adapter (reactive wrapper)
-     └─ React adapter (useSyncExternalStore wrapper)
-```
-
-Getting this right in the module graph *now* avoids a messy v1.0. The spec must publish the dependency DAG.
-
----
-
-## 10. "DOMECS" vs "domecs" vs "Domecs" — pick one
-
-README and package names alternate capitalizations (`DOMECS`, `@DOMECS/persist`, `'DOMECS'` in the import string). npm is case-insensitive-ish but package names are conventionally lowercase-kebab. Decide:
-
-- Display name: **DOMECS**
-- npm name: **domecs**, **@domecs/persist**, etc.
-- Import: **`import {…} from 'domecs'`**
-
-Commit 45b8db9 already aligned the README text; align the code.
-
----
-
-## 11. Missing concerns the README does not mention
-
-- **Testing story.** How does a user test a system without the DOM? There must be a headless world mode.
-- **Hot module reload.** For an engine that targets game dev, HMR on systems and components is table-stakes. Design for it or concede that the inspector covers the gap.
-- **Worker off-loading.** Listed in the roadmap but not in the architecture. Workers change the model: systems become message-passing actors, components must be structured-cloneable. Decide whether Workers are a v1 concern (then they shape the API) or a v2 concern (then document the breaking change expected).
-- **Network rollback.** Listed as "long-term." It is architecturally load-bearing: if the snapshot system isn't rollback-safe on day one, it will never be. Document the invariants the snapshot layer preserves.
-- **Memory ownership.** If components are plain objects and systems mutate them in place, who owns them? The world. Components returned from queries must never be stashed across ticks without a copy.
-
----
-
-## Verdict
-
-The positioning is excellent. The architecture is mostly right. The README is slightly over-promising on four specific axes:
-
-1. **Bundle size** — remove the number.
-2. **Determinism** — define what it costs.
-3. **Renderer model** — upgrade from 1:1 to entity-views.
-4. **Plugin interface** — upgrade from function to object.
-
-All four are cheap to fix *before* code is written, catastrophic to fix *after*. The specification in the rest of `doc/` bakes these corrections in.
+The original load-bearing corrections — bundle size, determinism, renderer model, plugin interface — are all in SPEC v0.1 and `api.md`. Residual risk has migrated from "architecture wrong" to "contract incomplete" and concentrates in three areas: change-tracking ergonomics (`markChanged`, §3.1), the signal surface (§3.2–§3.3), and query-complexity honesty (§3.4). Close those three before the roguelike exemplar lands, or they will calcify.

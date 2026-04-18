@@ -111,6 +111,7 @@ interface SystemContext {
   events:   EventView        // tick-consistent; emit() schedules for next tick
   world:    WorldAPI         // spawn, despawn, component mutation
   rand:     Rng              // seeded per-world PRNG
+  state:    unknown          // system-local slot; see SystemDef.state
 }
 ```
 
@@ -125,8 +126,11 @@ world.system(name, {
   triggers?: EventType[],    // event only
   reactsTo?: QueryDef,       // reactive only
   enabled?:  () => boolean,
+  state?:    unknown,        // system-local; preserved across hot-swap (§9.5)
 }, fn)
 ```
+
+`state` is the system's private slot, readable and writable as `ctx.state` inside `fn`. It is preserved across dev-mode hot-swap (§9.5). It is **not** part of the world snapshot — on `restore()`, systems re-register and `state` resets. Closures over module-scope values are not preserved across hot-swap; swap-durable state must live in `state`.
 
 ### 2.6 Events
 
@@ -405,6 +409,22 @@ Example:
 | `onRestore`   | After snapshot loads, before resume   |
 
 Plugins registered without any hooks fall back to the degenerate `(world) => teardown?` form.
+
+### 9.5 Hot-swap (dev only)
+
+Dev builds expose `SystemHandle.replaceFn(fn: System): void`. It swaps a system's function in place while preserving:
+
+- the `SystemDef` (query, schedule, priority, rateHz, triggers, reactsTo, enabled)
+- the `state` slot (§2.5)
+- the subscription set (archetype caches, event-type subscriptions, reactive query membership)
+
+The swap lands at step 0 of the next tick, never mid-tick. Ordering with other tick-boundary work: hot-swap happens before event-buffer flush (step 1), so the replacement `fn` is the one that observes this tick's events.
+
+If the new `fn`'s intent needs a different `SystemDef` (new query shape, changed `reactsTo`, different `schedule`), the swap is refused with an error; the caller must `remove()` the handle and re-register. The seam does not reconcile shape changes.
+
+Production builds omit `replaceFn` entirely (it is not just a no-op — the method is absent so HMR client code tree-shakes in prod). Worker-hosted systems (§12) never accept hot-swap: system functions are closures, and closures are not structured-cloneable.
+
+DOMECS ships no HMR client itself. `replaceFn` is the seam a bundler's HMR glue (or `@domecs/inspector`'s manual-reload control) invokes. The expected dev-loop shape: the bundler re-evaluates the module, hands the new `fn` to `replaceFn`, and the world keeps its entities, components, time, and PRNG state.
 
 ---
 
