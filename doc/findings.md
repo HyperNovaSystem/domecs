@@ -67,3 +67,29 @@ A 60 Hz world with a "run 60 times per second" physics system actually fires 61 
 Option 3 preserves the SPEC's 1 ms quantization story for user-visible time and removes drift from the scheduler. Recommend it.
 
 **Spec impact.** SPEC §2.7 (quantization rule) + §3 fixed-rate rule + §4 step 3. Tests should exercise a ms-exact `fixedStep` for now.
+
+---
+
+## [F-4] `Not(Has(X))` silently returns true for all entities
+
+**Status:** open — 2026-04-18
+**Surfaced by:** `example/roguelike/src/game.ts` — `enemyCount` helper; initial roguelike test run (2/10 failures).
+
+**Problem.** `api.md` documents `Not<T>(type)` with signature `Not(Player)` (taking a `ComponentType`). But `And(Has(Actor), Not(Has(Player)))` is an extremely natural phrasing — `Not` reads as a predicate combinator the way `Or`/`And` do, not as a shortcut for "without component". Because `Has(Player)` returns a `QueryNode` (not a `ComponentType`), the literal `.type.name` read inside `evalStructural` falls through to `undefined`, and `!types.has(undefined)` is always `true`. The query silently returns every entity that satisfies the sibling clause — no type error at runtime, no loud failure; just wrong counts.
+
+TypeScript *should* reject passing a `QueryNode` where `ComponentType<T>` is expected, but the test harness runs vitest directly (no `tsc --noEmit` in the test command), so the mistake survives into runtime. The roguelike integration tests caught it — unit tests of `Not` alone (passing the documented shape) did not.
+
+**Proposed resolution.** Widen `Not` (and by symmetry `Has`) to accept *either* `ComponentType<T>` or `QueryNode`:
+
+```ts
+export function Not<T>(arg: ComponentType<T> | QueryNode): QueryNode {
+  const inner = 'kind' in arg ? arg : Has(arg)
+  return { kind: 'not', child: inner }
+}
+```
+
+…plus a `not` node shape change from `{ kind: 'not'; type }` to `{ kind: 'not'; child: QueryNode }`, with `evalStructural` / `evalEntity` recursing into the child. This makes `Not(Player)` and `Not(Has(Player))` both valid (and equivalent), matching reader intuition and closing the footgun.
+
+Alternative: keep the narrow signature but add a `tsc --noEmit` typecheck step to the workspace `test` script so miswrites fail loudly in CI. Preferred path is widening + typecheck — runtime forgiveness *and* static guard.
+
+**Spec impact.** `api.md` §`Not` signature; no SPEC normative-text impact.
