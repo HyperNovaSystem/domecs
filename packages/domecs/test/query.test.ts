@@ -61,6 +61,36 @@ describe('query — structural predicates (archetype-cached)', () => {
     expect(q.entities.map((e) => e.id)).toEqual([alive])
   })
 
+  it('Not(Has(T)) is equivalent to Not(T) — predicate-combinator form (SPEC §2.4, F-4)', () => {
+    const world = createWorld()
+    const alive = world.spawn()
+    const dead = world.spawn()
+    world.addComponent(alive, Health, { hp: 10 })
+    world.addComponent(dead, Health, { hp: 0 })
+    world.addComponent(dead, Dead, {})
+    // Both forms must select only `alive`. Pre-fix, Not(Has(Dead)) silently
+    // matched everything because the inner QueryNode had no `.type.name`.
+    const qShortcut = world.query(And(Has(Health), Not(Dead)))
+    const qNested = world.query(And(Has(Health), Not(Has(Dead))))
+    expect(qNested.entities.map((e) => e.id)).toEqual([alive])
+    expect(qNested.entities.map((e) => e.id)).toEqual(qShortcut.entities.map((e) => e.id))
+  })
+
+  it('And/Or accept bare ComponentType as a one-arg shortcut for Has(T) (SPEC §2.4)', () => {
+    const world = createWorld()
+    const a = world.spawn()
+    const b = world.spawn()
+    world.addComponent(a, Position, { x: 0, y: 0 })
+    world.addComponent(a, Velocity, { dx: 1, dy: 0 })
+    world.addComponent(b, Position, { x: 0, y: 0 })
+    // And(Position, Velocity) === And(Has(Position), Has(Velocity))
+    const qAnd = world.query(And(Position, Velocity))
+    expect(qAnd.entities.map((e) => e.id)).toEqual([a])
+    // Or(Position, Velocity) === Or(Has(Position), Has(Velocity))
+    const qOr = world.query(Or(Position, Velocity))
+    expect(qOr.entities.map((e) => e.id).sort()).toEqual([a, b])
+  })
+
   it('Or(A, B) matches either', () => {
     const world = createWorld()
     const a = world.spawn()

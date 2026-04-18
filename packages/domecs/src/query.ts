@@ -2,9 +2,6 @@ import type { ComponentType, Entity } from './types.js'
 
 export type QueryNode =
   | { kind: 'has'; type: ComponentType<unknown> }
-  | { kind: 'not'; type: ComponentType<unknown> }
-  | { kind: 'or'; children: QueryNode[] }
-  | { kind: 'and'; children: QueryNode[] }
   | { kind: 'changed'; type: ComponentType<unknown> }
   | { kind: 'added'; type: ComponentType<unknown> }
   | { kind: 'removed'; type: ComponentType<unknown> }
@@ -13,9 +10,19 @@ export type QueryNode =
       type: ComponentType<unknown>
       predicate: (value: unknown) => boolean
     }
+  | { kind: 'not'; child: QueryNode }
+  | { kind: 'and'; children: QueryNode[] }
+  | { kind: 'or'; children: QueryNode[] }
 
 export type QueryShorthand = ReadonlyArray<ComponentType<unknown>> | QueryNode
 export type QueryDef = QueryShorthand
+
+/**
+ * Argument accepted by predicate combinators (`Not` / `And` / `Or`):
+ * either a `QueryNode` or a bare `ComponentType` (auto-wrapped as `Has(T)`).
+ * SPEC §2.4.
+ */
+export type NodeOrComponent = QueryNode | ComponentType<unknown>
 
 export interface EntityView {
   readonly id: Entity
@@ -29,17 +36,25 @@ export interface QueryResult {
   onRemove(fn: (e: EntityView) => void): () => void
 }
 
+function isQueryNode(arg: NodeOrComponent): arg is QueryNode {
+  return typeof arg === 'object' && arg !== null && 'kind' in arg
+}
+
+function asNode(arg: NodeOrComponent): QueryNode {
+  return isQueryNode(arg) ? arg : Has(arg)
+}
+
 export function Has<T>(type: ComponentType<T>): QueryNode {
   return { kind: 'has', type: type as ComponentType<unknown> }
 }
-export function Not<T>(type: ComponentType<T>): QueryNode {
-  return { kind: 'not', type: type as ComponentType<unknown> }
+export function Not(arg: NodeOrComponent): QueryNode {
+  return { kind: 'not', child: asNode(arg) }
 }
-export function Or(...children: QueryNode[]): QueryNode {
-  return { kind: 'or', children }
+export function Or(...args: NodeOrComponent[]): QueryNode {
+  return { kind: 'or', children: args.map(asNode) }
 }
-export function And(...children: QueryNode[]): QueryNode {
-  return { kind: 'and', children }
+export function And(...args: NodeOrComponent[]): QueryNode {
+  return { kind: 'and', children: args.map(asNode) }
 }
 export function Changed<T>(type: ComponentType<T>): QueryNode {
   return { kind: 'changed', type: type as ComponentType<unknown> }
@@ -77,6 +92,7 @@ export function treeHas(
   if (node.kind === 'or' || node.kind === 'and') {
     return node.children.some((c) => treeHas(c, kinds))
   }
+  if (node.kind === 'not') return treeHas(node.child, kinds)
   return false
 }
 
@@ -91,5 +107,6 @@ export function collectTypesByKind(
   if (node.kind === 'or' || node.kind === 'and') {
     for (const c of node.children) collectTypesByKind(c, kind, out)
   }
+  if (node.kind === 'not') collectTypesByKind(node.child, kind, out)
   return out
 }

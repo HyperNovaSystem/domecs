@@ -10,7 +10,7 @@
   },
   "files": ["src", "README.md"],
   "scripts": {
-    "test": "vitest run",
+    "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"

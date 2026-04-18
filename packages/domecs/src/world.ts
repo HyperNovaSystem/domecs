@@ -191,7 +191,7 @@ export function createWorld(options: WorldOptions = {}): World {
   function evalStructural(node: QueryNode, types: Set<string>): boolean {
     switch (node.kind) {
       case 'has': return types.has(node.type.name)
-      case 'not': return !types.has(node.type.name)
+      case 'not': return !evalStructural(node.child, types)
       case 'or': return node.children.some((c) => evalStructural(c, types))
       case 'and': return node.children.every((c) => evalStructural(c, types))
       case 'added': return types.has(node.type.name)
@@ -204,7 +204,7 @@ export function createWorld(options: WorldOptions = {}): World {
   function evalEntity(node: QueryNode, entity: Entity): boolean {
     switch (node.kind) {
       case 'has': return hasType(entity, node.type.name)
-      case 'not': return !hasType(entity, node.type.name)
+      case 'not': return !evalEntity(node.child, entity)
       case 'or': return node.children.some((c) => evalEntity(c, entity))
       case 'and': return node.children.every((c) => evalEntity(c, entity))
       case 'added': return (tickAdded.get(node.type.name)?.has(entity)) ?? false
@@ -729,5 +729,6 @@ function collectRemovedTypeNames(node: QueryNode, out: Set<string> = new Set()):
   if (node.kind === 'or' || node.kind === 'and') {
     for (const c of node.children) collectRemovedTypeNames(c, out)
   }
+  if (node.kind === 'not') collectRemovedTypeNames(node.child, out)
   return out
 }

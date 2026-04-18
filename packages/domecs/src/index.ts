@@ -40,5 +40,6 @@ export type {
   QueryNode,
   QueryResult,
   QueryShorthand,
+  NodeOrComponent,
   EntityView,
 } from './query.js'
