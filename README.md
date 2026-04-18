@@ -33,7 +33,7 @@ It is trying to be the best engine in the world for games where the **model is t
 - **Archetype-cached queries** with `onAdd` / `onRemove` hooks for O(1) reaction to entity composition changes.
 - **Deterministic scheduling** — tick / fixed-step / once / event-driven systems with explicit priority.
 - **Buffered event bus** — events emitted during a tick are flushed at the start of the next tick, so frame order never depends on system order.
-- **Retained-mode DOM renderer** — mount / update / unmount lifecycle per entity; diffs only changed components.
+- **Retained-mode DOM renderer** — entities are invisible until they match a registered view; views mount / update / unmount per slot and diff only changed components.
 - **Sprite system** — CSS sprite sheets, animated frames, z-ordering, transforms, all driven by components.
 - **IndexedDB persistence** — first-class save/load, autosave, multi-slot, schema migrations, snapshot/restore for undo.
 - **Input collector** — keyboard, mouse, pointer, touch, gamepad normalized into a per-tick input snapshot.
@@ -70,7 +70,7 @@ npm install @DOMECS/inspector   # in-browser entity/component debugger
 
 ```ts
 import { createWorld, defineComponent } from 'DOMECS'
-import { mountDOM } from 'DOMECS/dom'
+import { mountDOM, defineView } from 'DOMECS/dom'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Sprite   = defineComponent<{ sheet: string; frame: number }>('Sprite')
@@ -78,24 +78,42 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
 
 const world = createWorld()
 
+world.use(mountDOM(world, {
+  slots: { stage: document.getElementById('stage')! },
+  views: {
+    sprite: defineView(Sprite, {
+      slot: 'stage',
+      create: () => {
+        const el = document.createElement('div')
+        el.className = 'sprite'
+        return el
+      },
+      update: (el, e) => {
+        el.style.transform = `translate(${e.Position.x}px, ${e.Position.y}px)`
+        el.style.backgroundPosition = `-${e.Sprite.frame * 16}px 0`
+      },
+    }),
+  },
+}))
+
+world.system('movement', { query: [Position, Velocity] }, ({ entities, time }) => {
+  for (const e of entities) {
+    e.Position.x += e.Velocity.dx * time.scaledDelta
+    e.Position.y += e.Velocity.dy * time.scaledDelta
+    world.markChanged(e.id, Position)
+  }
+})
+
 world.spawn({
   Position: { x: 100, y: 100 },
   Velocity: { dx: 1, dy: 0 },
   Sprite:   { sheet: 'hero.png', frame: 0 },
 })
 
-world.system('movement', { query: [Position, Velocity] }, ({ entities, time }) => {
-  for (const e of entities) {
-    e.Position.x += e.Velocity.dx * time.scaledDelta
-    e.Position.y += e.Velocity.dy * time.scaledDelta
-  }
-})
-
-mountDOM(world, document.getElementById('stage')!)
 world.start()
 ```
 
-Each entity with a `Sprite` and `Position` becomes a `<div data-entity="…">` under `#stage`.
+Entities are invisible by default. An entity mounts DOM only when it matches a registered view's query — here, the `sprite` view binds to `Sprite` and projects one element into the `stage` slot. An entity can project zero, one, or many views across slots (`stage`, `hud`, `portal`, `chrome`), or none at all.
 Mutating `e.Position.x` in a system updates `transform: translate(...)` on the next tick — no virtual DOM, no React reconcilation, no canvas redraw.
 
 ---
