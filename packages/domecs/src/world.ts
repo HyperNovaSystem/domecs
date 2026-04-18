@@ -1,6 +1,7 @@
 import { internal } from './component.js'
 import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
 import { emptyInput, type InputSnapshot } from './input.js'
+import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
 import { createRng, type Rng, type RngState } from './rng.js'
 import {
   createScheduler,
@@ -57,6 +58,8 @@ export interface World {
   step(dt?: number): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
+  use(plugin: Plugin, options?: unknown): () => void
+  capability<K extends string>(name: K): Capability<K>
 }
 
 export interface WorldOptions {
@@ -111,6 +114,7 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   let scheduler!: Scheduler
+  let plugins!: ReturnType<typeof createPluginRegistry>
   let fixedStepCounter = 0
   let nextId: Entity = 0
   const alive = new Set<Entity>()
@@ -541,6 +545,9 @@ export function createWorld(options: WorldOptions = {}): World {
       time.elapsed += time.scaledDelta
       time.tick += 1
 
+      // SPEC §9.4 — plugin onTickStart fires at step 0.
+      plugins.callTickStart(world)
+
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
       const eventView = bus.flush()
       if (sigTickStart.size > 0) sigTickStart.emit(time)
@@ -591,6 +598,10 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
+      plugins.callRender(world)
+
+      // SPEC §9.4 — plugin onTickEnd fires at step 8.
+      plugins.callTickEnd(world)
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     },
 
@@ -604,9 +615,18 @@ export function createWorld(options: WorldOptions = {}): World {
       bus.emit(type, payload)
       world.step(dt)
     },
+
+    use(plugin: Plugin, options?: unknown): () => void {
+      return plugins.use(plugin, options)
+    },
+
+    capability<K extends string>(name: K): Capability<K> {
+      return plugins.capability(name)
+    },
   }
 
   scheduler = createScheduler(world.query.bind(world), fixedStep)
+  plugins = createPluginRegistry(world)
 
   return world
 }

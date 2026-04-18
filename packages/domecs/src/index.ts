@@ -24,6 +24,7 @@ export type {
   SystemSchedule,
 } from './scheduler.js'
 export type { Signal } from './signals.js'
+export type { Plugin, PluginHandle, Capability } from './plugin.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'
 export type {
