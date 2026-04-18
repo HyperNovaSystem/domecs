@@ -1,5 +1,6 @@
 export { defineComponent } from './component.js'
 export { createWorld } from './world.js'
+export { defineEvent } from './events.js'
 export { createRng, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'
 export {
@@ -12,7 +13,9 @@ export {
   Changed,
   Where,
 } from './query.js'
-export type { World, WorldOptions } from './world.js'
+export type { World, WorldOptions, WorldSignals } from './world.js'
+export type { EventType, EventView } from './events.js'
+export type { Signal } from './signals.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'
 export type {

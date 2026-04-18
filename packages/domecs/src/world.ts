@@ -1,5 +1,7 @@
 import { internal } from './component.js'
+import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
 import { createRng, type Rng, type RngState } from './rng.js'
+import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, quantizeMs, type TimeState } from './time.js'
 import type { ComponentBag, ComponentType, Entity } from './types.js'
 import {
@@ -11,9 +13,20 @@ import {
   type QueryResult,
 } from './query.js'
 
+export interface WorldSignals {
+  entitySpawned: Signal<Entity>
+  entityDespawned: Signal<Entity>
+  componentAdded: Signal<{ entity: Entity; type: ComponentType<unknown> }>
+  componentRemoved: Signal<{ entity: Entity; type: ComponentType<unknown> }>
+  tickStart: Signal<Readonly<TimeState>>
+  tickEnd: Signal<Readonly<TimeState>>
+}
+
 export interface World {
   readonly rand: Rng
   readonly time: Readonly<TimeState>
+  readonly signals: WorldSignals
+  readonly events: EventView
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -21,6 +34,11 @@ export interface World {
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
+  emit<T>(type: EventType<T>, payload: T): void
+  on<T>(type: EventType<T>, fn: (e: T) => void): () => void
+  setScale(scale: number): void
+  pause(): void
+  resume(): void
   componentTypes(): ComponentType<unknown>[]
   archetype(entity: Entity): ComponentType<unknown>[]
   query(def: QueryDef): QueryResult
@@ -56,6 +74,26 @@ export function createWorld(options: WorldOptions = {}): World {
   const rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
+  const bus: EventBus = createEventBus()
+  let preResumeScale = 1
+
+  const sigEntitySpawned: EmittableSignal<Entity> = createSignal()
+  const sigEntityDespawned: EmittableSignal<Entity> = createSignal()
+  const sigComponentAdded: EmittableSignal<{ entity: Entity; type: ComponentType<unknown> }> =
+    createSignal()
+  const sigComponentRemoved: EmittableSignal<{ entity: Entity; type: ComponentType<unknown> }> =
+    createSignal()
+  const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
+  const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
+
+  const signals: WorldSignals = {
+    entitySpawned: sigEntitySpawned,
+    entityDespawned: sigEntityDespawned,
+    componentAdded: sigComponentAdded,
+    componentRemoved: sigComponentRemoved,
+    tickStart: sigTickStart,
+    tickEnd: sigTickEnd,
+  }
 
   let nextId: Entity = 0
   const alive = new Set<Entity>()
@@ -225,6 +263,12 @@ export function createWorld(options: WorldOptions = {}): World {
     get time() {
       return time
     },
+    get signals() {
+      return signals
+    },
+    get events() {
+      return bus.view()
+    },
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
       alive.add(id)
@@ -245,6 +289,7 @@ export function createWorld(options: WorldOptions = {}): World {
           world.addComponent(id, type, value)
         }
       }
+      sigEntitySpawned.emit(id)
       return id
     },
 
@@ -252,6 +297,13 @@ export function createWorld(options: WorldOptions = {}): World {
       if (!alive.has(entity)) return
       const arch = entityArchetype.get(entity)
       if (arch) {
+        // SPEC §2.10: componentRemoved fires before the bag is released.
+        if (sigComponentRemoved.size > 0) {
+          for (const name of arch.types) {
+            const t = typeRegistry.get(name)
+            if (t) sigComponentRemoved.emit({ entity, type: t })
+          }
+        }
         for (const name of arch.types) {
           recordTick(tickRemoved, name, entity)
           stores.get(name)?.delete(entity)
@@ -270,6 +322,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       entityArchetype.delete(entity)
       alive.delete(entity)
+      sigEntityDespawned.emit(entity)
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {
@@ -292,11 +345,14 @@ export function createWorld(options: WorldOptions = {}): World {
       const nextTypes = currentTypes(entity)
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
+      sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
     },
 
     removeComponent(entity: Entity, type: ComponentType<unknown>): void {
       const s = stores.get(type.name)
       if (!s || !s.has(entity)) return
+      // SPEC §2.10: componentRemoved fires before the store drops the value.
+      sigComponentRemoved.emit({ entity, type })
       s.delete(entity)
       recordTick(tickRemoved, type.name, entity)
       const nextTypes = currentTypes(entity)
@@ -401,6 +457,27 @@ export function createWorld(options: WorldOptions = {}): World {
       return result
     },
 
+    emit<T>(type: EventType<T>, payload: T): void {
+      bus.emit(type, payload)
+    },
+
+    on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
+      return bus.on(type, fn)
+    },
+
+    setScale(scale: number): void {
+      time.scale = scale
+    },
+
+    pause(): void {
+      if (time.scale !== 0) preResumeScale = time.scale
+      time.scale = 0
+    },
+
+    resume(): void {
+      if (time.scale === 0) time.scale = preResumeScale
+    },
+
     step(dt?: number): void {
       // SPEC §4 step 0 — reset per-tick change-detection.
       tickAdded.clear()
@@ -411,6 +488,11 @@ export function createWorld(options: WorldOptions = {}): World {
       time.scaledDelta = quantizeMs(d * time.scale)
       time.elapsed += time.scaledDelta
       time.tick += 1
+      // SPEC §4 step 1 — flush event buffer from last tick into readable view.
+      bus.flush()
+      if (sigTickStart.size > 0) sigTickStart.emit(time)
+      // Systems (steps 2–7) run here in later scheduler work.
+      if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     },
   }
 
