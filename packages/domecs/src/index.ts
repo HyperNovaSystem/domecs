@@ -15,6 +15,14 @@ export {
 } from './query.js'
 export type { World, WorldOptions, WorldSignals } from './world.js'
 export type { EventType, EventView } from './events.js'
+export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js'
+export type {
+  System,
+  SystemContext,
+  SystemDef,
+  SystemHandle,
+  SystemSchedule,
+} from './scheduler.js'
 export type { Signal } from './signals.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'

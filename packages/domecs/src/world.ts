@@ -1,6 +1,16 @@
 import { internal } from './component.js'
 import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
+import { emptyInput, type InputSnapshot } from './input.js'
 import { createRng, type Rng, type RngState } from './rng.js'
+import {
+  createScheduler,
+  type CompiledSystem,
+  type Scheduler,
+  type System,
+  type SystemContext,
+  type SystemDef,
+  type SystemHandle,
+} from './scheduler.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, quantizeMs, type TimeState } from './time.js'
 import type { ComponentBag, ComponentType, Entity } from './types.js'
@@ -27,6 +37,7 @@ export interface World {
   readonly time: Readonly<TimeState>
   readonly signals: WorldSignals
   readonly events: EventView
+  readonly input: InputSnapshot
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -36,6 +47,7 @@ export interface World {
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
+  system(name: string, def: SystemDef, fn: System): SystemHandle
   setScale(scale: number): void
   pause(): void
   resume(): void
@@ -43,6 +55,8 @@ export interface World {
   archetype(entity: Entity): ComponentType<unknown>[]
   query(def: QueryDef): QueryResult
   step(dt?: number): void
+  stepN(n: number, dt?: number): void
+  turn<T>(type: EventType<T>, payload: T, dt?: number): void
 }
 
 export interface WorldOptions {
@@ -76,6 +90,7 @@ export function createWorld(options: WorldOptions = {}): World {
   const time = createTime(fixedStep)
   const bus: EventBus = createEventBus()
   let preResumeScale = 1
+  let input: InputSnapshot = emptyInput()
 
   const sigEntitySpawned: EmittableSignal<Entity> = createSignal()
   const sigEntityDespawned: EmittableSignal<Entity> = createSignal()
@@ -95,6 +110,8 @@ export function createWorld(options: WorldOptions = {}): World {
     tickEnd: sigTickEnd,
   }
 
+  let scheduler!: Scheduler
+  let fixedStepCounter = 0
   let nextId: Entity = 0
   const alive = new Set<Entity>()
   // componentName -> Map<Entity, value>
@@ -256,6 +273,34 @@ export function createWorld(options: WorldOptions = {}): World {
     return arch ? new Set(arch.types) : new Set()
   }
 
+  function isEnabled(s: CompiledSystem): boolean {
+    if (!s.enabled) return false
+    if (s.def.enabled && s.def.enabled() === false) return false
+    return true
+  }
+
+  function eventMatches(s: CompiledSystem, view: EventView): boolean {
+    const triggers = s.def.triggers
+    if (!triggers || triggers.length === 0) return true
+    for (const t of triggers) {
+      if (view.of(t).length > 0) return true
+    }
+    return false
+  }
+
+  function runSystem(s: CompiledSystem, view: EventView): void {
+    const ctx: SystemContext = {
+      entities: s.query ? s.query.entities : [],
+      time,
+      input,
+      events: view,
+      world,
+      rand,
+      state: s.state,
+    }
+    s.fn(ctx)
+  }
+
   const world: World = {
     get rand() {
       return rand
@@ -268,6 +313,9 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     get events() {
       return bus.view()
+    },
+    get input() {
+      return input
     },
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
@@ -478,6 +526,10 @@ export function createWorld(options: WorldOptions = {}): World {
       if (time.scale === 0) time.scale = preResumeScale
     },
 
+    system(name, def, fn): SystemHandle {
+      return scheduler.register(name, def, fn)
+    },
+
     step(dt?: number): void {
       // SPEC §4 step 0 — reset per-tick change-detection.
       tickAdded.clear()
@@ -488,13 +540,73 @@ export function createWorld(options: WorldOptions = {}): World {
       time.scaledDelta = quantizeMs(d * time.scale)
       time.elapsed += time.scaledDelta
       time.tick += 1
+
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
-      bus.flush()
+      const eventView = bus.flush()
       if (sigTickStart.size > 0) sigTickStart.emit(time)
-      // Systems (steps 2–7) run here in later scheduler work.
+
+      // SPEC §4 step 2 — input collection (stub in headless).
+
+      // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
+      if (time.scale !== 0) {
+        time.fixedAccumulator += time.scaledDelta
+        while (time.fixedAccumulator + 1e-12 >= time.fixedStep) {
+          time.fixedAccumulator -= time.fixedStep
+          fixedStepCounter += 1
+          for (const s of scheduler.systemsByMode('fixed')) {
+            if (!isEnabled(s)) continue
+            if (fixedStepCounter % s.fixedDivisor !== 0) continue
+            runSystem(s, eventView)
+          }
+        }
+      }
+
+      // SPEC §3 — `once` systems fire on first tick of world.
+      for (const s of scheduler.systemsByMode('once')) {
+        if (s.ranOnce || !isEnabled(s)) continue
+        runSystem(s, eventView)
+        s.ranOnce = true
+      }
+
+      // SPEC §4 step 4 — tick systems.
+      if (time.scale !== 0) {
+        for (const s of scheduler.systemsByMode('tick')) {
+          if (!isEnabled(s)) continue
+          runSystem(s, eventView)
+        }
+      }
+
+      // SPEC §4 step 5 — event systems for events in this tick's view.
+      for (const s of scheduler.systemsByMode('event')) {
+        if (!isEnabled(s)) continue
+        if (!eventMatches(s, eventView)) continue
+        runSystem(s, eventView)
+      }
+
+      // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
+      for (const s of scheduler.systemsByMode('reactive')) {
+        if (!isEnabled(s) || !s.reactsTo) continue
+        if (s.reactsTo.size === 0) continue
+        runSystem(s, eventView)
+      }
+
+      // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     },
+
+    stepN(n: number, dt?: number): void {
+      for (let i = 0; i < n; i++) world.step(dt)
+    },
+
+    turn<T>(type: EventType<T>, payload: T, dt?: number): void {
+      // SPEC §3 turn-based mode: emit action, advance one tick.
+      // Because events flush at next step's step 1, we emit first then step.
+      bus.emit(type, payload)
+      world.step(dt)
+    },
   }
+
+  scheduler = createScheduler(world.query.bind(world), fixedStep)
 
   return world
 }
