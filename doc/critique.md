@@ -8,10 +8,6 @@ This file began as an adversarial reading of `README.md`. On 2026-04-17 it was r
 
 These were not in the README so they did not appear in the original critique. They appear now because they live in SPEC/`api.md`.
 
-### 2.1 ~~`world.markChanged` is explicit~~ — RESOLVED (SPEC §2.9, 2026-04-17)
-
-Closed by SPEC §2.9 "Change tracking" + Invariant I-2. Production stays proxy-free (O(1) mark append, O(1) `Changed(T)` read). Dev builds reuse the I-1 proxy to warn on **mutation-without-mark** (default `'warn'`, `'throw'` for CI) and can optionally hint on **mark-without-mutation** for optimizers. Counters + recent-offenders ring exposed at `world.diag.markChanged` for the inspector. Not hand-holdy — the contract still requires explicit marking — but bug-hunters and optimizers get loud, actionable feedback.
-
 ### 2.2 `Signal<T>` subscription shape is undefined
 
 `World.signals` is declared in `api.md`, but the `Signal<T>` type has no subscribe/unsubscribe surface in the reference. Consumers cannot write an adapter against it as written.
