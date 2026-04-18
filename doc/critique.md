@@ -8,11 +8,9 @@ This file began as an adversarial reading of `README.md`. On 2026-04-17 it was r
 
 These were not in the README so they did not appear in the original critique. They appear now because they live in SPEC/`api.md`.
 
-### 2.4 `Where(T, predicate)` cannot be archetype-cached
+### ~~2.4 `Where(T, predicate)` cannot be archetype-cached~~ — RESOLVED (SPEC §2.4, 2026-04-18)
 
-SPEC §2.4 claims queries are archetype-cached. A value-predicate requires O(n) scan over the archetype's entities each tick — no index can satisfy it without a user-provided hash.
-
-*Recommend:* note `Where` as O(matching-archetype-entities) in §2.4, and recommend modeling filterable state as a tag component so archetype caching applies. Otherwise users will reach for `Where` in hot paths.
+Closed by SPEC §2.4 "Complexity (normative)": indexed operators (`Has` / `Not` / `Or` / `Added` / `Removed` / `Changed`) are O(matching-entities) amortized via the archetype cache; `Where(T, predicate)` is explicitly called out as unindexed, O(matching-archetype-entities) per tick, and users are directed to model filterable state as a tag component so archetype caching applies.  The "reach for `Where` in hot paths" trap is now labeled in the spec itself.
 
 ### 2.5 `rateHz` vs world-level `fixedStep`
 
@@ -42,4 +40,4 @@ SPEC §3 calls reactive systems "debounced to tick" and §4 step 6 runs them. Un
 
 ## 3. Verdict
 
-The original load-bearing corrections — bundle size, determinism, renderer model, plugin interface — are all in SPEC v0.1 and `api.md`. Residual risk has migrated from "architecture wrong" to "contract incomplete" and now concentrates on query-complexity honesty (§2.4), scheduling arithmetic (§2.5), and renderer slot semantics (§2.7). §2.1 (`markChanged`) is resolved by SPEC §2.9 + Invariant I-2; §2.2 (`Signal<T>` shape) and §2.3 (signals × I-1) are both closed by SPEC §2.10. The remaining open items are mechanical — none of them block the roguelike exemplar, but §2.5 (`rateHz` vs `fixedStep`) should land before a second `fixed` system is written.
+The original load-bearing corrections — bundle size, determinism, renderer model, plugin interface — are all in SPEC v0.1 and `api.md`. Residual risk has migrated from "architecture wrong" to "contract incomplete" and now concentrates on scheduling arithmetic (§2.5), capability-surface conventions (§2.6), renderer slot semantics (§2.7), and reactive debouncing (§2.8). §2.1 (`markChanged`) is resolved by SPEC §2.9 + Invariant I-2; §2.2 (`Signal<T>` shape) and §2.3 (signals × I-1) are both closed by SPEC §2.10; §2.4 (`Where` complexity) is closed by the SPEC §2.4 complexity note. The remaining open items are mechanical — none of them block the roguelike exemplar, but §2.5 (`rateHz` vs `fixedStep`) should land before a second `fixed` system is written.

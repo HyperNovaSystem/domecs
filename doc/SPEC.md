@@ -91,6 +91,8 @@ A query is a composable predicate over component presence and values:
 
 Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
 
+**Complexity (normative).**  `Has` / `Not` / `Or` / `Added` / `Removed` / `Changed` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
+
 Change-detection filters (`Changed`, `Added`, `Removed`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
 
 ### 2.5 System
