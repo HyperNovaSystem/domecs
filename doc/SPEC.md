@@ -224,6 +224,16 @@ Corollary: `componentRemoved` delivers *before* the component's bag is released,
 Priorities disambiguate within a mode.
 Systems registered with the same priority run in **registration order**.
 
+### Fixed-rate rule (normative)
+
+All `fixed` systems share the **single** world-level accumulator driven by `TimeState.fixedStep` (§2.7). `SystemDef.rateHz` does **not** give a system its own accumulator; it is a **subsampling divisor** over the shared fixed step.
+
+Concretely, let `baseHz = 1 / fixedStep` (e.g., 60 for a 16.667 ms step). A system's `rateHz` must satisfy `baseHz % rateHz === 0` — the divisor `d = baseHz / rateHz` must be a positive integer. The system runs on every `d`-th fixed step. Omitting `rateHz` is equivalent to `rateHz = baseHz` (runs every fixed step).
+
+Non-divisor rates are **rejected at `world.system(...)` registration time** with a thrown error. This preserves the single-accumulator determinism story (§8): the tick order in step 3 is fully determined by `fixedStep`, and every `fixed` system's firing schedule is fixed integer-deterministic against that one accumulator.
+
+Rationale: multiple independent accumulators would multiply the state that snapshot/restore (§7) must preserve and would open ordering questions when two systems' steps fall on the same frame. One accumulator + integer divisors keeps the model single-threaded and replayable.
+
 ### Idle suspension
 
 If there are no `tick` or `fixed` systems with non-empty queries, and no events are queued, the RAF loop stops.
@@ -251,7 +261,7 @@ At each tick:
 3. **Run `fixed` systems.** Zero or more steps to catch the accumulator up to scaled time.
 4. **Run `tick` systems.** In priority order.
 5. **Run `event` systems.** For events buffered in step 1. Events emitted during 3–4 were buffered for *next* tick.
-6. **Run `reactive` systems.** For queries that changed in steps 3–5.
+6. **Run `reactive` systems.** For queries that changed in steps 3–5. Debouncing rule (normative): multiple component mutations within one tick that hit the same reactive system's `reactsTo` query **coalesce into one invocation** with a combined delta (the union of added/removed/changed entity sets observed across steps 3–5). A reactive system sees each entity at most once per tick. If a reactive system's execution mutates state that would re-trigger a reactive system earlier in priority order within this same step 6, the re-trigger is **deferred to the next tick's step 6** — the tick does not iterate to a fixed point. This matches the event-buffering rule in §2.6.
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
 8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
 
@@ -325,6 +335,8 @@ Slots are named roots, registered at `mountDOM(world, { slots: {...} })` time. S
 - `chrome` — outside the stage entirely (menus, inventory sidebars).
 
 Applications register custom slots as needed.
+
+**Slot-collision policy (normative).** Slot *mounting* (via `mountDOM({ slots: {...} })`) is exclusive: attempting to mount a second root to an already-mounted slot name **throws** at `mountDOM` call time. View *registration*, by contrast, is additive: any number of views from any number of plugins may target the same slot name, and the renderer **appends** elements into that slot in registration order. This is the same rule as §5.1's entity→zero-or-more-views — multiple views per slot are already legal; §5.6 makes it explicit that cross-plugin overlap is not a conflict. Ordering within a slot is registration order; plugins that care about z-order should stack layers via named sub-slots (e.g., `chrome:menu`, `chrome:toasts`) rather than racing against each other on a shared slot.
 
 ---
 

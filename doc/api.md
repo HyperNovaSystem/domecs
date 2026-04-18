@@ -310,6 +310,40 @@ interface Capability<K extends string> {
 }
 ```
 
+**Capability surface convention (worked example).** `Capability<K>` is a marker; the provider exposes methods by **declaration merging** (TypeScript module augmentation) against the `Capability<K>` for its key. This keeps capability surfaces strongly typed at the consumer without a runtime registry of method signatures.
+
+```ts
+// ── in @domecs/physics ──────────────────────────────────────────────
+declare module 'domecs' {
+  interface Capability<K> {
+    // only augments the K = 'spatial-index' instantiation
+    query: K extends 'spatial-index'
+      ? (bounds: { x: number; y: number; w: number; h: number }) => Entity[]
+      : never
+    nearest: K extends 'spatial-index'
+      ? (x: number, y: number, radius: number) => Entity[]
+      : never
+  }
+}
+
+export const physicsPlugin: Plugin = {
+  name: '@domecs/physics',
+  provides: ['spatial-index'],
+  install(world) {
+    const index = new Quadtree(/* ... */)
+    const cap = world.capability('spatial-index')
+    ;(cap as any).query   = (b) => index.query(b)
+    ;(cap as any).nearest = (x, y, r) => index.nearest(x, y, r)
+  },
+}
+
+// ── in consumer code (e.g., @domecs/pathfinding) ────────────────────
+const hits = world.capability('spatial-index').query({ x: 0, y: 0, w: 64, h: 64 })
+//    ^? Entity[]  — the augmentation makes this fully typed
+```
+
+Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` (or `peerDepends`) and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
+
 ---
 
 ## `domecs/input`
