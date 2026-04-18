@@ -128,7 +128,8 @@ interface World {
   //
   // Listener-gated: a signal with no subscribers is a noop — the world skips
   // the bookkeeping needed to fan out that event. Users who attach no
-  // subscribers pay zero for signals they do not consume.
+  // subscribers pay zero for signals they do not consume. Subscribers run
+  // synchronously in the tick phase that emitted the signal (SPEC §2.10).
   readonly signals: {
     entitySpawned:   Signal<Entity>
     entityDespawned: Signal<Entity>
@@ -140,6 +141,12 @@ interface World {
 }
 
 type Entity = number
+
+// Observation channel returned from `World.signals`. Subscribers fire
+// synchronously in the tick phase that emitted the signal (see SPEC §2.10).
+interface Signal<T> {
+  subscribe(fn: (e: T) => void): () => void   // returns unsubscribe
+}
 
 type ComponentBag = Record<string, unknown>
 // runtime-typed via the ComponentType's `name` as the bag key

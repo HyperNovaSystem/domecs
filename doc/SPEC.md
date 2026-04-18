@@ -182,6 +182,29 @@ dev?: {
 
 This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
 
+### 2.10 Signals
+
+`World.signals` fields are `Signal<T>` instances with this contract:
+
+```ts
+interface Signal<T> {
+  subscribe(fn: (e: T) => void): () => void    // returns unsubscribe
+}
+```
+
+**Synchronous delivery.**  Subscribers run synchronously within the tick phase that emitted the signal — not queued, not microtask-deferred:
+
+- `entitySpawned` / `entityDespawned` / `componentAdded` / `componentRemoved` fire on the call site of the structural change (inside `spawn`, `despawn`, `addComponent`, `removeComponent`).
+- `tickStart` fires inside step 1; `tickEnd` fires inside step 8 (after the Invariant-I-1 proxy is poisoned).
+
+A subscriber that throws propagates to the call site that emitted the signal; the world does not catch.
+
+**Listener-gated.**  A signal with no subscribers does no bookkeeping.  `subscribe` and its returned unsubscribe function are O(1).
+
+**Mutation during delivery.**  Subscribers added or removed during delivery take effect on the *next* emission of that signal.  Re-entrant emission (a subscriber triggers the same signal) delivers synchronously in emission order.
+
+Payload lifetime is governed by Invariant I-1 (§2.2): subscribers must not retain component references obtained via `getComponent` past the tick phase in which the signal fired.
+
 ---
 
 ## 3. Scheduling modes
