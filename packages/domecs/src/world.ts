@@ -1,4 +1,6 @@
 import { internal } from './component.js'
+import { createRng, type Rng, type RngState } from './rng.js'
+import { createTime, quantizeMs, type TimeState } from './time.js'
 import type { ComponentBag, ComponentType, Entity } from './types.js'
 import {
   normalize,
@@ -10,6 +12,8 @@ import {
 } from './query.js'
 
 export interface World {
+  readonly rand: Rng
+  readonly time: Readonly<TimeState>
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -24,7 +28,7 @@ export interface World {
 }
 
 export interface WorldOptions {
-  seed?: number | [number, number, number, number]
+  seed?: number | RngState
   headless?: boolean
   fixedStep?: number
   idle?: boolean
@@ -47,7 +51,12 @@ interface CompiledQuery {
   onRemoveFns: Set<(v: EntityView) => void>
 }
 
-export function createWorld(_options: WorldOptions = {}): World {
+export function createWorld(options: WorldOptions = {}): World {
+  const seed = options.seed ?? 0
+  const rand = createRng(seed)
+  const fixedStep = options.fixedStep ?? 1 / 60
+  const time = createTime(fixedStep)
+
   let nextId: Entity = 0
   const alive = new Set<Entity>()
   // componentName -> Map<Entity, value>
@@ -210,6 +219,12 @@ export function createWorld(_options: WorldOptions = {}): World {
   }
 
   const world: World = {
+    get rand() {
+      return rand
+    },
+    get time() {
+      return time
+    },
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
       alive.add(id)
@@ -386,11 +401,16 @@ export function createWorld(_options: WorldOptions = {}): World {
       return result
     },
 
-    step(_dt?: number): void {
+    step(dt?: number): void {
       // SPEC §4 step 0 — reset per-tick change-detection.
       tickAdded.clear()
       tickRemoved.clear()
       tickChanged.clear()
+      const d = dt ?? 0
+      time.delta = d
+      time.scaledDelta = quantizeMs(d * time.scale)
+      time.elapsed += time.scaledDelta
+      time.tick += 1
     },
   }
 
