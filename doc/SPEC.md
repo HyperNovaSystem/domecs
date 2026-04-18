@@ -1,0 +1,512 @@
+# DOMECS — Specification v0.1 (Draft)
+
+**Status:** Draft. Incorporates the critique in `critique.md` and the exemplar requirements in `exemplars.md`. Source of truth until code ships; README supersedes only where marked.
+
+**Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
+
+---
+
+## 0. Design axioms
+
+1. **The model is the game.**  DOMECS optimizes the ergonomics and performance of simulations that live in structured data, not pixel pipelines.
+2. **The DOM is the renderer.**  Layout, text, input, accessibility, and scaling are delegated to the browser. The engine does not reimplement them.
+3. **Entities are data.**  No classes, no inheritance, no lifecycle methods on entities. Behavior lives in systems.
+4. **Determinism is a contract, not a feature.**  Where DOMECS promises determinism, it pays the cost (PRNG, time quantization, iteration order) everywhere.
+5. **Pay for what you import.**  The core is usable without the renderer.  The renderer is usable without persistence.  Every subsystem ships as its own entry point.
+6. **Worlds are plural.**  `createWorld()` may be called any number of times.  No global mutable state survives between worlds.
+
+---
+
+## 1. Packages and layering
+
+```
+domecs                 — core: World, entities, components, queries, systems, events, time
+domecs/dom             — DOM renderer: views, mounting, diffing
+domecs/input           — input collector: keyboard, pointer, touch, gamepad
+@domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
+@domecs/persist        — IndexedDB snapshot/restore, autosave, migrations
+@domecs/inspector      — devtools panel, entity browser, time-travel scrubber
+@domecs/svelte         — Svelte 5 reactive adapter
+@domecs/react          — React adapter via useSyncExternalStore
+@domecs/worker         — off-main-thread simulation host (v0.3)
+```
+
+### Module dependency DAG
+
+```
+domecs (core)
+ ├── domecs/input         (depends: core)
+ ├── domecs/dom           (depends: core)
+ │    ├── @domecs/sprites (depends: core, dom)
+ │    └── @domecs/inspector (depends: core, dom; uses core reflection)
+ ├── @domecs/persist      (depends: core)
+ ├── @domecs/svelte       (depends: core; may use dom)
+ ├── @domecs/react        (depends: core; may use dom)
+ └── @domecs/worker       (depends: core)
+```
+
+No cycles.  Core is renderer-agnostic; the DOM renderer is framework-agnostic.
+
+### Naming
+
+- Display name: **DOMECS**.
+- npm name: **`domecs`**. Scoped plugins under **`@domecs/…`**.
+- Import: `import { createWorld } from 'domecs'`.
+
+---
+
+## 2. Core model
+
+### 2.1 Entity
+
+An entity is a non-negative integer id.  Ids are never reused within a world's lifetime (monotonic u53).  An entity has no methods; operations go through the world.
+
+### 2.2 Component
+
+A component *type* is defined once via `defineComponent<T>(name, defaults?)`.  Its return value is an opaque `ComponentType<T>` carrying a `Symbol` discriminator and the schema.
+
+A component *instance* is a plain object attached to an entity via `world.addComponent(entity, type, value)`.  Component instances are **mutable in place**; systems write to their fields directly.
+
+Component types are **serializable** by default.  If a schema includes non-clonable fields (functions, Promises, DOM nodes, weak refs), the component must declare itself **transient**, which excludes it from snapshots.
+
+Component instances are **owned by the world**.
+
+**Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
+
+Dev builds enforce I-1 at runtime: component objects handed out of a query are wrapped in a proxy that is **poisoned** at tick-end (step 8), so a stale read in the next tick throws with the entity id and component type at the point of misuse.  Production builds skip the proxy for speed; the contract is the same.
+
+### 2.3 World
+
+A world owns: entities, component stores, archetype index, query cache, system scheduler, event buffer, time state, input state, plugins, and a PRNG.
+
+Worlds are independent.  Two worlds never share mutable state.
+
+### 2.4 Query
+
+A query is a composable predicate over component presence and values:
+
+- `Has(T)` — component type present.
+- `Not(T)` — component type absent.
+- `Or(A, B)` — either.
+- `Changed(T)` — mutated this tick.
+- `Added(T)` — added this tick.
+- `Removed(T)` — removed this tick.
+- `Where(T, predicate)` — component value matches predicate.
+
+Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
+
+Change-detection filters (`Changed`, `Added`, `Removed`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
+
+### 2.5 System
+
+A system is a function receiving a `SystemContext`:
+
+```ts
+type System = (ctx: SystemContext) => void
+
+interface SystemContext {
+  entities: EntityView[]     // query result
+  time:     TimeState        // tick-consistent
+  input:    InputSnapshot    // tick-consistent
+  events:   EventView        // tick-consistent; emit() schedules for next tick
+  world:    WorldAPI         // spawn, despawn, component mutation
+  rand:     Rng              // seeded per-world PRNG
+}
+```
+
+Systems are registered with:
+
+```ts
+world.system(name, {
+  query:     QueryDef,
+  schedule:  'tick' | 'fixed' | 'event' | 'once' | 'reactive',
+  priority?: number,         // lower runs first; default 0
+  rateHz?:   number,         // fixed only
+  triggers?: EventType[],    // event only
+  reactsTo?: QueryDef,       // reactive only
+  enabled?:  () => boolean,
+}, fn)
+```
+
+### 2.6 Events
+
+Events are typed messages.  Emitted events are **buffered** and flushed at step 1 of the next tick.  Event systems see a read-only view of the buffered events that match their `triggers`.
+
+Events never carry live component references; they carry data or entity ids.
+
+An event emitted during an event system's execution is delivered at step 1 of *the next tick* (not the same tick, not the end of the current tick).  This is the rule; it is not a surprise.
+
+### 2.7 Time
+
+```ts
+interface TimeState {
+  tick:          number    // integer, monotonic
+  elapsed:       number    // seconds since world.start()
+  delta:         number    // seconds since last tick
+  scaledDelta:   number    // delta * scale (quantized to ms)
+  scale:         number    // 0 = paused; 1 = real-time
+  fixedStep:     number    // for fixed-schedule systems
+  fixedAccumulator: number // internal
+}
+```
+
+`scale = 0` disables `tick` and `fixed` systems; `event` systems still run (so UI responds to pause-menu events).
+
+### 2.8 PRNG
+
+`world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
+
+---
+
+## 3. Scheduling modes
+
+| Mode       | Fires on                                | Sees                                |
+|------------|-----------------------------------------|-------------------------------------|
+| `once`     | `world.start()` (first tick of world)   | initial input/time                  |
+| `fixed`    | every `fixedStep` of scaled time        | integrated fixed delta              |
+| `tick`     | every render frame                      | scaled delta                        |
+| `event`    | events buffered from previous tick      | event view                          |
+| `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) |
+
+Priorities disambiguate within a mode.
+Systems registered with the same priority run in **registration order**.
+
+### Idle suspension
+
+If there are no `tick` or `fixed` systems with non-empty queries, and no events are queued, the RAF loop stops.
+It resumes on `world.emit()`, input, or `world.start()`.
+
+### Headless mode
+
+`createWorld({ headless: true })` disables RAF. `world.step(deltaSeconds)` advances one tick manually.
+`world.stepN(steps)` advances N ticks. Used by tests, AI search, board game replay, server authority.
+
+### Turn-based mode
+
+Equivalent to headless with a thin driver: `world.turn(action)` emits the action as an event, calls `world.step()`, returns when systems have quiesced.
+Roguelike default.
+
+---
+
+## 4. Tick order (normative)
+
+At each tick:
+
+0. **Reset per-tick state.** Clear change-detection flags (Added/Removed/Changed sets).
+1. **Flush event buffer from last tick.** Events become readable by event systems.
+2. **Collect input.** `InputCollector` snapshots keyboard, pointer, touch, gamepad, focus into `InputSnapshot`.
+3. **Run `fixed` systems.** Zero or more steps to catch the accumulator up to scaled time.
+4. **Run `tick` systems.** In priority order.
+5. **Run `event` systems.** For events buffered in step 1. Events emitted during 3–4 were buffered for *next* tick.
+6. **Run `reactive` systems.** For queries that changed in steps 3–5.
+7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
+8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
+
+Events emitted in steps 5–6 are buffered for next tick.
+
+---
+
+## 5. Renderer (`domecs/dom`)
+
+### 5.1 Views, not elements
+
+An entity projects **zero-or-more views**. A view is a named slot + a renderer function:
+
+```ts
+interface View<T> {
+  slot:    string               // 'stage', 'hud', 'portal', 'inspector'...
+  target?: HTMLElement          // override root
+  create(entity, component): HTMLElement
+  update(el, entity, component, prev): void
+  destroy(el, entity): void
+}
+```
+
+A view is **bound to one or more component types**.
+The renderer registry maps component types to views.
+
+- Sprite view: one element on the `stage` slot.
+- Nameplate view: one element on the `overlay` slot.
+- Tooltip view: one element on the `portal` slot, created on hover event, destroyed on leave.
+
+### 5.2 Unrendered entities are the default
+
+An entity only mounts DOM if it matches at least one registered view's query.
+An entity with no registered view is invisible and costs nothing.
+
+### 5.3 Mount lifecycle
+
+```
+spawn entity
+  → query matches view(s)
+  → onAdd fires
+  → view.create(entity) mounts element into slot
+tick
+  → component changes
+  → view.update(element, entity, prev) on next commit
+despawn or component removal
+  → onRemove fires
+  → view.destroy(element, entity) unmounts
+```
+
+Renderer commits are **batched** per slot. One DOM write per element per tick, regardless of how many components changed.
+
+### 5.4 Style contract
+
+Sprites and stage-slot views should mutate only `transform`, `opacity`, `background-position`, and CSS custom properties.
+Anything else escapes the compositor and is documented as "slow-path."
+
+### 5.5 Virtualization
+
+Renderers may declare `virtualize: true`.
+For such views, the renderer calls a `shouldMount(entity, viewport)` hook before `create()`.
+This supports long sortable tables (`domecs/dom` ships a table-list view for this) and large stage viewports.
+
+### 5.6 Portals and layers
+
+Slots are named roots, registered at `mountDOM(world, { slots: {...} })` time. Standard slots:
+
+- `stage` — game viewport.
+- `hud` — overlaid on stage, ignores stage transform.
+- `portal` — document body-level (tooltips, modals).
+- `chrome` — outside the stage entirely (menus, inventory sidebars).
+
+Applications register custom slots as needed.
+
+---
+
+## 6. Input (`domecs/input`)
+
+- Keyboard: normalized to W3C `code` values; modifier state separated.
+- Pointer: unified mouse/pen/touch via Pointer Events.
+- Gamepad: polled per tick; snapshot includes all connected pads.
+- Focus: active element and whether a text input consumes keys (prevents game keybindings from firing when typing in chat).
+
+`InputSnapshot` is immutable within a tick. Systems read; they do not mutate.
+
+Keybinding layer is *not* part of core — it is a plugin that translates `InputSnapshot` to high-level `Action` events.
+
+---
+
+## 7. Persistence (`@domecs/persist`)
+
+### 7.1 Snapshot
+
+```ts
+interface WorldSnapshot {
+  version:    number
+  seed:       [number, number, number, number]  // PRNG state
+  tick:       number
+  entities:   { id: number; components: Record<string, unknown> }[]
+  meta?:      Record<string, unknown>
+}
+```
+
+Snapshot is a **synchronous** operation returning a structurally-cloned object. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies.
+
+### 7.2 Write path
+
+```
+snapshot() [sync, main thread]
+  → write to IndexedDB [async, microtask]
+  → resolve save promise
+```
+
+Autosave is debounced.
+A snapshot is captured every N ticks; the write is coalesced so two snapshots in the same frame produce one write.
+
+### 7.3 Migrations
+
+```ts
+createPersistence(world, {
+  database: 'my-game',
+  version:  3,
+  codecs:   {
+    Position: {
+      read:  (snap, v) => snap.version >= 2 ? v : { x: v.x / 10, y: v.y / 10 },
+      write: (v) => v,
+    },
+  },
+})
+```
+
+Migrations are per-component, not per-world.
+The codec system allows one component schema to evolve without forcing monolithic world-level migration.
+
+### 7.4 Ring buffer (time-travel)
+
+The inspector (§10) consumes a bounded ring buffer of **diff snapshots**: each entry records only the components that changed since the previous snapshot.
+Memory is `O(changes)` not `O(entities × snapshots)`.
+
+---
+
+## 8. Determinism contract
+
+DOMECS promises:
+
+- **Given identical inputs, seed, and initial snapshot, the post-tick state is bit-identical across engines that correctly implement IEEE-754 arithmetic.**
+
+This relies on:
+
+- `world.rand` is the only PRNG used in authoritative systems.
+- Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
+- Iteration order of queries is deterministic (archetype order, then entity id).
+- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (`domecs/math` ships them as a plugin).
+- `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
+
+The inspector can run an authoritative system in a sandbox and detect violations (PRNG, wall-clock, disallowed trig) by monkey-patching.
+
+---
+
+## 9. Plugins
+
+### 9.1 Shape
+
+```ts
+interface Plugin {
+  name:     string
+  depends?: string[]           // plugin names required
+  provides?: string[]          // capability keys exported (spatial index, etc.)
+  install(world: World): {
+    teardown?:     () => void
+    onTickStart?:  (world: World) => void
+    onTickEnd?:    (world: World) => void
+    onRender?:     (world: World) => void
+    onSnapshot?:   (snap: WorldSnapshot) => WorldSnapshot
+    onRestore?:    (snap: WorldSnapshot) => WorldSnapshot
+  } | void
+}
+```
+
+### 9.2 Registration
+
+```ts
+world.use(plugin, options?)
+```
+
+Plugins install in topological order per `depends`.
+Cycles throw at registration time.
+
+### 9.3 Capability registry
+
+Plugins expose capabilities on `world.capability(name)`.
+Example:
+- `@domecs/physics` provides `spatial-index` → `world.capability('spatial-index').query(bounds)`.
+- `@domecs/pathfinding` depends on `spatial-index`.
+
+### 9.4 Lifecycle plug points
+
+| Hook        | Fires at                                |
+|-------------|------------------------------------------|
+| `onTickStart` | Step 0 of tick                        |
+| `onTickEnd`   | Step 8 of tick                        |
+| `onRender`    | After step 7 commits                  |
+| `onSnapshot`  | Before persist writes                 |
+| `onRestore`   | After snapshot loads, before resume   |
+
+Plugins registered without any hooks fall back to the degenerate `(world) => teardown?` form.
+
+---
+
+## 10. Inspector (`@domecs/inspector`)
+
+A plugin.
+When installed, it:
+- Mounts a side panel (default slot `chrome`, user-overridable).
+- Enumerates all `componentTypes()` and renders a per-entity editor.
+- Subscribes to the snapshot ring buffer; exposes a scrubber.
+- Detects determinism violations (wall-clock reads, `Math.random` calls) via monkey-patching in dev builds.
+- Displays archetype set membership per entity, pinpointing composition churn.
+
+The inspector is **not** part of core; production builds omit it.
+
+---
+
+## 11. Framework adapters
+
+Adapters are **opt-in**.  The core tick loop (§4) never calls adapter code.  Adapters layer above the renderer and attach subscribers to the world signals (see `api.md`, `World.signals`), which are listener-gated and cost nothing when unused.  Applications with no adapter pay zero.
+
+Adapters are also **asymmetric by design**; they are not interchangeable.  Tier labels below are normative.
+
+### 11.1 Tier 1 — `@domecs/svelte` (recommended)
+
+- `createReactiveWorld(worldOptions)` — wraps component stores in Svelte 5 `$state` proxies.  Mutating `e.Position.x` in a system triggers fine-grained reactivity in any `.svelte` consumer.
+- `<GameEngine>` — lifecycle component.  Registers provided systems, starts the world, tears down on unmount.
+- `useQuery(query)` — reactive entity array.
+
+Svelte's runes give fine-grained reactivity at mutation time, with no diff pass and no per-query subscription overhead.  This is the adapter the spec is optimized around.
+
+### 11.2 Tier 2 — `@domecs/react` (compatibility)
+
+- `createReactWorld(worldOptions)` — wraps world in a `useSyncExternalStore` store.
+- `useQuery(query)` — returns an array; subscribes the consumer to query-change notifications.
+- `<Entity id={}>` — renders a single entity with per-component subcomponents.
+
+React integration is **best-effort, not peer with Svelte**.  Known tradeoffs (see `critique.md` §7):
+
+- Reactivity is **coarse-grained**: each `useQuery` subscribes to whole-query change notifications via `useSyncExternalStore`, not per-field mutation.
+- Per-render cost is higher; React's reconciler runs on top of DOMECS's diff.
+- The fine-grained reactive story (`e.Position.x = 100` → one DOM write) does **not** transfer.  React consumers see re-renders at query granularity.
+- Adapter stability: consumers must still honor Invariant I-1 (§2.2); stashing `useQuery` results across ticks without copying fields will be caught by the dev-mode proxy.
+
+React is supported because the ecosystem demands it, not because the shape fits.  Applications that can pick either should pick Svelte.
+
+### 11.3 Tier 0 — vanilla (no adapter)
+
+The DOM renderer is directly usable with no framework.  Most exemplars in `doc/exemplars.md` work in vanilla.  Vanilla incurs no signal bookkeeping, no proxy overhead, and no adapter lifecycle.  It is the fastest path and the reference against which adapter costs are measured.
+
+---
+
+## 12. Worker host (`@domecs/worker`, v0.3 target)
+
+Design implications locked in at v0.1 so the core stays compatible:
+
+- Component values must be structured-cloneable.
+- Systems must not close over DOM references.
+- `emit()` and `world.spawn()` work across the Worker boundary via message passing.
+- The renderer runs on the main thread; simulation runs in the worker; snapshots are passed by structured clone (or SharedArrayBuffer where available).
+
+v0.1 does not ship Workers but does not block them.
+
+---
+
+## 13. Bundle size
+
+There is no fixed-byte target in this specification.
+Each published package measures and publishes its own min+gzip size.
+
+---
+
+## 14. Testing
+
+- Core and persistence must have full feature coverage.
+- Every exemplar in `doc/exemplars.md` has a corresponding `examples/` project that CI builds and smoke-tests.
+- Determinism is tested by running two worlds in parallel with identical seed+inputs and asserting byte-identical snapshots.
+- Renderer is tested via `@testing-library/dom`.
+
+Headless mode (§3) makes system tests fast and framework-free.
+
+---
+
+## 15. Versioning and stability
+
+- v0.x: unstable. APIs may change between minor versions. Breaking changes called out in CHANGELOG.
+- v1.0: API freeze for `domecs`, `domecs/dom`, `@domecs/persist`. Other packages may lag.
+- Deprecations: minimum two minor releases of warning with a migration guide.
+
+---
+
+## 16. Non-goals
+
+- Twin-stick or bullet-hell action games — DOMECS is the wrong tool.
+- 3D — use a real 3D engine; DOMECS may complement it by hosting UI.
+- Server-authoritative networking with lockstep — planned via worker + rollback (v1+), not at v0.1.
+- A visual DSL or editor as a required tool — DOMECS Studio (exemplar #6) is optional.
+
+---
+
+## 17. Cross-references
+
+- `critique.md` — design flaws in the README proposal and the corrections applied here.
+- `exemplars.md` — six applications whose requirements shaped v0.1.
+- `api.md` — concrete type and function signatures (next document).
