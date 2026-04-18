@@ -79,19 +79,29 @@ Worlds are independent.  Two worlds never share mutable state.
 
 ### 2.4 Query
 
-A query is a composable predicate over component presence and values:
+A query is a composable predicate over component presence and values. Queries are built from two kinds of nodes (normative):
 
-- `Has(T)` — component type present.
-- `Not(T)` — component type absent.
-- `Or(A, B)` — either.
-- `Changed(T)` — mutated this tick.
-- `Added(T)` — added this tick.
-- `Removed(T)` — removed this tick.
-- `Where(T, predicate)` — component value matches predicate.
+**Component shortcuts** carry a single `ComponentType` and produce a leaf node:
+
+- `Has(T)` — component type present on the entity.
+- `Changed(T)` — `markChanged(e, T)` was called in the previous tick.
+- `Added(T)` — component type was added in the previous tick.
+- `Removed(T)` — component type was removed in the previous tick.
+- `Where(T, predicate)` — component is present and `predicate(value)` is true.
+
+**Predicate combinators** carry one or more child `QueryNode`s and compose them:
+
+- `Not(node)` — true when `node` is false. Unary.
+- `And(...nodes)` — true when every child is true. N-ary.
+- `Or(...nodes)` — true when any child is true. N-ary.
+
+The combinators MUST also accept a bare `ComponentType` as a one-arg shortcut for `Has(T)`, so that `Not(Player) ≡ Not(Has(Player))`, `And(Position, Velocity) ≡ And(Has(Position), Has(Velocity))`, etc. This is purely an ergonomic widening; the produced `QueryNode` is identical in either form.
+
+A node MUST be well-formed: its runtime payload must match its declared `kind`. Engine implementations MUST reject a node whose payload disagrees with its kind (statically via a discriminated union; in dev builds, additionally at runtime). A combinator presented with neither a `QueryNode` nor a `ComponentType` is a contract violation, not a constant-true predicate.
 
 Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
 
-**Complexity (normative).**  `Has` / `Not` / `Or` / `Added` / `Removed` / `Changed` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
+**Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `Added` / `Removed` / `Changed` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
 Change-detection filters (`Changed`, `Added`, `Removed`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
 

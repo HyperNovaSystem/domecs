@@ -204,24 +204,33 @@ interface Rng {
 ```ts
 type QueryDef = QueryNode
 
+// Component shortcuts carry a single ComponentType and produce a leaf node.
+// Predicate combinators (Not / And / Or) carry child QueryNodes.
 type QueryNode =
   | { kind: 'has';      type: ComponentType<unknown> }
-  | { kind: 'not';      type: ComponentType<unknown> }
-  | { kind: 'or';       children: QueryNode[] }
-  | { kind: 'and';      children: QueryNode[] }
   | { kind: 'changed';  type: ComponentType<unknown> }
   | { kind: 'added';    type: ComponentType<unknown> }
   | { kind: 'removed';  type: ComponentType<unknown> }
   | { kind: 'where';    type: ComponentType<unknown>; predicate: (v: unknown) => boolean }
+  | { kind: 'not';      child: QueryNode }
+  | { kind: 'and';      children: QueryNode[] }
+  | { kind: 'or';       children: QueryNode[] }
 
+// Component shortcuts: take a ComponentType, produce a leaf node.
 function Has<T>(t: ComponentType<T>): QueryNode
-function Not<T>(t: ComponentType<T>): QueryNode
-function Or(...nodes: QueryNode[]): QueryNode
-function And(...nodes: QueryNode[]): QueryNode
 function Changed<T>(t: ComponentType<T>): QueryNode
 function Added<T>(t: ComponentType<T>): QueryNode
 function Removed<T>(t: ComponentType<T>): QueryNode
 function Where<T>(t: ComponentType<T>, p: (v: T) => boolean): QueryNode
+
+// Predicate combinators: take child QueryNodes, OR a bare ComponentType as a
+// one-arg shortcut for Has(T). `Not(Player)` and `Not(Has(Player))` are
+// equivalent; `And(Position, Velocity)` and `And(Has(Position), Has(Velocity))`
+// are equivalent.
+type NodeOrComponent = QueryNode | ComponentType<unknown>
+function Not(arg: NodeOrComponent): QueryNode
+function And(...args: NodeOrComponent[]): QueryNode
+function Or(...args: NodeOrComponent[]): QueryNode
 
 // shorthand: a plain array is sugar for And(Has(A), Has(B), ...)
 type QueryShorthand = ComponentType<unknown>[] | QueryNode
