@@ -1,0 +1,18 @@
+{
+  "name": "domecs-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "DOMECS — ECS-driven DOM game engine. Workspace root.",
+  "packageManager": "pnpm@10.30.2",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r --parallel test",
+    "build": "pnpm -r --parallel build",
+    "typecheck": "pnpm -r --parallel typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9",
+    "@types/node": "^22.10.1"
+  }
+}
