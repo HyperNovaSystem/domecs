@@ -8,12 +8,6 @@ This file began as an adversarial reading of `README.md`. On 2026-04-17 it was r
 
 These were not in the README so they did not appear in the original critique. They appear now because they live in SPEC/`api.md`.
 
-### 2.3 Signals × Invariant I-1 is unspecified
-
-Can a subscriber stash a component reference received via `componentAdded` or read via `tickStart` and use it at `tickEnd`? The dev-mode proxy (§2.2) poisons at step 8 — does it poison signal-delivered references too? Answering "yes" implies proxy wrapping for signal payloads; "no" means signals carry data/ids only.
-
-*Recommend:* state the rule in §2.2 or §9.4. The cheap answer is "signals carry entity id + component type only; consumers re-read via `getComponent` within the same tick." This keeps I-1 uniform.
-
 ### 2.4 `Where(T, predicate)` cannot be archetype-cached
 
 SPEC §2.4 claims queries are archetype-cached. A value-predicate requires O(n) scan over the archetype's entities each tick — no index can satisfy it without a user-provided hash.
@@ -48,4 +42,4 @@ SPEC §3 calls reactive systems "debounced to tick" and §4 step 6 runs them. Un
 
 ## 3. Verdict
 
-The original load-bearing corrections — bundle size, determinism, renderer model, plugin interface — are all in SPEC v0.1 and `api.md`. Residual risk has migrated from "architecture wrong" to "contract incomplete" and now concentrates on signals × I-1 (§2.3) and query-complexity honesty (§2.4). §2.1 (`markChanged`) is resolved by SPEC §2.9 + Invariant I-2; §2.2 (`Signal<T>` shape) is resolved by SPEC §2.10. Close §2.3 before the roguelike exemplar lands, or it will calcify.
+The original load-bearing corrections — bundle size, determinism, renderer model, plugin interface — are all in SPEC v0.1 and `api.md`. Residual risk has migrated from "architecture wrong" to "contract incomplete" and now concentrates on query-complexity honesty (§2.4), scheduling arithmetic (§2.5), and renderer slot semantics (§2.7). §2.1 (`markChanged`) is resolved by SPEC §2.9 + Invariant I-2; §2.2 (`Signal<T>` shape) and §2.3 (signals × I-1) are both closed by SPEC §2.10. The remaining open items are mechanical — none of them block the roguelike exemplar, but §2.5 (`rateHz` vs `fixedStep`) should land before a second `fixed` system is written.

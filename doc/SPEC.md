@@ -203,7 +203,9 @@ A subscriber that throws propagates to the call site that emitted the signal; th
 
 **Mutation during delivery.**  Subscribers added or removed during delivery take effect on the *next* emission of that signal.  Re-entrant emission (a subscriber triggers the same signal) delivers synchronously in emission order.
 
-Payload lifetime is governed by Invariant I-1 (§2.2): subscribers must not retain component references obtained via `getComponent` past the tick phase in which the signal fired.
+**Payload rule (normative).**  Signal payloads carry only entity ids, component *types*, and plain time data — never component references.  A subscriber that needs component state calls `world.getComponent(entity, Type)` within the same tick phase.  This keeps Invariant I-1 (§2.2) uniform: signals introduce no new reference-lifetime rules, and the dev-mode poisoned proxy does not need to wrap signal payloads.  Component references obtained via `getComponent` inside a subscriber are tick-scoped exactly as they would be inside a system — the step-8 poisoning applies to them without special-casing the signal site.
+
+Corollary: `componentRemoved` delivers *before* the component's bag is released, so a subscriber may still call `getComponent(entity, type)` and receive the outgoing snapshot within that same phase.  After the emitting call site returns, the component is gone.
 
 ---
 
