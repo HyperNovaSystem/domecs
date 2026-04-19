@@ -18,7 +18,7 @@ import {
   type SystemHandle,
 } from './scheduler.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
-import { createTime, quantizeMs, type TimeState } from './time.js'
+import { createTime, type TimeState } from './time.js'
 import type { ComponentBag, ComponentType, Entity } from './types.js'
 import {
   normalize,
@@ -123,6 +123,10 @@ export function createWorld(options: WorldOptions = {}): World {
   let scheduler!: Scheduler
   let plugins!: ReturnType<typeof createPluginRegistry>
   let fixedStepCounter = 0
+  // F-3: drift-free fixed-step driver.
+  let totalScaledSeconds = 0
+  let fixedStepsFired = 0
+  let lastQuantizedElapsedMs = 0
   let nextId: Entity = 0
   const alive = new Set<Entity>()
   // componentName -> Map<Entity, value>
@@ -134,10 +138,18 @@ export function createWorld(options: WorldOptions = {}): World {
   const archetypes = new Map<string, ArchetypeBucket>()
   const entityArchetype = new Map<Entity, ArchetypeBucket>()
 
-  // per-tick change sets (reset in step())
+  // per-tick change sets (live during the current tick).
   const tickAdded = new Map<string, Set<Entity>>()
   const tickRemoved = new Map<string, Set<Entity>>()
   const tickChanged = new Map<string, Set<Entity>>()
+  // Pending change sets for mutations made outside any tick.
+  // SPEC §2.5 / F-2: between-tick markChanged calls land here, then are
+  // promoted into the per-tick maps at step 0 of the next tick — symmetric
+  // with the §2.6 event buffer-and-swap.
+  const pendingAdded = new Map<string, Set<Entity>>()
+  const pendingRemoved = new Map<string, Set<Entity>>()
+  const pendingChanged = new Map<string, Set<Entity>>()
+  let inTick = false
 
   // queries
   const queries: CompiledQuery[] = []
@@ -241,13 +253,34 @@ export function createWorld(options: WorldOptions = {}): World {
     return view as EntityView
   }
 
-  function recordTick(map: Map<string, Set<Entity>>, name: string, entity: Entity): void {
-    let s = map.get(name)
+  function recordChange(
+    tickMap: Map<string, Set<Entity>>,
+    pendingMap: Map<string, Set<Entity>>,
+    name: string,
+    entity: Entity,
+  ): void {
+    const target = inTick ? tickMap : pendingMap
+    let s = target.get(name)
     if (!s) {
       s = new Set()
-      map.set(name, s)
+      target.set(name, s)
     }
     s.add(entity)
+  }
+
+  function drainInto(
+    src: Map<string, Set<Entity>>,
+    dst: Map<string, Set<Entity>>,
+  ): void {
+    for (const [name, set] of src) {
+      let d = dst.get(name)
+      if (!d) {
+        d = new Set()
+        dst.set(name, d)
+      }
+      for (const e of set) d.add(e)
+    }
+    src.clear()
   }
 
   function storeFor<T>(type: ComponentType<T>): Map<Entity, T> {
@@ -364,7 +397,7 @@ export function createWorld(options: WorldOptions = {}): World {
           }
         }
         for (const name of arch.types) {
-          recordTick(tickRemoved, name, entity)
+          recordChange(tickRemoved, pendingRemoved, name, entity)
           stores.get(name)?.delete(entity)
         }
         // fire onRemove hooks for queries this entity was in
@@ -400,7 +433,7 @@ export function createWorld(options: WorldOptions = {}): World {
         ? ({ ...(internal(type).__defaults as object), ...(value as object) } as T)
         : value
       store.set(entity, merged)
-      recordTick(tickAdded, type.name, entity)
+      recordChange(tickAdded, pendingAdded, type.name, entity)
       const nextTypes = currentTypes(entity)
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
@@ -413,7 +446,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // SPEC §2.10: componentRemoved fires before the store drops the value.
       sigComponentRemoved.emit({ entity, type })
       s.delete(entity)
-      recordTick(tickRemoved, type.name, entity)
+      recordChange(tickRemoved, pendingRemoved, type.name, entity)
       const nextTypes = currentTypes(entity)
       nextTypes.delete(type.name)
       moveEntity(entity, nextTypes)
@@ -428,7 +461,7 @@ export function createWorld(options: WorldOptions = {}): World {
     markChanged<T>(entity: Entity, type: ComponentType<T>): void {
       // register type into registry even if caller only marks
       storeFor(type)
-      recordTick(tickChanged, type.name, entity)
+      recordChange(tickChanged, pendingChanged, type.name, entity)
     },
 
     componentTypes(): ComponentType<unknown>[] {
@@ -542,74 +575,96 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     step(dt?: number): void {
-      // SPEC §4 step 0 — reset per-tick change-detection.
+      // SPEC §4 step 0 — reset per-tick change-detection, then promote
+      // any between-tick (pending) marks into the live sets (F-2).
       tickAdded.clear()
       tickRemoved.clear()
       tickChanged.clear()
+      drainInto(pendingAdded, tickAdded)
+      drainInto(pendingRemoved, tickRemoved)
+      drainInto(pendingChanged, tickChanged)
+
       const d = dt ?? 0
+      const scaledDt = d * time.scale
+      // F-3: accumulate unquantized scaled time, then derive ms-quantized
+      // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
+      // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
+      totalScaledSeconds += scaledDt
+      const newQuantizedMs = Math.round(totalScaledSeconds * 1000)
+      const dtMs = newQuantizedMs - lastQuantizedElapsedMs
+      lastQuantizedElapsedMs = newQuantizedMs
       time.delta = d
-      time.scaledDelta = quantizeMs(d * time.scale)
-      time.elapsed += time.scaledDelta
+      time.scaledDelta = dtMs / 1000
+      time.elapsed = newQuantizedMs / 1000
       time.tick += 1
 
-      // SPEC §9.4 — plugin onTickStart fires at step 0.
-      plugins.callTickStart(world)
+      inTick = true
+      try {
+        // SPEC §9.4 — plugin onTickStart fires at step 0.
+        plugins.callTickStart(world)
 
-      // SPEC §4 step 1 — flush event buffer from last tick into readable view.
-      const eventView = bus.flush()
-      if (sigTickStart.size > 0) sigTickStart.emit(time)
+        // SPEC §4 step 1 — flush event buffer from last tick into readable view.
+        const eventView = bus.flush()
+        if (sigTickStart.size > 0) sigTickStart.emit(time)
 
-      // SPEC §4 step 2 — input collection (stub in headless).
+        // SPEC §4 step 2 — input collection (stub in headless).
 
-      // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-      if (time.scale !== 0) {
-        time.fixedAccumulator += time.scaledDelta
-        while (time.fixedAccumulator + 1e-12 >= time.fixedStep) {
-          time.fixedAccumulator -= time.fixedStep
-          fixedStepCounter += 1
-          for (const s of scheduler.systemsByMode('fixed')) {
+        // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
+        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
+        // in per-tick scaledDelta does not entangle the scheduler.
+        if (time.scale !== 0) {
+          const expected = Math.floor(totalScaledSeconds / time.fixedStep + 1e-9)
+          while (fixedStepsFired < expected) {
+            fixedStepsFired += 1
+            fixedStepCounter += 1
+            for (const s of scheduler.systemsByMode('fixed')) {
+              if (!isEnabled(s)) continue
+              if (fixedStepCounter % s.fixedDivisor !== 0) continue
+              runSystem(s, eventView)
+            }
+          }
+          time.fixedAccumulator =
+            totalScaledSeconds - fixedStepsFired * time.fixedStep
+        }
+
+        // SPEC §3 — `once` systems fire on first tick of world.
+        for (const s of scheduler.systemsByMode('once')) {
+          if (s.ranOnce || !isEnabled(s)) continue
+          runSystem(s, eventView)
+          s.ranOnce = true
+        }
+
+        // SPEC §4 step 4 — tick systems.
+        if (time.scale !== 0) {
+          for (const s of scheduler.systemsByMode('tick')) {
             if (!isEnabled(s)) continue
-            if (fixedStepCounter % s.fixedDivisor !== 0) continue
             runSystem(s, eventView)
           }
         }
-      }
 
-      // SPEC §3 — `once` systems fire on first tick of world.
-      for (const s of scheduler.systemsByMode('once')) {
-        if (s.ranOnce || !isEnabled(s)) continue
-        runSystem(s, eventView)
-        s.ranOnce = true
-      }
-
-      // SPEC §4 step 4 — tick systems.
-      if (time.scale !== 0) {
-        for (const s of scheduler.systemsByMode('tick')) {
+        // SPEC §4 step 5 — event systems for events in this tick's view.
+        for (const s of scheduler.systemsByMode('event')) {
           if (!isEnabled(s)) continue
+          if (!eventMatches(s, eventView)) continue
           runSystem(s, eventView)
         }
+
+        // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
+        for (const s of scheduler.systemsByMode('reactive')) {
+          if (!isEnabled(s) || !s.reactsTo) continue
+          if (s.reactsTo.size === 0) continue
+          runSystem(s, eventView)
+        }
+
+        // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
+        plugins.callRender(world)
+
+        // SPEC §9.4 — plugin onTickEnd fires at step 8.
+        plugins.callTickEnd(world)
+        if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+      } finally {
+        inTick = false
       }
-
-      // SPEC §4 step 5 — event systems for events in this tick's view.
-      for (const s of scheduler.systemsByMode('event')) {
-        if (!isEnabled(s)) continue
-        if (!eventMatches(s, eventView)) continue
-        runSystem(s, eventView)
-      }
-
-      // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
-      for (const s of scheduler.systemsByMode('reactive')) {
-        if (!isEnabled(s) || !s.reactsTo) continue
-        if (s.reactsTo.size === 0) continue
-        runSystem(s, eventView)
-      }
-
-      // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
-      plugins.callRender(world)
-
-      // SPEC §9.4 — plugin onTickEnd fires at step 8.
-      plugins.callTickEnd(world)
-      if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     },
 
     stepN(n: number, dt?: number): void {
@@ -676,6 +731,9 @@ export function createWorld(options: WorldOptions = {}): World {
       tickAdded.clear()
       tickRemoved.clear()
       tickChanged.clear()
+      pendingAdded.clear()
+      pendingRemoved.clear()
+      pendingChanged.clear()
       for (const q of queries) {
         q.matchingArchetypes.clear()
         q.structuralMembers.clear()
@@ -690,6 +748,9 @@ export function createWorld(options: WorldOptions = {}): World {
       time.scaledDelta = 0
       time.fixedAccumulator = 0
       fixedStepCounter = 0
+      totalScaledSeconds = 0
+      fixedStepsFired = 0
+      lastQuantizedElapsedMs = 0
 
       // Rehydrate entities + components (name-keyed; ComponentType objects
       // attach lazily when callers mutate via addComponent/markChanged).

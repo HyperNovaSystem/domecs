@@ -140,6 +140,8 @@ world.system(name, {
 
 `state` is the system's private slot, readable and writable as `ctx.state` inside `fn`. It is preserved across dev-mode hot-swap (§9.5). It is **not** part of the world snapshot — on `restore()`, systems re-register and `state` resets. Closures over module-scope values are not preserved across hot-swap; swap-durable state must live in `state`.
 
+**Between-tick mutations.** Component mutations and `markChanged` calls made *outside* a running system (e.g. from input callbacks or signal handlers between `step()` calls) are buffered and become visible to systems at the *next* tick — see §2.9 buffer-and-swap rule. Reactive systems thus observe both in-tick and between-tick marks uniformly, separated only by tick boundaries.
+
 ### 2.6 Events
 
 Events are typed messages.  Emitted events are **buffered** and flushed at step 1 of the next tick.  Event systems see a read-only view of the buffered events that match their `triggers`.
@@ -153,16 +155,24 @@ An event emitted during an event system's execution is delivered at step 1 of *t
 ```ts
 interface TimeState {
   tick:          number    // integer, monotonic
-  elapsed:       number    // seconds since world.start()
-  delta:         number    // seconds since last tick
-  scaledDelta:   number    // delta * scale (quantized to ms)
+  elapsed:       number    // seconds since world.start() (ms-quantized)
+  delta:         number    // seconds since last tick (raw, unquantized)
+  scaledDelta:   number    // ms-quantized; see drift-free rule below
   scale:         number    // 0 = paused; 1 = real-time
   fixedStep:     number    // for fixed-schedule systems
-  fixedAccumulator: number // internal
+  fixedAccumulator: number // internal; remainder of unquantized scaled time
 }
 ```
 
 `scale = 0` disables `tick` and `fixed` systems; `event` systems still run (so UI responds to pause-menu events).
+
+**Drift-free quantization rule (normative).** `scaledDelta` is ms-quantized so that the snapshot wire format and replay reproduce per-frame values exactly across machines. The quantization, however, MUST NOT entangle the fixed-step scheduler (§3 / §4 step 3): per-frame ms rounding accumulates ~2 % drift per second at non-ms-exact `fixedStep` values such as `1/60`. The implementation MUST therefore:
+
+1. Maintain an internal cumulative *unquantized* scaled-time total.
+2. Derive each tick's `scaledDelta` from the difference between the cumulative total's ms-rounded value and the previous tick's ms-rounded value (so per-tick `scaledDelta` is ms-aligned, but the running total is exact).
+3. Drive the fixed-step accumulator off the unquantized cumulative total (so the count of fixed steps fired in any time window equals `floor(cumulative / fixedStep)`, with no rounding drift).
+
+Result: `scaledDelta` keeps its §7 wire-format guarantee, and a `fixed` system at `rateHz = baseHz` fires exactly `N` times in `N * fixedStep` seconds of scaled time — at any `fixedStep`, ms-exact or not.
 
 ### 2.8 PRNG
 
@@ -193,6 +203,10 @@ dev?: {
 **Invariant (I-2 — explicit marks).**  `Changed(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; the dev-mode diagnostics exist to find them, not to paper over them.
 
 This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
+
+**Buffer-and-swap rule (normative).** `markChanged`, `addComponent`, `removeComponent`, and `despawn` may be called *outside* a running system — between `step()` calls, from signal handlers, from input callbacks, from plugin lifecycle hooks. Such between-tick writes MUST be captured into a *pending* set distinct from the live tick set, and promoted into the live set at step 0 of the next tick. This is symmetric with the event buffer (§2.6): both sources land in pending storage between ticks and are made visible at the start of the next tick.
+
+The implementation maintains an `inTick` flag for the duration of steps 1–8: writes during a tick land in the live set (visible to step 6 reactive systems within the same tick); writes outside a tick land in the pending set (visible to next tick's step 6). Step 0 first clears the live set, then drains pending into it. As a corollary, a between-tick `markChanged` call and a step-3-system `markChanged` call are observationally indistinguishable to a reactive system one tick later — only the timing of the surrounding `step()` call separates them.
 
 ### 2.10 Signals
 
@@ -242,6 +256,8 @@ Concretely, let `baseHz = 1 / fixedStep` (e.g., 60 for a 16.667 ms step). A syst
 
 Non-divisor rates are **rejected at `world.system(...)` registration time** with a thrown error. This preserves the single-accumulator determinism story (§8): the tick order in step 3 is fully determined by `fixedStep`, and every `fixed` system's firing schedule is fixed integer-deterministic against that one accumulator.
 
+The accumulator MUST follow the §2.7 drift-free rule: it advances against the unquantized cumulative scaled-time total, not against the per-tick ms-quantized `scaledDelta`. This guarantees that an `N`-Hz system fires exactly `N` times in `N * fixedStep` seconds at every `fixedStep`, ms-exact or not (e.g., `1/60`).
+
 Rationale: multiple independent accumulators would multiply the state that snapshot/restore (§7) must preserve and would open ordering questions when two systems' steps fall on the same frame. One accumulator + integer divisors keeps the model single-threaded and replayable.
 
 ### Idle suspension
@@ -265,7 +281,7 @@ Roguelike default.
 
 At each tick:
 
-0. **Reset per-tick state.** Clear change-detection flags (Added/Removed/Changed sets).
+0. **Reset per-tick state.** Clear the live Added/Removed/Changed sets, then drain pending between-tick writes into them (per §2.9 buffer-and-swap rule). After this step, the live sets contain exactly the structural changes / `markChanged` calls that occurred since the previous tick's step 0, regardless of whether they came from systems or external callers.
 1. **Flush event buffer from last tick.** Events become readable by event systems.
 2. **Collect input.** `InputCollector` snapshots keyboard, pointer, touch, gamepad, focus into `InputSnapshot`.
 3. **Run `fixed` systems.** Zero or more steps to catch the accumulator up to scaled time.

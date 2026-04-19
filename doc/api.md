@@ -72,6 +72,9 @@ interface World {
   addComponent<T>(entity: Entity, type: ComponentType<T>, value: T): void
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
+  // May be called inside or outside a running system. Between-tick calls are
+  // buffered and promoted into the live change-detection set at the next
+  // step()'s step 0 — symmetric with event buffering. See SPEC §2.9.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
   // Dev-only diagnostics surface. In prod, diag.markChanged.* counters
@@ -272,10 +275,16 @@ interface TimeState {
   tick:             number   // integer, monotonic
   elapsed:          number   // seconds since start
   delta:            number   // seconds this tick
-  scaledDelta:      number   // delta * scale, quantized to ms
+  scaledDelta:      number   // ms-quantized; per-tick rounded from the
+                             // engine's unquantized cumulative scaled-time
+                             // total (drift-free). See SPEC §2.7.
   scale:            number   // 0 = paused
-  fixedStep:        number   // seconds per fixed tick
-  fixedAccumulator: number
+  fixedStep:        number   // seconds per fixed tick; the fixed-step driver
+                             // advances against the unquantized cumulative
+                             // total, so an N-Hz system fires exactly N
+                             // times per N*fixedStep seconds at any
+                             // fixedStep — including 1/60.
+  fixedAccumulator: number   // remainder of unquantized scaled time
 }
 ```
 

@@ -149,11 +149,14 @@ describe('query — structural predicates (archetype-cached)', () => {
 })
 
 describe('query — change-detection filters (tick-scoped)', () => {
-  it('Added(T) reports adds since last tick; clears on world.step()', () => {
+  // SPEC §2.5 / F-2: between-tick mutations land in a pending set and are
+  // promoted into the live tick set at step 0 — symmetric with §2.6 events.
+  it('Added(T) reports adds since last tick; clears after one step', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
     const q = world.query(Added(Position))
+    world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()
     expect(q.size).toBe(0)
@@ -164,22 +167,26 @@ describe('query — change-detection filters (tick-scoped)', () => {
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
     world.step()
+    world.step()
     world.removeComponent(a, Position)
     const q = world.query(Removed(Position))
+    world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()
     expect(q.size).toBe(0)
   })
 
-  it('Changed(T) reports markChanged calls this tick', () => {
+  it('Changed(T) reports markChanged calls; visible after promotion', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
+    world.step()
     world.step()
     const pos = world.getComponent(a, Position)!
     pos.x = 5
     world.markChanged(a, Position)
     const q = world.query(Changed(Position))
+    world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()
     expect(q.size).toBe(0)

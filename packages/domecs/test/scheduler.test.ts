@@ -137,6 +137,14 @@ describe('system scheduler — `fixed` mode', () => {
     expect(sim).toBe(25)
   })
 
+  it('fires exactly N times per N seconds at fixedStep=1/60 (no quantization drift, F-3)', () => {
+    const w = createWorld({ fixedStep: 1 / 60 })
+    let phys = 0
+    w.system('physics', { schedule: 'fixed' }, () => phys++)
+    for (let i = 0; i < 60; i++) w.step(1 / 60)
+    expect(phys).toBe(60)
+  })
+
   it('fixed systems do not run while paused (scale = 0)', () => {
     const w = createWorld()
     let n = 0
@@ -148,6 +156,28 @@ describe('system scheduler — `fixed` mode', () => {
 })
 
 describe('system scheduler — `reactive` mode', () => {
+  it('observes markChanged calls made between ticks (SPEC §2.5, F-2)', () => {
+    // Buffer-and-swap: external markChanged calls land in a pending set
+    // that is promoted into this tick at step 0 — symmetric with §2.6 events.
+    const w = createWorld()
+    let calls = 0
+    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    w.system(
+      'react',
+      { schedule: 'reactive', reactsTo: Changed(Position) },
+      () => {
+        calls++
+      },
+    )
+    w.step(0.016)
+    expect(calls).toBe(0)
+    w.markChanged(e, Position)
+    w.step(0.016)
+    expect(calls).toBe(1)
+    w.step(0.016)
+    expect(calls).toBe(1)
+  })
+
   it('fires once in the same tick when a tick system marks changes', () => {
     // SPEC §4: reactive systems at step 6 observe mutations made during
     // steps 3–5 of the same tick. Tick-scoped sets are cleared at step 0
