@@ -1,0 +1,26 @@
+{
+  "name": "domecs-dom",
+  "version": "0.1.0-alpha.0",
+  "description": "DOMECS renderer: views, slots, mount lifecycle, batched DOM commits (SPEC §5).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "README.md"],
+  "scripts": {
+    "test": "tsc --noEmit && vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "domecs": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  }
+}
