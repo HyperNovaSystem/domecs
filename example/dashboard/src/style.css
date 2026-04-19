@@ -1,0 +1,216 @@
+:root {
+  --bg: #0a0e14;
+  --panel: #10161f;
+  --panel-edge: #1d2838;
+  --ink: #dce3ea;
+  --dim: #5e6d80;
+  --accent: #7cc6ff;
+  --warn: #ffb648;
+  --danger: #ff5d64;
+  --ok: #60e196;
+  --pressure-lo: #2a6b8b;
+  --pressure-hi: #ff5d64;
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 14px 18px;
+}
+
+header {
+  max-width: 1040px;
+  margin: 0 auto 14px;
+}
+
+header h1 {
+  margin: 0 0 3px;
+  font-size: 16px;
+  letter-spacing: 0.05em;
+}
+
+header p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+header code {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    'stage hud'
+    'chrome chrome';
+  gap: 14px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+#stage {
+  grid-area: stage;
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  height: 420px;
+  overflow: hidden;
+}
+
+#hud {
+  grid-area: hud;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+#chrome {
+  grid-area: chrome;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* stage visuals */
+.ground {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 40px;
+  background: repeating-linear-gradient(45deg, #0b121a, #0b121a 6px, #101821 6px, #101821 12px);
+  border-top: 1px solid #1d2838;
+}
+
+.platform {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  height: 10px;
+  background: linear-gradient(#9fb4c7, #56697c);
+  border: 1px solid #1d2838;
+  box-shadow: 0 2px 0 #1d2838;
+}
+
+.cylinder {
+  position: absolute;
+  bottom: 40px;
+  width: 44px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+}
+
+.cylinder .barrel {
+  width: 28px;
+  height: 150px;
+  background: #1a2533;
+  border: 1px solid #2a3a4f;
+  border-radius: 3px 3px 0 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.cylinder .piston {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  background: linear-gradient(#c0cdd9, #6d7e90);
+  border-top: 1px solid #dfe9f1;
+  transition: height 60ms linear;
+}
+
+.cylinder .rod {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  background: #8594a3;
+  transition: height 60ms linear;
+}
+
+.cylinder .label {
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+.cylinder.at-limit .barrel { border-color: var(--warn); }
+.cylinder.estop .piston,
+.cylinder.estop .rod { filter: saturate(0.2) brightness(0.7); }
+.cylinder.commanding-up .piston { background: linear-gradient(#beffd3, #60e196); }
+.cylinder.commanding-down .piston { background: linear-gradient(#ffd5b0, #ffb648); }
+
+/* HUD gauges */
+.gauge {
+  display: grid;
+  gap: 4px;
+}
+
+.gauge .head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.gauge .val {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge .bar {
+  height: 10px;
+  background: #0a0f17;
+  border: 1px solid var(--panel-edge);
+  position: relative;
+}
+
+.gauge .fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--pressure-lo), var(--pressure-hi));
+  transition: width 60ms linear;
+}
+
+.gauge.high .fill { background: var(--danger); }
+.gauge.estop .fill { background: var(--dim); }
+
+#height-card {
+  padding-top: 8px;
+  border-top: 1px dashed var(--panel-edge);
+  font-size: 12px;
+  line-height: 1.6;
+}
+#height-card .big {
+  font-size: 22px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+#height-card .target {
+  color: var(--warn);
+}
+#height-card .mode-pid { color: var(--ok); }
+#height-card .mode-manual { color: var(--dim); }
+
+.estop-banner {
+  color: var(--danger);
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}

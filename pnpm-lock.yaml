@@ -18,6 +18,28 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)
 
+  example/dashboard:
+    dependencies:
+      domecs:
+        specifier: workspace:*
+        version: link:../../packages/domecs
+      domecs-dom:
+        specifier: workspace:*
+        version: link:../../packages/domecs-dom
+      domecs-input:
+        specifier: workspace:*
+        version: link:../../packages/domecs-input
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.11
+        version: 5.4.21(@types/node@22.19.17)
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)
+
   example/roguelike:
     dependencies:
       domecs:

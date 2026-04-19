@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DOMECS · Hydraulic Lift</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>DOMECS · Hydraulic Lift Dashboard</h1>
+      <p>
+        <code>Q W E R</code> extend · <code>A S D F</code> retract · <code>Space</code> E-stop ·
+        <code>X</code> reset · <code>H</code> target height (PID)
+      </p>
+    </header>
+    <main>
+      <section id="stage" aria-label="Plant view"></section>
+      <aside id="hud" aria-label="Gauges"></aside>
+      <footer id="chrome" aria-label="Status"></footer>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
