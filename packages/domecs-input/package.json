@@ -1,30 +1,26 @@
 {
-  "name": "@domecs-example/roguelike",
+  "name": "domecs-input",
   "version": "0.1.0-alpha.0",
-  "private": true,
-  "description": "DOMECS v0.1 exemplar — headless turn-based roguelike (SPEC exemplar #1).",
+  "description": "DOMECS input collector: keyboard, pointer, focus, gamepad → per-tick InputSnapshot (SPEC §6).",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },
+  "files": ["src", "README.md"],
   "scripts": {
     "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "tsc --noEmit"
   },
   "dependencies": {
-    "domecs": "workspace:*",
-    "domecs-dom": "workspace:*",
-    "domecs-input": "workspace:*"
+    "domecs": "workspace:*"
   },
   "devDependencies": {
+    "happy-dom": "^15.11.7",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11",
     "vitest": "^2.1.9"
   }
 }

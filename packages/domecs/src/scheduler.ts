@@ -1,6 +1,6 @@
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
-import type { QueryDef, QueryResult } from './query.js'
+import { normalize, treeHas, type QueryDef, type QueryNode, type QueryResult } from './query.js'
 import type { Rng } from './rng.js'
 import type { TimeState } from './time.js'
 
@@ -90,6 +90,22 @@ export function createScheduler(
     register(name, def, fn): SystemHandle {
       const schedule = def.schedule ?? 'tick'
       const priority = def.priority ?? 0
+
+      if (schedule === 'reactive') {
+        if (!def.reactsTo) {
+          throw new Error(
+            `domecs: reactive system "${name}" requires a reactsTo query (SPEC §4 step 6).`,
+          )
+        }
+        const rNode = normalize(def.reactsTo) as QueryNode
+        const CHANGE_KINDS = new Set<QueryNode['kind']>(['added', 'removed', 'changed'])
+        if (!treeHas(rNode, CHANGE_KINDS)) {
+          throw new Error(
+            `domecs: reactive system "${name}" reactsTo query must contain at least one change-detection node (Added/Removed/Changed). ` +
+              `SPEC §4 step 6: reactive fires on queries that changed in steps 3–5; a reactsTo query that contains no Added/Removed/Changed leaves nothing to change.`,
+          )
+        }
+      }
 
       let fixedDivisor = 1
       if (schedule === 'fixed') {

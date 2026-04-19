@@ -1,5 +1,6 @@
 import {
   And,
+  Changed,
   createWorld,
   defineEvent,
   Has,
@@ -104,12 +105,13 @@ export function createRoguelike(options: RoguelikeOptions = {}): {
     },
   )
 
-  // FOV system: fire after movement. Reactive on Changed(Position) of actors.
+  // FOV system: fire after movement. Reactive on Changed(Position) of the player.
+  // R-1: Has(Position) would fire every tick; Changed gates to post-move ticks only.
   world.system(
     'fov',
     {
       schedule: 'reactive',
-      reactsTo: And(Has(Player), Has(Position)),
+      reactsTo: And(Has(Player), Changed(Position)),
     },
     () => {
       // Placeholder FOV: mark Visible on tiles within radius 6 of the player.

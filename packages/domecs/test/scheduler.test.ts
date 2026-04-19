@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { defineEvent } from '../src/events.js'
-import { Changed, Has } from '../src/query.js'
+import { And, Changed, Has, Not, Or } from '../src/query.js'
 import { createWorld } from '../src/world.js'
 
 const Position = defineComponent<{ x: number; y: number }>('Position', {
@@ -176,6 +176,40 @@ describe('system scheduler — `reactive` mode', () => {
     expect(calls).toBe(1)
     w.step(0.016)
     expect(calls).toBe(1)
+  })
+
+  it('rejects reactive registration without a change-detection node (F-5)', () => {
+    const w = createWorld()
+    // Structural-only reactsTo has no tick-scoped edge — must throw.
+    expect(() =>
+      w.system('bad', { schedule: 'reactive', reactsTo: Has(Position) }, () => {}),
+    ).toThrow(/change-detection/)
+    expect(() =>
+      w.system(
+        'bad2',
+        { schedule: 'reactive', reactsTo: And(Has(Position), Not(Has(Velocity))) },
+        () => {},
+      ),
+    ).toThrow(/change-detection/)
+    // Missing reactsTo also rejected.
+    expect(() => w.system('bad3', { schedule: 'reactive' }, () => {})).toThrow(
+      /reactsTo/,
+    )
+    // Accepts when a change-detection node appears anywhere in the tree.
+    expect(() =>
+      w.system(
+        'good',
+        { schedule: 'reactive', reactsTo: And(Has(Position), Changed(Velocity)) },
+        () => {},
+      ),
+    ).not.toThrow()
+    expect(() =>
+      w.system(
+        'good2',
+        { schedule: 'reactive', reactsTo: Or(Changed(Position), Changed(Velocity)) },
+        () => {},
+      ),
+    ).not.toThrow()
   })
 
   it('fires once in the same tick when a tick system marks changes', () => {

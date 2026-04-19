@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DOMECS Roguelike</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>DOMECS · Roguelike</h1>
+      <p>
+        Arrow keys / WASD to move. Space to wait. DOM-as-renderer — each tile is a
+        <code>&lt;div&gt;</code>.
+      </p>
+    </header>
+    <main>
+      <div id="viewport">
+        <div id="world"></div>
+        <div id="actors"></div>
+      </div>
+      <aside id="hud">
+        <div id="status">Ready.</div>
+      </aside>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

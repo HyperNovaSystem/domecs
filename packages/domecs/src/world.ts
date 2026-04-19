@@ -44,6 +44,13 @@ export interface World {
   readonly signals: WorldSignals
   readonly events: EventView
   readonly input: InputSnapshot
+  /**
+   * Publish a new InputSnapshot for subsequent systems to read (SPEC §4 step 2).
+   * Intended for use by the `domecs-input` plugin at `onTickStart`; user code may
+   * call it in headless tests to drive input deterministically. Replaces the
+   * current snapshot wholesale; there is no merge.
+   */
+  setInput(snap: InputSnapshot): void
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -360,6 +367,9 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     get input() {
       return input
+    },
+    setInput(snap: InputSnapshot): void {
+      input = snap
     },
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
