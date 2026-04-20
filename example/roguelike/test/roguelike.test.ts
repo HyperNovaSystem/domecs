@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Has } from 'domecs'
+import { entry, Has } from 'domecs'
 import {
   createRoguelike,
   describePlayerTile,
@@ -148,8 +148,8 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     const { world, playerId } = createRoguelike({ seed: 5, width: 8, height: 8 })
     expect(world.query(Has(Actor)).size).toBe(1)
     world.spawn([
-      [Position as never, { x: 3, y: 3 }],
-      [Actor as never, { name: 'Rat', hp: 2, faction: 'monster' }],
+      entry(Position, { x: 3, y: 3 }),
+      entry(Actor, { name: 'Rat', hp: 2, faction: 'monster' as const }),
     ])
     expect(world.query(Has(Actor)).size).toBe(2)
     expect(enemyCount(world)).toBe(1)

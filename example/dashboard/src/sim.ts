@@ -2,6 +2,7 @@ import {
   Changed,
   createWorld,
   defineEvent,
+  entry,
   type World,
 } from 'domecs'
 import {
@@ -44,11 +45,11 @@ export function createLift(options: LiftOptions = {}): LiftRefs {
   })
 
   const liftId = world.spawn([
-    [Lift as never, { heightM: 0, targetHeightM: null }],
-    [Plant as never, Plant.create()],
-    [Safety as never, { eStop: false }],
-    [Control as never, { mode: 'manual' }],
-    [PID as never, PID.create()],
+    entry(Lift, { heightM: 0, targetHeightM: null }),
+    entry(Plant, Plant.create()),
+    entry(Safety, { eStop: false }),
+    entry(Control, { mode: 'manual' as const }),
+    entry(PID, PID.create()),
   ])
 
   const cylinderIds: [number, number, number, number] = [0, 0, 0, 0] as [
@@ -56,10 +57,13 @@ export function createLift(options: LiftOptions = {}): LiftRefs {
   ]
   for (let i = 0; i < 4; i++) {
     cylinderIds[i as 0 | 1 | 2 | 3] = world.spawn([
-      [
-        Cylinder as never,
-        { index: i as 0 | 1 | 2 | 3, extension: 0, command: 0, pressureKpa: 0, atLimit: false },
-      ],
+      entry(Cylinder, {
+        index: i as 0 | 1 | 2 | 3,
+        extension: 0,
+        command: 0 as const,
+        pressureKpa: 0,
+        atLimit: false,
+      }),
     ])
   }
 

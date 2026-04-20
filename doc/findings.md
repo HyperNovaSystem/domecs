@@ -93,7 +93,7 @@ Alternative: keep the narrow signature but add a `tsc --noEmit` typecheck step t
 
 ## [F-5] `World.start()` / `World.stop()` declared in api.md but not implemented
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-19
 **Surfaced by:** `example/dashboard/src/main.ts` — realtime loop setup; previously noted informally by roguelike exemplar.
 
 **Problem.** `api.md` §`World` lists `start(): void` and `stop(): void` as first-class lifecycle methods, and the bottom-of-file worked example ends `world.start()`. The runtime `World` interface in `packages/domecs/src/world.ts` exposes `step(dt)` and `stepN(n, dt)` only — no `start`/`stop`. Both browser exemplars (roguelike, dashboard) have to roll their own `requestAnimationFrame` loop with wall-clock `dt` computation, which is boilerplate every consumer will duplicate and mis-tune (dt clamping, first-frame priming, visibility-change pauses).
@@ -102,11 +102,13 @@ Alternative: keep the narrow signature but add a `tsc --noEmit` typecheck step t
 
 **Spec impact.** `api.md` §`World` lifecycle block — either add normative semantics for the driver (dt-clamp, visibility-pause, resume behaviour) or delete the two lines and amend the worked example.
 
+**Resolution.** Option (a). `World.start(options?: StartOptions)` is a thin rAF driver: prime wall-clock reference on the first frame, compute per-frame dt, clamp at `dtClampMs` (default 100), pipe to `step(dt)`. `World.stop()` cancels the rAF and detaches the visibility listener. Options: `dtClampMs` (ms ceiling) and `pauseOnHidden` (default `true`, calls `pause()`/`resume()` around `visibilitychange`). `start()` is idempotent; `stop()` is safe without a prior `start()`. Throws in headless envs that lack `requestAnimationFrame`. Tests in `packages/domecs/test/lifecycle.test.ts` cover scheduling, dt-conversion, clamp, idempotency, restart-no-spike, and headless throw. Dashboard exemplar migrated off hand-rolled rAF; roguelike retains its per-frame `step(0)` heartbeat (turn-based, not realtime).
+
 ---
 
 ## [F-6] `world.step(0)` yields `time.scaledDelta === 0`, NaN-hazards derivative consumers
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-19
 **Surfaced by:** `example/dashboard/src/sim.ts` `pid-controller` — `derivative = (error - lastError) / dt`.
 
 **Problem.** A common realtime-loop pattern is `world.step(0)` to prime derived state before starting the rAF. In the F-3 drift-free scheduler, `step(0)` pushes `totalScaledSeconds` by 0, so the ms-quantized `scaledDelta` is 0. Any tick-schedule system that divides by `time.scaledDelta` (PID, smoothing filters, per-second rate estimators) silently produces `Infinity`/`NaN`. The dashboard PID had to guard with `const dt = world.time.scaledDelta || 1/60` — a workaround every controller author will re-derive.
@@ -122,11 +124,13 @@ Preferred combination: (1) for the priming case — cleaner invariant — plus (
 
 **Spec impact.** SPEC §4 (define `step(0)` explicitly) and SPEC §2.7 (add positive-floor rule to the quantization semantics).
 
+**Resolution.** Combined (1)+(2). *Explicit* `step(0)` (or any `step(dt)` with `dt <= 0`) is a heartbeat: no system execution, no tick-counter/`totalScaledSeconds` advancement, no change-detection buffer swap. Plugin hooks (`onTickStart`, `onRender`, `onTickEnd`) and `tickStart`/`tickEnd` signals still fire so UIs can paint initial state and input plugins can republish snapshots between turns. No-arg `step()` retains its legacy meaning (advance a tick with `dt=0`) so `turn()` and the existing query-change tests keep working. When `dt > 0`, per-tick quantized ms is floored at 1 so sub-ms wall-clock frames never expose `scaledDelta = 0` to PIDs/rate estimators. Tests: 5 cases in `scheduler.test.ts` under `describe('step(0) — F-6 heartbeat semantics')`.
+
 ---
 
 ## [F-7] `world.spawn([[ComponentType, value], …])` forces `as never` casts at call sites
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-19
 **Surfaced by:** `example/roguelike/src/game.ts` (initial workaround) and `example/dashboard/src/sim.ts` — every spawn tuple literal.
 
 **Problem.** `ComponentBag` entries carry a `ComponentType<T>` alongside a `T` value. The `spawn` signature accepts `ComponentBag = ReadonlyArray<readonly [ComponentType<unknown>, unknown]>` (per F-1). When a caller writes a heterogeneous array of tuples — `[[Position, {x:0,y:0}], [Health, {hp:10}]]` — TS infers the array type as `(readonly [ComponentType<Position> | ComponentType<Health>, {x,y} | {hp}])[]`, which is *not* assignable to the parameter's `ComponentType<unknown>` element because `ComponentType<T>` is invariant in `T`. The working-around every exemplar adopts is `[Position as never, {…}]` at each entry — ugly, untyped, and silences any genuine value-shape mismatch.
@@ -145,3 +149,5 @@ interface World {
 The goal: the value position's `T` is tied to the type position's `T` *within each entry*, while the array itself is heterogeneous. A small helper — `entry<T>(t: ComponentType<T>, v: T): Entry<T>` — lets call sites write `spawn([entry(Position, {x:0,y:0}), entry(Health, {hp:10})])` with full inference and no casts. The bare-tuple form still works but may need an explicit `as const` to preserve the tuple-literal shape.
 
 **Spec impact.** `api.md` §`spawn` + §`ComponentBag` — adopt the `Entry<T>` tagged-tuple form, document the `entry()` helper, and note that `as const` (or the helper) is required for inference.
+
+**Resolution.** Introduced `ComponentEntry<T> = readonly [ComponentType<T>, T]` and exported helper `entry<T>(t, v): ComponentEntry<T>` from `domecs`. `ComponentBag` widened to accept `ReadonlyArray<ComponentEntry<any>>` so heterogeneous-tuple inference flows through per entry. All three exemplars (roguelike, dashboard, lift tests) migrated off the `as never` casts; value-shape mismatches now fail at compile time (covered by `// @ts-expect-error` probe in `world.basic.test.ts`).

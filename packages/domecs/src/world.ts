@@ -70,6 +70,8 @@ export interface World {
   step(dt?: number): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
+  start(options?: StartOptions): () => void
+  stop(): void
   use(plugin: Plugin, options?: unknown): () => void
   capability<K extends string>(name: K): Capability<K>
   snapshot(): WorldSnapshot
@@ -81,6 +83,20 @@ export interface WorldOptions {
   headless?: boolean
   fixedStep?: number
   idle?: boolean
+}
+
+/**
+ * Options for {@link World.start}. The rAF driver is intentionally thin:
+ * compute wall-clock dt, clamp it, pipe it to `step(dt)`. Consumers that
+ * need custom scheduling keep using `step()` directly.
+ */
+export interface StartOptions {
+  /** Per-frame dt ceiling in ms (default 100). Prevents tab-return spikes
+   *  from exploding into hundreds of fixed-step ticks. */
+  dtClampMs?: number
+  /** Pause via {@link World.pause} when `document.hidden` flips true, resume
+   *  on re-show. Default true; has no effect outside a DOM. */
+  pauseOnHidden?: boolean
 }
 
 interface ArchetypeBucket {
@@ -130,6 +146,10 @@ export function createWorld(options: WorldOptions = {}): World {
   let scheduler!: Scheduler
   let plugins!: ReturnType<typeof createPluginRegistry>
   let fixedStepCounter = 0
+  // F-5: rAF driver state. `rafHandle === null` means "not running".
+  let rafHandle: number | null = null
+  let rafLastWallMs: number | null = null
+  let rafVisHandler: (() => void) | null = null
   // F-3: drift-free fixed-step driver.
   let totalScaledSeconds = 0
   let fixedStepsFired = 0
@@ -585,6 +605,29 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     step(dt?: number): void {
+      // F-6: an *explicit* dt<=0 is a "heartbeat" — no time advancement,
+      // no system execution, no change-detection buffer swap. Plugin hooks,
+      // signals, and onRender still fire so UIs can paint initial state
+      // and input plugins can republish snapshots between turns. A no-arg
+      // step() keeps its legacy meaning ("advance a tick with d=0"), which
+      // turn-based exemplars and turn() rely on.
+      if (dt !== undefined && dt <= 0) {
+        time.delta = 0
+        time.scaledDelta = 0
+        inTick = true
+        try {
+          plugins.callTickStart(world)
+          if (sigTickStart.size > 0) sigTickStart.emit(time)
+          plugins.callRender(world)
+          plugins.callTickEnd(world)
+          if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+        } finally {
+          inTick = false
+        }
+        return
+      }
+      const d = dt ?? 0
+
       // SPEC §4 step 0 — reset per-tick change-detection, then promote
       // any between-tick (pending) marks into the live sets (F-2).
       tickAdded.clear()
@@ -594,14 +637,18 @@ export function createWorld(options: WorldOptions = {}): World {
       drainInto(pendingRemoved, tickRemoved)
       drainInto(pendingChanged, tickChanged)
 
-      const d = dt ?? 0
       const scaledDt = d * time.scale
       // F-3: accumulate unquantized scaled time, then derive ms-quantized
       // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
       // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
       totalScaledSeconds += scaledDt
       const newQuantizedMs = Math.round(totalScaledSeconds * 1000)
-      const dtMs = newQuantizedMs - lastQuantizedElapsedMs
+      // F-6: when the caller passed a positive dt, floor per-tick
+      // quantized dt at 1 ms so sub-ms wall-clock frames never expose
+      // scaledDelta = 0 to consumers that divide by it (PIDs, smoothing
+      // filters, rate estimators). No-arg step() keeps its d=0 behaviour.
+      const rawDtMs = newQuantizedMs - lastQuantizedElapsedMs
+      const dtMs = time.scale !== 0 && d > 0 && rawDtMs < 1 ? 1 : rawDtMs
       lastQuantizedElapsedMs = newQuantizedMs
       time.delta = d
       time.scaledDelta = dtMs / 1000
@@ -686,6 +733,73 @@ export function createWorld(options: WorldOptions = {}): World {
       // Because events flush at next step's step 1, we emit first then step.
       bus.emit(type, payload)
       world.step(dt)
+    },
+
+    start(options?: StartOptions): () => void {
+      // F-5: thin rAF driver. Every browser exemplar was hand-rolling this
+      // with bespoke dt-clamp / first-frame priming / visibility-pause
+      // logic. Owning it here gives one place to fix that mis-tune.
+      if (rafHandle !== null) return () => world.stop()
+      const g = globalThis as unknown as {
+        requestAnimationFrame?: (cb: (t: number) => void) => number
+        cancelAnimationFrame?: (h: number) => void
+        document?: { hidden?: boolean; addEventListener: Function; removeEventListener: Function }
+      }
+      if (typeof g.requestAnimationFrame !== 'function' || typeof g.cancelAnimationFrame !== 'function') {
+        throw new Error(
+          'domecs: World.start() requires requestAnimationFrame; use step(dt) in headless environments',
+        )
+      }
+      const raf = g.requestAnimationFrame
+      const dtClampMs = options?.dtClampMs ?? 100
+      const pauseOnHidden = options?.pauseOnHidden !== false
+      rafLastWallMs = null
+      const frame = (t: number): void => {
+        if (rafHandle === null) return
+        if (rafLastWallMs === null) {
+          // First frame primes the reference — skip the step to avoid a
+          // spurious dt = t (time-origin) on the very first tick.
+          rafLastWallMs = t
+          rafHandle = raf(frame)
+          return
+        }
+        const gap = t - rafLastWallMs
+        rafLastWallMs = t
+        const dtMs = gap > dtClampMs ? dtClampMs : gap
+        world.step(dtMs / 1000)
+        if (rafHandle !== null) rafHandle = raf(frame)
+      }
+      rafHandle = raf(frame)
+      if (pauseOnHidden && g.document && typeof g.document.addEventListener === 'function') {
+        const doc = g.document
+        rafVisHandler = (): void => {
+          if (doc.hidden) {
+            world.pause()
+          } else {
+            world.resume()
+            // Discard the accumulated wall-clock gap so the first post-
+            // resume frame primes cleanly instead of delivering a spike.
+            rafLastWallMs = null
+          }
+        }
+        doc.addEventListener('visibilitychange', rafVisHandler)
+      }
+      return () => world.stop()
+    },
+
+    stop(): void {
+      if (rafHandle === null) return
+      const g = globalThis as unknown as {
+        cancelAnimationFrame?: (h: number) => void
+        document?: { removeEventListener: Function }
+      }
+      g.cancelAnimationFrame?.(rafHandle)
+      rafHandle = null
+      rafLastWallMs = null
+      if (rafVisHandler && g.document && typeof g.document.removeEventListener === 'function') {
+        g.document.removeEventListener('visibilitychange', rafVisHandler)
+        rafVisHandler = null
+      }
     },
 
     use(plugin: Plugin, options?: unknown): () => void {

@@ -3,6 +3,7 @@ import {
   Changed,
   createWorld,
   defineEvent,
+  entry,
   Has,
   Not,
   type World,
@@ -47,8 +48,8 @@ export function createRoguelike(options: RoguelikeOptions = {}): {
       const edge = x === 0 || y === 0 || x === width - 1 || y === height - 1
       const kind: 'floor' | 'wall' = edge || world.rand.next() < 0.08 ? 'wall' : 'floor'
       world.spawn([
-        [Position as never, { x, y }],
-        [Tile as never, { kind }],
+        entry(Position, { x, y }),
+        entry(Tile, { kind }),
       ])
     }
   }
@@ -71,11 +72,11 @@ export function createRoguelike(options: RoguelikeOptions = {}): {
   }
 
   const playerId = world.spawn([
-    [Position as never, { x: px, y: py }],
-    [Actor as never, { name: 'You', hp: 20, faction: 'player' }],
-    [Player as never, {}],
-    [Renderable as never, { glyph: '@' }],
-    [Visible as never, { seen: true }],
+    entry(Position, { x: px, y: py }),
+    entry(Actor, { name: 'You', hp: 20, faction: 'player' as const }),
+    entry(Player, {}),
+    entry(Renderable, { glyph: '@' }),
+    entry(Visible, { seen: true }),
   ])
 
   // Movement system: consumes MoveEvent, respects walls.

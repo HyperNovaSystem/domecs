@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createWorld, defineComponent } from '../src/index.js'
+import { createWorld, defineComponent, entry } from '../src/index.js'
 import type { ComponentBag, ComponentType } from '../src/index.js'
 
 describe('world — entity & component basics', () => {
@@ -45,6 +45,23 @@ describe('world — entity & component basics', () => {
     const e = world.spawn(bag)
     expect(world.getComponent(e, Position)).toEqual({ x: 1, y: 2 })
     expect(world.getComponent(e, Velocity)).toEqual({ dx: -1, dy: 0 })
+  })
+
+  it('spawn accepts heterogeneous tuple array via entry() helper (F-7)', () => {
+    const world = createWorld()
+    // No `as never` / `as ComponentType<unknown>` casts — entry<T>() preserves T
+    // inside each tuple so the heterogeneous array typechecks under strict TS.
+    const e = world.spawn([
+      entry(Position, { x: 10, y: 20 }),
+      entry(Velocity, { dx: 3, dy: 4 }),
+    ])
+    expect(world.getComponent(e, Position)).toEqual({ x: 10, y: 20 })
+    expect(world.getComponent(e, Velocity)).toEqual({ dx: 3, dy: 4 })
+  })
+
+  it('entry() rejects value shape mismatches at compile time', () => {
+    // @ts-expect-error — { x, y } is not { dx, dy }
+    entry(Velocity, { x: 1, y: 2 })
   })
 
   it('spawn accepts a Map-form ComponentBag', () => {

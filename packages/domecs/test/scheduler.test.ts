@@ -241,3 +241,64 @@ describe('system scheduler — `reactive` mode', () => {
     expect(calls).toBe(1)
   })
 })
+
+describe('step(0) — F-6 heartbeat semantics', () => {
+  it('does not invoke fixed/tick/reactive/event systems', () => {
+    const w = createWorld()
+    let fixedN = 0, tickN = 0, reactiveN = 0, eventN = 0
+    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    w.system('f', { schedule: 'fixed' }, () => { fixedN++ })
+    w.system('t', { schedule: 'tick' }, () => { tickN++ })
+    w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
+    w.system('ev', { schedule: 'event', triggers: [Move] }, () => { eventN++ })
+    w.markChanged(e, Position)
+    w.emit(Move, { entity: e, dx: 1, dy: 0 })
+    w.step(0)
+    expect(fixedN).toBe(0)
+    expect(tickN).toBe(0)
+    expect(reactiveN).toBe(0)
+    expect(eventN).toBe(0)
+  })
+
+  it('does not advance tick counter or totalScaledSeconds', () => {
+    const w = createWorld()
+    expect(w.time.tick).toBe(0)
+    w.step(0)
+    w.step(0)
+    w.step(0)
+    expect(w.time.tick).toBe(0)
+    expect(w.time.elapsed).toBe(0)
+  })
+
+  it('preserves between-tick markChanged through step(0) so next real tick still sees it', () => {
+    const w = createWorld()
+    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    let reactiveN = 0
+    w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
+    w.markChanged(e, Position)
+    w.step(0)
+    w.step(0)
+    expect(reactiveN).toBe(0) // no-op did not consume or drop the mark
+    w.step(1 / 60)
+    expect(reactiveN).toBe(1)
+  })
+
+  it('still fires tickStart/tickEnd signals so UI can paint initial state', () => {
+    const w = createWorld()
+    let starts = 0, ends = 0
+    w.signals.tickStart.subscribe(() => { starts++ })
+    w.signals.tickEnd.subscribe(() => { ends++ })
+    w.step(0)
+    expect(starts).toBe(1)
+    expect(ends).toBe(1)
+  })
+
+  it('floors scaledDelta at 1ms when dt > 0 even under sub-ms wall-clock frames', () => {
+    const w = createWorld()
+    const seen: number[] = []
+    w.system('t', { schedule: 'tick' }, () => { seen.push(w.time.scaledDelta) })
+    // dt = 0.3 ms — below 1 ms ms-quantization threshold. Pre-F-6 this rounded to 0.
+    w.step(0.0003)
+    expect(seen[0]).toBeGreaterThanOrEqual(1 / 1000)
+  })
+})

@@ -29,10 +29,12 @@ export { SNAPSHOT_VERSION } from './snapshot.js'
 export type { WorldSnapshot } from './snapshot.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'
+export { entry } from './types.js'
 export type {
   ComponentType,
   ComponentOptions,
   ComponentBag,
+  ComponentEntry,
   Entity,
 } from './types.js'
 export type {

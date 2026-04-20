@@ -237,19 +237,11 @@ world.signals.tickEnd.subscribe(() => {
   paintChrome()
 })
 
-// ─── Realtime loop: wall-clock dt, world.step(dt). ──────────────────────
-let last = performance.now()
-function frame(now: number): void {
-  const dt = Math.min(0.1, (now - last) / 1000)
-  last = now
-  world.step(dt)
-  requestAnimationFrame(frame)
-}
-// Prime state then start.
+// ─── Realtime loop (F-5 engine driver) ──────────────────────────────────
+// Prime derived state (heartbeat: no system execution), then hand the
+// frame pump to the engine so tab-return freezes do not detonate the
+// fixed-step physics.
 world.step(0)
 paintHeightCard()
 paintChrome()
-requestAnimationFrame((t) => {
-  last = t
-  frame(t)
-})
+world.start({ dtClampMs: 100 })
