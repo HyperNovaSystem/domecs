@@ -69,6 +69,26 @@ describe('events', () => {
     expect(w.events.of(Attack)).toEqual([{ target: 1, damage: 4 }])
     expect(w.events.of(TurnPassed)).toEqual([99])
   })
+
+  // F-8: dispatch is identity-keyed via a per-EventType symbol, not by `name`.
+  // Two defineEvent calls sharing a name MUST produce isolated buckets, and
+  // a subscriber on one MUST NOT receive the other's payloads.
+  it('two defineEvent calls with the same name do not collide (F-8)', () => {
+    const A = defineEvent<{ which: 'A' }>('Reset')
+    const B = defineEvent<{ which: 'B' }>('Reset')
+    const w = createWorld()
+    const seenA: Array<{ which: 'A' }> = []
+    const seenB: Array<{ which: 'B' }> = []
+    w.on(A, (e) => seenA.push(e))
+    w.on(B, (e) => seenB.push(e))
+    w.emit(A, { which: 'A' })
+    w.emit(B, { which: 'B' })
+    w.step(0.016)
+    expect(seenA).toEqual([{ which: 'A' }])
+    expect(seenB).toEqual([{ which: 'B' }])
+    expect(w.events.of(A)).toEqual([{ which: 'A' }])
+    expect(w.events.of(B)).toEqual([{ which: 'B' }])
+  })
 })
 
 describe('world.setScale / pause / resume', () => {

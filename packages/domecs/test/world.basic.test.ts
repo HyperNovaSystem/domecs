@@ -84,6 +84,44 @@ describe('world — entity & component basics', () => {
     expect(world.getComponent(e, Position)).toBeUndefined()
   })
 
+  // F-10: entitiesWith yields {id, value} pairs for every live carrier of a
+  // component type. Skips entities lacking the type; values are typed.
+  it('entitiesWith iterates carriers with typed values (F-10)', () => {
+    const world = createWorld()
+    const a = world.spawn()
+    const b = world.spawn()
+    const c = world.spawn()
+    world.addComponent(a, Position, { x: 1, y: 1 })
+    world.addComponent(b, Position, { x: 2, y: 2 })
+    world.addComponent(c, Velocity, { dx: 9, dy: 9 }) // not a Position carrier
+    const seen = new Map<number, { x: number; y: number }>()
+    for (const { id, value } of world.entitiesWith(Position)) seen.set(id, value)
+    expect(seen.size).toBe(2)
+    expect(seen.get(a)).toEqual({ x: 1, y: 1 })
+    expect(seen.get(b)).toEqual({ x: 2, y: 2 })
+    expect(seen.has(c)).toBe(false)
+  })
+
+  it('entitiesWith yields nothing for an unregistered type', () => {
+    const world = createWorld()
+    const Mood = defineComponent<{ happy: boolean }>('Mood')
+    expect(Array.from(world.entitiesWith(Mood))).toEqual([])
+  })
+
+  // F-9: signals.entityDespawned fires AFTER reclaim. Subscribers see a
+  // world where world.has(id, T) is false and getComponent returns undefined.
+  it('entityDespawned subscriber sees post-reclaim world (F-9 ordering)', () => {
+    const world = createWorld()
+    const e = world.spawn()
+    world.addComponent(e, Position, { x: 5, y: 5 })
+    let observed: { has: boolean; comp: unknown } | null = null
+    world.signals.entityDespawned.subscribe((id) => {
+      observed = { has: world.has(id, Position), comp: world.getComponent(id, Position) }
+    })
+    world.despawn(e)
+    expect(observed).toEqual({ has: false, comp: undefined })
+  })
+
   it('defineComponent applies defaults via create()', () => {
     const Health = defineComponent<{ hp: number; max: number }>('Health', {
       defaults: { hp: 10, max: 10 },

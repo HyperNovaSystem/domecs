@@ -156,7 +156,7 @@ The goal: the value position's `T` is tied to the type position's `T` *within ea
 
 ## [F-8] `defineEvent` returns wrong-shape object; symbol identity is dead
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-20
 **Surfaced by:** `example/restaurant/src/sim.ts` — four `defineEvent(...)` declarations + reading `packages/domecs/src/events.ts` while debugging `ResetEvent` dispatch.
 
 **Problem.** `EventType<T>` declares `readonly [__eventTag]: symbol` (a `unique symbol` property key — guarantees nominal-typing per type). The impl returns `{ name, __tag: Symbol(name) }` — a plain string-named `__tag` field, then `as unknown as EventType<T>` to silence TS. The runtime object literally has no `[__eventTag]` property; the symbol-keyed slot the interface promises is missing. Worse: the event bus dispatches *only* by `type.name` ([`events.ts:37,41,53,59,73`](../packages/domecs/src/events.ts)), so the `Symbol(name)` is constructed and immediately thrown away — pure dead state.
@@ -175,11 +175,13 @@ If symbol-based dispatch lands, a small ergonomic helper `eventName(type)` for t
 
 **Spec impact.** `api.md` §`defineEvent` — clarify whether dispatch is name-keyed (and document collision policy) or identity-keyed via the symbol. SPEC §2.6 currently doesn't pin this down. No normative change to event lifecycle.
 
+**Resolution.** Picked Option A (identity-keyed dispatch). `events.ts` now exports a real `eventTag` symbol; the factory writes it as a symbol-keyed property (`{ name, [eventTag]: Symbol(name) }`); the bus's pending/current/subscriber Maps are keyed by `EventType[eventTag]` rather than `name`. The `as unknown as` cast is gone. New regression in `events.test.ts` (`two defineEvent calls with the same name do not collide`) covers the collision case directly. `api.md` §Events updated to describe `EventType<T>` as identity-keyed and explicitly permit duplicate `name` strings.
+
 ---
 
 ## [F-9] No referential-integrity story for inter-entity component fields
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-20
 **Surfaced by:** `example/restaurant/src/sim.ts` phantom-customer regression — fixed today by adding a `c.tableId !== null` guard to the patience system, after a browser smoke test at tick 4522 showed `seated = -4` (impossible) in the chrome footer.
 
 **Problem.** Restaurant components carry cross-entity references as bare numbers: `Table.customerId: number | null`, `Table.waiterId: number | null`, `Customer.tableId: number | null`, `Waiter.tableId: number | null`. The engine offers no help keeping these in sync:
@@ -199,11 +201,13 @@ The fix in the exemplar is local (skip patience for bound customers + null-guard
 
 **Workaround until then.** State-machine designs that span entities should put the *authoritative state flag* on a single component and have all referrers gate on it (here: customer.state). Don't gate on "field is non-null" alone — fields are mutable and references can outlive their referents.
 
+**Resolution.** Re-reading `world.ts` revealed `signals.entityDespawned` already exists (declared at `WorldSignals.entityDespawned`, instantiated in `createWorld`, emitted from inside `despawn` at the call site after store/archetype reclaim). The original critique mis-recommended adding it. The remaining gap was *normative* — SPEC §2.10 didn't pin the despawn-handler ordering rule, so consumers couldn't know whether `world.has(id, T)` would be `true` or `false` inside a subscriber. SPEC §2.10 now specifies: `entityDespawned` fires *after* reclaim; `componentRemoved` (per type) → store/archetype reclaim → `entityDespawned`. `api.md` §Events shows the canonical cross-ref scrub pattern using the signal + `world.entitiesWith`. First-class `EntityRef<T>` deferred (no v0.1 consumer demand once the global-listener idiom is documented). Regression in `world.basic.test.ts` (`entityDespawned subscriber sees post-reclaim world`) pins the ordering.
+
 ---
 
 ## [F-10] No public entity-iteration helper; `world.query` requires a node literal in tests
 
-**Status:** open — 2026-04-19
+**Status:** resolved — 2026-04-20
 **Surfaced by:** `example/restaurant/test/sim.test.ts` `countCustomersByState` helper.
 
 **Problem.** Test-side helpers that need to walk all entities of a given component have no first-class API. The exemplar test settled on `world.query({ kind: 'has', type: Customer })` because:
@@ -219,3 +223,5 @@ The helper landed as a confused mix: it iterates `world.componentTypes()` for no
 Alternative: rename `componentTypes()` to make its scope obvious (`registeredComponentTypes()`) so it stops collision-hinting at iteration.
 
 **Spec impact.** `api.md` §`World` — add the helper. No SPEC normative impact.
+
+**Resolution.** Added `world.entitiesWith<T>(type): Iterable<{id: Entity, value: T}>` adjacent to `componentTypes()` in `world.ts`; iterates the type's store directly (cheaper than building an intermediate query). Documented in `api.md` §`World` reflection block, plus a worked example in §Events showing the cross-ref-scrub idiom (F-9 + F-10 compose). Test in `world.basic.test.ts` covers carriers-only iteration + unregistered-type case.

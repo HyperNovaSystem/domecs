@@ -235,6 +235,8 @@ A subscriber that throws propagates to the call site that emitted the signal; th
 
 Corollary: `componentRemoved` delivers *before* the component's bag is released, so a subscriber may still call `getComponent(entity, type)` and receive the outgoing snapshot within that same phase.  After the emitting call site returns, the component is gone.
 
+**Despawn ordering rule (normative, F-9).** `entityDespawned` MUST fire *after* the engine has reclaimed the entity: by the time a subscriber runs, `world.has(id, T)` returns `false` for every component, the entity is no longer alive, and `getComponent(id, T)` returns `undefined`. Subscribers thus receive a clean reverse-index opportunity — the canonical pattern for inter-entity references is to register one `signals.entityDespawned` listener that scrubs every component holding the dying id as a foreign key. The order within a single `despawn` call is fixed: `componentRemoved` (per type, with bag still readable) → store/archetype reclaim → `entityDespawned`. A subscriber that calls `world.despawn` re-entrantly is well-defined; ordering of nested despawns is the call order of the subscribers.
+
 ---
 
 ## 3. Scheduling modes

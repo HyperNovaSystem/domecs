@@ -144,6 +144,10 @@ interface World {
 
   // reflection
   componentTypes(): ComponentType<unknown>[]
+  // Iterate every live entity carrying `type`, paired with its value. Same
+  // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
+  // less ceremony at the call-site (F-10).
+  entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
 
   // snapshots
@@ -297,9 +301,13 @@ interface QueryHooks {
 ```ts
 function defineEvent<T>(name: string): EventType<T>
 
+// `EventType<T>` is identity-keyed: the bus dispatches on a per-instance
+// symbol stored on the type object, not on `name`. Two `defineEvent('Same')`
+// calls produce distinct types whose payload buckets, subscribers, and views
+// never collide. `name` is an opaque label for diagnostics — duplicates are
+// permitted. (F-8.)
 interface EventType<T> {
   readonly name: string
-  readonly __tag: unique symbol
 }
 
 interface EventView {
@@ -307,6 +315,23 @@ interface EventView {
   emit<T>(type: EventType<T>, payload: T): void
 }
 ```
+
+**Inter-entity references.** Components carrying foreign-entity ids
+(`tableId: Entity | null`, `customerId: Entity | null`) become dangling on
+despawn. The canonical cleanup pattern uses `signals.entityDespawned`
+(SPEC §2.10 despawn ordering rule) plus `world.entitiesWith`:
+
+```ts
+world.signals.entityDespawned.subscribe((dead) => {
+  for (const { id, value } of world.entitiesWith(Table)) {
+    if (value.customerId === dead) value.customerId = null
+    if (value.waiterId === dead)   value.waiterId   = null
+  }
+})
+```
+
+The signal fires *after* the entity is reclaimed, so subscribers see a
+consistent world; one global listener replaces per-system null-guards.
 
 ### Time
 

@@ -65,6 +65,12 @@ export interface World {
   pause(): void
   resume(): void
   componentTypes(): ComponentType<unknown>[]
+  /**
+   * Iterate every live entity that currently holds component `type`, paired
+   * with its value. Convenience over `world.query(Has(type))` + per-entity
+   * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
+   */
+  entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   query(def: QueryDef): QueryResult
   step(dt?: number): void
@@ -496,6 +502,12 @@ export function createWorld(options: WorldOptions = {}): World {
 
     componentTypes(): ComponentType<unknown>[] {
       return Array.from(typeRegistry.values())
+    },
+
+    *entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
+      const store = stores.get(type.name) as Map<Entity, T> | undefined
+      if (!store) return
+      for (const [id, value] of store) yield { id, value }
     },
 
     archetype(entity: Entity): ComponentType<unknown>[] {

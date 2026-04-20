@@ -8,55 +8,7 @@ The bar for an entry here is: an *open* contract or DX issue against `SPEC.md` /
 
 ## 1. Open issues
 
-### 1.1 `defineEvent` runtime object doesn't match the declared type; dispatch is name-keyed (F-8)
-
-**Where it bites.** Surfaced 2026-04-19 by the restaurant exemplar (`example/restaurant/src/sim.ts`) — four `defineEvent` declarations + reading `packages/domecs/src/events.ts` while debugging dispatch. Not a runtime failure today; latent risk that compounds as the event surface grows.
-
-**Root cause.** `EventType<T>` is declared in `events.ts:3-7` as `{ readonly name: string; readonly [__eventTag]: symbol; readonly __t?: T }` — a unique-symbol property key meant to provide nominal typing per event. The factory at `events.ts:9-11` returns `{ name, __tag: Symbol(name) }` — a *string-keyed* `__tag` field — and casts through `unknown` to silence the type system. The promised symbol slot is missing at runtime; the constructed `Symbol(name)` is dead state because dispatch (`events.ts:37,41,53,59,73`) only ever reads `type.name`.
-
-**Why a critique-grade issue, not just a bug.** Three distinct spec-surface flaws line up:
-
-1. **The type lies about identity.** A unique-symbol property key in TypeScript is the canonical idiom for nominal typing — readers reasonably infer events are identity-keyed. They are not.
-2. **`as unknown as` hides the construction error.** The cast was added to make the wrong-shape literal compile. It's the smell that made the bug invisible. Any spec that relies on a property the impl never writes is a spec drift waiting to happen.
-3. **Name-keyed dispatch has no documented collision policy.** Two `defineEvent<A>('Reset')` calls — common in re-export chains or polyrepos — share a single dispatch bucket. Subscribers of one type receive payloads of the other; TS doesn't catch it because both views see `EventType<A>` and `EventType<B>` as nominally distinct (the symbol promise!) even though dispatch merges them.
-
-**Proposed normative fix.** SPEC §2.6 should pick one and commit:
-
-- **Option A (preferred):** Make dispatch identity-keyed via a real symbol stored on the type object. Export the `__eventTag` symbol from the events module, fix the factory to set the property at the symbol key, key the bus's internal Maps by `EventType` reference (or by the symbol). Drop the `as unknown as` cast — the construction now matches the type.
-- **Option B:** Drop the symbol from `EventType<T>` entirely. Document `name` as the dispatch key and require globally unique names. Add a dev-build assertion in `defineEvent` that throws on second registration of an existing name.
-
-Either option closes the hole; A keeps the type honest and makes intra-process collisions impossible.
-
-**Status.** Open. Tracked as `findings.md` §F-8. Workaround until merged: name events with package-qualified strings (`'restaurant:Reset'`, `'dashboard:Reset'`).
-
-### 1.2 No referential-integrity story for inter-entity component fields (F-9)
-
-**Where it bites.** Surfaced 2026-04-19 by the restaurant exemplar phantom-customer regression. Browser smoke test at tick 4522 showed `seated = -4` (impossible counter) because a queued customer was bound to a table by the dispatcher (`t.customerId = queuedId; c.tableId = freeTable`), then despawned by the patience system before seating completed. The table ran the rest of its lifecycle pointing at a dead customer id; `served++` and `walked++` both fired for the same human.
-
-**Root cause.** Components carry cross-entity references as bare `number | null` fields. `world.despawn(id)` reclaims the entity but does not notify any component that pointed to it. The reverse-index — "who referenced entity 17?" — does not exist. A despawn leaves dangling pointers in every other component, and the engine offers no idiom to keep them in sync.
-
-**Why a critique-grade issue, not just a bug.** Bare-id references are the *only* documented way to model multi-entity relationships in DOMECS. The pattern is universal — any sim with pickups, vehicles holding passengers, sockets holding connectors, parent/child hierarchies — and the engine punts on the consistency problem entirely. Three spec-surface gaps:
-
-1. **SPEC §2.6 is silent on despawn ordering vs cross-references.** Consumers can't know whether handlers run before or after data reclaim, or whether despawning during another despawn handler is safe.
-2. **No first-class `EntityRef` type.** Every consumer rolls their own discipline, every consumer gets it slightly wrong eventually. The phantom-customer bug is the canonical failure mode.
-3. **No built-in cleanup signal.** `signals.entityDespawned` would be a one-line addition that lets consumers centralise integrity logic. Its absence forces per-system guards.
-
-**Proposed normative fix.** SPEC §2.6 should normatively define one of:
-
-- **Lightweight (preferred for v0.1):** `signals.entityDespawned: Signal<Entity>` that fires once per despawn, after data reclaim is committed but before the next system runs. Consumers register one global listener that scrubs cross-refs. No engine-side reverse-indexing cost.
-- **Heavier (post-v0.1):** First-class `EntityRef<T>` field type tracked by the engine. On despawn, all `EntityRef`s pointing at the dying id are nulled before any handler runs.
-
-Either way, SPEC §2.6 must commit to a despawn-handler ordering rule so consumers can reason about what state they'll see.
-
-**Status.** Open. Tracked as `findings.md` §F-9. Workaround until merged: gate cross-component reads on a state-flag held by the *referent*, not on "field is non-null". The patience-skip fix in `example/restaurant/src/sim.ts:128-134` is the canonical pattern.
-
-### 1.3 No public entity-iteration helper (F-10)
-
-**Where it bites.** Surfaced 2026-04-19 by `example/restaurant/test/sim.test.ts` `countCustomersByState`. The test had to write `world.query({ kind: 'has', type: Customer })` because `Has(Customer)` *reads* as a system-declaration combinator, not an inspection idiom — and `world.componentTypes()` looks like the iteration helper but isn't.
-
-**Why a (small) critique-grade issue.** Less load-bearing than 1.1/1.2 but still a spec-surface issue: the API exposes pieces (`world.query`, `Has`, `world.componentTypes`) that the user must compose for the most common test/inspection pattern, and the closest-named method (`componentTypes`) returns the wrong thing. Either rename `componentTypes` to disambiguate or add a one-liner `world.entitiesWith(T)` shortcut. SPEC impact is in `api.md` only; no normative-text change.
-
-**Status.** Open. Tracked as `findings.md` §F-10.
+*None.* The three findings opened on 2026-04-19 (F-8, F-9, F-10) all closed on 2026-04-20; see §2.
 
 ---
 
@@ -78,15 +30,18 @@ The following critique points were live earlier in v0.1 development and have sin
 - **`World.start()/stop()` declared but not implemented (F-5).** Resolved 2026-04-19. `start()` is a thin rAF driver with `dtClampMs` + `pauseOnHidden` options; `stop()` cancels and detaches the visibility listener. Dashboard exemplar migrated off hand-rolled rAF.
 - **`world.step(0)` produces `scaledDelta = 0`, NaN-hazards derivative consumers (F-6).** Resolved 2026-04-19. `step(0)` is a heartbeat (no system execution, no tick advance); `dt > 0` floors the per-tick quantized ms at 1 to prevent sub-ms divisions.
 - **`spawn([[T, v], …])` forces `as never` casts (F-7).** Resolved 2026-04-19. Introduced `entry<T>(t, v)` helper + widened `ComponentBag` to accept `ComponentEntry<any>[]`. All exemplars migrated.
+- **`defineEvent` type/runtime mismatch; same-name collision (F-8).** Resolved 2026-04-20. `EventType<T>` now carries a `[eventTag]: unique symbol` populated honestly by `defineEvent` (no `as unknown as` cast); the bus dispatches via `Map<symbol, …>` keyed on `type[eventTag]`, so two `defineEvent('X')` calls produce isolated buckets. Pinned by collision regression in `packages/domecs/test/events.test.ts`.
+- **No referential-integrity story for inter-entity component fields (F-9).** Resolved 2026-04-20 by SPEC §2.10 normative despawn ordering rule + `api.md` cross-ref scrub pattern. The required `signals.entityDespawned` already existed in `world.ts`; the gap was normative — SPEC now pins the order (`componentRemoved` per type → reclaim → `entityDespawned`) so subscribers observe a post-reclaim world (`world.has(id, T) === false`). First-class `EntityRef<T>` deferred. Pinned by ordering test in `packages/domecs/test/world.basic.test.ts`.
+- **No public entity-iteration helper for a single component type (F-10).** Resolved 2026-04-20 by adding `world.entitiesWith<T>(type): Iterable<{id, value: T}>` in `packages/domecs/src/world.ts` — a generator that walks the type's store directly, cheaper than `query(Has(type))` + per-entity `getComponent`. Used in the F-9 cross-ref scrub example in `api.md`.
 
 ---
 
 ## 3. Verdict
 
-The original v0.1 critique (F-2/F-3/F-4/F-5/F-6/F-7) is closed. Three new open items surfaced 2026-04-19 from the restaurant exemplar build:
+All v0.1 critique findings (F-2/F-3/F-4/F-5/F-6/F-7/F-8/F-9/F-10) are closed. The 2026-04-19 trio surfaced from the restaurant exemplar build all landed on 2026-04-20:
 
-- **§1.1 (F-8)** — `defineEvent` type/runtime mismatch; latent collision risk. Fix is small but normative.
-- **§1.2 (F-9)** — no referential-integrity story for inter-entity component fields. Affects every multi-entity sim. Lightweight fix (`signals.entityDespawned` + ordering rule) recommended for v0.1; first-class `EntityRef<T>` deferred.
-- **§1.3 (F-10)** — minor `api.md` ergonomics gap; one-liner helper.
+- **F-8** — identity-keyed event dispatch removes the silent same-name collision and the type/runtime mismatch in one change.
+- **F-9** — the load-bearing one (real impossible-state bug `seated = -4` in the restaurant exemplar). The signal pre-existed; the normative ordering rule + canonical scrub pattern give consumers a documented integrity path. First-class `EntityRef<T>` remains deferred for a future revision.
+- **F-10** — small ergonomic helper that makes the F-9 scrub pattern a one-liner.
 
-§1.2 is the load-bearing one — it surfaced as a real impossible-state bug in the restaurant exemplar (`seated = -4`) before being patched in the consumer. It should land before v0.1 is published as stable. §1.1 and §1.3 are both quick wins that should accompany it.
+No open critique items against v0.1 at this time.
