@@ -140,3 +140,10 @@ vite.config.ts.timestamp-*
 
 # Playwright MCP snapshots/logs
 .playwright-mcp/
+
+# Playwright / screenshot artifacts
+artifacts/**
+!artifacts/README.md
+test-results/
+playwright-report/
+/**/playwright/.cache/
