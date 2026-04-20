@@ -139,15 +139,137 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
       requestAnimationFrame?: unknown
       cancelAnimationFrame?: unknown
     }
-    const prev = g.requestAnimationFrame
-    g.requestAnimationFrame = undefined
+    delete g.requestAnimationFrame
     try {
       const w = createWorld()
       expect(() => w.start()).toThrowError(/requestAnimationFrame/)
     } finally {
-      g.requestAnimationFrame = prev
-      // Reinstall for any later beforeEach-driven tests.
+      // Reinstall the harness so afterEach's restore() has something to
+      // clean up and so any later tests in this block still get stubs.
       raf = installRaf() as RafHarness & { restore: () => void }
     }
+  })
+
+  it('start() returns a disposer that stops the loop', () => {
+    const w = createWorld()
+    const dispose = w.start()
+    expect(raf.pending()).toBe(true)
+    dispose()
+    expect(raf.pending()).toBe(false)
+  })
+
+  it('stop() is idempotent — calling it twice does not double-cancel', () => {
+    const w = createWorld()
+    w.start()
+    w.stop()
+    expect(raf.cancels).toBe(1)
+    w.stop()
+    expect(raf.cancels).toBe(1)
+  })
+
+  it('survives repeated start/stop cycles without dt spikes', () => {
+    const w = createWorld()
+    const seen: number[] = []
+    w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.delta) })
+    for (let i = 0; i < 3; i++) {
+      w.start()
+      raf.advance(16)      // prime
+      raf.advance(16)      // step(0.016)
+      w.stop()
+      raf.advance(2_000)   // long gap outside the loop
+    }
+    for (const d of seen) expect(d).toBeLessThan(1)
+    expect(seen.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('World.start() — visibilitychange handling (F-5)', () => {
+  interface DocStub {
+    hidden: boolean
+    addEventListener: (t: string, cb: () => void) => void
+    removeEventListener: (t: string, cb: () => void) => void
+    _dispatch(): void
+  }
+  function installDocument(): DocStub {
+    const listeners = new Set<() => void>()
+    const doc: DocStub = {
+      hidden: false,
+      addEventListener: (type, cb) => {
+        if (type === 'visibilitychange') listeners.add(cb)
+      },
+      removeEventListener: (type, cb) => {
+        if (type === 'visibilitychange') listeners.delete(cb)
+      },
+      _dispatch(): void {
+        for (const cb of listeners) cb()
+      },
+    }
+    const globals = globalThis as unknown as { document?: unknown }
+    const prev = globals.document
+    globals.document = doc
+    ;(doc as unknown as { restore: () => void }).restore = (): void => {
+      if (prev === undefined) delete globals.document
+      else globals.document = prev
+    }
+    return doc
+  }
+
+  let raf: RafHarness & { restore: () => void }
+  let doc: DocStub & { restore?: () => void }
+  beforeEach(() => {
+    raf = installRaf() as RafHarness & { restore: () => void }
+    doc = installDocument() as DocStub & { restore: () => void }
+  })
+  afterEach(() => {
+    doc.restore?.()
+    raf.restore()
+  })
+
+  it('pauses world when hidden=true, resumes on re-show, and discards gap', () => {
+    const w = createWorld()
+    const seen: number[] = []
+    w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.delta) })
+    w.start({ dtClampMs: 100 })
+    raf.advance(16)             // prime
+    raf.advance(16)             // step(0.016)
+    expect(seen[0]).toBeCloseTo(0.016, 3)
+    // Simulate tab-hide.
+    doc.hidden = true
+    doc._dispatch()
+    expect(w.time.scale).toBe(0)
+    // rAF frames keep arriving but scale=0 means no tick systems run.
+    const before = seen.length
+    raf.advance(5_000)
+    expect(seen.length).toBe(before)
+    // Re-show: resume + rafLastWallMs reset.
+    doc.hidden = false
+    doc._dispatch()
+    expect(w.time.scale).toBe(1)
+    raf.advance(16)             // priming frame after reset
+    raf.advance(16)             // step(0.016), NOT step(5.016)
+    w.stop()
+    const last = seen[seen.length - 1]!
+    expect(last).toBeLessThan(1)
+  })
+
+  it('removeEventListener on stop(): late visibilitychange events are ignored', () => {
+    const w = createWorld()
+    w.start()
+    w.stop()
+    // The handler was removed; dispatching post-stop must NOT throw and must
+    // NOT flip world scale (no lingering pause/resume).
+    doc.hidden = true
+    expect(() => doc._dispatch()).not.toThrow()
+    expect(w.time.scale).toBe(1)
+  })
+
+  it('pauseOnHidden:false opts out entirely', () => {
+    const w = createWorld()
+    w.start({ pauseOnHidden: false })
+    doc.hidden = true
+    doc._dispatch()
+    // No handler attached → no pause.
+    expect(w.time.scale).toBe(1)
+    w.stop()
   })
 })

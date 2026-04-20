@@ -20,6 +20,12 @@ export interface ComponentOptions<T> {
  */
 export type ComponentEntry<T = unknown> = readonly [ComponentType<T>, T]
 
+// `ComponentEntry<any>` (not `<unknown>`) is load-bearing: bag-level consumers
+// iterate heterogeneous tuples whose T varies per element. `unknown` propagates
+// through `[ComponentType<unknown>, unknown]` and re-introduces the invariance
+// assignability failure that `entry<T>()` was built to avoid; `any` opts the
+// bag type out of checking *between* tuples while `entry()` preserves the
+// tie *within* each tuple.
 export type ComponentBag =
   | ReadonlyMap<ComponentType<unknown>, unknown>
   | ReadonlyArray<ComponentEntry<any>>

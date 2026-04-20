@@ -647,6 +647,9 @@ export function createWorld(options: WorldOptions = {}): World {
       // quantized dt at 1 ms so sub-ms wall-clock frames never expose
       // scaledDelta = 0 to consumers that divide by it (PIDs, smoothing
       // filters, rate estimators). No-arg step() keeps its d=0 behaviour.
+      // Guard on `d`, not `rawDtMs`: `rawDtMs` can be 0 from quantization
+      // carry even with positive caller dt, and that is exactly the case
+      // we need to raise to 1 ms.
       const rawDtMs = newQuantizedMs - lastQuantizedElapsedMs
       const dtMs = time.scale !== 0 && d > 0 && rawDtMs < 1 ? 1 : rawDtMs
       lastQuantizedElapsedMs = newQuantizedMs
@@ -752,6 +755,8 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       const raf = g.requestAnimationFrame
       const dtClampMs = options?.dtClampMs ?? 100
+      // Default true; explicit `false` disables. Anything else (undefined,
+      // nullish, truthy) enables — the switch is strict boolean-false.
       const pauseOnHidden = options?.pauseOnHidden !== false
       rafLastWallMs = null
       const frame = (t: number): void => {
@@ -773,6 +778,10 @@ export function createWorld(options: WorldOptions = {}): World {
       if (pauseOnHidden && g.document && typeof g.document.addEventListener === 'function') {
         const doc = g.document
         rafVisHandler = (): void => {
+          // Defensive: browsers may deliver a queued visibilitychange event
+          // after stop()+removeEventListener fires on the same microtask.
+          // Ignore it; the next start() installs a fresh handler.
+          if (rafHandle === null) return
           if (doc.hidden) {
             world.pause()
           } else {

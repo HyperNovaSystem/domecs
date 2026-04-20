@@ -174,6 +174,8 @@ interface TimeState {
 
 Result: `scaledDelta` keeps its §7 wire-format guarantee, and a `fixed` system at `rateHz = baseHz` fires exactly `N` times in `N * fixedStep` seconds of scaled time — at any `fixedStep`, ms-exact or not.
 
+**Positive-floor rule (normative, F-6).** When `step(dt)` is called with a positive wall-clock `dt` and the world is not paused (`time.scale !== 0`), the per-tick ms-quantized dt MUST NOT be zero — it MUST be raised to a minimum of 1 ms (i.e. `scaledDelta >= 1e-3`). Without this, sub-ms wall-clock frames (common on high-refresh monitors) produce `scaledDelta = 0`, which yields `NaN` in any controller that divides by dt (PIDs, rate estimators, first-order smoothing filters). The floor applies only to the per-tick *published* value: the internal cumulative unquantized total is unchanged, so §2.7's drift-free guarantee still holds across any window that contains at least one normally-sized frame. The floor is bypassed when the caller explicitly requests a no-op heartbeat (§4 step 0 exception below) — a positive dt is the signal that real time elapsed.
+
 ### 2.8 PRNG
 
 `world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
@@ -279,7 +281,22 @@ Roguelike default.
 
 ## 4. Tick order (normative)
 
-At each tick:
+### 4.0 `step(dt)` heartbeat exception (F-6, normative)
+
+An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, not a tick. The implementation MUST:
+
+1. Leave `time.tick`, `time.elapsed`, and all change-detection buffers (live and pending) unchanged.
+2. Set `time.delta = 0` and `time.scaledDelta = 0`.
+3. Skip steps 3–6 entirely — no `fixed`, `tick`, `event`, or `reactive` systems run.
+4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots.
+
+A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Change-detection buffers marked via external `markChanged` calls *before* a heartbeat are preserved and promoted normally by the next positive `step(dt)`.
+
+**Legacy carve-out.** A no-argument `step()` call (`dt === undefined`) is *not* a heartbeat — it advances a tick with `time.delta = 0` for backwards compatibility with turn-based exemplars. Turn-based callers should use `turn(event, payload)` (which invokes `step()` internally) rather than passing literal zero. Code that wants explicit "do nothing now but keep the UI alive" behavior MUST pass `0` explicitly.
+
+### 4.1 Normal tick order
+
+For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
 
 0. **Reset per-tick state.** Clear the live Added/Removed/Changed sets, then drain pending between-tick writes into them (per §2.9 buffer-and-swap rule). After this step, the live sets contain exactly the structural changes / `markChanged` calls that occurred since the previous tick's step 0, regardless of whether they came from systems or external callers.
 1. **Flush event buffer from last tick.** Events become readable by event systems.

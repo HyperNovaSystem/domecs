@@ -58,10 +58,33 @@ interface ComponentType<T> {
 ```ts
 interface World {
   // lifecycle
-  start():  void
+  //
+  // `start(options?)` installs an rAF-driven loop that computes wall-clock
+  // dt, clamps it, and pipes each frame into `step(dt)`. Returns a disposer
+  // that calls `stop()`. Calling `start()` on an already-running world is a
+  // no-op (returns the disposer). In environments without
+  // `requestAnimationFrame` it throws — use `step(dt)` instead.
+  //
+  // `step(dt)` semantics:
+  //   - `step(dt)` with `dt > 0`: normal tick advance.
+  //   - `step(0)` — F-6 heartbeat: no tick advance, no system execution,
+  //     no change-detection buffer swap. Plugin hooks + tickStart/tickEnd
+  //     signals + onRender still fire so UIs can paint initial state and
+  //     input plugins can republish snapshots between turns. Use this to
+  //     prime the world before `start()` or to poll between turns in a
+  //     turn-based game.
+  //   - `step()` (no arg): legacy "advance one tick with dt=0". Preserved
+  //     for `turn()` and turn-based exemplars. Not a heartbeat.
+  //   - `step(dt)` with `0 < dt < 1 ms`: dt is floored at 1 ms of
+  //     scaled time so PID derivative consumers never see `scaledDelta=0`.
+  //     See SPEC §2.7.
+  start(options?: StartOptions): () => void
   stop():   void
-  step(dt?: number):  void     // headless or manual
-  stepN(n: number):   void
+  step(dt?: number):  void     // see rules above
+  stepN(n: number, dt?: number): void
+
+  // Turn-based action: emit an event and advance one tick.
+  turn<T>(type: EventType<T>, payload: T, dt?: number): void
 
   // entities
   spawn(components?: ComponentBag): Entity
@@ -145,14 +168,31 @@ interface World {
 
 type Entity = number
 
+// Options for `World.start`. The rAF driver is intentionally thin:
+// compute wall-clock dt, clamp it, pipe it to step(dt). Consumers that
+// need custom scheduling keep using `step()` directly.
+interface StartOptions {
+  dtClampMs?:    number   // default 100
+  pauseOnHidden?: boolean // default true
+}
+
 // Observation channel returned from `World.signals`. Subscribers fire
 // synchronously in the tick phase that emitted the signal (see SPEC §2.10).
 interface Signal<T> {
   subscribe(fn: (e: T) => void): () => void   // returns unsubscribe
 }
 
-type ComponentBag = Record<string, unknown>
-// runtime-typed via the ComponentType's `name` as the bag key
+// Spawn bags: pass components either as a Map (runtime-keyed by ComponentType)
+// or as a readonly array of tuple pairs. For tuple arrays, prefer
+// `entry(type, value)` over raw `[type, value]` — `entry<T>()` preserves the
+// tie between the tuple's component type and its value's T under strict
+// TypeScript, eliminating `as never` casts (F-7 in doc/findings.md).
+type ComponentEntry<T = unknown> = readonly [ComponentType<T>, T]
+type ComponentBag =
+  | ReadonlyMap<ComponentType<unknown>, unknown>
+  | ReadonlyArray<ComponentEntry<any>>
+
+function entry<T>(type: ComponentType<T>, value: T): ComponentEntry<T>
 
 interface SystemDef {
   query?:    QueryDef
