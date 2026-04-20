@@ -1,0 +1,163 @@
+:root {
+  --bg: #0a0e14;
+  --panel: #10161f;
+  --panel-edge: #1d2838;
+  --ink: #dce3ea;
+  --dim: #5e6d80;
+  --accent: #7cc6ff;
+  --warn: #ffb648;
+  --danger: #ff5d64;
+  --ok: #60e196;
+  --table-free: #25344a;
+  --table-busy: #4d5f3a;
+  --table-cooking: #6b552d;
+  --table-ready: #2d6b53;
+  --table-eating: #2a4f6b;
+  --table-done: #6b2d2d;
+  --table-clearing: #3a3a55;
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; background: var(--bg); color: var(--ink); padding: 14px 18px; }
+
+header { max-width: 1100px; margin: 0 auto 14px; }
+header h1 { margin: 0 0 3px; font-size: 16px; letter-spacing: 0.05em; }
+header p { margin: 0; font-size: 11px; color: var(--dim); }
+header code {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    'floor hud'
+    'chrome chrome';
+  gap: 14px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+#floor {
+  grid-area: floor;
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  min-height: 460px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  grid-template-rows: max-content;
+  gap: 12px;
+  align-content: start;
+}
+
+#hud {
+  grid-area: hud;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+#chrome {
+  grid-area: chrome;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* table cards */
+.table-card {
+  position: relative;
+  height: 96px;
+  border: 1px solid var(--panel-edge);
+  background: var(--table-free);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 11px;
+  transition: background-color 120ms linear;
+}
+.table-card .idx { color: var(--dim); }
+.table-card .state { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.table-card .timer {
+  position: absolute; right: 8px; top: 8px;
+  font-variant-numeric: tabular-nums; color: var(--dim);
+}
+.table-card.state-free { background: var(--table-free); }
+.table-card.state-seated, .table-card.state-ordering { background: var(--table-busy); }
+.table-card.state-cooking { background: var(--table-cooking); }
+.table-card.state-ready, .table-card.state-serving { background: var(--table-ready); }
+.table-card.state-eating { background: var(--table-eating); }
+.table-card.state-done { background: var(--table-done); }
+.table-card.state-clearing { background: var(--table-clearing); }
+.table-card .bar {
+  height: 4px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.table-card .bar > div {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 80ms linear;
+}
+
+/* HUD: queue + waiters + stats */
+#queue, #staff {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--panel-edge);
+}
+.queued-dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--warn);
+  border: 1px solid #1d2838;
+}
+.queued-dot.fading { opacity: 0.4; }
+
+.waiter-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #1a2533;
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  color: var(--dim);
+}
+.waiter-pill.idle { color: var(--dim); }
+.waiter-pill.seating, .waiter-pill.taking { color: var(--accent); }
+.waiter-pill.serving { color: var(--ok); }
+.waiter-pill.clearing { color: var(--warn); }
+
+#stats {
+  font-size: 12px;
+  display: grid;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+#stats .row { display: flex; justify-content: space-between; }
+#stats .row .k { color: var(--dim); }
+#stats .row .v { color: var(--ink); }
+#stats .row .v.revenue { color: var(--ok); }
+#stats .row .v.walked { color: var(--danger); }
+#stats .row .v.queue { color: var(--warn); }
+#stats .paused { color: var(--warn); font-weight: 700; }

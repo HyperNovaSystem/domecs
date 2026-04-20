@@ -151,3 +151,71 @@ The goal: the value position's `T` is tied to the type position's `T` *within ea
 **Spec impact.** `api.md` §`spawn` + §`ComponentBag` — adopt the `Entry<T>` tagged-tuple form, document the `entry()` helper, and note that `as const` (or the helper) is required for inference.
 
 **Resolution.** Introduced `ComponentEntry<T> = readonly [ComponentType<T>, T]` and exported helper `entry<T>(t, v): ComponentEntry<T>` from `domecs`. `ComponentBag` widened to accept `ReadonlyArray<ComponentEntry<any>>` so heterogeneous-tuple inference flows through per entry. All three exemplars (roguelike, dashboard, lift tests) migrated off the `as never` casts; value-shape mismatches now fail at compile time (covered by `// @ts-expect-error` probe in `world.basic.test.ts`).
+
+---
+
+## [F-8] `defineEvent` returns wrong-shape object; symbol identity is dead
+
+**Status:** open — 2026-04-19
+**Surfaced by:** `example/restaurant/src/sim.ts` — four `defineEvent(...)` declarations + reading `packages/domecs/src/events.ts` while debugging `ResetEvent` dispatch.
+
+**Problem.** `EventType<T>` declares `readonly [__eventTag]: symbol` (a `unique symbol` property key — guarantees nominal-typing per type). The impl returns `{ name, __tag: Symbol(name) }` — a plain string-named `__tag` field, then `as unknown as EventType<T>` to silence TS. The runtime object literally has no `[__eventTag]` property; the symbol-keyed slot the interface promises is missing. Worse: the event bus dispatches *only* by `type.name` ([`events.ts:37,41,53,59,73`](../packages/domecs/src/events.ts)), so the `Symbol(name)` is constructed and immediately thrown away — pure dead state.
+
+Two practical consequences:
+
+1. **Name collisions silently merge events.** Two `defineEvent<A>('Reset')` and `defineEvent<B>('Reset')` calls — possibly across packages or re-exports — share a single dispatch bucket. Subscribers see payloads of the wrong `T`. The unique-symbol contract was supposed to prevent exactly this; the cast nullifies it.
+2. **Type erasure means no value-shape check at the boundary.** The cast `as unknown as EventType<T>` strips `T`, so subscribers can pull `EventType<{rate: number}>` via `events.of(SomeOtherEvent)` if the names collide and TS infers correctly elsewhere — runtime returns `{wholeDifferentShape}` payloads with no warning.
+
+**Proposed resolution.** Two parts:
+
+1. **Make the runtime object match the type.** Either name the property correctly (`{ name, [__eventTag]: Symbol(name) }`, exporting the symbol so consumers can construct event types if needed) or drop the symbol from the type and use *only* `name` as the discriminator (admit dispatch is name-based and document name-uniqueness as a precondition). Preferred: keep the symbol, fix the property key, dispatch through it instead of `name` — closes the collision hole.
+2. **Either way, drop the `as unknown as` cast.** If the construction is correct the cast is unnecessary and the type system should accept it. The cast is the smell that made the bug invisible.
+
+If symbol-based dispatch lands, a small ergonomic helper `eventName(type)` for telemetry/log lines avoids consumers reaching into `type.name`.
+
+**Spec impact.** `api.md` §`defineEvent` — clarify whether dispatch is name-keyed (and document collision policy) or identity-keyed via the symbol. SPEC §2.6 currently doesn't pin this down. No normative change to event lifecycle.
+
+---
+
+## [F-9] No referential-integrity story for inter-entity component fields
+
+**Status:** open — 2026-04-19
+**Surfaced by:** `example/restaurant/src/sim.ts` phantom-customer regression — fixed today by adding a `c.tableId !== null` guard to the patience system, after a browser smoke test at tick 4522 showed `seated = -4` (impossible) in the chrome footer.
+
+**Problem.** Restaurant components carry cross-entity references as bare numbers: `Table.customerId: number | null`, `Table.waiterId: number | null`, `Customer.tableId: number | null`, `Waiter.tableId: number | null`. The engine offers no help keeping these in sync:
+
+- When `world.despawn(id)` runs, every component that holds `id` as a foreign reference becomes a *dangling pointer*. `world.getComponent(staleId, T)` returns `undefined`, but the caller has to remember to check, and there's no way to ask "what referenced this entity before it died?"
+- The phantom-customer bug surfaced exactly this: a queued customer was bound to a table by `dispatcher` (`t.customerId = queuedId; c.tableId = freeTable`), then the `patience` system despawned the same customer because its state was still `'queued'`. The table lived on with a dangling `customerId`, the seating timer completed, the lifecycle ran to `served++`, and the same human was counted both walked and served.
+
+The fix in the exemplar is local (skip patience for bound customers + null-guard in `completeTask`), but the *class* of bug is endemic to any sim with multi-entity relationships: pickups, vehicles holding passengers, sockets holding a connector. The engine surfaces no idiom for it.
+
+**Proposed resolution options** (not mutually exclusive):
+
+1. **Cascade hooks.** `defineComponent` accepts an optional `onEntityDespawned(self, despawnedId, world)` predicate, run during despawn flush for every component referencing the despawned entity. Engine doesn't track references — the consumer registers their own scan logic per type. Cheap, opt-in, no overhead for components without cross-refs.
+2. **Typed entity references.** A first-class `EntityRef<T extends Component[]>` field type that the engine tracks. On despawn, all `EntityRef`s pointing at the dying id are nulled (or trigger a registered handler) before the component data is reclaimed. Heavier — pays per-ref maintenance cost — but eliminates the failure mode at the root.
+3. **`world.onDespawn(fn)` global signal.** A `signals.entityDespawned` (similar to existing `signals.tickEnd`) firing the despawned id, lets consumers hand-roll cleanup centrally. Lightest weight; doesn't help locally-scoped invariants but at least gives one chokepoint.
+
+**Spec impact.** SPEC §2.6 lifecycle would need a normative statement about despawn ordering vs. cross-references regardless of which option lands. Currently silent — consumers infer from behaviour.
+
+**Workaround until then.** State-machine designs that span entities should put the *authoritative state flag* on a single component and have all referrers gate on it (here: customer.state). Don't gate on "field is non-null" alone — fields are mutable and references can outlive their referents.
+
+---
+
+## [F-10] No public entity-iteration helper; `world.query` requires a node literal in tests
+
+**Status:** open — 2026-04-19
+**Surfaced by:** `example/restaurant/test/sim.test.ts` `countCustomersByState` helper.
+
+**Problem.** Test-side helpers that need to walk all entities of a given component have no first-class API. The exemplar test settled on `world.query({ kind: 'has', type: Customer })` because:
+
+- `Has(Customer)` is the documented combinator but reads as a *system query* declaration; intuition says queries are tied to the system lifecycle, not ad-hoc test inspection. (In fact `world.query(Has(Customer))` works just fine — but it took a code read to confirm.)
+- There's no `world.entitiesWith(Customer)` or `world.componentEntries(Customer)` or `for (const [id, c] of world.iter(Customer))` shorthand.
+- `world.componentTypes()` exists but returns the type registry, not the entities — a near-miss in the API that *suggests* an iteration affordance is there when it isn't.
+
+The helper landed as a confused mix: it iterates `world.componentTypes()` for no reason (early dead loop), then falls through to `world.query({kind:'has', type:Customer})`. That confusion is a tell.
+
+**Proposed resolution.** Add `world.entitiesWith<T>(type: ComponentType<T>): Iterable<{id: Entity, value: T}>` (or similar) as a documented shortcut that internally just calls `world.query(Has(type))`. Doesn't change semantics; signals "this is the test/inspection path, not a system declaration"; eliminates the node-literal incantation.
+
+Alternative: rename `componentTypes()` to make its scope obvious (`registeredComponentTypes()`) so it stops collision-hinting at iteration.
+
+**Spec impact.** `api.md` §`World` — add the helper. No SPEC normative impact.

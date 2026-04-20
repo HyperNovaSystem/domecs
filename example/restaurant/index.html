@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DOMECS · Restaurant</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>DOMECS · Restaurant Floor</h1>
+      <p>
+        <code>P</code> pause/resume · <code>R</code> reset ·
+        <code>↑</code>/<code>↓</code> arrival rate ·
+        <code>+</code>/<code>-</code> add/remove waiter
+      </p>
+    </header>
+    <main>
+      <section id="floor" aria-label="Restaurant floor"></section>
+      <aside id="hud" aria-label="Stats">
+        <div id="queue" aria-label="Door queue"></div>
+        <div id="staff" aria-label="Waiters"></div>
+        <div id="stats" aria-label="Counters"></div>
+      </aside>
+      <footer id="chrome" aria-label="Status"></footer>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
