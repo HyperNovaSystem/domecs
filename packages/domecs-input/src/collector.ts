@@ -33,6 +33,7 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
   return {
     name: 'domecs-input',
     install(world: World): PluginHandle {
+      const wake = (world as World & { __wake?: () => void }).__wake
       const doc = typeof document !== 'undefined' ? document : undefined
       const win = typeof window !== 'undefined' ? window : undefined
       const keyTarget = (options.keyTarget ?? doc) as EventTarget | undefined
@@ -72,6 +73,7 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         }
         syncMods(e)
         if (preventDefaultKeys && isHandledKey(code)) e.preventDefault()
+        wake?.()
       }
       function onKeyUp(ev: Event): void {
         const e = ev as KeyboardEvent
@@ -81,12 +83,14 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
           pressedNext.delete(code)
         }
         syncMods(e)
+        wake?.()
       }
       function onBlur(): void {
         if (!clearOnBlur) return
         for (const c of held) releasedNext.add(c)
         held.clear()
         mods.ctrl = mods.alt = mods.shift = mods.meta = false
+        wake?.()
       }
       function syncMods(e: KeyboardEvent): void {
         mods.ctrl = e.ctrlKey
@@ -114,20 +118,24 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         pointer.deltaX += pointer.x - prevX
         pointer.deltaY += pointer.y - prevY
         pointer.buttons = e.buttons
+        wake?.()
       }
       function onPointerDown(ev: Event): void {
         const e = ev as PointerEvent
         pointer.x = e.clientX
         pointer.y = e.clientY
         pointer.buttons = e.buttons
+        wake?.()
       }
       function onPointerUp(ev: Event): void {
         const e = ev as PointerEvent
         pointer.buttons = e.buttons
+        wake?.()
       }
       function onWheel(ev: Event): void {
         const e = ev as WheelEvent
         pointer.wheel += e.deltaY
+        wake?.()
       }
 
       keyTarget?.addEventListener('keydown', onKeyDown)

@@ -39,6 +39,7 @@ export type {
 } from './types.js'
 export type {
   QueryDef,
+  QueryHooks,
   QueryNode,
   QueryResult,
   QueryShorthand,

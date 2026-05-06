@@ -130,6 +130,17 @@ describe('world — entity & component basics', () => {
     expect(value).toEqual({ hp: 5, max: 10 })
   })
 
+  it('enforces ComponentOptions.validate on addComponent', () => {
+    const world = createWorld()
+    const e = world.spawn()
+    const Stock = defineComponent<{ units: number }>('Stock', {
+      validate: (value) => value.units >= 0 || 'units must be non-negative',
+    })
+    expect(() => world.addComponent(e, Stock, { units: -1 })).toThrow(/non-negative/)
+    expect(world.has(e, Stock)).toBe(false)
+    expect(world.getComponent(e, Stock)).toBeUndefined()
+  })
+
   it('rejects duplicate addComponent on same entity', () => {
     const world = createWorld()
     const e = world.spawn()

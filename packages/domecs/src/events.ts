@@ -29,6 +29,8 @@ export interface EventBus {
   flush(): EventView
   /** Current view (for inspection). */
   view(): EventView
+  /** Whether any events are queued for the next tick. */
+  hasPending(): boolean
 }
 
 export function createEventBus(): EventBus {
@@ -89,6 +91,9 @@ export function createEventBus(): EventBus {
     },
     view(): EventView {
       return makeView(current)
+    },
+    hasPending(): boolean {
+      return pending.size > 0
     },
   }
 }

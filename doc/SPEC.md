@@ -266,12 +266,18 @@ Rationale: multiple independent accumulators would multiply the state that snaps
 
 ### Idle suspension
 
-If there are no `tick` or `fixed` systems with non-empty queries, and no events are queued, the RAF loop stops.
-It resumes on `world.emit()`, input, or `world.start()`.
+If there are no enabled `tick`/`fixed` systems that require continuous
+frames, no unfired `once` systems, no pending component work, and no queued
+events, the RAF loop sleeps.
+It resumes on external `world.emit()`, structural component mutations /
+`markChanged`, input activity through `domecs-input`, `resume()`, or an
+explicit `world.start()`.
 
 ### Headless mode
 
-`createWorld({ headless: true })` disables RAF. `world.step(deltaSeconds)` advances one tick manually.
+`createWorld({ headless: true })` disables the realtime driver. `world.start()`
+MUST throw even if the host environment exposes `requestAnimationFrame`;
+`world.step(deltaSeconds)` advances one tick manually.
 `world.stepN(steps)` advances N ticks. Used by tests, AI search, board game replay, server authority.
 
 ### Turn-based mode
@@ -532,7 +538,7 @@ Plugins registered without any hooks fall back to the degenerate `(world) => tea
 
 ### 9.5 Hot-swap (dev only)
 
-Dev builds expose `SystemHandle.replaceFn(fn: System): void`. It swaps a system's function in place while preserving:
+Source/dev builds expose `SystemHandle.replaceFn(fn: System): void`. It swaps a system's function in place while preserving:
 
 - the `SystemDef` (query, schedule, priority, rateHz, triggers, reactsTo, enabled)
 - the `state` slot (§2.5)

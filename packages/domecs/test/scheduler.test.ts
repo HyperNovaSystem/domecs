@@ -48,6 +48,21 @@ describe('system scheduler — tick order (SPEC §4)', () => {
     expect(n).toBe(2)
   })
 
+  it('replaceFn swaps in the new implementation on the next tick boundary', () => {
+    const w = createWorld()
+    const log: string[] = []
+    let h!: ReturnType<typeof w.system>
+    h = w.system('x', {}, () => {
+      log.push('a')
+      h.replaceFn?.(() => {
+        log.push('b')
+      })
+    })
+    w.step(0.016)
+    w.step(0.016)
+    expect(log).toEqual(['a', 'b'])
+  })
+
   it('SystemDef.enabled() gate overrides per-tick', () => {
     const w = createWorld()
     let running = false

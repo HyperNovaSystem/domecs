@@ -25,6 +25,7 @@ import {
   treeHas,
   type EntityView,
   type QueryDef,
+  type QueryHooks,
   type QueryNode,
   type QueryResult,
 } from './query.js'
@@ -73,6 +74,7 @@ export interface World {
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   query(def: QueryDef): QueryResult
+  observe(def: QueryDef, hooks: QueryHooks): () => void
   step(dt?: number): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
@@ -124,6 +126,8 @@ interface CompiledQuery {
 
 export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
+  const headless = options.headless === true
+  const idle = options.idle !== false
   let rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
@@ -153,9 +157,12 @@ export function createWorld(options: WorldOptions = {}): World {
   let plugins!: ReturnType<typeof createPluginRegistry>
   let fixedStepCounter = 0
   // F-5: rAF driver state. `rafHandle === null` means "not running".
+  let rafStarted = false
   let rafHandle: number | null = null
   let rafLastWallMs: number | null = null
   let rafVisHandler: (() => void) | null = null
+  let rafWakeStep = false
+  let rafDtClampMs = 100
   // F-3: drift-free fixed-step driver.
   let totalScaledSeconds = 0
   let fixedStepsFired = 0
@@ -187,6 +194,7 @@ export function createWorld(options: WorldOptions = {}): World {
   // queries
   const queries: CompiledQuery[] = []
   let nextQueryId = 0
+  let nextObserverId = 0
 
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
@@ -365,6 +373,49 @@ export function createWorld(options: WorldOptions = {}): World {
     return false
   }
 
+  function hasPendingComponentWork(): boolean {
+    return pendingAdded.size > 0 || pendingRemoved.size > 0 || pendingChanged.size > 0
+  }
+
+  function hasFrameSystems(): boolean {
+    for (const s of scheduler.systemsByMode('once')) {
+      if (!s.ranOnce && isEnabled(s)) return true
+    }
+    for (const s of scheduler.systemsByMode('tick')) {
+      if (isEnabled(s)) return true
+    }
+    if (time.scale !== 0) {
+      for (const s of scheduler.systemsByMode('fixed')) {
+        if (isEnabled(s)) return true
+      }
+    }
+    return false
+  }
+
+  function shouldKeepDriverAwake(): boolean {
+    if (!idle) return true
+    if (hasFrameSystems()) return true
+    if (hasPendingComponentWork()) return true
+    if (bus.hasPending()) return true
+    return false
+  }
+
+  function scheduleDriverFrame(): void {
+    if (!rafStarted || rafHandle !== null) return
+    const g = globalThis as unknown as {
+      requestAnimationFrame?: (cb: (t: number) => void) => number
+    }
+    if (typeof g.requestAnimationFrame !== 'function') return
+    rafHandle = g.requestAnimationFrame(frame)
+  }
+
+  function wakeDriver(): void {
+    if (!rafStarted || !idle || inTick) return
+    if (rafHandle !== null) return
+    if (rafLastWallMs !== null) rafWakeStep = true
+    scheduleDriverFrame()
+  }
+
   function runSystem(s: CompiledSystem, view: EventView): void {
     const ctx: SystemContext = {
       entities: s.query ? s.query.entities : [],
@@ -376,6 +427,26 @@ export function createWorld(options: WorldOptions = {}): World {
       state: s.state,
     }
     s.fn(ctx)
+  }
+
+  function frame(t: number): void {
+    if (!rafStarted) return
+    rafHandle = null
+    if (rafLastWallMs === null) {
+      // First frame primes the reference — skip the step to avoid a
+      // spurious dt = t (time-origin) on the very first tick.
+      rafLastWallMs = t
+      scheduleDriverFrame()
+      return
+    }
+    const gap = t - rafLastWallMs
+    rafLastWallMs = t
+    const dtMs = rafWakeStep ? 1 : (gap > rafDtClampMs ? rafDtClampMs : gap)
+    rafWakeStep = false
+    world.step(dtMs / 1000)
+    if (!rafStarted) return
+    if (!shouldKeepDriverAwake()) return
+    scheduleDriverFrame()
   }
 
   const world: World = {
@@ -396,6 +467,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     setInput(snap: InputSnapshot): void {
       input = snap
+      wakeDriver()
     },
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
@@ -418,6 +490,7 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       sigEntitySpawned.emit(id)
+      wakeDriver()
       return id
     },
 
@@ -451,6 +524,7 @@ export function createWorld(options: WorldOptions = {}): World {
       entityArchetype.delete(entity)
       alive.delete(entity)
       sigEntityDespawned.emit(entity)
+      wakeDriver()
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {
@@ -465,15 +539,14 @@ export function createWorld(options: WorldOptions = {}): World {
           `domecs: entity ${entity} already has component "${type.name}"`,
         )
       }
-      const merged = internal(type).__defaults
-        ? ({ ...(internal(type).__defaults as object), ...(value as object) } as T)
-        : value
+      const merged = type.create(value as Partial<T>)
       store.set(entity, merged)
       recordChange(tickAdded, pendingAdded, type.name, entity)
       const nextTypes = currentTypes(entity)
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
+      wakeDriver()
     },
 
     removeComponent(entity: Entity, type: ComponentType<unknown>): void {
@@ -486,6 +559,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const nextTypes = currentTypes(entity)
       nextTypes.delete(type.name)
       moveEntity(entity, nextTypes)
+      wakeDriver()
     },
 
     getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined {
@@ -498,6 +572,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // register type into registry even if caller only marks
       storeFor(type)
       recordChange(tickChanged, pendingChanged, type.name, entity)
+      wakeDriver()
     },
 
     componentTypes(): ComponentType<unknown>[] {
@@ -591,8 +666,31 @@ export function createWorld(options: WorldOptions = {}): World {
       return result
     },
 
+    observe(def: QueryDef, hooks: QueryHooks): () => void {
+      const q = world.query(def)
+      const unsubscribers: Array<() => void> = []
+      if (hooks.onAdd) unsubscribers.push(q.onAdd(hooks.onAdd))
+      if (hooks.onRemove) unsubscribers.push(q.onRemove(hooks.onRemove))
+      let changeHandle: SystemHandle | null = null
+      if (hooks.onChange) {
+        const node = normalize(def)
+        changeHandle = world.system(
+          `__observe_${nextObserverId++}`,
+          { schedule: 'reactive', reactsTo: node },
+          () => {
+            for (const entity of q.entities) hooks.onChange!(entity)
+          },
+        )
+      }
+      return () => {
+        for (const unsubscribe of unsubscribers) unsubscribe()
+        changeHandle?.remove()
+      }
+    },
+
     emit<T>(type: EventType<T>, payload: T): void {
       bus.emit(type, payload)
+      wakeDriver()
     },
 
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
@@ -601,6 +699,7 @@ export function createWorld(options: WorldOptions = {}): World {
 
     setScale(scale: number): void {
       time.scale = scale
+      if (scale > 0) wakeDriver()
     },
 
     pause(): void {
@@ -610,10 +709,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     resume(): void {
       if (time.scale === 0) time.scale = preResumeScale
+      wakeDriver()
     },
 
     system(name, def, fn): SystemHandle {
-      return scheduler.register(name, def, fn)
+      const handle = scheduler.register(name, def, fn)
+      wakeDriver()
+      return handle
     },
 
     step(dt?: number): void {
@@ -639,6 +741,8 @@ export function createWorld(options: WorldOptions = {}): World {
         return
       }
       const d = dt ?? 0
+
+      scheduler.applyPendingReplacements()
 
       // SPEC §4 step 0 — reset per-tick change-detection, then promote
       // any between-tick (pending) marks into the live sets (F-2).
@@ -754,7 +858,11 @@ export function createWorld(options: WorldOptions = {}): World {
       // F-5: thin rAF driver. Every browser exemplar was hand-rolling this
       // with bespoke dt-clamp / first-frame priming / visibility-pause
       // logic. Owning it here gives one place to fix that mis-tune.
-      if (rafHandle !== null) return () => world.stop()
+      if (headless) {
+        throw new Error(
+          'domecs: World.start() is disabled for worlds created with headless=true; use step(dt) instead',
+        )
+      }
       const g = globalThis as unknown as {
         requestAnimationFrame?: (cb: (t: number) => void) => number
         cancelAnimationFrame?: (h: number) => void
@@ -765,35 +873,25 @@ export function createWorld(options: WorldOptions = {}): World {
           'domecs: World.start() requires requestAnimationFrame; use step(dt) in headless environments',
         )
       }
-      const raf = g.requestAnimationFrame
-      const dtClampMs = options?.dtClampMs ?? 100
+      if (rafStarted) {
+        wakeDriver()
+        return () => world.stop()
+      }
+      rafStarted = true
+      rafDtClampMs = options?.dtClampMs ?? 100
       // Default true; explicit `false` disables. Anything else (undefined,
       // nullish, truthy) enables — the switch is strict boolean-false.
       const pauseOnHidden = options?.pauseOnHidden !== false
       rafLastWallMs = null
-      const frame = (t: number): void => {
-        if (rafHandle === null) return
-        if (rafLastWallMs === null) {
-          // First frame primes the reference — skip the step to avoid a
-          // spurious dt = t (time-origin) on the very first tick.
-          rafLastWallMs = t
-          rafHandle = raf(frame)
-          return
-        }
-        const gap = t - rafLastWallMs
-        rafLastWallMs = t
-        const dtMs = gap > dtClampMs ? dtClampMs : gap
-        world.step(dtMs / 1000)
-        if (rafHandle !== null) rafHandle = raf(frame)
-      }
-      rafHandle = raf(frame)
+      rafWakeStep = false
+      scheduleDriverFrame()
       if (pauseOnHidden && g.document && typeof g.document.addEventListener === 'function') {
         const doc = g.document
         rafVisHandler = (): void => {
           // Defensive: browsers may deliver a queued visibilitychange event
           // after stop()+removeEventListener fires on the same microtask.
           // Ignore it; the next start() installs a fresh handler.
-          if (rafHandle === null) return
+          if (!rafStarted) return
           if (doc.hidden) {
             world.pause()
           } else {
@@ -801,6 +899,7 @@ export function createWorld(options: WorldOptions = {}): World {
             // Discard the accumulated wall-clock gap so the first post-
             // resume frame primes cleanly instead of delivering a spike.
             rafLastWallMs = null
+            scheduleDriverFrame()
           }
         }
         doc.addEventListener('visibilitychange', rafVisHandler)
@@ -809,14 +908,16 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     stop(): void {
-      if (rafHandle === null) return
+      if (!rafStarted) return
       const g = globalThis as unknown as {
         cancelAnimationFrame?: (h: number) => void
         document?: { removeEventListener: Function }
       }
-      g.cancelAnimationFrame?.(rafHandle)
+      if (rafHandle !== null) g.cancelAnimationFrame?.(rafHandle)
+      rafStarted = false
       rafHandle = null
       rafLastWallMs = null
+      rafWakeStep = false
       if (rafVisHandler && g.document && typeof g.document.removeEventListener === 'function') {
         g.document.removeEventListener('visibilitychange', rafVisHandler)
         rafVisHandler = null
@@ -824,7 +925,9 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     use(plugin: Plugin, options?: unknown): () => void {
-      return plugins.use(plugin, options)
+      const unuse = plugins.use(plugin, options)
+      wakeDriver()
+      return unuse
     },
 
     capability<K extends string>(name: K): Capability<K> {
@@ -924,6 +1027,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
   }
 
+  ;(world as World & { __wake?: () => void }).__wake = wakeDriver
   scheduler = createScheduler(world.query.bind(world), fixedStep)
   plugins = createPluginRegistry(world)
 

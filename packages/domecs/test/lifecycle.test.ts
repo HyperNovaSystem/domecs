@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineEvent } from '../src/events.js'
 import { createWorld } from '../src/world.js'
 
 // Minimal rAF harness: collect the frame callback and advance time
@@ -10,6 +11,8 @@ interface RafHarness {
   calls: number
   cancels: number
 }
+
+const Ping = defineEvent<{ n: number }>('Ping')
 
 function installRaf(): RafHarness {
   let nextHandle = 1
@@ -150,12 +153,44 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     }
   })
 
+  it('throws on start() for worlds created with headless=true even when rAF exists', () => {
+    const w = createWorld({ headless: true })
+    expect(() => w.start()).toThrowError(/headless/i)
+  })
+
   it('start() returns a disposer that stops the loop', () => {
     const w = createWorld()
     const dispose = w.start()
     expect(raf.pending()).toBe(true)
     dispose()
     expect(raf.pending()).toBe(false)
+  })
+
+  it('stops scheduling new frames when idle=true and no frame work remains', () => {
+    const w = createWorld({ idle: true })
+    w.start()
+    raf.advance(16) // prime
+    expect(raf.pending()).toBe(true)
+    raf.advance(16) // first real tick; loop should go idle afterwards
+    expect(raf.pending()).toBe(false)
+  })
+
+  it('wakes a sleeping idle loop when external events arrive', () => {
+    const w = createWorld({ idle: true })
+    let seen = 0
+    w.system('event', { schedule: 'event', triggers: [Ping] }, (ctx) => {
+      seen += ctx.events.of(Ping).length
+    })
+    w.start()
+    raf.advance(16) // prime
+    raf.advance(16) // eventless tick, then sleep
+    expect(raf.pending()).toBe(false)
+
+    w.emit(Ping, { n: 1 })
+    expect(raf.pending()).toBe(true)
+    raf.advance(16)
+    raf.advance(16)
+    expect(seen).toBe(1)
   })
 
   it('stop() is idempotent — calling it twice does not double-cancel', () => {

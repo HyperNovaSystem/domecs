@@ -1,7 +1,7 @@
 {
   "name": "domecs-workspace",
   "private": true,
-  "version": "0.0.0",
+  "version": "2026.5.5",
   "description": "DOMECS — ECS-driven DOM game engine. Workspace root.",
   "packageManager": "pnpm@10.30.2",
   "type": "module",

@@ -36,6 +36,12 @@ export interface QueryResult {
   onRemove(fn: (e: EntityView) => void): () => void
 }
 
+export interface QueryHooks {
+  onAdd?: (e: EntityView) => void
+  onRemove?: (e: EntityView) => void
+  onChange?: (e: EntityView) => void
+}
+
 function isQueryNode(arg: NodeOrComponent): arg is QueryNode {
   return typeof arg === 'object' && arg !== null && 'kind' in arg
 }

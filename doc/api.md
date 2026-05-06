@@ -13,9 +13,9 @@ function createWorld(options?: WorldOptions): World
 
 interface WorldOptions {
   seed?:      number | [number, number, number, number]
-  headless?:  boolean      // no RAF loop; world.step() drives ticks
+  headless?:  boolean      // default false; start() throws, world.step() drives ticks
   fixedStep?: number       // seconds; default 1/60
-  idle?:      boolean      // default true; suspend RAF when no work
+  idle?:      boolean      // default true; sleep RAF when no frame work remains
   dev?:       DevOptions
 }
 
@@ -43,6 +43,8 @@ function defineComponent<T>(
 interface ComponentOptions<T> {
   defaults?:  Partial<T>
   transient?: boolean        // excluded from snapshots; default false
+  // Called after defaults are merged by ComponentType.create() and
+  // world.addComponent(). Return true to accept, or a string message to throw.
   validate?:  (value: T) => true | string
 }
 
@@ -62,8 +64,16 @@ interface World {
   // `start(options?)` installs an rAF-driven loop that computes wall-clock
   // dt, clamps it, and pipes each frame into `step(dt)`. Returns a disposer
   // that calls `stop()`. Calling `start()` on an already-running world is a
-  // no-op (returns the disposer). In environments without
-  // `requestAnimationFrame` it throws — use `step(dt)` instead.
+  // no-op (returns the disposer) and also wakes a sleeping idle loop. In
+  // environments without `requestAnimationFrame` it throws — use `step(dt)`
+  // instead. Worlds created with `{ headless: true }` also throw even if rAF
+  // exists in the host environment.
+  //
+  // When `WorldOptions.idle !== false`, the driver sleeps when no always-on
+  // frame work remains (no enabled `tick`/`fixed`/unfired `once` systems, no
+  // pending component work, no queued events). It wakes on external
+  // `world.emit(...)`, structural component mutations / `markChanged`,
+  // `domecs-input` activity, `resume()`, or an explicit `start()`.
   //
   // `step(dt)` semantics:
   //   - `step(dt)` with `dt > 0`: normal tick advance.
@@ -123,6 +133,9 @@ interface World {
 
   // queries
   query(def: QueryDef): QueryResult
+  // Convenience over query(...).onAdd/onRemove. If hooks.onChange is present,
+  // def must contain at least one Added/Removed/Changed node; callbacks fire
+  // at step 6 reactive time, once per matching entity for that tick.
   observe(def: QueryDef, hooks: QueryHooks): () => void
 
   // events
@@ -232,7 +245,7 @@ interface SystemHandle {
   enable():  void
   disable(): void
   remove():  void
-  replaceFn?(fn: System): void   // dev builds only; SPEC §9.5. Absent in prod.
+  replaceFn?(fn: System): void   // source/dev builds; SPEC §9.5. Queued for next tick boundary.
 }
 
 interface Rng {
@@ -292,6 +305,9 @@ interface QueryResult {
 interface QueryHooks {
   onAdd?:    (e: EntityView) => void
   onRemove?: (e: EntityView) => void
+  // Requires a change-detection query (Added/Removed/Changed somewhere in
+  // the tree). Fires at the reactive phase for every entity currently in the
+  // query result after that tick's mutations are coalesced.
   onChange?: (e: EntityView) => void
 }
 ```

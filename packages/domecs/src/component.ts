@@ -14,14 +14,22 @@ export function defineComponent<T>(
   options: ComponentOptions<T> = {},
 ): ComponentType<T> {
   const defaults = options.defaults
+  const validate = options.validate
   const shape = {
     name,
     __tag: tag,
     __defaults: defaults,
     __transient: options.transient ?? false,
-    __validate: options.validate,
+    __validate: validate,
     create(value?: Partial<T>): T {
-      return { ...(defaults ?? {}), ...(value ?? {}) } as T
+      const merged = { ...(defaults ?? {}), ...(value ?? {}) } as T
+      if (validate) {
+        const verdict = validate(merged)
+        if (verdict !== true) {
+          throw new Error(`domecs: invalid component "${name}": ${verdict}`)
+        }
+      }
+      return merged
     },
   }
   return shape as unknown as ComponentType<T>

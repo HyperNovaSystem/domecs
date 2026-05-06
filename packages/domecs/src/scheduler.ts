@@ -36,6 +36,7 @@ export interface SystemHandle {
   enable(): void
   disable(): void
   remove(): void
+  replaceFn?(fn: System): void
 }
 
 export interface CompiledSystem {
@@ -43,6 +44,7 @@ export interface CompiledSystem {
   name: string
   def: SystemDef
   fn: System
+  pendingFn?: System
   schedule: SystemSchedule
   priority: number
   enabled: boolean
@@ -61,6 +63,7 @@ export interface Scheduler {
   systemsByMode(mode: SystemSchedule): CompiledSystem[]
   /** Remove a system by handle (no-op if already removed). */
   remove(s: CompiledSystem): void
+  applyPendingReplacements(): void
 }
 
 function comparator(a: CompiledSystem, b: CompiledSystem): number {
@@ -165,6 +168,9 @@ export function createScheduler(
           const j = arr.indexOf(compiled)
           if (j >= 0) arr.splice(j, 1)
         },
+        replaceFn(fn: System) {
+          compiled.pendingFn = fn
+        },
       }
       return handle
     },
@@ -179,6 +185,14 @@ export function createScheduler(
       const arr = byMode.get(s.schedule)!
       const j = arr.indexOf(s)
       if (j >= 0) arr.splice(j, 1)
+    },
+
+    applyPendingReplacements(): void {
+      for (const s of systems) {
+        if (!s.pendingFn) continue
+        s.fn = s.pendingFn
+        delete s.pendingFn
+      }
     },
   }
 }

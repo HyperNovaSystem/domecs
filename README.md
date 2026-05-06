@@ -52,6 +52,8 @@ The architecture below is the design target.
 
 ## Install
 
+If you're consuming the published packages:
+
 ```bash
 npm install DOMECS
 ```
@@ -62,6 +64,45 @@ Optional packages:
 npm install @DOMECS/persist     # IndexedDB save/load
 npm install @DOMECS/sprites     # sprite sheet + animation components
 npm install @DOMECS/inspector   # in-browser entity/component debugger
+```
+
+This repository itself is a `pnpm` workspace. If you're developing in
+this repo or running the examples, use the workspace setup below rather
+than `npm install`.
+
+---
+
+## Workspace setup
+
+Install all workspace packages from the repository root:
+
+```bash
+pnpm install
+```
+
+The examples in [`example/`](./example) depend on the local packages in
+[`packages/`](./packages) via `workspace:*`, so they must be installed
+through the workspace to resolve `domecs`, `domecs-dom`, and
+`domecs-input` correctly.
+
+If you previously ran `npm install` in the repo root and an example
+fails with "dependencies are imported but could not be resolved",
+remove the npm-generated install artifacts and reinstall with `pnpm`.
+
+Run the examples from the repository root:
+
+```bash
+pnpm --filter @domecs-example/restaurant dev
+pnpm --filter @domecs-example/dashboard dev
+pnpm --filter @domecs-example/roguelike test
+```
+
+Workspace-wide commands:
+
+```bash
+pnpm test
+pnpm build
+pnpm typecheck
 ```
 
 ---

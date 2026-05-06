@@ -146,6 +146,44 @@ describe('query — structural predicates (archetype-cached)', () => {
     expect(added).toEqual([a])
     expect(removed).toEqual([a])
   })
+
+  it('world.observe wires onAdd/onRemove behind one disposer', () => {
+    const world = createWorld()
+    const added: number[] = []
+    const removed: number[] = []
+    const stop = world.observe(Has(Position), {
+      onAdd: (e) => added.push(e.id),
+      onRemove: (e) => removed.push(e.id),
+    })
+    const a = world.spawn()
+    world.addComponent(a, Position, { x: 0, y: 0 })
+    world.removeComponent(a, Position)
+    expect(added).toEqual([a])
+    expect(removed).toEqual([a])
+
+    stop()
+    world.addComponent(a, Position, { x: 1, y: 1 })
+    expect(added).toEqual([a])
+  })
+
+  it('world.observe onChange fires from reactive change-detection queries', () => {
+    const world = createWorld({ headless: true })
+    const changed: number[] = []
+    const a = world.spawn()
+    world.addComponent(a, Position, { x: 0, y: 0 })
+    world.step()
+    world.step()
+
+    const stop = world.observe(And(Has(Position), Changed(Position)), {
+      onChange: (e) => changed.push(e.id),
+    })
+    const pos = world.getComponent(a, Position)!
+    pos.x = 1
+    world.markChanged(a, Position)
+    world.step()
+    expect(changed).toEqual([a])
+    stop()
+  })
 })
 
 describe('query — change-detection filters (tick-scoped)', () => {
