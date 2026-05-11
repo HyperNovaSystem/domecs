@@ -279,7 +279,7 @@ The renderer update path also avoids per-frame `Map` rebuilds: full updates iter
 
 ## [F-12] Text-input focus is reported but does not stop key capture
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** code review of `packages/domecs-input/src/collector.ts`.
 
 **Problem.** `InputPluginOptions.textInputSelector` is documented as matching tags that should be treated as text inputs, and the README describes keyboard pass-through. The collector only uses the selector inside `currentFocus()` to set `input.focus.consumesKeys`; `onKeyDown` and `onKeyUp` still record keys into `held`, `pressedNext`, and `releasedNext` while a textarea/input/contenteditable element is focused.
@@ -294,7 +294,7 @@ This means typing in a chat box, save-name field, editor property panel, or cont
 
 ## [F-13] Component identity is still effectively name-keyed in queries
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** code review of `packages/domecs/src/world.ts`.
 
 **Problem.** `storeFor(...)` rejects two distinct `ComponentType` objects with the same `name` once both are registered, but query evaluation is name-based:
@@ -313,7 +313,7 @@ As a result, a second `defineComponent('Position')` can be used in a query befor
 
 ## [F-14] DOM view `destroy` receives an incomplete entity view on removal/despawn
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** code review of `packages/domecs-dom/src/mount.ts` and `packages/domecs/src/world.ts`.
 
 **Problem.** `mountDOM` stores the `EntityView` passed by query `onRemove` into `pendingDestroy`, then calls `def.destroy?.(rec.el, view)`. For `removeComponent`, core deletes the removed component before `moveEntity(...)` fires query `onRemove`, so `makeView(entity)` no longer contains the component that made the view match. For `despawn`, core passes only `{ id }` to `onRemove` callbacks.
@@ -328,7 +328,7 @@ The renderer already has the last complete mounted view in `rec.view`, but does 
 
 ## [F-15] Failed plugin installs can leak capability reservations
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** code review of `packages/domecs/src/plugin.ts`.
 
 **Problem.** `createPluginRegistry.use(...)` reserves `plugin.provides` capabilities before calling `plugin.install(...)`. If `install` throws, the plugin is not added to `byName`/`order`, no disposer is returned, and the pre-reserved capabilities remain in `capabilityOwner`/`capabilities`. Future plugins that provide the same capability will then fail with "already provided" even though no provider is installed.
@@ -341,7 +341,7 @@ The renderer already has the last complete mounted view in `rec.view`, but does 
 
 ## [F-16] `restore()` silently mutates query membership without firing query hooks
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** code review of `packages/domecs/src/world.ts` and interaction with `domecs-dom`.
 
 **Problem.** `world.restore(...)` clears each compiled query's `matchingArchetypes` and `structuralMembers`, rebuilds entities/archetypes, and repopulates `structuralMembers` directly. It does not fire `onRemove` for entities removed by the wipe, nor `onAdd` for restored entities that now match existing queries.
@@ -356,7 +356,7 @@ Any consumer that keeps a live query subscription across restore can become stal
 
 ## [F-17] Published package tarballs omit the MIT license text
 
-**Status:** open — 2026-05-10
+**Status:** closed — 2026-05-11
 **Surfaced by:** `pnpm pack` inspection of `domecs`, `domecs-dom`, and `domecs-input`.
 
 **Problem.** Each package declares `"license": "MIT"`, but package `files` include only `dist` and `README.md`. The workspace root has `LICENSE`, but the packed per-package tarballs do not currently include a `LICENSE` file. This is legally and operationally undesirable for public packages, even though the SPDX license field is present.

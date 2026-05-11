@@ -117,6 +117,13 @@ describe('plugins — depends (SPEC §9.2)', () => {
 })
 
 describe('plugins — capability registry (SPEC §9.3)', () => {
+
+  it('rolls back provided capabilities when install throws', () => {
+    const w = createWorld()
+    expect(() => w.use({ name: 'bad', provides: ['si'], install: () => { throw new Error('boom') } })).toThrow('boom')
+    expect(() => w.use({ name: 'good', provides: ['si'], install: () => {} })).not.toThrow()
+  })
+
   it('provider publishes a capability; consumer reads it', () => {
     const w = createWorld()
     w.use({

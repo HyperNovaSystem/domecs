@@ -146,6 +146,22 @@ describe('domecs-input collector', () => {
     ta.remove()
   })
 
+
+
+  it('suppresses key capture while text input is focused', () => {
+    const world = createWorld()
+    world.use(createInputPlugin({ pollGamepads: false }))
+    const ta = document.createElement('textarea')
+    document.body.appendChild(ta)
+    ta.focus()
+    document.dispatchEvent(kbd('keydown', 'KeyW'))
+    world.step(1 / 60)
+    expect(world.input.focus.consumesKeys).toBe(true)
+    expect(world.input.keys.size).toBe(0)
+    expect(world.input.keyDelta.pressed.size).toBe(0)
+    ta.remove()
+  })
+
   it('teardown removes listeners', () => {
     const world = createWorld()
     const dispose = world.use(createInputPlugin({ pollGamepads: false }))

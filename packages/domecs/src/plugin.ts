@@ -75,7 +75,16 @@ export function createPluginRegistry(world: World): PluginRegistry {
       capabilityOwner.set(cap, plugin.name)
       getOrCreateCapability(cap)
     }
-    const handle = plugin.install(world, options) ?? null
+    let handle: PluginHandle | null = null
+    try {
+      handle = plugin.install(world, options) ?? null
+    } catch (err) {
+      for (const cap of provides) {
+        capabilityOwner.delete(cap)
+        capabilities.delete(cap)
+      }
+      throw err
+    }
     const entry: InstalledPlugin = { plugin, handle, options }
     byName.set(plugin.name, entry)
     order.push(entry)
