@@ -1,4 +1,4 @@
-import { Changed, Has, type EntityView } from 'domecs'
+import { And, Changed, Has, type EntityView } from 'domecs'
 import { defineView, mountDOM } from 'domecs-dom'
 import { createInputPlugin } from 'domecs-input'
 import {
@@ -103,25 +103,27 @@ const KEY_TO_DELTA: Record<string, [number, number]> = {
   KeyJ: [0, 1],
 }
 
-// HUD + status system: reports position, visible count; reactive on Changed(Position).
-world.system(
-  'hud',
-  { schedule: 'reactive', reactsTo: Changed(Position) },
-  () => {
-    const pos = world.getComponent(playerId, Position)
-    if (!pos) return
-    const visibleCount = world
-      .query(Has(Tile))
-      .entities.filter((v) => world.getComponent(v.id, Visible)?.seen).length
-    statusEl.textContent = `pos: (${pos.x}, ${pos.y})\ntiles seen: ${visibleCount}\ntick: ${world.time.tick}`
+function paintStatus(): void {
+  const pos = world.getComponent(playerId, Position)
+  if (!pos) return
+  const visibleCount = world
+    .query(Has(Tile))
+    .entities.filter((v) => world.getComponent(v.id, Visible)?.seen).length
+  statusEl.textContent = `pos: (${pos.x}, ${pos.y})\ntiles seen: ${visibleCount}\ntick: ${world.time.tick}`
+}
+
+// HUD/status is a nice fit for the new observe(...) sugar: update only after
+// player movement rather than wiring an explicit reactive system by hand.
+world.observe(And(Has(Position), Changed(Position)), {
+  onChange: (e) => {
+    if (e.id === playerId) paintStatus()
   },
-)
+})
 
 // Initial render — step once so onRender fires with the starting state.
 world.step(0)
-statusEl.textContent = `pos: (${world.getComponent(playerId, Position)?.x}, ${
-  world.getComponent(playerId, Position)?.y
-})\nwelcome!`
+paintStatus()
+statusEl.textContent += '\nwelcome!'
 
 // Input → MoveEvent. We read keyDelta.pressed out-of-tick (between turns) and
 // issue a turn per press. We also keep a small auto-repeat for held keys.

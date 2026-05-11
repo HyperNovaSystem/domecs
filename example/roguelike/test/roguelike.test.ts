@@ -13,6 +13,14 @@ import {
 } from '../src/index.js'
 
 describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
+  it('rejects invalid runtime component payloads via component validation', () => {
+    const { world } = createRoguelike({ seed: 1, width: 8, height: 8 })
+    const e = world.spawn()
+    expect(() =>
+      world.addComponent(e, Position, { x: 1.5, y: 2 } as any),
+    ).toThrow(/integer/)
+  })
+
   it('spawns a 128x128 grid + player without mounting DOM (headless)', () => {
     const { world, width, height } = createRoguelike({ seed: 1 })
     const tiles = world.query(Has(Tile)).size

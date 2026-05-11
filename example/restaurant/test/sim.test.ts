@@ -40,6 +40,12 @@ function countCustomersByState(
 }
 
 describe('arrival', () => {
+  it('rejects invalid restaurant config via component validation', () => {
+    expect(() =>
+      createRestaurant({ arrivalRatePerSec: -1 }),
+    ).toThrow(/arrivalRatePerSec/)
+  })
+
   it('produces customers at roughly the configured Poisson rate', () => {
     const { world } = createRestaurant({
       seed: 1,

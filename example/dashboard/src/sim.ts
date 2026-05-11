@@ -42,6 +42,8 @@ export function createLift(options: LiftOptions = {}): LiftRefs {
   const world = createWorld({
     seed: options.seed ?? 0xa11caf,
     fixedStep: options.fixedStep ?? 1 / 60,
+    // Continuous realtime dashboard/plant sim: keep the driver awake.
+    idle: false,
   })
 
   const liftId = world.spawn([

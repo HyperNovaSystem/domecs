@@ -44,7 +44,11 @@ export function createRestaurant(options: RestaurantOptions = {}): RestaurantRef
   const tableCount = options.tableCount ?? 8
   const initialWaiters = options.waiterCount ?? 2
 
-  const world = createWorld({ seed: options.seed ?? 0xfeed })
+  const world = createWorld({
+    seed: options.seed ?? 0xfeed,
+    // Continuous realtime sim: keep the driver awake while running.
+    idle: false,
+  })
 
   const restaurantId = world.spawn([
     entry(

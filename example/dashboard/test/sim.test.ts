@@ -17,6 +17,20 @@ function runSeconds(step: (dt: number) => void, seconds: number): void {
 }
 
 describe('hydraulic physics', () => {
+  it('rejects invalid cylinder values via component validation', () => {
+    const { world } = createLift()
+    const e = world.spawn()
+    expect(() =>
+      world.addComponent(e, Cylinder, {
+        index: 0,
+        extension: 1.5,
+        command: 0,
+        pressureKpa: 0,
+        atLimit: false,
+      }),
+    ).toThrow(/extension/)
+  })
+
   it('extends a cylinder under command=1 at rateMps over time', () => {
     const { world, cylinderIds } = createLift()
     world.emit(SetCommandEvent, { index: 0, command: 1 })

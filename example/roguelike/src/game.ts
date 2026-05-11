@@ -38,7 +38,12 @@ export function createRoguelike(options: RoguelikeOptions = {}): {
 } {
   const width = options.width ?? MAP_W
   const height = options.height ?? MAP_H
-  const world = createWorld({ seed: options.seed ?? 0xd0dec5, fixedStep: 1 / 50 })
+  const world = createWorld({
+    seed: options.seed ?? 0xd0dec5,
+    fixedStep: 1 / 50,
+    // Turn-based world: allow the realtime driver to sleep between actions.
+    idle: true,
+  })
 
   world.use(spatialIndexPlugin())
 
