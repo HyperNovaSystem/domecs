@@ -110,7 +110,7 @@ pnpm typecheck
 ## Quick start
 
 ```ts
-import { createWorld, defineComponent } from 'DOMECS'
+import { createWorld, defineComponent, entry } from 'DOMECS'
 import { mountDOM, defineView } from 'DOMECS/dom'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
@@ -145,11 +145,11 @@ world.system('movement', { query: [Position, Velocity] }, ({ entities, time }) =
   }
 })
 
-world.spawn({
-  Position: { x: 100, y: 100 },
-  Velocity: { dx: 1, dy: 0 },
-  Sprite:   { sheet: 'hero.png', frame: 0 },
-})
+world.spawn([
+  entry(Position, { x: 100, y: 100 }),
+  entry(Velocity, { dx: 1, dy: 0 }),
+  entry(Sprite,   { sheet: 'hero.png', frame: 0 }),
+])
 
 world.start()
 ```

@@ -2,16 +2,16 @@
 
 Log of SPEC/API ambiguities, contradictions, or gaps surfaced while building the alpha engine + roguelike exemplar. Each entry proposes a resolution. Decisions roll into a spec update after the alpha cycle.
 
-Format: `## [F-N] Title` — status (`open` | `resolved` | `deferred`) — date.
+Format: `## [F-N] Title` — status (`open` | `resolved` | `closed` | `deferred`) — date.
 
 ---
 
 ## [F-1] `ComponentBag` string-keyed form has no registration path
 
-**Status:** resolved — 2026-04-18
+**Status:** closed — 2026-05-10
 **Surfaced by:** `packages/domecs/test/world.basic.test.ts` — "spawn accepts a ComponentBag keyed by ComponentType.name".
 
-**Problem.** `api.md` declares `type ComponentBag = Record<string, unknown>` with keys being `ComponentType.name`. SPEC §2.3 says worlds own their component stores and that *no global mutable state* survives between worlds. There is no specified moment at which a string key (`"Position"`) is bound to its `ComponentType<T>` inside a given world. If `spawn(bag)` is the first mention of the type, the world has never seen the `ComponentType` object, so it cannot look up the type from the string name without either (a) a process-global name→type registry (violates plural-worlds axiom), or (b) an eager registration step the SPEC does not describe.
+**Problem.** `api.md` declares `type ComponentBag = Record<string, unknown>` with keys being `ComponentType.name`. SPEC §2.3 says worlds own their component stores and that *no global mutable state* survives between worlds.  There is no specified moment at which a string key (`"Position"`) is bound to its `ComponentType<T>` inside a given world.  If `spawn(bag)` is the first mention of the type, the world has never seen the `ComponentType` object, so it cannot look up the type from the string name without either (a) a process-global name→type registry (violates plural-worlds axiom), or (b) an eager registration step the SPEC does not describe.
 
 **Resolution.** Redefine `ComponentBag` as identity-keyed, not name-keyed:
 
@@ -21,40 +21,43 @@ type ComponentBag =
   | ReadonlyArray<readonly [ComponentType<unknown>, unknown]>
 ```
 
-This removes the lookup ambiguity and keeps worlds self-contained. The `Record<string, unknown>` sugar can return post-alpha once a `createWorld({ components: [...] })` eager-registration option is specified. For alpha we use the identity form exclusively; the quick-start example in `api.md` (`Position: { x, y }`) should be treated as pseudocode pending that follow-up.
+This removes the lookup ambiguity and keeps worlds self-contained.  The `Record<string, unknown>` sugar can return post-alpha once a `createWorld({ components: [...] })` eager-registration option is specified. For alpha we use the identity form exclusively.
 
 **Spec impact.** `api.md` §`World.spawn` + `ComponentBag` type. No SPEC normative-text impact beyond §2.3 staying intact.
+
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/types.ts` uses identity-keyed `ComponentBag`, `entry<T>()` is exported from `domecs`, `world.basic.test.ts` covers tuple and Map forms, and the root README plus `doc/api.md` quick-start examples no longer show string-keyed spawn bags.
 
 ---
 
 ## [F-2] External `markChanged` between ticks is invisible to reactive systems
 
-**Status:** resolved — 2026-04-18
+**Status:** closed — 2026-05-10
 **Surfaced by:** `packages/domecs/test/scheduler.test.ts` — initial draft of the reactive-system test.
 
-**Problem.** SPEC §4 step 0 said "Clear change-detection flags" and step 8 said "Commit … for next tick's step 0", but a caller who invoked `world.markChanged` or mutated component data *between* `step()` calls (outside any system) wrote into the change-detection sets — and those writes were erased by the next `step()`'s step 0 before any system ran. Such external mutations were silently invisible to reactive systems.
+**Problem.** SPEC §4 step 0 said "Clear change-detection flags" and step 8 said "Commit … for next tick's step 0", but a caller who invoked `world.markChanged` or mutated component data *between* `step()` calls (outside any system) wrote into the change-detection sets — and those writes were erased by the next `step()`'s step 0 before any system ran.
+Such external mutations were silently invisible to reactive systems.
 
 **Resolution.** Adopted the buffer-and-swap design (option 2 from the original proposal), symmetric with the §2.6 event buffer:
-
 - Engine maintains a `pending` set distinct from the live tick set, plus an `inTick` flag set true for the duration of steps 1–8.
 - `addComponent`, `removeComponent`, `despawn`, `markChanged` route writes to the live set when `inTick === true` and to the pending set otherwise.
-- Step 0 first clears the live set, then drains pending into it. Reactive systems at step 6 observe between-tick writes from the previous tick boundary and in-tick writes from steps 3–5 indistinguishably.
+- Step 0 first clears the live set, then drains pending into it.  Reactive systems at step 6 observe between-tick writes from the previous tick boundary and in-tick writes from steps 3–5 indistinguishably.
 
 Verified by [`packages/domecs/test/scheduler.test.ts`](../packages/domecs/test/scheduler.test.ts) "observes markChanged calls made between ticks" and the change-detection filter tests in [`packages/domecs/test/query.test.ts`](../packages/domecs/test/query.test.ts).
 
 **Spec impact.** Landed in SPEC §2.9 (buffer-and-swap rule, normative), §2.5 (cross-link), §4 step 0 (clear-then-drain wording).
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/world.ts` maintains separate pending Added/Removed/Changed maps, routes writes through `recordChange(...)` based on `inTick`, drains pending maps at `step()` step 0, and clears them during `restore()`. Regression coverage remains in `scheduler.test.ts` and `query.test.ts`.
+
 ---
 
 ## [F-3] `TimeState.scaledDelta` quantization at 1 ms breaks `fixedStep = 1/60`
 
-**Status:** resolved — 2026-04-18
+**Status:** closed — 2026-05-10
 **Surfaced by:** `packages/domecs/test/scheduler.test.ts` — "accepts divisor rates and runs each Nth fixed step".
 
 **Problem.** SPEC §2.7 required `scaledDelta` to be quantized to 1 ms precision for cross-machine determinism. The default `fixedStep = 1/60 ≈ 16.667 ms` rounded to 17 ms per tick. Sixty ticks of `dt = 1/60` yielded total scaled time `60 × 17 ms = 1020 ms → 61.2` fixed steps. A nominal 60 Hz physics system fired ≈61 Hz of wall-clock — a silent ~2 % rate drift, even though per-tick determinism remained intact.
 
 **Resolution.** Adopted option 3 from the original proposal (decouple the fixed-step accumulator from `scaledDelta`):
-
 - Engine maintains a cumulative *unquantized* scaled-time total (`totalScaledSeconds`).
 - Per-tick `scaledDelta` is derived from the *difference* between the cumulative total's ms-rounded value and the previous tick's ms-rounded value — preserves the §2.7 wire-format guarantee, but the running total stays exact.
 - The fixed-step driver fires until `fixedStepsFired >= floor(totalScaledSeconds / fixedStep)`, so the count of fired steps in any time window equals the unquantized truth.
@@ -63,11 +66,13 @@ Verified by [`packages/domecs/test/scheduler.test.ts`](../packages/domecs/test/s
 
 **Spec impact.** Landed in SPEC §2.7 (drift-free quantization rule, normative) + §3 fixed-rate-rule cross-link.
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/world.ts` tracks `totalScaledSeconds`, `fixedStepsFired`, and `lastQuantizedElapsedMs`; derives public `scaledDelta` from cumulative ms rounding; drives fixed systems from unquantized cumulative time; and resets the accumulator state during `restore()`. Regression coverage remains in `scheduler.test.ts` (`fixedStep=1/60` fires exactly 60 times in 60 ticks).
+
 ---
 
 ## [F-4] `Not(Has(X))` silently returns true for all entities
 
-**Status:** open — 2026-04-18
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/roguelike/src/game.ts` — `enemyCount` helper; initial roguelike test run (2/10 failures).
 
 **Problem.** `api.md` documents `Not<T>(type)` with signature `Not(Player)` (taking a `ComponentType`). But `And(Has(Actor), Not(Has(Player)))` is an extremely natural phrasing — `Not` reads as a predicate combinator the way `Or`/`And` do, not as a shortcut for "without component". Because `Has(Player)` returns a `QueryNode` (not a `ComponentType`), the literal `.type.name` read inside `evalStructural` falls through to `undefined`, and `!types.has(undefined)` is always `true`. The query silently returns every entity that satisfies the sibling clause — no type error at runtime, no loud failure; just wrong counts.
@@ -87,13 +92,17 @@ export function Not<T>(arg: ComponentType<T> | QueryNode): QueryNode {
 
 Alternative: keep the narrow signature but add a `tsc --noEmit` typecheck step to the workspace `test` script so miswrites fail loudly in CI. Preferred path is widening + typecheck — runtime forgiveness *and* static guard.
 
-**Spec impact.** `api.md` §`Not` signature; no SPEC normative-text impact.
+**Spec impact.** `api.md` §`Not` signature; SPEC §2.4 query predicate-combinator semantics.
+
+**Resolution.** Implemented the widened predicate-combinator model. `packages/domecs/src/query.ts` now defines `NodeOrComponent = QueryNode | ComponentType<unknown>`, represents `not` as `{ kind: 'not'; child: QueryNode }`, and lets `Not`, `And`, and `Or` auto-wrap bare component types with `Has(T)`. `world.ts` recursively evaluates `not` nodes in both structural and entity-level query paths.
+
+**Close-out.** Verified on 2026-05-10: `doc/api.md` and `doc/SPEC.md` document the widened signatures, package test scripts run `tsc --noEmit` before Vitest, and `packages/domecs/test/query.test.ts` covers `Not(Has(T))` equivalence plus bare-component `And/Or` shortcuts.
 
 ---
 
 ## [F-5] `World.start()` / `World.stop()` declared in api.md but not implemented
 
-**Status:** resolved — 2026-04-19
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/dashboard/src/main.ts` — realtime loop setup; previously noted informally by roguelike exemplar.
 
 **Problem.** `api.md` §`World` lists `start(): void` and `stop(): void` as first-class lifecycle methods, and the bottom-of-file worked example ends `world.start()`. The runtime `World` interface in `packages/domecs/src/world.ts` exposes `step(dt)` and `stepN(n, dt)` only — no `start`/`stop`. Both browser exemplars (roguelike, dashboard) have to roll their own `requestAnimationFrame` loop with wall-clock `dt` computation, which is boilerplate every consumer will duplicate and mis-tune (dt clamping, first-frame priming, visibility-change pauses).
@@ -104,11 +113,13 @@ Alternative: keep the narrow signature but add a `tsc --noEmit` typecheck step t
 
 **Resolution.** Option (a). `World.start(options?: StartOptions)` is a thin rAF driver: prime wall-clock reference on the first frame, compute per-frame dt, clamp at `dtClampMs` (default 100), pipe to `step(dt)`. `World.stop()` cancels the rAF and detaches the visibility listener. Options: `dtClampMs` (ms ceiling) and `pauseOnHidden` (default `true`, calls `pause()`/`resume()` around `visibilitychange`). `start()` is idempotent; `stop()` is safe without a prior `start()`. Throws in headless envs that lack `requestAnimationFrame`. Tests in `packages/domecs/test/lifecycle.test.ts` cover scheduling, dt-conversion, clamp, idempotency, restart-no-spike, and headless throw. Dashboard exemplar migrated off hand-rolled rAF; roguelike retains its per-frame `step(0)` heartbeat (turn-based, not realtime).
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/world.ts` exposes and implements `start(options?: StartOptions): () => void` plus `stop()`, including rAF scheduling, dt clamping, first-frame priming, visibility pause/resume, idempotency, and headless/requestAnimationFrame error paths. `doc/api.md` documents `StartOptions`, `packages/domecs/test/lifecycle.test.ts` contains the F-5 regression suite, and `example/dashboard/src/main.ts` uses `world.start({ dtClampMs: 100 })`.
+
 ---
 
 ## [F-6] `world.step(0)` yields `time.scaledDelta === 0`, NaN-hazards derivative consumers
 
-**Status:** resolved — 2026-04-19
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/dashboard/src/sim.ts` `pid-controller` — `derivative = (error - lastError) / dt`.
 
 **Problem.** A common realtime-loop pattern is `world.step(0)` to prime derived state before starting the rAF. In the F-3 drift-free scheduler, `step(0)` pushes `totalScaledSeconds` by 0, so the ms-quantized `scaledDelta` is 0. Any tick-schedule system that divides by `time.scaledDelta` (PID, smoothing filters, per-second rate estimators) silently produces `Infinity`/`NaN`. The dashboard PID had to guard with `const dt = world.time.scaledDelta || 1/60` — a workaround every controller author will re-derive.
@@ -126,11 +137,13 @@ Preferred combination: (1) for the priming case — cleaner invariant — plus (
 
 **Resolution.** Combined (1)+(2). *Explicit* `step(0)` (or any `step(dt)` with `dt <= 0`) is a heartbeat: no system execution, no tick-counter/`totalScaledSeconds` advancement, no change-detection buffer swap. Plugin hooks (`onTickStart`, `onRender`, `onTickEnd`) and `tickStart`/`tickEnd` signals still fire so UIs can paint initial state and input plugins can republish snapshots between turns. No-arg `step()` retains its legacy meaning (advance a tick with `dt=0`) so `turn()` and the existing query-change tests keep working. When `dt > 0`, per-tick quantized ms is floored at 1 so sub-ms wall-clock frames never expose `scaledDelta = 0` to PIDs/rate estimators. Tests: 5 cases in `scheduler.test.ts` under `describe('step(0) — F-6 heartbeat semantics')`.
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/world.ts` treats explicit `dt <= 0` as a heartbeat before applying tick systems or draining change buffers, leaves `time.tick`/`time.elapsed` unadvanced, still calls plugin/render/tick signals, and floors positive sub-ms `scaledDelta` to at least 1 ms. Regression coverage remains in `packages/domecs/test/scheduler.test.ts` for heartbeat no-system execution, no tick advancement, preserved pending `markChanged`, tick signals, and sub-ms flooring.
+
 ---
 
 ## [F-7] `world.spawn([[ComponentType, value], …])` forces `as never` casts at call sites
 
-**Status:** resolved — 2026-04-19
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/roguelike/src/game.ts` (initial workaround) and `example/dashboard/src/sim.ts` — every spawn tuple literal.
 
 **Problem.** `ComponentBag` entries carry a `ComponentType<T>` alongside a `T` value. The `spawn` signature accepts `ComponentBag = ReadonlyArray<readonly [ComponentType<unknown>, unknown]>` (per F-1). When a caller writes a heterogeneous array of tuples — `[[Position, {x:0,y:0}], [Health, {hp:10}]]` — TS infers the array type as `(readonly [ComponentType<Position> | ComponentType<Health>, {x,y} | {hp}])[]`, which is *not* assignable to the parameter's `ComponentType<unknown>` element because `ComponentType<T>` is invariant in `T`. The working-around every exemplar adopts is `[Position as never, {…}]` at each entry — ugly, untyped, and silences any genuine value-shape mismatch.
@@ -152,11 +165,13 @@ The goal: the value position's `T` is tied to the type position's `T` *within ea
 
 **Resolution.** Introduced `ComponentEntry<T> = readonly [ComponentType<T>, T]` and exported helper `entry<T>(t, v): ComponentEntry<T>` from `domecs`. `ComponentBag` widened to accept `ReadonlyArray<ComponentEntry<any>>` so heterogeneous-tuple inference flows through per entry. All three exemplars (roguelike, dashboard, lift tests) migrated off the `as never` casts; value-shape mismatches now fail at compile time (covered by `// @ts-expect-error` probe in `world.basic.test.ts`).
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/types.ts` exports `ComponentEntry<T>` and `entry<T>()`, `packages/domecs/src/index.ts` re-exports them, examples and package tests use `entry(...)` instead of call-site `as never` casts, and `world.basic.test.ts` covers both successful heterogeneous spawn arrays and compile-time value-shape rejection.
+
 ---
 
 ## [F-8] `defineEvent` returns wrong-shape object; symbol identity is dead
 
-**Status:** resolved — 2026-04-20
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/restaurant/src/sim.ts` — four `defineEvent(...)` declarations + reading `packages/domecs/src/events.ts` while debugging `ResetEvent` dispatch.
 
 **Problem.** `EventType<T>` declares `readonly [__eventTag]: symbol` (a `unique symbol` property key — guarantees nominal-typing per type). The impl returns `{ name, __tag: Symbol(name) }` — a plain string-named `__tag` field, then `as unknown as EventType<T>` to silence TS. The runtime object literally has no `[__eventTag]` property; the symbol-keyed slot the interface promises is missing. Worse: the event bus dispatches *only* by `type.name` ([`events.ts:37,41,53,59,73`](../packages/domecs/src/events.ts)), so the `Symbol(name)` is constructed and immediately thrown away — pure dead state.
@@ -177,11 +192,13 @@ If symbol-based dispatch lands, a small ergonomic helper `eventName(type)` for t
 
 **Resolution.** Picked Option A (identity-keyed dispatch). `events.ts` now exports a real `eventTag` symbol; the factory writes it as a symbol-keyed property (`{ name, [eventTag]: Symbol(name) }`); the bus's pending/current/subscriber Maps are keyed by `EventType[eventTag]` rather than `name`. The `as unknown as` cast is gone. New regression in `events.test.ts` (`two defineEvent calls with the same name do not collide`) covers the collision case directly. `api.md` §Events updated to describe `EventType<T>` as identity-keyed and explicitly permit duplicate `name` strings.
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/events.ts` defines and uses the symbol-keyed `eventTag`, all event storage/subscriber maps key by `type[eventTag]`, `defineEvent` returns the correctly shaped object without an `unknown` cast, `doc/api.md` documents identity-keyed event types, and `events.test.ts` covers same-name event isolation.
+
 ---
 
 ## [F-9] No referential-integrity story for inter-entity component fields
 
-**Status:** resolved — 2026-04-20
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/restaurant/src/sim.ts` phantom-customer regression — fixed today by adding a `c.tableId !== null` guard to the patience system, after a browser smoke test at tick 4522 showed `seated = -4` (impossible) in the chrome footer.
 
 **Problem.** Restaurant components carry cross-entity references as bare numbers: `Table.customerId: number | null`, `Table.waiterId: number | null`, `Customer.tableId: number | null`, `Waiter.tableId: number | null`. The engine offers no help keeping these in sync:
@@ -203,11 +220,13 @@ The fix in the exemplar is local (skip patience for bound customers + null-guard
 
 **Resolution.** Re-reading `world.ts` revealed `signals.entityDespawned` already exists (declared at `WorldSignals.entityDespawned`, instantiated in `createWorld`, emitted from inside `despawn` at the call site after store/archetype reclaim). The original critique mis-recommended adding it. The remaining gap was *normative* — SPEC §2.10 didn't pin the despawn-handler ordering rule, so consumers couldn't know whether `world.has(id, T)` would be `true` or `false` inside a subscriber. SPEC §2.10 now specifies: `entityDespawned` fires *after* reclaim; `componentRemoved` (per type) → store/archetype reclaim → `entityDespawned`. `api.md` §Events shows the canonical cross-ref scrub pattern using the signal + `world.entitiesWith`. First-class `EntityRef<T>` deferred (no v0.1 consumer demand once the global-listener idiom is documented). Regression in `world.basic.test.ts` (`entityDespawned subscriber sees post-reclaim world`) pins the ordering.
 
+**Close-out.** Verified on 2026-05-10: `packages/domecs/src/world.ts` emits `componentRemoved` before store removal and `entityDespawned` after store/archetype reclaim; `doc/SPEC.md` contains the F-9 despawn ordering rule; `doc/api.md` documents the `entityDespawned` + `entitiesWith` cross-reference scrub pattern; and `world.basic.test.ts` plus `signals.test.ts` cover post-reclaim entity-despawn and component-removal ordering.
+
 ---
 
 ## [F-10] No public entity-iteration helper; `world.query` requires a node literal in tests
 
-**Status:** resolved — 2026-04-20
+**Status:** closed — 2026-05-10
 **Surfaced by:** `example/restaurant/test/sim.test.ts` `countCustomersByState` helper.
 
 **Problem.** Test-side helpers that need to walk all entities of a given component have no first-class API. The exemplar test settled on `world.query({ kind: 'has', type: Customer })` because:
@@ -225,3 +244,123 @@ Alternative: rename `componentTypes()` to make its scope obvious (`registeredCom
 **Spec impact.** `api.md` §`World` — add the helper. No SPEC normative impact.
 
 **Resolution.** Added `world.entitiesWith<T>(type): Iterable<{id: Entity, value: T}>` adjacent to `componentTypes()` in `world.ts`; iterates the type's store directly (cheaper than building an intermediate query). Documented in `api.md` §`World` reflection block, plus a worked example in §Events showing the cross-ref-scrub idiom (F-9 + F-10 compose). Test in `world.basic.test.ts` covers carriers-only iteration + unregistered-type case.
+
+**Close-out.** Verified on 2026-05-10: `World` exposes `entitiesWith<T>(type)`, the implementation iterates the typed store directly, the helper is documented in `doc/api.md`, the package README uses it in the movement example, and `world.basic.test.ts` covers typed carrier iteration and the unregistered-type empty case.
+
+---
+
+## Code Review Pass — 2026-05-10
+
+Reviewed the existing `domecs`, `domecs-dom`, and `domecs-input` packages. `pnpm test` passes, but the pass surfaced the following issues.
+
+## [F-11] `domecs-dom` creates permanent core queries during every render commit
+
+**Status:** closed — 2026-05-10
+**Surfaced by:** code review of `packages/domecs-dom/src/mount.ts`.
+
+**Problem.** `mountDOM` creates its long-lived structural query once at mount time, but `commit()` creates additional ad-hoc queries on every render:
+- no `changedOn`: `world.query(state.def.query)` in the full-update path;
+- `changedOn`: `world.query(state.def.query)` again after collecting changed ids;
+- `collectChanged`: `world.query(Changed(c))` for each component in `changedOn`.
+
+Core `world.query(...)` appends a `CompiledQuery` to the world's internal `queries` array and has no disposal API. A mounted DOM view therefore leaks query objects every frame. Over time, every archetype transition and query evaluation pays for an ever-growing list of dead renderer queries.
+
+**Proposed resolution.** Make renderer update queries persistent per `ViewState` instead of recreating them in `commit()`. For `changedOn`, cache one `Changed(c)` query per component at mount time. Longer term, add an explicit query disposer or `world.queryOnce(...)`/inspection API for non-observing reads.
+
+**Resolution.** Implemented persistent renderer queries and a core query disposal API. `QueryResult` now exposes `dispose()`, which removes the compiled query from the world's archetype indexes, clears subscriptions, and makes `entities`/`size` read as empty/zero. `domecs-dom` now allocates exactly one structural query per view and one cached `Changed(c)` query per `changedOn` component at mount time, reuses those queries during every render commit, and disposes all cached queries during `teardown()`.
+
+The renderer update path also avoids per-frame `Map` rebuilds: full updates iterate the cached structural query's current `entities`; gated updates collect changed ids from cached `Changed(...)` queries, then update only matching mounted records from the cached structural query.
+
+**Spec impact.** `domecs-dom` renderer lifecycle and `domecs` query API. `doc/api.md` now documents `QueryResult.dispose()`.
+
+**Close-out.** Verified on 2026-05-10: `packages/domecs-dom/src/mount.ts` has no `world.query(...)` calls inside `commit()`, `packages/domecs-dom/test/lifecycle.test.ts` asserts render commits allocate no additional world queries with or without `changedOn`, and `packages/domecs/test/query.test.ts` covers disposed query behavior.
+
+---
+
+## [F-12] Text-input focus is reported but does not stop key capture
+
+**Status:** open — 2026-05-10
+**Surfaced by:** code review of `packages/domecs-input/src/collector.ts`.
+
+**Problem.** `InputPluginOptions.textInputSelector` is documented as matching tags that should be treated as text inputs, and the README describes keyboard pass-through. The collector only uses the selector inside `currentFocus()` to set `input.focus.consumesKeys`; `onKeyDown` and `onKeyUp` still record keys into `held`, `pressedNext`, and `releasedNext` while a textarea/input/contenteditable element is focused.
+
+This means typing in a chat box, save-name field, editor property panel, or contenteditable control can still trigger game controls. Consumers can manually check `input.focus.consumesKeys`, but the option name/documentation implies the collector itself suppresses those key events.
+
+**Proposed resolution.** Decide the contract explicitly. Preferred: when the active element matches `textInputSelector`, do not record normal key presses/releases and do not `preventDefault`; optionally still track modifiers or provide an `ignoreTextInput` flag. Add a regression test that focuses a textarea, dispatches `KeyW`, and asserts that `input.keys`/`keyDelta` remain empty.
+
+**Spec impact.** SPEC §6 input collector semantics and `domecs-input` README/options docs.
+
+---
+
+## [F-13] Component identity is still effectively name-keyed in queries
+
+**Status:** open — 2026-05-10
+**Surfaced by:** code review of `packages/domecs/src/world.ts`.
+
+**Problem.** `storeFor(...)` rejects two distinct `ComponentType` objects with the same `name` once both are registered, but query evaluation is name-based:
+
+- archetype sets store component names, not component objects;
+- `evalStructural(Has(T))` checks `types.has(T.name)`;
+- `evalEntity(Has(T))` and `getComponent` read `stores.get(T.name)`.
+
+As a result, a second `defineComponent('Position')` can be used in a query before it is registered with `storeFor`, and it will match entities carrying the first `Position` type. The collision is only detected on mutation/registration, not on read/query paths. This undercuts the intended `ComponentType` identity semantics and creates the same class of bug that F-8 fixed for events.
+
+**Proposed resolution.** Either make components fully identity-keyed internally (`Map<ComponentType, Store>`, archetypes as component handles or stable per-world ids), or force query/get/has/markChanged paths to register/validate the component type before using `type.name`. If names remain load-bearing, document global per-world name uniqueness as the actual contract and make duplicate names fail as early as possible.
+
+**Spec impact.** SPEC/API component identity contract, query semantics, snapshot restore format if component handles become first-class in storage.
+
+---
+
+## [F-14] DOM view `destroy` receives an incomplete entity view on removal/despawn
+
+**Status:** open — 2026-05-10
+**Surfaced by:** code review of `packages/domecs-dom/src/mount.ts` and `packages/domecs/src/world.ts`.
+
+**Problem.** `mountDOM` stores the `EntityView` passed by query `onRemove` into `pendingDestroy`, then calls `def.destroy?.(rec.el, view)`. For `removeComponent`, core deletes the removed component before `moveEntity(...)` fires query `onRemove`, so `makeView(entity)` no longer contains the component that made the view match. For `despawn`, core passes only `{ id }` to `onRemove` callbacks.
+
+The renderer already has the last complete mounted view in `rec.view`, but does not pass it to `destroy`. A view that needs old component data for teardown, cleanup, animation handoff, entity-specific class removal, or diagnostics cannot reliably read it from the `destroy` argument.
+
+**Proposed resolution.** In `commit()`, call `destroy` with `rec.view` (the last known mounted view) instead of the pending `onRemove` view. If the removed view is still useful, pass it as an optional third argument in a future API, but keep the current two-argument API stable by making the second argument complete and predictable.
+
+**Spec impact.** `domecs-dom` view lifecycle semantics.
+
+---
+
+## [F-15] Failed plugin installs can leak capability reservations
+
+**Status:** open — 2026-05-10
+**Surfaced by:** code review of `packages/domecs/src/plugin.ts`.
+
+**Problem.** `createPluginRegistry.use(...)` reserves `plugin.provides` capabilities before calling `plugin.install(...)`. If `install` throws, the plugin is not added to `byName`/`order`, no disposer is returned, and the pre-reserved capabilities remain in `capabilityOwner`/`capabilities`. Future plugins that provide the same capability will then fail with "already provided" even though no provider is installed.
+
+**Proposed resolution.** Make plugin installation transactional: validate dependencies/conflicts first, call `install` inside a `try`, and roll back any capability reservations if installation throws. Add a regression test for a throwing provider followed by a successful provider of the same capability.
+
+**Spec impact.** SPEC §9 plugin installation failure semantics.
+
+---
+
+## [F-16] `restore()` silently mutates query membership without firing query hooks
+
+**Status:** open — 2026-05-10
+**Surfaced by:** code review of `packages/domecs/src/world.ts` and interaction with `domecs-dom`.
+
+**Problem.** `world.restore(...)` clears each compiled query's `matchingArchetypes` and `structuralMembers`, rebuilds entities/archetypes, and repopulates `structuralMembers` directly. It does not fire `onRemove` for entities removed by the wipe, nor `onAdd` for restored entities that now match existing queries.
+
+Any consumer that keeps a live query subscription across restore can become stale. The DOM renderer is the clearest example: mounted records are driven by query `onAdd`/`onRemove`; after restore, the query internals may reflect the snapshot while the actual DOM still reflects pre-restore mounts because no pending creates/destroys were scheduled.
+
+**Proposed resolution.** Define restore as either (a) a lifecycle boundary that invalidates all existing queries/mounts, requiring teardown/remount, or (b) a transactional structural diff that emits query removals/additions for the restore delta. Preferred for app framework ergonomics: emit lifecycle/query transitions or expose a `world.signals.restored` hook that first-party renderers use to resync from scratch.
+
+**Spec impact.** SPEC §7 restore semantics, query observer contract, `domecs-dom` mount lifecycle.
+
+---
+
+## [F-17] Published package tarballs omit the MIT license text
+
+**Status:** open — 2026-05-10
+**Surfaced by:** `pnpm pack` inspection of `domecs`, `domecs-dom`, and `domecs-input`.
+
+**Problem.** Each package declares `"license": "MIT"`, but package `files` include only `dist` and `README.md`. The workspace root has `LICENSE`, but the packed per-package tarballs do not currently include a `LICENSE` file. This is legally and operationally undesirable for public packages, even though the SPDX license field is present.
+
+**Proposed resolution.** Include the root license text in each published package. Options: add `"../../LICENSE"` is not supported by npm `files`, so either copy/symlink `LICENSE` into each package before publish, keep a package-level `LICENSE` file, or add a `prepack` step that materializes it. Then verify with `pnpm pack` before first release.
+
+**Spec impact.** Packaging/release docs only.

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
+import { Has } from '../src/query.js'
+import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
 const Position = defineComponent<{ x: number; y: number }>('Position', {
@@ -13,7 +15,7 @@ const Ephemeral = defineComponent<{ tag: string }>('Ephemeral', { transient: tru
 describe('snapshot — shape (SPEC §7.1)', () => {
   it('captures version, seed, tick, and entities', () => {
     const w = createWorld({ seed: 0xc0ffee })
-    w.spawn([[Position as never, { x: 1, y: 2 }]])
+    w.spawn([entry(Position, { x: 1, y: 2 })])
     w.step(0.016)
     const snap = w.snapshot()
     expect(typeof snap.version).toBe('number')
@@ -27,8 +29,8 @@ describe('snapshot — shape (SPEC §7.1)', () => {
   it('excludes transient components', () => {
     const w = createWorld()
     const e = w.spawn([
-      [Position as never, { x: 1, y: 2 }],
-      [Ephemeral as never, { tag: 'temp' }],
+      entry(Position, { x: 1, y: 2 }),
+      entry(Ephemeral, { tag: 'temp' }),
     ])
     const snap = w.snapshot()
     const captured = snap.entities.find((r) => r.id === e)!
@@ -38,7 +40,7 @@ describe('snapshot — shape (SPEC §7.1)', () => {
 
   it('deep-clones component values (mutation after snapshot does not leak)', () => {
     const w = createWorld()
-    const e = w.spawn([[Position as never, { x: 10, y: 20 }]])
+    const e = w.spawn([entry(Position, { x: 10, y: 20 })])
     const snap = w.snapshot()
     const pos = w.getComponent(e, Position)!
     pos.x = 999
@@ -49,10 +51,10 @@ describe('snapshot — shape (SPEC §7.1)', () => {
 describe('restore — roundtrip (SPEC §7.1)', () => {
   it('restores entities + components from a snapshot', () => {
     const w = createWorld({ seed: 7 })
-    const a = w.spawn([[Position as never, { x: 1, y: 1 }]])
+    const a = w.spawn([entry(Position, { x: 1, y: 1 })])
     const b = w.spawn([
-      [Position as never, { x: 2, y: 2 }],
-      [Velocity as never, { dx: 1, dy: 0 }],
+      entry(Position, { x: 2, y: 2 }),
+      entry(Velocity, { dx: 1, dy: 0 }),
     ])
     w.step(0.016)
     w.step(0.016)
@@ -95,13 +97,13 @@ describe('restore — roundtrip (SPEC §7.1)', () => {
 
   it('wipes prior state before restoring', () => {
     const w = createWorld()
-    w.spawn([[Position as never, { x: 1, y: 1 }]])
+    w.spawn([entry(Position, { x: 1, y: 1 })])
     const snap = w.snapshot()
     const w2 = createWorld()
-    w2.spawn([[Position as never, { x: 99, y: 99 }]])
-    w2.spawn([[Position as never, { x: 77, y: 77 }]])
+    w2.spawn([entry(Position, { x: 99, y: 99 })])
+    w2.spawn([entry(Position, { x: 77, y: 77 })])
     w2.restore(snap)
-    const all = w2.query({ kind: 'has', type: Position as never }).entities
+    const all = w2.query(Has(Position)).entities
     expect(all).toHaveLength(1)
     expect(
       (all[0] as unknown as { Position: { x: number; y: number } }).Position.x,

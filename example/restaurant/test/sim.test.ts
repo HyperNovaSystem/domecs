@@ -22,21 +22,11 @@ function countCustomersByState(
   world: ReturnType<typeof createRestaurant>['world'],
   state: 'queued' | 'seated' | 'leaving',
 ): number {
-  let n = 0
-  for (const t of world.componentTypes()) {
-    if (t.name !== 'Customer') continue
-    // fall through to query path
-  }
-  // Simple iteration via archetype query
   let count = 0
-  // Walk every entity: cheap enough for tests.
-  // (No public iterator; use the engine query instead.)
-  const q = world.query({ kind: 'has', type: Customer })
-  for (const e of q.entities) {
-    const c = world.getComponent(e.id, Customer)
-    if (c && c.state === state) count++
+  for (const { value: customer } of world.entitiesWith(Customer)) {
+    if (customer.state === state) count++
   }
-  return count + n
+  return count
 }
 
 describe('arrival', () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent } from 'domecs'
+import { Has, createWorld, defineComponent, type QueryDef, type QueryResult } from 'domecs'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Sprite = defineComponent<{ glyph: string }>('Sprite')
@@ -46,6 +46,68 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     world.despawn(a)
     world.step()
     expect(stage.children.length).toBe(0)
+
+    handle.teardown()
+  })
+
+  it('does not allocate new world queries during render commits when changedOn is absent', () => {
+    const world = createWorld({ headless: true })
+    let queryCalls = 0
+    const originalQuery = world.query.bind(world)
+    ;(world as typeof world & { query(def: QueryDef): QueryResult }).query = (def) => {
+      queryCalls++
+      return originalQuery(def)
+    }
+
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      create() {
+        return document.createElement('span')
+      },
+      update() {},
+    })
+    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(queryCalls).toBe(1)
+
+    const a = world.spawn()
+    world.addComponent(a, Sprite, { glyph: '@' })
+    world.step()
+    world.step()
+    world.step()
+    expect(queryCalls).toBe(1)
+
+    handle.teardown()
+  })
+
+  it('does not allocate new world queries during render commits when changedOn is present', () => {
+    const world = createWorld({ headless: true })
+    let queryCalls = 0
+    const originalQuery = world.query.bind(world)
+    ;(world as typeof world & { query(def: QueryDef): QueryResult }).query = (def) => {
+      queryCalls++
+      return originalQuery(def)
+    }
+
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      changedOn: [Sprite],
+      create() {
+        return document.createElement('span')
+      },
+      update() {},
+    })
+    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(queryCalls).toBe(2) // structural query + one cached Changed(Sprite) query
+
+    const a = world.spawn()
+    world.addComponent(a, Sprite, { glyph: '@' })
+    world.step()
+    world.markChanged(a, Sprite)
+    world.step()
+    world.step()
+    expect(queryCalls).toBe(2)
 
     handle.teardown()
   })

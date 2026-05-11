@@ -300,6 +300,7 @@ interface QueryResult {
   readonly size:     number
   onAdd(fn: (e: EntityView) => void): () => void
   onRemove(fn: (e: EntityView) => void): () => void
+  dispose(): void // releases live archetype tracking; entities=[], size=0 after disposal
 }
 
 interface QueryHooks {
@@ -629,7 +630,7 @@ v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from us
 ## Quick-start example (updated)
 
 ```ts
-import { createWorld, defineComponent, Has } from 'domecs'
+import { createWorld, defineComponent, entry, Has } from 'domecs'
 import { mountDOM, defineView } from 'domecs/dom'
 import { createInput } from 'domecs/input'
 import { Sprite, createSpritesPlugin } from '@domecs/sprites'
@@ -672,11 +673,11 @@ world.system('movement', {
   }
 })
 
-world.spawn({
-  Position: { x: 100, y: 100 },
-  Velocity: { dx: 30, dy: 0 },
-  Sprite:   { sheet: 'hero', frame: 0 },
-})
+world.spawn([
+  entry(Position, { x: 100, y: 100 }),
+  entry(Velocity, { dx: 30, dy: 0 }),
+  entry(Sprite,   { sheet: 'hero', frame: 0 }),
+])
 
 world.start()
 ```

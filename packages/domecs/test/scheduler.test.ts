@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { defineEvent } from '../src/events.js'
 import { And, Changed, Has, Not, Or } from '../src/query.js'
+import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
 const Position = defineComponent<{ x: number; y: number }>('Position', {
@@ -77,8 +78,8 @@ describe('system scheduler — tick order (SPEC §4)', () => {
 
   it('system query feeds ctx.entities', () => {
     const w = createWorld()
-    w.spawn([[Position as never, { x: 0, y: 0 }]])
-    w.spawn([[Position as never, { x: 1, y: 2 }]])
+    w.spawn([entry(Position, { x: 0, y: 0 })])
+    w.spawn([entry(Position, { x: 1, y: 2 })])
     w.spawn()
     let seenIds: number[] = []
     w.system('scan', { query: Has(Position) }, (ctx) => {
@@ -176,7 +177,7 @@ describe('system scheduler — `reactive` mode', () => {
     // that is promoted into this tick at step 0 — symmetric with §2.6 events.
     const w = createWorld()
     let calls = 0
-    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     w.system(
       'react',
       { schedule: 'reactive', reactsTo: Changed(Position) },
@@ -234,7 +235,7 @@ describe('system scheduler — `reactive` mode', () => {
     // from external code between ticks).
     const w = createWorld()
     let calls = 0
-    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     let dirty = false
     w.system('mutate', {}, () => {
       if (dirty) w.markChanged(e, Position)
@@ -261,7 +262,7 @@ describe('step(0) — F-6 heartbeat semantics', () => {
   it('does not invoke fixed/tick/reactive/event systems', () => {
     const w = createWorld()
     let fixedN = 0, tickN = 0, reactiveN = 0, eventN = 0
-    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     w.system('f', { schedule: 'fixed' }, () => { fixedN++ })
     w.system('t', { schedule: 'tick' }, () => { tickN++ })
     w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
@@ -287,7 +288,7 @@ describe('step(0) — F-6 heartbeat semantics', () => {
 
   it('preserves between-tick markChanged through step(0) so next real tick still sees it', () => {
     const w = createWorld()
-    const e = w.spawn([[Position as never, { x: 0, y: 0 }]])
+    const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     let reactiveN = 0
     w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
     w.markChanged(e, Position)

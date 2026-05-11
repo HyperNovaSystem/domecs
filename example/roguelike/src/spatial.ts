@@ -33,16 +33,14 @@ export function spatialIndexPlugin(): Plugin {
 
       function rebuild(): void {
         buckets.clear()
-        const q = world.query({ kind: 'has', type: Position })
-        for (const e of q.entities) {
-          const v = e as unknown as { id: number; Position: { x: number; y: number } }
-          const k = key(v.Position.x, v.Position.y)
+        for (const { id, value: position } of world.entitiesWith(Position)) {
+          const k = key(position.x, position.y)
           let s = buckets.get(k)
           if (!s) {
             s = new Set()
             buckets.set(k, s)
           }
-          s.add(v.id)
+          s.add(id)
         }
       }
 

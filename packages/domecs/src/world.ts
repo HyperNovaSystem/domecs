@@ -635,8 +635,10 @@ export function createWorld(options: WorldOptions = {}): World {
         return set
       }
 
+      let disposed = false
       const result: QueryResult = {
         get entities() {
+          if (disposed) return []
           const candidates = collectCandidates()
           const out: EntityView[] = []
           for (const e of candidates) {
@@ -646,6 +648,7 @@ export function createWorld(options: WorldOptions = {}): World {
           return out
         },
         get size() {
+          if (disposed) return 0
           if (!needsEntityFilter && !hasRemoved) return q.structuralMembers.size
           let count = 0
           for (const e of collectCandidates()) {
@@ -655,12 +658,24 @@ export function createWorld(options: WorldOptions = {}): World {
           return count
         },
         onAdd(fn) {
+          if (disposed) return () => {}
           q.onAddFns.add(fn)
           return () => q.onAddFns.delete(fn)
         },
         onRemove(fn) {
+          if (disposed) return () => {}
           q.onRemoveFns.add(fn)
           return () => q.onRemoveFns.delete(fn)
+        },
+        dispose() {
+          if (disposed) return
+          disposed = true
+          const idx = queries.indexOf(q)
+          if (idx >= 0) queries.splice(idx, 1)
+          q.matchingArchetypes.clear()
+          q.structuralMembers.clear()
+          q.onAddFns.clear()
+          q.onRemoveFns.clear()
         },
       }
       return result
@@ -685,6 +700,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return () => {
         for (const unsubscribe of unsubscribers) unsubscribe()
         changeHandle?.remove()
+        q.dispose()
       }
     },
 

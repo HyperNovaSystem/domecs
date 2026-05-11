@@ -133,6 +133,22 @@ describe('query — structural predicates (archetype-cached)', () => {
     expect(q.size).toBe(0)
   })
 
+  it('query results can be disposed to release live archetype tracking', () => {
+    const world = createWorld()
+    const a = world.spawn()
+    const q = world.query(Has(Position))
+    let added = 0
+    q.onAdd(() => { added++ })
+
+    q.dispose()
+    q.dispose()
+    world.addComponent(a, Position, { x: 0, y: 0 })
+
+    expect(added).toBe(0)
+    expect(q.size).toBe(0)
+    expect(q.entities).toEqual([])
+  })
+
   it('onAdd/onRemove hooks fire on query membership transitions', () => {
     const world = createWorld()
     const q = world.query(Has(Position))

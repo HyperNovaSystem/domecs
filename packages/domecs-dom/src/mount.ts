@@ -1,4 +1,4 @@
-import type { Entity, EntityView, World } from 'domecs'
+import type { Entity, EntityView, QueryResult, World } from 'domecs'
 import { Changed } from 'domecs'
 import type { ViewDef } from './view.js'
 
@@ -21,6 +21,8 @@ interface MountedRecord {
 interface ViewState {
   def: ViewDef
   slotEl: HTMLElement
+  query: QueryResult
+  changedQueries: QueryResult[] | null
   mounted: Map<Entity, MountedRecord>
   pendingCreate: Map<Entity, EntityView>
   pendingDestroy: Map<Entity, EntityView>
@@ -52,6 +54,10 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
     const state: ViewState = {
       def,
       slotEl,
+      query: q,
+      changedQueries: def.changedOn && def.changedOn.length > 0
+        ? def.changedOn.map((c) => world.query(Changed(c)))
+        : null,
       mounted: new Map(),
       pendingCreate: new Map(),
       pendingDestroy: new Map(),
@@ -75,7 +81,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
     install() {
       return {
         onRender() {
-          for (const state of states) commit(world, state)
+          for (const state of states) commit(state)
         },
       }
     },
@@ -88,6 +94,8 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
       for (const state of states) {
         state.unsubAdd()
         state.unsubRemove()
+        state.query.dispose()
+        for (const q of state.changedQueries ?? []) q.dispose()
         for (const [, rec] of state.mounted) {
           state.def.destroy?.(rec.el, rec.view)
           rec.el.remove()
@@ -102,7 +110,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
   }
 }
 
-function commit(world: World, state: ViewState): void {
+function commit(state: ViewState): void {
   for (const [id, view] of state.pendingDestroy) {
     const rec = state.mounted.get(id)
     if (rec) {
@@ -122,24 +130,19 @@ function commit(world: World, state: ViewState): void {
   state.pendingCreate.clear()
 
   if (state.def.update && state.mounted.size > 0) {
-    const changed = collectChanged(world, state.def.changedOn)
+    const changed = collectChanged(state.changedQueries)
     if (!changed) {
-      const q = world.query(state.def.query)
-      const byId = new Map<Entity, EntityView>()
-      for (const v of q.entities) byId.set(v.id, v)
-      for (const [id, rec] of state.mounted) {
-        const view = byId.get(id) ?? rec.view
+      for (const view of state.query.entities) {
+        const rec = state.mounted.get(view.id)
+        if (!rec) continue
         rec.view = view
         state.def.update(rec.el, view)
       }
     } else if (changed.size > 0) {
-      const q = world.query(state.def.query)
-      const byId = new Map<Entity, EntityView>()
-      for (const v of q.entities) byId.set(v.id, v)
-      for (const id of changed) {
-        const rec = state.mounted.get(id)
+      for (const view of state.query.entities) {
+        if (!changed.has(view.id)) continue
+        const rec = state.mounted.get(view.id)
         if (!rec) continue
-        const view = byId.get(id) ?? rec.view
         rec.view = view
         state.def.update(rec.el, view)
       }
@@ -147,14 +150,11 @@ function commit(world: World, state: ViewState): void {
   }
 }
 
-function collectChanged(
-  world: World,
-  changedOn: ReadonlyArray<import('domecs').ComponentType<unknown>> | undefined,
-): Set<Entity> | null {
-  if (!changedOn || changedOn.length === 0) return null
+function collectChanged(changedQueries: QueryResult[] | null): Set<Entity> | null {
+  if (!changedQueries) return null
   const out = new Set<Entity>()
-  for (const c of changedOn) {
-    for (const e of world.query(Changed(c)).entities) out.add(e.id)
+  for (const q of changedQueries) {
+    for (const e of q.entities) out.add(e.id)
   }
   return out
 }

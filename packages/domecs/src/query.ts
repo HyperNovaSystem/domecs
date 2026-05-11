@@ -34,6 +34,11 @@ export interface QueryResult {
   readonly size: number
   onAdd(fn: (e: EntityView) => void): () => void
   onRemove(fn: (e: EntityView) => void): () => void
+  /**
+   * Release this live query from the world's archetype indexes. After disposal,
+   * `entities` is empty, `size` is 0, and add/remove subscriptions are cleared.
+   */
+  dispose(): void
 }
 
 export interface QueryHooks {

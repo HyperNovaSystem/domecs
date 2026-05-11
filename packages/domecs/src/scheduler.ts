@@ -167,6 +167,8 @@ export function createScheduler(
           const arr = byMode.get(schedule)!
           const j = arr.indexOf(compiled)
           if (j >= 0) arr.splice(j, 1)
+          compiled.query?.dispose()
+          compiled.reactsTo?.dispose()
         },
         replaceFn(fn: System) {
           compiled.pendingFn = fn
