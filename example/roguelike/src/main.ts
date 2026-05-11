@@ -166,8 +166,11 @@ world.observe(And(Has(Position), Changed(Position)), {
 })
 
 // Initial render — step once so onRender fires with the starting state.
+// Enable motion only after the initial camera snap so page load does not pan
+// from map origin to the player.
 world.step(0)
 applyCamera()
+viewport.classList.add('motion-ready')
 paintStatus()
 statusEl.textContent += '\nwelcome!'
 

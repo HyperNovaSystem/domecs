@@ -11,6 +11,8 @@
   --enemy: #ff6b6b;
   --resource: #66e3c4;
   --highlight: #ff4d6d;
+  --move-ms: 120ms;
+  --move-ease: cubic-bezier(0.2, 0, 0, 1);
   font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
 }
 
@@ -68,6 +70,11 @@ main {
   will-change: transform;
 }
 
+#viewport.motion-ready #world,
+#viewport.motion-ready #actors {
+  transition: transform var(--move-ms) var(--move-ease);
+}
+
 #actors {
   position: absolute;
   inset: 0;
@@ -103,7 +110,7 @@ main {
   font-weight: 700;
   font-size: 14px;
   text-shadow: 0 0 6px rgba(255, 223, 110, 0.55);
-  transition: transform 80ms linear;
+  transition: transform var(--move-ms) var(--move-ease);
 }
 
 .actor.hidden {
@@ -135,4 +142,12 @@ aside#hud {
 #status {
   white-space: pre-wrap;
   color: var(--fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #viewport.motion-ready #world,
+  #viewport.motion-ready #actors,
+  .actor {
+    transition: none;
+  }
 }

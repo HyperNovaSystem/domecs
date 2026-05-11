@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { entry, Has } from 'domecs'
 import {
@@ -82,6 +83,18 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     expect(cameraOrigin({ ...base, playerX: 2, playerY: 2 })).toEqual({ x: 0, y: 0 })
     expect(cameraOrigin({ ...base, playerX: 64, playerY: 64 })).toEqual({ x: 40, y: 48 })
     expect(cameraOrigin({ ...base, playerX: 126, playerY: 126 })).toEqual({ x: 80, y: 96 })
+  })
+
+  it('uses matching motion transitions for camera and actor transforms', () => {
+    const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+    expect(css).toContain('--move-ms: 120ms;')
+    expect(css).toMatch(
+      /#viewport\.motion-ready #world,\s*#viewport\.motion-ready #actors\s*{[^}]*transition: transform var\(--move-ms\) var\(--move-ease\);/s,
+    )
+    expect(css).toMatch(
+      /\.actor\s*{[^}]*transition: transform var\(--move-ms\) var\(--move-ease\);/s,
+    )
+    expect(css).toMatch(/prefers-reduced-motion: reduce/)
   })
 
   it('turn-based scheduling: nothing advances unless the player acts', () => {
