@@ -88,3 +88,28 @@ that is not yet implemented.
 Evidence: [doc/SPEC.md](./doc/SPEC.md) lines 590-597, [README.md](./README.md) lines 262-263.
 Next step: audit core/persistence APIs for structured-clone assumptions before
 building `@domecs/worker`.
+
+## Packaging and Vite Interop
+
+Vite should be the blessed app packaging/deployment path, while DOMECS runtime
+packages remain bundler-agnostic ESM libraries. See
+[doc/PACKAGING.md](./doc/PACKAGING.md).
+
+- Add an official Vite-powered app template, eventually exposed through
+  `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
+- Add an optional `@domecs/vite` plugin only for higher-level framework value:
+  sprite/asset manifests, dev inspector injection, HMR helpers, build-time
+  metadata checks, and persist migration validation.
+- Convert published runtime packages from source-only `./src/index.ts` exports
+  to built `dist` ESM + `.d.ts` exports before npm publication.
+- Document Vite deployment recipes, including `base` for GitHub Pages,
+  itch.io/subdirectory hosting, and static hosting of `dist/`.
+- Decide asset conventions for CSS sprites, image/audio files, generated
+  manifests, and whether any first-party package CSS needs `sideEffects`
+  metadata.
+- Confirm Vite workspace interop for pnpm symlinks, dependency de-duplication,
+  and component identity if multiple copies of `domecs` are installed.
+- Keep Node/headless use healthy: core must stay importable without browser
+  globals, and DOM packages should not require a live `document` at import time.
+- Keep Vitest as the default testing path for templates/examples, with
+  `happy-dom` only for DOM-specific tests.
