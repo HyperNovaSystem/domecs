@@ -243,20 +243,20 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function evalStructural(node: QueryNode, types: Set<string>): boolean {
     switch (node.kind) {
-      case 'has': return types.has(node.type.name)
+      case 'has': requireRegisteredType(node.type); return types.has(node.type.name)
       case 'not': return !evalStructural(node.child, types)
       case 'or': return node.children.some((c) => evalStructural(c, types))
       case 'and': return node.children.every((c) => evalStructural(c, types))
-      case 'added': return types.has(node.type.name)
-      case 'changed': return types.has(node.type.name)
+      case 'added': requireRegisteredType(node.type); return types.has(node.type.name)
+      case 'changed': requireRegisteredType(node.type); return types.has(node.type.name)
       case 'removed': return true
-      case 'where': return types.has(node.type.name)
+      case 'where': requireRegisteredType(node.type); return types.has(node.type.name)
     }
   }
 
   function evalEntity(node: QueryNode, entity: Entity): boolean {
     switch (node.kind) {
-      case 'has': return hasType(entity, node.type.name)
+      case 'has': requireRegisteredType(node.type); return hasType(entity, node.type.name)
       case 'not': return !evalEntity(node.child, entity)
       case 'or': return node.children.some((c) => evalEntity(c, entity))
       case 'and': return node.children.every((c) => evalEntity(c, entity))
@@ -338,6 +338,10 @@ export function createWorld(options: WorldOptions = {}): World {
       )
     }
     return s as Map<Entity, T>
+  }
+
+  function requireRegisteredType(type: ComponentType<unknown>): void {
+    storeFor(type)
   }
 
   function iterateBag(
@@ -528,6 +532,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {
+      requireRegisteredType(type)
       return hasType(entity, type.name)
     },
 
@@ -550,6 +555,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     removeComponent(entity: Entity, type: ComponentType<unknown>): void {
+      requireRegisteredType(type)
       const s = stores.get(type.name)
       if (!s || !s.has(entity)) return
       // SPEC §2.10: componentRemoved fires before the store drops the value.
@@ -563,6 +569,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined {
+      requireRegisteredType(type)
       const s = stores.get(type.name)
       if (!s) return undefined
       return s.get(entity) as T | undefined
@@ -580,6 +587,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     *entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
+      requireRegisteredType(type)
       const store = stores.get(type.name) as Map<Entity, T> | undefined
       if (!store) return
       for (const [id, value] of store) yield { id, value }
@@ -988,6 +996,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // Wipe world state (preserve plugins, system registrations, signals).
+      const prevMembers = queries.map((q) => Array.from(q.structuralMembers))
       alive.clear()
       stores.clear()
       archetypes.clear()
@@ -999,6 +1008,8 @@ export function createWorld(options: WorldOptions = {}): World {
       pendingRemoved.clear()
       pendingChanged.clear()
       for (const q of queries) {
+        const removed = prevMembers[q.id] ?? []
+        if (q.onRemoveFns.size > 0) for (const id of removed) for (const fn of q.onRemoveFns) fn(makeView(id))
         q.matchingArchetypes.clear()
         q.structuralMembers.clear()
       }
@@ -1036,7 +1047,13 @@ export function createWorld(options: WorldOptions = {}): World {
         arch.entities.add(rec.id)
         entityArchetype.set(rec.id, arch)
         for (const q of queries) {
-          if (q.matchingArchetypes.has(arch)) q.structuralMembers.add(rec.id)
+          if (q.matchingArchetypes.has(arch)) {
+            q.structuralMembers.add(rec.id)
+            if (q.onAddFns.size > 0) {
+              const view = makeView(rec.id)
+              for (const fn of q.onAddFns) fn(view)
+            }
+          }
         }
       }
       nextId = maxId + 1

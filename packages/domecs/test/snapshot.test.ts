@@ -111,6 +111,25 @@ describe('restore — roundtrip (SPEC §7.1)', () => {
   })
 })
 
+
+
+  it('fires query remove/add hooks when restore changes membership', () => {
+    const w = createWorld()
+    const adds: number[] = []
+    const removes: number[] = []
+    const q = w.query(Has(Position))
+    q.onAdd((e) => adds.push(e.id))
+    q.onRemove((e) => removes.push(e.id))
+    const a = w.spawn([entry(Position, { x: 1, y: 1 })])
+    w.step(0.016)
+    const snap = w.snapshot()
+    w.despawn(a)
+    w.step(0.016)
+    w.restore(snap)
+    expect(removes.length).toBeGreaterThan(0)
+    expect(adds.length).toBeGreaterThan(0)
+  })
+
 describe('snapshot — plugin hooks (SPEC §9.4)', () => {
   it('onSnapshot and onRestore receive the snap', () => {
     const w = createWorld()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createWorld, defineComponent, entry } from '../src/index.js'
+import { Has, createWorld, defineComponent, entry } from '../src/index.js'
 import type { ComponentBag, ComponentType } from '../src/index.js'
 
 describe('world — entity & component basics', () => {
@@ -156,4 +156,13 @@ describe('world — entity & component basics', () => {
     const types = world.archetype(e).map((t) => t.name).sort()
     expect(types).toEqual(['Position', 'Velocity'])
   })
+})
+
+
+it('rejects querying with distinct ComponentType objects sharing a name', () => {
+  const w = createWorld()
+  const PositionA = defineComponent<{ x: number; y: number }>('Clash')
+  const PositionB = defineComponent<{ x: number; y: number }>('Clash')
+  w.spawn([entry(PositionA, { x: 1, y: 2 })])
+  expect(() => w.query(Has(PositionB)).entities).toThrow(/share the name/)
 })

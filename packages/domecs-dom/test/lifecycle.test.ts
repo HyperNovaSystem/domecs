@@ -143,4 +143,31 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     handle.teardown()
   })
+
+
+  it('passes last mounted complete view to destroy after removal', () => {
+    const world = createWorld({ headless: true })
+    const seen: string[] = []
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      create(e) {
+        const el = document.createElement('span')
+        el.textContent = (e as any).Sprite.glyph
+        return el
+      },
+      destroy(_el, e) {
+        seen.push((e as any).Sprite?.glyph ?? '')
+      },
+    })
+    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const a = world.spawn()
+    world.addComponent(a, Sprite, { glyph: '@' })
+    world.step()
+    world.removeComponent(a, Sprite)
+    world.step()
+    expect(seen).toEqual(['@'])
+    handle.teardown()
+  })
+
 })

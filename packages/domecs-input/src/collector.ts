@@ -59,9 +59,17 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         entered: [],
       }
 
+      function shouldCaptureKeys(): boolean {
+        return !currentFocus().consumesKeys
+      }
+
       function onKeyDown(ev: Event): void {
         const e = ev as KeyboardEvent
         if (e.repeat) {
+          syncMods(e)
+          return
+        }
+        if (!shouldCaptureKeys()) {
           syncMods(e)
           return
         }
@@ -77,6 +85,10 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       }
       function onKeyUp(ev: Event): void {
         const e = ev as KeyboardEvent
+        if (!shouldCaptureKeys()) {
+          syncMods(e)
+          return
+        }
         const code = e.code
         if (held.delete(code)) {
           releasedNext.add(code)

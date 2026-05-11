@@ -114,7 +114,7 @@ function commit(state: ViewState): void {
   for (const [id, view] of state.pendingDestroy) {
     const rec = state.mounted.get(id)
     if (rec) {
-      state.def.destroy?.(rec.el, view)
+      state.def.destroy?.(rec.el, rec.view)
       rec.el.remove()
       state.mounted.delete(id)
     }
