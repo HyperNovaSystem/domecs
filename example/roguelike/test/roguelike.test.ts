@@ -7,6 +7,8 @@ import {
   describePlayerTile,
   enemyCount,
   highlight,
+  isWaitKey,
+  movementDeltaFromKeys,
   MoveEvent,
   Position,
   resourceCount,
@@ -95,6 +97,29 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
       /\.actor\s*{[^}]*transition: transform var\(--move-ms\) var\(--move-ease\);/s,
     )
     expect(css).toMatch(/prefers-reduced-motion: reduce/)
+  })
+
+  it('maps browser key input to 8-way movement including diagonal chords', () => {
+    const keys = (...codes: string[]): ReadonlySet<string> => new Set(codes)
+
+    expect(movementDeltaFromKeys(keys('KeyQ'), keys())).toEqual([-1, -1])
+    expect(movementDeltaFromKeys(keys('KeyE'), keys())).toEqual([1, -1])
+    expect(movementDeltaFromKeys(keys('KeyZ'), keys())).toEqual([-1, 1])
+    expect(movementDeltaFromKeys(keys('KeyC'), keys())).toEqual([1, 1])
+    expect(movementDeltaFromKeys(keys('KeyY'), keys())).toEqual([-1, -1])
+    expect(movementDeltaFromKeys(keys('KeyU'), keys())).toEqual([1, -1])
+    expect(movementDeltaFromKeys(keys('KeyB'), keys())).toEqual([-1, 1])
+    expect(movementDeltaFromKeys(keys('KeyN'), keys())).toEqual([1, 1])
+    expect(movementDeltaFromKeys(keys('Numpad7'), keys())).toEqual([-1, -1])
+    expect(movementDeltaFromKeys(keys('Numpad9'), keys())).toEqual([1, -1])
+    expect(movementDeltaFromKeys(keys('Numpad1'), keys())).toEqual([-1, 1])
+    expect(movementDeltaFromKeys(keys('Numpad3'), keys())).toEqual([1, 1])
+
+    expect(movementDeltaFromKeys(keys('KeyD'), keys('KeyW', 'KeyD'))).toEqual([1, -1])
+    expect(movementDeltaFromKeys(keys(), keys('ArrowLeft', 'ArrowDown'))).toEqual([-1, 1])
+    expect(movementDeltaFromKeys(keys(), keys('KeyE'))).toEqual([1, -1])
+    expect(movementDeltaFromKeys(keys('Space'), keys('KeyW'))).toBeNull()
+    expect(isWaitKey('Numpad5')).toBe(true)
   })
 
   it('turn-based scheduling: nothing advances unless the player acts', () => {

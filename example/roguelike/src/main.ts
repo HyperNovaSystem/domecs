@@ -7,6 +7,8 @@ import {
   createRoguelike,
   enemyCount,
   Highlight,
+  isWaitKey,
+  movementDeltaFromKeys,
   MoveEvent,
   Player,
   Position,
@@ -122,21 +124,6 @@ world.use(
   }),
 )
 
-const KEY_TO_DELTA: Record<string, [number, number]> = {
-  ArrowLeft: [-1, 0],
-  ArrowRight: [1, 0],
-  ArrowUp: [0, -1],
-  ArrowDown: [0, 1],
-  KeyA: [-1, 0],
-  KeyD: [1, 0],
-  KeyW: [0, -1],
-  KeyS: [0, 1],
-  KeyH: [-1, 0],
-  KeyL: [1, 0],
-  KeyK: [0, -1],
-  KeyJ: [0, 1],
-}
-
 function paintStatus(): void {
   const pos = world.getComponent(playerId, Position)
   if (!pos) return
@@ -180,27 +167,27 @@ let lastRepeatAt = 0
 const REPEAT_MS = 130
 
 function tryMoveFromKeys(pressed: ReadonlySet<string>, held: ReadonlySet<string>): void {
-  for (const code of pressed) {
-    const d = KEY_TO_DELTA[code]
+  if (pressed.size > 0) {
+    const d = movementDeltaFromKeys(pressed, held)
     if (d) {
       world.turn(MoveEvent, { entity: playerId, dx: d[0], dy: d[1] })
       lastRepeatAt = performance.now()
       return
     }
-    if (code === 'Space' || code === 'Period') {
-      world.turn(MoveEvent, { entity: playerId, dx: 0, dy: 0 })
-      return
-    }
-  }
-  const now = performance.now()
-  if (now - lastRepeatAt >= REPEAT_MS) {
-    for (const code of held) {
-      const d = KEY_TO_DELTA[code]
-      if (d) {
-        world.turn(MoveEvent, { entity: playerId, dx: d[0], dy: d[1] })
-        lastRepeatAt = now
+    for (const code of pressed) {
+      if (isWaitKey(code)) {
+        world.turn(MoveEvent, { entity: playerId, dx: 0, dy: 0 })
         return
       }
+    }
+  }
+
+  const now = performance.now()
+  if (now - lastRepeatAt >= REPEAT_MS) {
+    const d = movementDeltaFromKeys(new Set(), held)
+    if (d) {
+      world.turn(MoveEvent, { entity: playerId, dx: d[0], dy: d[1] })
+      lastRepeatAt = now
     }
   }
 }
