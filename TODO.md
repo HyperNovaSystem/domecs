@@ -100,8 +100,9 @@ packages remain bundler-agnostic ESM libraries. See
 - Add an optional `@domecs/vite` plugin only for higher-level framework value:
   sprite/asset manifests, dev inspector injection, HMR helpers, build-time
   metadata checks, and persist migration validation.
-- Convert published runtime packages from source-only `./src/index.ts` exports
-  to built `dist` ESM + `.d.ts` exports before npm publication.
+- Verify the npm publish path before first release: workspace packages use
+  source exports for local dev, while `publishConfig` rewrites published
+  metadata to built `dist` ESM + `.d.ts` exports.
 - Document Vite deployment recipes, including `base` for GitHub Pages,
   itch.io/subdirectory hosting, and static hosting of `dist/`.
 - Decide asset conventions for CSS sprites, image/audio files, generated

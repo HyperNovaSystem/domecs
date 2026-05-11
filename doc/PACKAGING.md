@@ -33,10 +33,11 @@ The examples already validate the intended direction:
 - `example/roguelike` also has Vite configuration.
 - examples depend on local workspace packages via `workspace:*`.
 
-That is the right app shape. The framework packages themselves currently expose
-TypeScript source directly, e.g. `"exports": { ".": "./src/index.ts" }`,
-which works well inside the workspace and with Vite, but is not the final shape
-for published npm packages.
+That is the right app shape. The framework packages intentionally expose
+TypeScript source directly in the workspace, e.g. `"exports": { ".": "./src/index.ts" }`,
+so examples and local development keep working immediately after `pnpm install`.
+For npm publication, `publishConfig` rewrites the package metadata to built
+`dist` JavaScript and declaration exports.
 
 ## App packaging model
 
@@ -69,7 +70,9 @@ ordinary web server straightforward.
 ## Runtime package publishing model
 
 Core packages should remain bundler-agnostic and publish built ESM plus types.
-For npm publication, move from source-only exports to `dist` exports:
+In the repository, top-level `main` / `types` / `exports` may continue pointing
+at `src` for workspace/Vite development. For npm publication, each package's
+`publishConfig` rewrites those fields to `dist` exports:
 
 ```json
 {
@@ -82,14 +85,25 @@ For npm publication, move from source-only exports to `dist` exports:
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"]
+  "files": ["dist", "README.md"]
 }
 ```
 
-Open decision: choose the library build tool. Plain `tsc` is enough if the
-packages only need ESM output and declarations. `tsup` or Rollup may be useful
-later if packages need bundled subpath artifacts, minified browser builds, or
-more elaborate export maps.
+Packages build with plain `tsc -p tsconfig.build.json`. `tsup` or Rollup may be
+useful later if packages need bundled subpath artifacts, minified browser
+builds, or more elaborate export maps.
+
+Release from the workspace root with:
+
+```bash
+pnpm run publish:npm
+```
+
+The script builds all packages first, then runs:
+
+```bash
+pnpm -r --filter './packages/*' publish --access public
+```
 
 ## Official template
 
