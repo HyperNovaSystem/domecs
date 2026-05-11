@@ -2,6 +2,8 @@
   "name": "domecs-dom",
   "version": "0.1.0-alpha.0",
   "description": "DOMECS renderer: views, slots, mount lifecycle, batched DOM commits (SPEC §5).",
+  "private": false,
+  "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -9,6 +11,9 @@
     ".": "./src/index.ts"
   },
   "files": ["src", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest",
