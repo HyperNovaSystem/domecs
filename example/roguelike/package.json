@@ -2,7 +2,7 @@
   "name": "@domecs-example/roguelike",
   "version": "0.1.0-alpha.0",
   "private": true,
-  "description": "DOMECS v0.1 exemplar — headless turn-based roguelike (SPEC exemplar #1).",
+  "description": "DOMECS v0.1 exemplar — turn-based roguelike with a browser viewport.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

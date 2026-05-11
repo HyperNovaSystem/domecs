@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { entry, Has } from 'domecs'
 import {
+  cameraOrigin,
   createRoguelike,
   describePlayerTile,
   enemyCount,
   highlight,
   MoveEvent,
   Position,
+  resourceCount,
+  Resource,
+  Renderable,
   Tile,
   Actor,
   Highlight,
@@ -21,13 +25,63 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     ).toThrow(/integer/)
   })
 
-  it('spawns a 128x128 grid + player without mounting DOM (headless)', () => {
+  it('spawns a 128x128 grid + player/resources/enemies without mounting DOM (headless)', () => {
     const { world, width, height } = createRoguelike({ seed: 1 })
     const tiles = world.query(Has(Tile)).size
     expect(tiles).toBe(width * height)
-    // ~16k entities live simultaneously.
+    // ~16k tile entities, plus actors and resource pickups.
     expect(tiles).toBeGreaterThanOrEqual(16000)
-    expect(enemyCount(world)).toBe(0)
+    expect(enemyCount(world)).toBeGreaterThan(0)
+    expect(resourceCount(world)).toBeGreaterThan(0)
+  })
+
+  it('places deterministic enemies and resources on floor tiles', () => {
+    const { world } = createRoguelike({
+      seed: 77,
+      width: 32,
+      height: 32,
+      enemyCount: 3,
+      resourceCount: 5,
+    })
+    const cap = world.capability('spatial-index') as unknown as {
+      rebuild: () => void
+      at: (x: number, y: number) => readonly number[]
+    }
+    cap.rebuild()
+
+    const floorAt = (x: number, y: number): boolean => cap
+      .at(x, y)
+      .some((id) => world.getComponent(id, Tile)?.kind === 'floor')
+
+    expect(enemyCount(world)).toBe(3)
+    expect(resourceCount(world)).toBe(5)
+
+    const monsters = world
+      .query(Has(Actor))
+      .entities.filter((e) => world.getComponent(e.id, Actor)?.faction === 'monster')
+    expect(monsters).toHaveLength(3)
+    for (const e of monsters) {
+      const pos = world.getComponent(e.id, Position)
+      expect(pos).toBeTruthy()
+      expect(world.getComponent(e.id, Renderable)?.glyph).toMatch(/[rgbs]/)
+      expect(floorAt(pos!.x, pos!.y)).toBe(true)
+    }
+
+    for (const e of world.query(Has(Resource)).entities) {
+      const pos = world.getComponent(e.id, Position)
+      const resource = world.getComponent(e.id, Resource)
+      expect(pos).toBeTruthy()
+      expect(resource?.amount).toBeGreaterThan(0)
+      expect(world.getComponent(e.id, Renderable)?.glyph).toMatch(/[%$*]/)
+      expect(floorAt(pos!.x, pos!.y)).toBe(true)
+    }
+  })
+
+  it('clamps the browser camera to a fixed-size viewport over the larger map', () => {
+    const base = { mapWidth: 128, mapHeight: 128, viewWidth: 48, viewHeight: 32 }
+    expect(cameraOrigin({ ...base, playerX: 2, playerY: 2 })).toEqual({ x: 0, y: 0 })
+    expect(cameraOrigin({ ...base, playerX: 64, playerY: 64 })).toEqual({ x: 40, y: 48 })
+    expect(cameraOrigin({ ...base, playerX: 126, playerY: 126 })).toEqual({ x: 80, y: 96 })
   })
 
   it('turn-based scheduling: nothing advances unless the player acts', () => {
@@ -152,8 +206,14 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     }
   })
 
-  it('Actor query finds only the player initially; spawning monsters increases count', () => {
-    const { world, playerId } = createRoguelike({ seed: 5, width: 8, height: 8 })
+  it('Actor query separates the player from monsters', () => {
+    const { world, playerId } = createRoguelike({
+      seed: 5,
+      width: 8,
+      height: 8,
+      enemyCount: 0,
+      resourceCount: 0,
+    })
     expect(world.query(Has(Actor)).size).toBe(1)
     world.spawn([
       entry(Position, { x: 3, y: 3 }),

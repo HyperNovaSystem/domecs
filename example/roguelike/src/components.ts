@@ -27,6 +27,19 @@ export const Actor = defineComponent<{ name: string; hp: number; faction: 'playe
   },
 )
 
+export type ResourceKind = 'food' | 'gold' | 'crystal'
+
+export const Resource = defineComponent<{ kind: ResourceKind; amount: number }>('Resource', {
+  defaults: { kind: 'food', amount: 1 },
+  validate: (value) => {
+    if (value.kind !== 'food' && value.kind !== 'gold' && value.kind !== 'crystal') {
+      return 'resource kind must be "food", "gold", or "crystal"'
+    }
+    if (!Number.isInteger(value.amount) || value.amount <= 0) return 'amount must be a positive integer'
+    return true
+  },
+})
+
 export const Player = defineComponent<Record<string, never>>('Player', { defaults: {} })
 
 export const Visible = defineComponent<{ seen: boolean }>('Visible', {
