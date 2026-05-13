@@ -27,9 +27,9 @@ first red/green pass on the core runtime contract.
    - Fixed `documentatio` typo in this TODO stream as part of the cleanup.
 
 1. 🛠️ **Implemented** — Dev diagnostics scope de-scoped for v0.1.
-   - Decision: keep `WorldOptions.dev` as forward-compatible shape, but remove
-     proxy-backed diagnostics/counters from the v0.1 contract.
-   - Action: track diagnostics as a post-v0.1 feature in roadmap docs.
+   - Decision: remove proxy-backed diagnostics/counters from the v0.1
+     contract, and do not expose `WorldOptions.dev` in the current API surface.
+   - Action: track a future diagnostics API as post-v0.1 roadmap work.
 
 2. ⛔ **Wontfix (for v0.1)** — Snapshot restore rich reflection/signals.
    - Reason: adding snapshot-carried type metadata now would harden an unstable

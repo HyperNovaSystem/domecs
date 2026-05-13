@@ -79,8 +79,11 @@ export interface World {
    * change callbacks. Returns an unsubscribe function.
    *
    * - `onAdd` / `onRemove` fire when membership changes.
-   * - `onChange` fires for current members whenever any tracked component is
-   *   marked changed within a tick.
+   * - `onChange` requires `def` to include at least one change-detection node
+   *   such as `Added(...)`, `Removed(...)`, or `Changed(...)`; plain `Has(...)`
+   *   queries do not support reactive change ticks.
+   * - When valid, `onChange` fires for current members on ticks where the
+   *   change-detection portion of the query is non-empty.
    */
   observe(def: QueryDef, hooks: QueryHooks): () => void
   step(dt?: number): void
