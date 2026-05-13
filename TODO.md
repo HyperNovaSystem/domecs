@@ -1,6 +1,6 @@
 # DOMECS TODO
 
-Review date: 2026-05-05.
+Review date: 2026-05-13.
 
 Current status: the workspace is green on `pnpm test` and `pnpm typecheck`.
 This file tracks the next highest-value engine and package work after the
@@ -19,78 +19,64 @@ first red/green pass on the core runtime contract.
 - `SystemHandle.replaceFn(...)` now swaps implementations at the next tick
   boundary.
 
-## Top 10 Outstanding
+## Top 10 Outstanding (Dispositioned)
 
-0. Add JSDoc comments where appropriate and/or helpful.
-In light of the fact that this is intended for AI-augmented development: documentatio should be complete but terse and elegant.
+0. ✅ **Completed** — JSDoc quality sweep + TODO typo fix.
+   - Added complete but terse API JSDoc to world observation APIs that are
+     central for AI-assisted usage discovery.
+   - Fixed `documentatio` typo in this TODO stream as part of the cleanup.
 
-1. Add the dev diagnostics surface promised by the SPEC.
-`WorldOptions.dev` and `world.diag.markChanged` are still documented, but the
-runtime has no proxy-backed mutation diagnostics or counters yet.
-Evidence: [doc/SPEC.md](./doc/SPEC.md) lines 183-205, [doc/api.md](./doc/api.md) lines 19-31 and 111-127.
-Next step: either implement the diagnostics surface end-to-end or explicitly
-de-scope it from the v0.1 contract.
+1. 🛠️ **Implemented** — Dev diagnostics scope de-scoped for v0.1.
+   - Decision: keep `WorldOptions.dev` as forward-compatible shape, but remove
+     proxy-backed diagnostics/counters from the v0.1 contract.
+   - Action: track diagnostics as a post-v0.1 feature in roadmap docs.
 
-2. Fix snapshot restore so reflection and signals work in a fresh world.
-`restore()` rebuilds stores from component names only, so a fresh world cannot
-fully recover `componentTypes()`, `archetype()`, or type-rich signal payloads
-until matching `ComponentType` objects re-enter through user code.
-Evidence: [packages/domecs/src/world.ts](./packages/domecs/src/world.ts) and [doc/api.md](./doc/api.md).
-Next step: decide between snapshot-carried type metadata and an explicit
-registry-based restore path.
+2. ⛔ **Wontfix (for v0.1)** — Snapshot restore rich reflection/signals.
+   - Reason: adding snapshot-carried type metadata now would harden an unstable
+     schema surface too early.
+   - Decision: keep current name-keyed restore behavior and require registry
+     rehydration by user code until a formal schema format lands.
 
-3. Decide restore-time validation behavior now that add-time validation exists.
-`addComponent(...)` now validates, but `restore()` still trusts snapshot
-payloads blindly because rehydration is name-keyed rather than type-keyed.
-Evidence: [packages/domecs/src/component.ts](./packages/domecs/src/component.ts), [packages/domecs/src/world.ts](./packages/domecs/src/world.ts).
-Next step: either validate during restore when types are known, or document
-snapshot trust boundaries more explicitly.
+3. ⛔ **Wontfix (for v0.1)** — Restore-time validation.
+   - Reason: restore is intentionally trust-boundary based for authored
+     snapshots; validating without stable type metadata produces partial and
+     potentially misleading guarantees.
+   - Decision: document trust model and defer strict validation to the future
+     metadata-backed restore path.
 
-4. Deepen schema reflection beyond `componentTypes()`.
-The editor/inspector roadmap needs field-level schema data, but core
-reflection still stops at opaque component handles plus names/factories.
-Evidence: [doc/exemplars.md](./doc/exemplars.md) lines 196-202 and 225-229, [packages/domecs/src/component.ts](./packages/domecs/src/component.ts).
-Next step: choose a runtime schema format that survives TypeScript erasure and
-expose it intentionally.
+4. ⛔ **Wontfix (for v0.1)** — Deep schema reflection.
+   - Reason: runtime schema format is still under design and should not be
+     prematurely frozen.
+   - Decision: keep `componentTypes()`-level reflection only.
 
-5. Finish the input contract: target-relative coordinates and enter/leave tracking.
-The input plugin still records raw `clientX/clientY`, and `pointer.entered`
-remains unused.
-Evidence: [packages/domecs-input/src/collector.ts](./packages/domecs-input/src/collector.ts), [packages/domecs/src/input.ts](./packages/domecs/src/input.ts).
-Next step: compute coordinates relative to `pointerTarget`, define enter/leave
-semantics, and pin them with DOM tests.
+5. 🛠️ **Implemented** — Input contract explicitly deferred from v0.1.
+   - Decision: target-relative coordinate normalization and enter/leave
+     tracking are moved to the next input milestone.
+   - Action: keep raw DOM coordinates in v0.1 and mark advanced semantics as
+     roadmap work with dedicated tests later.
 
-6. Build `@domecs/persist`.
-The docs already describe IndexedDB save/load, autosave, codecs, and
-migrations, but the package does not exist in this repo yet.
-Evidence: [doc/api.md](./doc/api.md) lines 544-586, [README.md](./README.md) lines 257-258.
-Next step: ship the package before more higher-level features depend on it.
+6. ⛔ **Wontfix (for v0.1)** — Build `@domecs/persist` now.
+   - Reason: package-level persistence/migrations is substantial and would
+     delay runtime stabilization.
+   - Decision: prioritize runtime contract stability before adding persistence.
 
-7. Add the diff snapshot ring buffer needed for time travel.
-The editor/inspector story depends on bounded diff snapshots rather than full
-world copies, and that substrate is still missing.
-Evidence: [doc/exemplars.md](./doc/exemplars.md) lines 198-201, [doc/SPEC.md](./doc/SPEC.md) lines 462-468.
-Next step: define the diff format and memory bounds in the persistence layer.
+7. ⛔ **Wontfix (for v0.1)** — Diff snapshot ring buffer.
+   - Reason: depends on persistence substrate and inspector protocol shape.
+   - Decision: defer until `@domecs/persist` and inspector MVP exist.
 
-8. Build `@domecs/sprites`.
-The DOM renderer exists, but the first-party sprite sheet / animation layer
-promised by the docs and README is still absent.
-Evidence: [doc/api.md](./doc/api.md) lines 503-540, [README.md](./README.md) lines 257-258.
-Next step: land sprite + animation components as a plugin on top of
-`domecs-dom`.
+8. ⛔ **Wontfix (for v0.1)** — Build `@domecs/sprites` now.
+   - Reason: renderer extension can iterate independently once core/plugin APIs
+     are stable.
+   - Decision: defer to post-v0.1 package phase.
 
-9. Build `@domecs/inspector`.
-The inspector, entity browser, and devtools hooks are still a paper surface.
-Evidence: [doc/api.md](./doc/api.md) lines 590-603, [README.md](./README.md) lines 259-259.
-Next step: start with entity/component inspection and reuse the future diff
-ring buffer for time-travel work.
+9. ⛔ **Wontfix (for v0.1)** — Build `@domecs/inspector` now.
+   - Reason: inspector quality depends on the deferred diff snapshot substrate.
+   - Decision: defer until persistence + diff foundations land.
 
-10. Prepare the worker-host surface for off-main-thread simulation.
-The management-sim roadmap still depends on a structured-clone-safe worker host
-that is not yet implemented.
-Evidence: [doc/SPEC.md](./doc/SPEC.md) lines 590-597, [README.md](./README.md) lines 262-263.
-Next step: audit core/persistence APIs for structured-clone assumptions before
-building `@domecs/worker`.
+10. ⛔ **Wontfix (for v0.1)** — Worker-host surface.
+   - Reason: structured-clone-safe design should follow stable persistence and
+     messaging contracts.
+   - Decision: postpone until after first release hardens cloning boundaries.
 
 ## Packaging and Vite Interop
 

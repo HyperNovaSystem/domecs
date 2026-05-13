@@ -74,6 +74,14 @@ export interface World {
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   query(def: QueryDef): QueryResult
+  /**
+   * Observe a query reactively and receive structural + optional per-tick
+   * change callbacks. Returns an unsubscribe function.
+   *
+   * - `onAdd` / `onRemove` fire when membership changes.
+   * - `onChange` fires for current members whenever any tracked component is
+   *   marked changed within a tick.
+   */
   observe(def: QueryDef, hooks: QueryHooks): () => void
   step(dt?: number): void
   stepN(n: number, dt?: number): void
