@@ -21,6 +21,9 @@ first red/green pass on the core runtime contract.
 
 ## Top 10 Outstanding
 
+0. Add JSDoc comments where appropriate and/or helpful.
+In light of the fact that this is intended for AI-augmented development: documentatio should be complete but terse and elegant.
+
 1. Add the dev diagnostics surface promised by the SPEC.
 `WorldOptions.dev` and `world.diag.markChanged` are still documented, but the
 runtime has no proxy-backed mutation diagnostics or counters yet.

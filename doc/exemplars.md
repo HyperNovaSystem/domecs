@@ -47,7 +47,9 @@ ASCII-art or tile-sprite dungeon crawler. Turn-based. Procedurally generated 128
 
 ## 2. Management Sim — *"Harbor Authority"*
 
-City-builder scoped to a single port. 200 ships, 500 workers, 5,000 cargo containers, 40 warehouses, 12 cranes. Real-time with adjustable speed (pause, 1×, 4×, 16×, 64×).
+City-builder scoped to a single port.
+200 ships, 500 workers, 5,000 cargo containers, 40 warehouses, 12 cranes.
+Real-time with adjustable speed (pause, 1×, 4×, 16×, 64×).
 
 ### What it stresses
 
@@ -144,7 +146,9 @@ Abstract strategy on a hex grid. 2–4 local or networked players. Perfect infor
 
 ## 5. Control Dashboard — *"Fleet Pulse"*
 
-Operations dashboard monitoring 400 vehicles. WebSocket data feed. Alarms, charts, maps, sortable tables, drill-down detail panes. Must remain responsive under 500 updates per second from the wire.
+Operations dashboard monitoring 400 vehicles.
+WebSocket data feed.
+Alarms, charts, maps, sortable tables, drill-down detail panes. Must remain responsive under 500 updates per second from the wire.
 
 ### What it stresses
 

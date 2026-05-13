@@ -2,9 +2,18 @@
 
 **Entity Component System → Document Object Model**
 
-A high-performance ECS game engine that renders to the DOM. Built for games whose complexity lives in their *systems and state* — inventories, dialogue trees, economies, crafting graphs, base-builders, roguelikes, idle/incremental, tactics, management sims — rather than in their pixels.
+A high-performance ECS game engine that renders to the DOM.
+Built for games whose complexity lives in their *systems and state* — inventories, dialogue trees, economies, crafting graphs, base-builders, roguelikes, idle/incremental, tactics, management sims — rather than in their pixels.
 
-Sprites in CSS. State in IndexedDB. Logic in plain functions over plain data.
+Sprites in CSS.
+State in IndexedDB.
+Logic in plain functions over plain data.
+
+---
+
+## Power Features
+* Optimized for UI-heavy games & apps
+* Tailored for AI-augmented development
 
 ---
 
