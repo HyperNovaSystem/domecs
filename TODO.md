@@ -9,7 +9,7 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 ## Next
 
 - Verify the npm publish path before first release: workspace packages use source exports for local dev, while `publishConfig` rewrites published metadata to built `dist` ESM + `.d.ts` exports.
-- Add an official Vite-powered app template, eventually exposed through
+- Wire `domecs_template_vite` into the future create flow:
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
 - Document Vite deployment recipes, including `base` for GitHub Pages, itch.io/subdirectory hosting, and static hosting of `dist/`.
 - Wire `pnpm run release:validate` into CI once the packed-package smoke test is stable across the workspace and `HyperNovaSystem` app repositories.
@@ -18,8 +18,6 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 - Decide asset conventions for CSS sprites, image/audio files, generated
   manifests, and whether any first-party package CSS needs `sideEffects`
   metadata.
-- Keep Node/headless use healthy: core must stay importable without browser
-  globals, and DOM packages should not require a live `document` at import time.
 - Keep Vitest as the default testing path for templates/examples, with
   `happy-dom` only for DOM-specific tests.
 

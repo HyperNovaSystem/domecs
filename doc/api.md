@@ -13,7 +13,7 @@ function createWorld(options?: WorldOptions): World
 
 interface WorldOptions {
   seed?:      number | [number, number, number, number]
-  headless?:  boolean      // default false; start() throws, world.step() drives ticks
+  headless?:  boolean      // default false; start() throws, world.step() drives ticks; no browser globals required
   fixedStep?: number       // seconds; default 1/60
   idle?:      boolean      // default true; sleep RAF when no frame work remains
 }
@@ -422,12 +422,16 @@ Rules: (1) one provider per capability name — `provides: ['spatial-index']` fr
 ## `@domecs/input`
 
 ```ts
-function createInput(world: World, options?: InputOptions): Plugin
+function createInputPlugin(options?: InputPluginOptions): Plugin
 
-interface InputOptions {
-  target?: HTMLElement        // default: document
-  gamepad?: boolean           // default: true
-  preventDefault?: (e: Event) => boolean
+interface InputPluginOptions {
+  keyTarget?: Document | HTMLElement      // default: document when present
+  pointerTarget?: Document | HTMLElement  // default: document when present
+  wheelTarget?: Document | HTMLElement    // default: pointerTarget
+  clearOnBlur?: boolean                   // default true
+  textInputSelector?: string              // default 'input,textarea,[contenteditable="true"]'
+  pollGamepads?: boolean                  // default true when navigator.getGamepads exists
+  preventDefaultKeys?: boolean            // default false
 }
 
 interface InputSnapshot {
@@ -454,39 +458,41 @@ interface GamepadSnapshot {
 }
 ```
 
+Importing `@domecs/input` is safe without browser globals. Installing
+`createInputPlugin()` in Node registers no DOM listeners, skips gamepad polling,
+and publishes empty snapshots on tick.
+
 ---
 
 ## `@domecs/dom`
 
 ```ts
-function mountDOM(world: World, options: DomOptions): Plugin
+function mountDOM(world: World, options: MountOptions): MountHandle
 
-interface DomOptions {
+interface MountOptions {
   slots: Record<string, HTMLElement>     // e.g. { stage: el, hud: el, portal: document.body }
-  views: Record<string, ViewDefinition<unknown>>
+  views: readonly ViewDef[]
 }
 
-interface ViewDefinition<T> {
+interface MountHandle {
+  teardown(): void
+}
+
+interface ViewDef {
   slot:         string
-  query?:       QueryDef                  // default: Has(associatedComponent)
-  virtualize?:  boolean
-  shouldMount?: (entity: EntityView, viewport: Viewport) => boolean
+  query:        QueryShorthand
+  changedOn?:   readonly ComponentType<unknown>[]
   create(entity: EntityView): HTMLElement
-  update(el: HTMLElement, entity: EntityView, prev: EntityView | null): void
+  update?(el: HTMLElement, entity: EntityView): void
   destroy?(el: HTMLElement, entity: EntityView): void
 }
 
-interface Viewport {
-  rect: DOMRect
-  scroll: { x: number; y: number }
-}
-
-// sugar: define a view bound to a single component
-function defineView<T>(
-  component: ComponentType<T>,
-  def: Omit<ViewDefinition<T>, 'query'>
-): ViewDefinition<T>
+function defineView(def: ViewDef): ViewDef
 ```
+
+Importing `@domecs/dom` is safe without browser globals. `mountDOM` requires
+caller-provided slot elements for views; it never discovers `document` on
+module load.
 
 ---
 
@@ -605,7 +611,7 @@ v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from us
 ```ts
 import { createWorld, defineComponent, entry, Has } from '@domecs/core'
 import { mountDOM, defineView } from '@domecs/dom'
-import { createInput } from '@domecs/input'
+import { createInputPlugin } from '@domecs/input'
 import { Sprite, createSpritesPlugin } from '@domecs/sprites'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
@@ -613,15 +619,17 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
 
 const world = createWorld({ seed: 0xC0FFEE })
 
-world.use(createInput(world))
+world.use(createInputPlugin())
 world.use(createSpritesPlugin({
   sheets: { hero: { url: '/hero.png', frameW: 16, frameH: 16, cols: 8, rows: 4 } },
 }))
-world.use(mountDOM(world, {
+mountDOM(world, {
   slots: { stage: document.getElementById('stage')! },
-  views: {
-    sprite: defineView(Sprite, {
+  views: [
+    defineView({
       slot: 'stage',
+      query: Has(Sprite),
+      changedOn: [Position, Sprite],
       create: () => {
         const el = document.createElement('div')
         el.className = 'sprite'
@@ -632,8 +640,8 @@ world.use(mountDOM(world, {
         el.style.backgroundPosition = `-${e.Sprite.frame * 16}px 0`
       },
     }),
-  },
-}))
+  ],
+})
 
 world.system('movement', {
   query: [Position, Velocity],

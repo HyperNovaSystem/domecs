@@ -146,7 +146,8 @@ pnpm -r --filter './packages/*' publish --access public
 
 ## Official template
 
-DOMECS should ship an official Vite-powered app template, eventually exposed as
+The initial official Vite-powered app template lives in the sibling
+`domecs_template_vite` repository and should eventually be exposed as
 one of:
 
 ```bash
@@ -173,6 +174,7 @@ my-game/
 The template should include:
 - vanilla DOM mounting with `@domecs/dom`;
 - a minimal tick loop / fixed-step example;
+- a basic `once` / `event` / `reactive` system example;
 - CSS import and asset usage through Vite;
 - `dev`, `build`, `preview`, `typecheck`, and `test` scripts;
 - a short deployment note for static hosts;

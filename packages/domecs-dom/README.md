@@ -80,6 +80,9 @@ mount.teardown()
 world render phase, so it works with both manual `world.step()` loops and
 `world.start()`.
 
+The package is safe to import in Node/headless tests. `mountDOM` itself expects
+caller-provided slots for real views; it never looks up `document` on import.
+
 ## Related packages
 
 - `@domecs/core` — core ECS runtime.

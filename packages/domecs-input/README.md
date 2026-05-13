@@ -86,6 +86,10 @@ Defaults:
 - `pollGamepads`: `true` when `navigator.getGamepads` exists
 - `preventDefaultKeys`: `false`
 
+When no browser globals exist, the default DOM targets are absent. The plugin is
+still safe to import and install; it registers no event listeners, does not poll
+gamepads, and publishes empty snapshots on each tick.
+
 ## Headless tests
 
 For deterministic tests without browser events, you can bypass this plugin and

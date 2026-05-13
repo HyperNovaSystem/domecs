@@ -44,6 +44,22 @@
 
 No cycles.  Core is renderer-agnostic; the DOM renderer is framework-agnostic.
 
+### Headless and import-time safety
+
+First-release packages must be safe to import under plain Node with no browser
+globals installed. `@domecs/core` is the authoritative headless runtime:
+`createWorld({ headless: true })` plus explicit `world.step(dt)` must run
+without `window`, `document`, `navigator`, `requestAnimationFrame`, or
+`cancelAnimationFrame`. `World.start()` remains browser-only and must throw a
+clear error when rAF is unavailable or when the world was created with
+`headless: true`.
+
+Browser-adjacent packages may depend on DOM types and caller-provided DOM
+objects, but they must not read a live `document` at module evaluation time.
+`@domecs/dom` requires explicit slots when mounting; importing it in Node is a
+no-op. `@domecs/input` may be installed in Node; with no default DOM targets it
+publishes empty input snapshots and registers no event listeners.
+
 ### Naming
 
 - Display name: **DOMECS**.
