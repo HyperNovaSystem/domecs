@@ -1,16 +1,13 @@
 # DOMECS Packaging and Vite Interop
 
-Review date: 2026-05-10.
+Review date: 2026-05-13.
 
-DOMECS is intended to be a full browser app framework for rich DOM-first apps
-and games. Vite should be the blessed development, build, and deployment path
-for DOMECS applications, while the runtime packages remain normal ESM libraries
-with no bundler lock-in.
+DOMECS is intended to be a full browser app framework for rich DOM-first apps and games.
+Vite should be the blessed development, build, and deployment path for DOMECS applications, while the runtime packages remain normal ESM libraries with no bundler lock-in.
 
 ## Decision
 
-Use Vite as the official app scaffold and deployment story, but do not make Vite
-a runtime dependency of the core framework packages.
+Use Vite as the official app scaffold and deployment story, but do not make Vite a runtime dependency of the core framework packages.
 
 Recommended split:
 
@@ -21,23 +18,37 @@ create-domecs template(s)           = Vite by default
 @domecs/vite                        = optional advanced Vite plugin
 ```
 
+The `domecs` npm organization/scope has been officially reserved for this project.
+Use `@domecs/*` for first-party scoped packages.
+Before the first public release, finalize whether DOM/input publish under the existing unscoped package names (`domecs-dom`, `domecs-input`) or move into the reserved scope (for example `@domecs/dom`, `@domecs/input`), and update the spec, API reference, README, package manifests, and template imports together.
+
+The GitHub organization is `HyperNovaSystem`. The engine repository is
+`HyperNovaSystem/domecs`, and example applications may live either in this
+workspace's `example/*` packages or as separate downstream app repositories in
+the same GitHub organization.
+
 This keeps DOMECS pleasant for app authors without preventing use from other
 bundlers, embedded pages, React/Svelte shells, or plain browser module graphs.
 
-## Current repository state
 
-The examples already validate the intended direction:
+## Current repository and org state
+
+The in-repository examples already validate the intended direction:
 
 - `example/restaurant` uses `vite`, `vite build`, and `vite preview`.
 - `example/dashboard` uses the same pattern.
 - `example/roguelike` also has Vite configuration.
 - examples depend on local workspace packages via `workspace:*`.
 
-That is the right app shape. The framework packages intentionally expose
-TypeScript source directly in the workspace, e.g. `"exports": { ".": "./src/index.ts" }`,
-so examples and local development keep working immediately after `pnpm install`.
-For npm publication, `publishConfig` rewrites the package metadata to built
-`dist` JavaScript and declaration exports.
+Separate example app repositories under `HyperNovaSystem` should validate the
+published-package path: fresh installs from npm or packed tarballs, template
+defaults, static deployment recipes, and compatibility with real app repo
+layouts.
+
+That is the right app shape.
+The framework packages intentionally expose TypeScript source directly in the workspace, e.g. `"exports": { ".": "./src/index.ts" }`, so examples and local development keep working immediately after `pnpm install`.
+For npm publication, `publishConfig` rewrites the package metadata to built `dist` JavaScript and declaration exports.
+
 
 ## App packaging model
 
@@ -66,6 +77,7 @@ A DOMECS application should be a Vite app with scripts like:
 The default deployment artifact is Vite's `dist/` directory. This makes static
 hosting on GitHub Pages, Netlify, Vercel, Cloudflare Pages, S3, itch.io, or any
 ordinary web server straightforward.
+
 
 ## Runtime package publishing model
 
@@ -105,6 +117,7 @@ The script builds all packages first, then runs:
 pnpm -r --filter './packages/*' publish --access public
 ```
 
+
 ## Official template
 
 DOMECS should ship an official Vite-powered app template, eventually exposed as
@@ -132,7 +145,6 @@ my-game/
 ```
 
 The template should include:
-
 - vanilla DOM mounting with `domecs-dom`;
 - a minimal tick loop / fixed-step example;
 - CSS import and asset usage through Vite;
@@ -140,11 +152,12 @@ The template should include:
 - a short deployment note for static hosts;
 - optional variants later for React/Svelte shells or PWA/offline play.
 
+
 ## Optional `@domecs/vite` plugin
 
-A Vite plugin should be optional and added only when it provides framework-level
-value beyond normal Vite usage. Candidate features:
+A Vite plugin should be optional and added only when it provides framework-level value beyond normal Vite usage.
 
+Candidate features:
 - sprite atlas or asset manifest generation for `@domecs/sprites`;
 - automatic dev inspector injection in development builds;
 - hot-reload helpers for views, systems, and data tables;
@@ -182,8 +195,8 @@ Track the following before calling Vite support first-class:
 10. **Deployment docs** — add copy-paste recipes for Vite static output on the
     supported hosts.
 
+
 ## Bottom line
 
-DOMECS should feel like a full app framework by offering a Vite-first scaffold,
-examples, and deployment documentation. The engine itself should remain a small,
-portable ESM runtime that happens to work especially well in Vite apps.
+DOMECS should feel like a full app framework by offering a Vite-first scaffold, examples, and deployment documentation.
+The engine itself should remain a small, portable ESM runtime that happens to work especially well in Vite apps.

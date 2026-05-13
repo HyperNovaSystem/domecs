@@ -8,7 +8,8 @@
 
 ## 0. Design axioms
 
-1. **The model is the game.**  DOMECS optimizes the ergonomics and performance of simulations that live in structured data, not pixel pipelines.
+0. **Assume AI-assisted usage**  DOMECS assumes developers are AI-augmented and optimizes for that mode.  The core API will be discoverable and ergonomic for introspection and generation by AI+human agents.
+1. **The model is the app.**  DOMECS optimizes the ergonomics and performance of simulations that live in structured data, not pixel pipelines.
 2. **The DOM is the renderer.**  Layout, text, input, accessibility, and scaling are delegated to the browser. The engine does not reimplement them.
 3. **Entities are data.**  No classes, no inheritance, no lifecycle methods on entities. Behavior lives in systems.
 4. **Determinism is a contract, not a feature.**  Where DOMECS promises determinism, it pays the cost (PRNG, time quantization, iteration order) everywhere.
@@ -46,7 +47,10 @@ No cycles.  Core is renderer-agnostic; the DOM renderer is framework-agnostic.
 ### Naming
 
 - Display name: **DOMECS**.
-- npm name: **`domecs`**. Scoped plugins under **`@domecs/…`**.
+- Core npm package name: **`domecs`**.
+- Officially reserved npm organization/scope: **`@domecs`** for first-party scoped
+  packages such as `@domecs/persist`, `@domecs/inspector`, and future
+  framework integrations.
 - Import: `import { createWorld } from 'domecs'`.
 
 ---
@@ -69,7 +73,7 @@ Component instances are **owned by the world**.
 
 **Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
 
-Dev builds enforce I-1 at runtime: component objects handed out of a query are wrapped in a proxy that is **poisoned** at tick-end (step 8), so a stale read in the next tick throws with the entity id and component type at the point of misuse.  Production builds skip the proxy for speed; the contract is the same.
+v0.1 treats I-1 as a caller contract, not as a proxy-enforced runtime feature. Stale-reference poisoning is deferred until the diagnostics surface is designed, so the current core does not expose a dev/prod split for component wrapper behavior.
 
 ### 2.3 World
 
@@ -182,27 +186,11 @@ Result: `scaledDelta` keeps its §7 wire-format guarantee, and a `fixed` system 
 
 ### 2.9 Change tracking
 
-`world.markChanged(entity, type)` is the input to `Changed(T)` queries.  It is **explicit**: the core does not auto-detect component mutations.  The contract is the same in dev and prod; the difference is observability.
+`world.markChanged(entity, type)` is the input to `Changed(T)` queries. It is **explicit**: the core does not auto-detect component mutations. In v0.1 the path is proxy-free in every build: `markChanged` records the entity/type pair for the next tick's change filters, with no write interception, no per-field version bookkeeping, no `WorldOptions.dev`, and no `world.diag` surface.
 
-**Production builds.**  `markChanged` is an O(1) append to a per-archetype dirty ring.  `Changed(T)` reads from the ring at tick start (step 1).  No proxy, no write interception, no per-field version bookkeeping.
+Post-v0.1 diagnostics may warn about mutation-without-mark or mark-without-mutation patterns through a plugin or inspector surface, but those warnings must not change `Changed(T)` semantics. Missed marks remain caller bugs; extra defensive marks remain legal.
 
-**Dev builds.**  The Invariant-I-1 proxy (§2.2) also records writes.  At tick end, before step 8 (poison), the world diffs *recorded mutations* against *recorded marks* and emits two signals:
-
-- **`mutation-without-mark`** (default: `warn`).  A field on a component was written but `markChanged` was not called.  `Changed(T)` will miss this mutation.  Warning payload: `{ entity, type, field, systemName, stackHint }`.  Configurable to `'throw'` for CI, `'off'` for noisy prototyping.
-- **`mark-without-mutation`** (default: `off`).  `markChanged` was called but no mutation was recorded on that entity/type.  Emitted as an *info-level hint* for optimizers hunting wasted marks; never on by default because defensive marking is a valid style.
-
-Both signals also increment counters on `world.diag.markChanged` (`mutations`, `marks`, `unmarked`, `overmarked`, plus a bounded ring of recent offenders).  The inspector (§10) surfaces this tab; custom dashboards can read the same surface without scraping the console.
-
-**Configuration** (see `api.md`, `WorldOptions.dev`):
-
-```ts
-dev?: {
-  markWarn?:    'warn' | 'throw' | 'off'     // default: 'warn' in dev, forced 'off' in prod
-  markOveruse?: 'hint' | 'off'               // default: 'off'
-}
-```
-
-**Invariant (I-2 — explicit marks).**  `Changed(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; the dev-mode diagnostics exist to find them, not to paper over them.
+**Invariant (I-2 — explicit marks).**  `Changed(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; future diagnostics may help find them, but the core does not paper over them.
 
 This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
 
@@ -223,7 +211,7 @@ interface Signal<T> {
 **Synchronous delivery.**  Subscribers run synchronously within the tick phase that emitted the signal — not queued, not microtask-deferred:
 
 - `entitySpawned` / `entityDespawned` / `componentAdded` / `componentRemoved` fire on the call site of the structural change (inside `spawn`, `despawn`, `addComponent`, `removeComponent`).
-- `tickStart` fires inside step 1; `tickEnd` fires inside step 8 (after the Invariant-I-1 proxy is poisoned).
+- `tickStart` fires inside step 1; `tickEnd` fires inside step 8 after tick-end bookkeeping.
 
 A subscriber that throws propagates to the call site that emitted the signal; the world does not catch.
 
@@ -231,7 +219,7 @@ A subscriber that throws propagates to the call site that emitted the signal; th
 
 **Mutation during delivery.**  Subscribers added or removed during delivery take effect on the *next* emission of that signal.  Re-entrant emission (a subscriber triggers the same signal) delivers synchronously in emission order.
 
-**Payload rule (normative).**  Signal payloads carry only entity ids, component *types*, and plain time data — never component references.  A subscriber that needs component state calls `world.getComponent(entity, Type)` within the same tick phase.  This keeps Invariant I-1 (§2.2) uniform: signals introduce no new reference-lifetime rules, and the dev-mode poisoned proxy does not need to wrap signal payloads.  Component references obtained via `getComponent` inside a subscriber are tick-scoped exactly as they would be inside a system — the step-8 poisoning applies to them without special-casing the signal site.
+**Payload rule (normative).**  Signal payloads carry only entity ids, component *types*, and plain time data — never component references.  A subscriber that needs component state calls `world.getComponent(entity, Type)` within the same tick phase.  This keeps Invariant I-1 (§2.2) uniform: signals introduce no new reference-lifetime rules, and signal payloads need no component wrappers.  Component references obtained via `getComponent` inside a subscriber are tick-scoped exactly as they would be inside a system.
 
 Corollary: `componentRemoved` delivers *before* the component's bag is released, so a subscriber may still call `getComponent(entity, type)` and receive the outgoing snapshot within that same phase.  After the emitting call site returns, the component is gone.
 
@@ -382,7 +370,7 @@ This supports long sortable tables (`domecs/dom` ships a table-list view for thi
 
 Slots are named roots, registered at `mountDOM(world, { slots: {...} })` time. Standard slots:
 
-- `stage` — game viewport.
+- `stage` — app viewport.
 - `hud` — overlaid on stage, ignores stage transform.
 - `portal` — document body-level (tooltips, modals).
 - `chrome` — outside the stage entirely (menus, inventory sidebars).
@@ -398,9 +386,11 @@ Applications register custom slots as needed.
 - Keyboard: normalized to W3C `code` values; modifier state separated.
 - Pointer: unified mouse/pen/touch via Pointer Events.
 - Gamepad: polled per tick; snapshot includes all connected pads.
-- Focus: active element and whether a text input consumes keys (prevents game keybindings from firing when typing in chat).
+- Focus: active element and whether a text input consumes keys (prevents app keybindings from firing when typing in chat).
 
 `InputSnapshot` is immutable within a tick. Systems read; they do not mutate.
+
+v0.1 pointer coordinates are raw DOM event client coordinates. Target-relative normalization, hit-tested entity enter/leave tracking, and higher-level action mapping are deferred to the next input milestone or app-level plugins.
 
 Keybinding layer is *not* part of core — it is a plugin that translates `InputSnapshot` to high-level `Action` events.
 
@@ -421,6 +411,8 @@ interface WorldSnapshot {
 ```
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
+
+`restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
 ### 7.2 Autosave — eventually consistent
 
@@ -449,7 +441,7 @@ Explicit `snapshot()` remains the way to get a globally coherent world-at-T (man
 
 ```ts
 createPersistence(world, {
-  database: 'my-game',
+  database: 'my-domecs-app',
   version:  3,
   codecs:   {
     Position: {
@@ -585,7 +577,7 @@ Any framework (Svelte, React, Solid, Vue, Lit, or vanilla DOM) can layer on top 
 - **Scope.**  Two adapters × two reactivity models doubles the surface the spec has to defend.  v0.1 picks one path and proves it.
 - **Honesty.**  A Svelte `$state`-wrapped component store is not the same object as a vanilla component instance; systems written against one do not trivially port to the other.  Tiered adapters hid that asymmetry behind a marketing story.
 - **Invariant I-1.**  The cross-tick reference rule (§2.2) is uniform for vanilla.  Adapter-wrapped references introduce per-adapter lifetime questions; deferring them lets the invariant stay simple.
-- **`markChanged` is the API.**  With no "auto-detect in Svelte" alternative, explicit marking is not an ergonomics regression — it is the contract (see §2.9 for the full change-tracking contract and the dev-mode `mutation-without-mark` / `mark-without-mutation` diagnostics).  This closes the `Changed(T)` correctness question by removing the branch where discipline varies.
+- **`markChanged` is the API.**  With no "auto-detect in Svelte" alternative, explicit marking is not an ergonomics regression — it is the contract (see §2.9 for the full change-tracking contract).  This closes the `Changed(T)` correctness question by removing the branch where discipline varies.
 
 ### 11.2 What ships after v0.1
 

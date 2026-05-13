@@ -16,19 +16,6 @@ interface WorldOptions {
   headless?:  boolean      // default false; start() throws, world.step() drives ticks
   fixedStep?: number       // seconds; default 1/60
   idle?:      boolean      // default true; sleep RAF when no frame work remains
-  dev?:       DevOptions
-}
-
-// Dev-only diagnostics; stripped at prod build time.
-interface DevOptions {
-  // Emit on mutation-without-markChanged. Default 'warn' in dev, forced
-  // 'off' in prod. 'throw' is the CI setting.
-  markWarn?:    'warn' | 'throw' | 'off'
-
-  // Emit an info-level hint when markChanged is called but no mutation
-  // was recorded on that entity/type this tick. Off by default — flip on
-  // when profiling. Never fires in prod.
-  markOveruse?: 'hint' | 'off'
 }
 ```
 
@@ -108,25 +95,9 @@ interface World {
   // May be called inside or outside a running system. Between-tick calls are
   // buffered and promoted into the live change-detection set at the next
   // step()'s step 0 — symmetric with event buffering. See SPEC §2.9.
+  // v0.1 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
+  // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
-
-  // Dev-only diagnostics surface. In prod, diag.markChanged.* counters
-  // remain addressable but stay at zero. See SPEC §2.9.
-  readonly diag: {
-    markChanged: {
-      mutations:   number               // writes observed by the I-1 proxy this tick
-      marks:       number               // markChanged calls this tick
-      unmarked:    number               // mutations without a corresponding mark
-      overmarked:  number               // marks without a corresponding mutation
-      recent(): ReadonlyArray<{
-        kind:   'unmarked' | 'overmarked'
-        entity: Entity
-        type:   string                  // ComponentType name
-        field?: string                  // for 'unmarked'
-        tick:   number
-      }>
-    }
-  }
 
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
@@ -165,6 +136,8 @@ interface World {
 
   // snapshots
   snapshot(): WorldSnapshot
+  // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
+  // strict schema validation and unknown-component tooling are future work.
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -467,11 +440,11 @@ interface InputSnapshot {
 }
 
 interface PointerSnapshot {
-  x: number; y: number
+  x: number; y: number        // raw DOM client coordinates in v0.1
   buttons: number
   delta: { x: number; y: number }
   wheel: number
-  entered: readonly Entity[]   // entities under pointer this tick
+  entered: readonly Entity[]   // reserved for future hit-tested enter tracking; empty in v0.1
 }
 
 interface GamepadSnapshot {
@@ -682,4 +655,4 @@ world.spawn([
 world.start()
 ```
 
-Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). Prod is proxy-free: `markChanged` is an O(1) ring append. Dev builds piggyback on the I-1 proxy to warn on **mutation-without-mark** (default `'warn'`, configurable to `'throw'` for CI or `'off'` for prototyping) and can optionally hint on **mark-without-mutation** for optimizers (`dev: { markOveruse: 'hint' }`). Counters and a recent-offenders ring live at `world.diag.markChanged` for the inspector or custom dashboards.
+Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v0.1 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.
