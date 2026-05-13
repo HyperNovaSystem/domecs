@@ -21,9 +21,9 @@
 ## 1. Packages and layering
 
 ```
-domecs                 — core: World, entities, components, queries, systems, events, time
-domecs/dom             — DOM renderer: views, mounting, diffing
-domecs/input           — input collector: keyboard, pointer, touch, gamepad
+@domecs/core           — core: World, entities, components, queries, systems, events, time
+@domecs/dom            — DOM renderer: views, mounting, diffing
+@domecs/input          — input collector: keyboard, pointer, touch, gamepad
 @domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
 @domecs/persist        — IndexedDB snapshot/restore, autosave, migrations
 @domecs/inspector      — devtools panel, entity browser, time-travel scrubber
@@ -33,9 +33,9 @@ domecs/input           — input collector: keyboard, pointer, touch, gamepad
 ### Module dependency DAG
 
 ```
-domecs (core)
- ├── domecs/input         (depends: core)
- ├── domecs/dom           (depends: core)
+@domecs/core
+ ├── @domecs/input        (depends: core)
+ ├── @domecs/dom          (depends: core)
  │    ├── @domecs/sprites (depends: core, dom)
  │    └── @domecs/inspector (depends: core, dom; uses core reflection)
  ├── @domecs/persist      (depends: core)
@@ -47,11 +47,11 @@ No cycles.  Core is renderer-agnostic; the DOM renderer is framework-agnostic.
 ### Naming
 
 - Display name: **DOMECS**.
-- Core npm package name: **`domecs`**.
-- Officially reserved npm organization/scope: **`@domecs`** for first-party scoped
-  packages such as `@domecs/persist`, `@domecs/inspector`, and future
-  framework integrations.
-- Import: `import { createWorld } from 'domecs'`.
+- Official npm scope: **`@domecs`**.
+- All first-party runtime packages publish under `@domecs/*`.
+- First-release package map: core is **`@domecs/core`**, DOM renderer is
+  **`@domecs/dom`**, and input collector is **`@domecs/input`**.
+- Import: `import { createWorld } from '@domecs/core'`.
 
 ---
 
@@ -258,7 +258,7 @@ If there are no enabled `tick`/`fixed` systems that require continuous
 frames, no unfired `once` systems, no pending component work, and no queued
 events, the RAF loop sleeps.
 It resumes on external `world.emit()`, structural component mutations /
-`markChanged`, input activity through `domecs-input`, `resume()`, or an
+`markChanged`, input activity through `@domecs/input`, `resume()`, or an
 explicit `world.start()`.
 
 ### Headless mode
@@ -310,7 +310,7 @@ Events emitted in steps 5–6 are buffered for next tick.
 
 ---
 
-## 5. Renderer (`domecs/dom`)
+## 5. Renderer (`@domecs/dom`)
 
 ### 5.1 Views, not elements
 
@@ -364,7 +364,7 @@ Anything else escapes the compositor and is documented as "slow-path."
 
 Renderers may declare `virtualize: true`.
 For such views, the renderer calls a `shouldMount(entity, viewport)` hook before `create()`.
-This supports long sortable tables (`domecs/dom` ships a table-list view for this) and large stage viewports.
+This supports long sortable tables (`@domecs/dom` ships a table-list view for this) and large stage viewports.
 
 ### 5.6 Portals and layers
 
@@ -381,7 +381,7 @@ Applications register custom slots as needed.
 
 ---
 
-## 6. Input (`domecs/input`)
+## 6. Input (`@domecs/input`)
 
 - Keyboard: normalized to W3C `code` values; modifier state separated.
 - Pointer: unified mouse/pen/touch via Pointer Events.
@@ -473,7 +473,7 @@ This relies on:
 - `world.rand` is the only PRNG used in authoritative systems.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
 - Iteration order of queries is deterministic (archetype order, then entity id).
-- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (`domecs/math` ships them as a plugin).
+- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (`@domecs/math` ships them as a plugin).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
 The inspector can run an authoritative system in a sandbox and detect violations (PRNG, wall-clock, disallowed trig) by monkey-patching.
@@ -608,7 +608,8 @@ Each published package measures and publishes its own min+gzip size.
 ## 14. Testing
 
 - Core and persistence must have full feature coverage.
-- Every exemplar in `doc/exemplars.md` has a corresponding `examples/` project that CI builds and smoke-tests.
+- Every exemplar in `doc/exemplars.md` has a corresponding `example/` project or `HyperNovaSystem` app repository that CI builds and smoke-tests.
+- Workspace examples validate source interop through `workspace:*`; release validation must also stage clean app copies against packed/published `@domecs/*` packages and run their normal `test` and static `build` scripts.
 - Determinism is tested by running two worlds in parallel with identical seed+inputs and asserting byte-identical snapshots.
 - Renderer is tested via `@testing-library/dom`.
 
@@ -619,7 +620,7 @@ Headless mode (§3) makes system tests fast and framework-free.
 ## 15. Versioning and stability
 
 - v0.x: unstable. APIs may change between minor versions. Breaking changes called out in CHANGELOG.
-- v1.0: API freeze for `domecs`, `domecs/dom`, `@domecs/persist`. Other packages may lag.
+- v1.0: API freeze for `@domecs/core`, `@domecs/dom`, `@domecs/persist`. Other packages may lag.
 - Deprecations: minimum two minor releases of warning with a migration guide.
 
 ---

@@ -1,4 +1,4 @@
-import { defineComponent } from 'domecs'
+import { defineComponent } from '@domecs/core'
 
 export type TableState =
   | 'free'

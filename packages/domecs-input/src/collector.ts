@@ -1,4 +1,4 @@
-import type { GamepadSnapshot, InputSnapshot, Plugin, PluginHandle, PointerSnapshot, World } from 'domecs'
+import type { GamepadSnapshot, InputSnapshot, Plugin, PluginHandle, PointerSnapshot, World } from '@domecs/core'
 
 export interface InputPluginOptions {
   /** Element receiving keyboard events. Default: document. */
@@ -31,7 +31,7 @@ const DEFAULT_TEXT_SELECTOR = 'input,textarea,[contenteditable="true"]'
 
 export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
   return {
-    name: 'domecs-input',
+    name: '@domecs/input',
     install(world: World): PluginHandle {
       const wake = (world as World & { __wake?: () => void }).__wake
       const doc = typeof document !== 'undefined' ? document : undefined

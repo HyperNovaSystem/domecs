@@ -10,6 +10,15 @@ The implementation also exposed several framework gaps that matter before a real
 
 ## Findings
 
+### 2026-05-13: Release validation must use packed scoped packages
+
+Harbor now imports `@domecs/core`, `@domecs/dom`, and `@domecs/input`, so it can
+smoke-test the public package names. For local development the app can still
+point at `file:../domecs/packages/*`, but release validation should stage the
+app against packed tarballs. Folder-based npm lockfiles preserve workspace
+internals such as `workspace:*`, while packed tarballs prove the publish
+metadata, `dist` files, and static Vite build path.
+
 ### 1. Fast-forward needs first-class logical substepping
 
 Harbor Authority wants pause, 1×, 4×, 16×, and 64×. The prototype uses `world.time.scaledDelta`, so one browser frame at 64× can become a single very large tick. That is acceptable for coarse continuous systems, but not for systems that assume logical 60 Hz or bounded per-tick work.

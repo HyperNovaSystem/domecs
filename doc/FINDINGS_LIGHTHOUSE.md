@@ -10,6 +10,15 @@ The implementation also exposed framework gaps around save-slot ergonomics, tran
 
 ## Findings
 
+### 2026-05-13: Release validation must use packed scoped packages
+
+Lighthouse now imports `@domecs/core` and `@domecs/dom`, so it can smoke-test
+the public package names. For local development the app can still point at
+`file:../domecs/packages/*`, but release validation should stage the app
+against packed tarballs. Folder-based npm lockfiles preserve workspace
+internals such as `workspace:*`, while packed tarballs prove the publish
+metadata, `dist` files, and static Vite build path.
+
 ### 1. Transient-only view entities leave empty snapshot records
 
 `lighthouse_novel` spawns DOM view entities whose components are all marked `transient`. DOMECS correctly omits those components from `world.snapshot()`, but the snapshot still includes the entity record with an empty `components` object. For a UI-heavy visual novel (choices, transcript lines, save slot cards, gallery cards), that adds save-file noise and can revive empty entities on restore.
@@ -50,12 +59,12 @@ Suggestion:
 
 ### 5. Text-first DOM UI wants renderer helpers beyond entity-per-element views
 
-The visual novel UI is mostly text: dialogue, speaker labels, choices, transcript backlog, save slots, and gallery entries. `domecs-dom` views worked, but the app still hand-wrote common text UI plumbing such as escaping, list ordering, button handlers, and sidebar chrome outside retained views.
+The visual novel UI is mostly text: dialogue, speaker labels, choices, transcript backlog, save slots, and gallery entries. `@domecs/dom` views worked, but the app still hand-wrote common text UI plumbing such as escaping, list ordering, button handlers, and sidebar chrome outside retained views.
 
 Suggestion:
 
 - Provide text/UI recipes for ordered list views, button views that emit events, transcript/backlog rendering, and accessible dialogue markup.
-- Consider `domecs-dom` utilities for keyed ordered child projection where the view order is part of component data.
+- Consider `@domecs/dom` utilities for keyed ordered child projection where the view order is part of component data.
 
 ### 6. Rich text/typewriter support belongs in a DOM-oriented example or plugin
 
@@ -81,7 +90,7 @@ One story state fans out into multiple DOM regions: background, portraits, dialo
 
 Suggestion:
 
-- Keep multi-slot/multi-view projection central in `domecs-dom` docs.
+- Keep multi-slot/multi-view projection central in `@domecs/dom` docs.
 - Add a visual-novel example to renderer docs demonstrating one persistent story entity driving many transient view entities/slots.
 
 ### 9. Event buffers are intentionally not durable; docs should say how to persist durable history

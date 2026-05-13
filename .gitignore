@@ -149,3 +149,4 @@ playwright-report/
 /**/playwright/.cache/
 
 .pnpm-store/
+.tmp/

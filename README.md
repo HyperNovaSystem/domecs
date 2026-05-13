@@ -64,15 +64,15 @@ The architecture below is the design target.
 If you're consuming the published packages:
 
 ```bash
-npm install DOMECS
+npm install @domecs/core @domecs/dom @domecs/input
 ```
 
 Optional packages:
 
 ```bash
-npm install @DOMECS/persist     # IndexedDB save/load
-npm install @DOMECS/sprites     # sprite sheet + animation components
-npm install @DOMECS/inspector   # in-browser entity/component debugger
+npm install @domecs/persist     # IndexedDB save/load
+npm install @domecs/sprites     # sprite sheet + animation components
+npm install @domecs/inspector   # in-browser entity/component debugger
 ```
 
 This repository itself is a `pnpm` workspace. If you're developing in
@@ -91,8 +91,8 @@ pnpm install
 
 The examples in [`example/`](./example) depend on the local packages in
 [`packages/`](./packages) via `workspace:*`, so they must be installed
-through the workspace to resolve `domecs`, `domecs-dom`, and
-`domecs-input` correctly.
+through the workspace to resolve `@domecs/core`, `@domecs/dom`, and
+`@domecs/input` correctly.
 
 If you previously ran `npm install` in the repo root and an example
 fails with "dependencies are imported but could not be resolved",
@@ -112,15 +112,20 @@ Workspace-wide commands:
 pnpm test
 pnpm build
 pnpm typecheck
+pnpm run release:validate
 ```
+
+`release:validate` builds and packs the runtime packages, stages clean example
+apps against those tarballs, then runs each staged app's `test` and `build`
+scripts. Use it before publishing a new `@domecs/*` version.
 
 ---
 
 ## Quick start
 
 ```ts
-import { createWorld, defineComponent, entry } from 'DOMECS'
-import { mountDOM, defineView } from 'DOMECS/dom'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { mountDOM, defineView } from '@domecs/dom'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Sprite   = defineComponent<{ sheet: string; frame: number }>('Sprite')
@@ -171,7 +176,7 @@ Mutating `e.Position.x` in a system updates `transform: translate(...)` on the n
 ## Persistence
 
 ```ts
-import { createPersistence } from '@DOMECS/persist'
+import { createPersistence } from '@domecs/persist'
 
 const persist = createPersistence(world, {
   database: 'my-game',
@@ -194,13 +199,13 @@ Saves are entity snapshots — components only, no DOM, no closures. Load rebuil
 ┌─────────────────────────────────────────────┐
 │  Your game code — components & systems      │
 ├─────────────────────────────────────────────┤
-│  DOMECS/core      World · Entities · Query  │
+│  @domecs/core     World · Entities · Query  │
 │                   Systems · Events · Time   │
 ├─────────────────────────────────────────────┤
-│  DOMECS/dom       Retained DOM renderer     │
-│  @DOMECS/sprites  Sprite sheets, animation  │
-│  @DOMECS/persist  IndexedDB snapshots       │
-│  @DOMECS/inspector  Devtools panel          │
+│  @domecs/dom      Retained DOM renderer     │
+│  @domecs/sprites  Sprite sheets, animation  │
+│  @domecs/persist  IndexedDB snapshots       │
+│  @domecs/inspector  Devtools panel          │
 ├─────────────────────────────────────────────┤
 │  Browser — DOM, CSS, IndexedDB, Pointer API │
 └─────────────────────────────────────────────┘
@@ -248,14 +253,15 @@ Replay, networked rollback, and time-travel debugging all become tractable.
 - Management sims, base-builders, factory games
 - Visual novels with branching state
 - Tabletop simulators, board game engines
-- Tooling, level editors, simulation dashboards
+- Tooling, level editors, control/simulation dashboards
 
 **Probably not a fit**
 - Bullet hell, twin-stick shooters, anything with thousands of moving sprites per frame
 - 3D
 - Pixel-perfect platformers needing sub-frame collision
 
-For those, reach for Phaser, PixiJS, or a real game engine. Or use DOMECS for the *menus* and embed a canvas for the action.
+For those, reach for Phaser, PixiJS, or a dedicated game engine.
+Or use DOMECS for the *menus* and embed a canvas for the action.
 
 ---
 

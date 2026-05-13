@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent } from 'domecs'
+import { Has, createWorld, defineComponent } from '@domecs/core'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Tag = defineComponent<{}>('Tag')

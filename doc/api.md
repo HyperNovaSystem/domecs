@@ -4,7 +4,7 @@ Concrete type and function signatures for the public API described in `SPEC.md`.
 
 ---
 
-## `domecs` (core)
+## `@domecs/core` (core)
 
 ### `createWorld`
 
@@ -60,7 +60,7 @@ interface World {
   // frame work remains (no enabled `tick`/`fixed`/unfired `once` systems, no
   // pending component work, no queued events). It wakes on external
   // `world.emit(...)`, structural component mutations / `markChanged`,
-  // `domecs-input` activity, `resume()`, or an explicit `start()`.
+  // `@domecs/input` activity, `resume()`, or an explicit `start()`.
   //
   // `step(dt)` semantics:
   //   - `step(dt)` with `dt > 0`: normal tick advance.
@@ -387,7 +387,7 @@ interface Capability<K extends string> {
 
 ```ts
 // ── in @domecs/physics ──────────────────────────────────────────────
-declare module 'domecs' {
+declare module '@domecs/core' {
   interface Capability<K> {
     // only augments the K = 'spatial-index' instantiation
     query: K extends 'spatial-index'
@@ -419,7 +419,7 @@ Rules: (1) one provider per capability name — `provides: ['spatial-index']` fr
 
 ---
 
-## `domecs/input`
+## `@domecs/input`
 
 ```ts
 function createInput(world: World, options?: InputOptions): Plugin
@@ -456,7 +456,7 @@ interface GamepadSnapshot {
 
 ---
 
-## `domecs/dom`
+## `@domecs/dom`
 
 ```ts
 function mountDOM(world: World, options: DomOptions): Plugin
@@ -603,9 +603,9 @@ v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from us
 ## Quick-start example (updated)
 
 ```ts
-import { createWorld, defineComponent, entry, Has } from 'domecs'
-import { mountDOM, defineView } from 'domecs/dom'
-import { createInput } from 'domecs/input'
+import { createWorld, defineComponent, entry, Has } from '@domecs/core'
+import { mountDOM, defineView } from '@domecs/dom'
+import { createInput } from '@domecs/input'
 import { Sprite, createSpritesPlugin } from '@domecs/sprites'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')

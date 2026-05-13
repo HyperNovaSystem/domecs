@@ -8,23 +8,13 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 
 ## Next
 
-- Verify the npm publish path before first release: workspace packages use
-  source exports for local dev, while `publishConfig` rewrites published
-  metadata to built `dist` ESM + `.d.ts` exports.
-- Finalize the first-release npm naming map now that the `domecs` org/scope is
-  officially reserved: decide whether DOM/input remain `domecs-dom` /
-  `domecs-input` or move under `@domecs/*`, then update spec, API docs,
-  READMEs, manifests, and templates in one pass.
+- Verify the npm publish path before first release: workspace packages use source exports for local dev, while `publishConfig` rewrites published metadata to built `dist` ESM + `.d.ts` exports.
 - Add an official Vite-powered app template, eventually exposed through
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
-- Document Vite deployment recipes, including `base` for GitHub Pages,
-  itch.io/subdirectory hosting, and static hosting of `dist/`.
-- Define how `HyperNovaSystem` example app repositories participate in release
-  validation: workspace examples cover source interop, while org-level apps
-  should smoke-test packed/published packages, template defaults, and static
-  deployment recipes.
+- Document Vite deployment recipes, including `base` for GitHub Pages, itch.io/subdirectory hosting, and static hosting of `dist/`.
+- Wire `pnpm run release:validate` into CI once the packed-package smoke test is stable across the workspace and `HyperNovaSystem` app repositories.
 - Confirm Vite workspace interop for pnpm symlinks, dependency de-duplication,
-  and component identity if multiple copies of `domecs` are installed.
+  and component identity if multiple copies of `@domecs/core` are installed.
 - Decide asset conventions for CSS sprites, image/audio files, generated
   manifests, and whether any first-party package CSS needs `sideEffects`
   metadata.

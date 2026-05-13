@@ -13,7 +13,7 @@ Design documentation for DOMECS. These files are the living specification; the r
 ## Reading order
 
 - New to the project → [../README.md](../README.md), then `critique.md` to see what the README over-promises, then `SPEC.md`.
-- Implementing core → `SPEC.md` §§ 2–4, 8, then `api.md` sections for `domecs`.
+- Implementing core → `SPEC.md` §§ 2–4, 8, then `api.md` sections for `@domecs/core`.
 - Implementing a plugin → `SPEC.md` § 9, then `api.md` plugin interface.
 - Packaging or deploying an app → `PACKAGING.md`, then the Vite example apps under `../example/`.
 - Validating a design change → cross-check against `exemplars.md` requirement intersection table.

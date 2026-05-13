@@ -20,13 +20,13 @@ importers:
 
   example/dashboard:
     dependencies:
-      domecs:
+      '@domecs/core':
         specifier: workspace:*
         version: link:../../packages/domecs
-      domecs-dom:
+      '@domecs/dom':
         specifier: workspace:*
         version: link:../../packages/domecs-dom
-      domecs-input:
+      '@domecs/input':
         specifier: workspace:*
         version: link:../../packages/domecs-input
     devDependencies:
@@ -42,13 +42,13 @@ importers:
 
   example/restaurant:
     dependencies:
-      domecs:
+      '@domecs/core':
         specifier: workspace:*
         version: link:../../packages/domecs
-      domecs-dom:
+      '@domecs/dom':
         specifier: workspace:*
         version: link:../../packages/domecs-dom
-      domecs-input:
+      '@domecs/input':
         specifier: workspace:*
         version: link:../../packages/domecs-input
     devDependencies:
@@ -64,13 +64,13 @@ importers:
 
   example/roguelike:
     dependencies:
-      domecs:
+      '@domecs/core':
         specifier: workspace:*
         version: link:../../packages/domecs
-      domecs-dom:
+      '@domecs/dom':
         specifier: workspace:*
         version: link:../../packages/domecs-dom
-      domecs-input:
+      '@domecs/input':
         specifier: workspace:*
         version: link:../../packages/domecs-input
     devDependencies:
@@ -95,7 +95,7 @@ importers:
 
   packages/domecs-dom:
     dependencies:
-      domecs:
+      '@domecs/core':
         specifier: workspace:*
         version: link:../domecs
     devDependencies:
@@ -111,7 +111,7 @@ importers:
 
   packages/domecs-input:
     dependencies:
-      domecs:
+      '@domecs/core':
         specifier: workspace:*
         version: link:../domecs
     devDependencies:

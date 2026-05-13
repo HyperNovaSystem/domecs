@@ -1,8 +1,8 @@
-# domecs-input
+# @domecs/input
 
 Browser input collector plugin for DOMECS.
 
-`domecs-input` listens to keyboard, pointer, wheel, focus, and gamepad state and
+`@domecs/input` listens to keyboard, pointer, wheel, focus, and gamepad state and
 publishes a per-tick `InputSnapshot` to `world.input`.
 
 > Status: early alpha.
@@ -10,14 +10,14 @@ publishes a per-tick `InputSnapshot` to `world.input`.
 ## Install
 
 ```bash
-npm install domecs domecs-input
+npm install @domecs/core @domecs/input
 ```
 
 ## Quick start
 
 ```ts
-import { createWorld } from 'domecs'
-import { createInputPlugin } from 'domecs-input'
+import { createWorld } from '@domecs/core'
+import { createInputPlugin } from '@domecs/input'
 
 const world = createWorld()
 const stage = document.querySelector<HTMLElement>('#stage')!
@@ -98,8 +98,8 @@ world.step()
 
 ## Related packages
 
-- `domecs` — core ECS runtime.
-- `domecs-dom` — retained-mode DOM renderer.
+- `@domecs/core` — core ECS runtime.
+- `@domecs/dom` — retained-mode DOM renderer.
 
 ## License
 

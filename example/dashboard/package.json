@@ -18,9 +18,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "domecs": "workspace:*",
-    "domecs-dom": "workspace:*",
-    "domecs-input": "workspace:*"
+    "@domecs/core": "workspace:*",
+    "@domecs/dom": "workspace:*",
+    "@domecs/input": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

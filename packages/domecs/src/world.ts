@@ -47,7 +47,7 @@ export interface World {
   readonly input: InputSnapshot
   /**
    * Publish a new InputSnapshot for subsequent systems to read (SPEC §4 step 2).
-   * Intended for use by the `domecs-input` plugin at `onTickStart`; user code may
+   * Intended for use by the `@domecs/input` plugin at `onTickStart`; user code may
    * call it in headless tests to drive input deterministically. Replaces the
    * current snapshot wholesale; there is no merge.
    */

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createWorld } from 'domecs'
+import { createWorld } from '@domecs/core'
 import { createInputPlugin } from '../src/collector.js'
 
 function kbd(type: 'keydown' | 'keyup', code: string, opts: KeyboardEventInit = {}): KeyboardEvent {
   return new KeyboardEvent(type, { code, key: code, bubbles: true, ...opts })
 }
 
-describe('domecs-input collector', () => {
+describe('@domecs/input collector', () => {
   let originalGetGamepads: typeof navigator.getGamepads | undefined
 
   beforeEach(() => {

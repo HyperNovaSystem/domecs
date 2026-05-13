@@ -8,6 +8,15 @@ The current DOMECS slice is expressive enough for a deterministic board game: he
 
 ## Findings
 
+### 2026-05-13: Release validation must use packed scoped packages
+
+Tessera now imports `@domecs/core` and `@domecs/dom`, so it can smoke-test the
+public package names. For local development the app can still point at
+`file:../domecs/packages/*`, but release validation should stage the app
+against packed tarballs. Folder-based npm lockfiles preserve workspace
+internals such as `workspace:*`, while packed tarballs prove the publish
+metadata, `dist` files, and static Vite build path.
+
 ### T-1: Reactive systems need clearer `ctx.entities` behavior
 
 A reactive system with `reactsTo: Changed(Piece)` did not receive those entities in `ctx.entities` unless the same query was also supplied as `query: Changed(Piece)`. That is internally consistent with the current scheduler, but surprising for exemplar code.

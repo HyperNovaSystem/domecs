@@ -1,4 +1,4 @@
-import { defineComponent } from 'domecs'
+import { defineComponent } from '@domecs/core'
 
 export const Position = defineComponent<{ x: number; y: number }>('Position', {
   defaults: { x: 0, y: 0 },

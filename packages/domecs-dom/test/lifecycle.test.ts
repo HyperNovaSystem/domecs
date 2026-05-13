@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent, type QueryDef, type QueryResult } from 'domecs'
+import { Has, createWorld, defineComponent, type QueryDef, type QueryResult } from '@domecs/core'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Sprite = defineComponent<{ glyph: string }>('Sprite')

@@ -12,15 +12,17 @@ Use Vite as the official app scaffold and deployment story, but do not make Vite
 Recommended split:
 
 ```txt
-domecs / domecs-dom / domecs-input  = runtime libraries, bundler-agnostic
-example/*                           = Vite applications
-create-domecs template(s)           = Vite by default
-@domecs/vite                        = optional advanced Vite plugin
+@domecs/core / @domecs/dom / @domecs/input  = runtime libraries, bundler-agnostic
+example/*                                    = Vite applications
+create-domecs template(s)                    = Vite by default
+@domecs/vite                                 = optional advanced Vite plugin
 ```
 
-The `domecs` npm organization/scope has been officially reserved for this project.
-Use `@domecs/*` for first-party scoped packages.
-Before the first public release, finalize whether DOM/input publish under the existing unscoped package names (`domecs-dom`, `domecs-input`) or move into the reserved scope (for example `@domecs/dom`, `@domecs/input`), and update the spec, API reference, README, package manifests, and template imports together.
+The `@domecs` npm organization/scope has been officially reserved for this project.
+Use `@domecs/*` for all first-party runtime packages. The first public release
+publishes core as `@domecs/core`, the DOM renderer as `@domecs/dom`, and the
+input collector as `@domecs/input`. The older unscoped names (`domecs`,
+`domecs-dom`, `domecs-input`) are not official first-release package names.
 
 The GitHub organization is `HyperNovaSystem`. The engine repository is
 `HyperNovaSystem/domecs`, and example applications may live either in this
@@ -50,6 +52,30 @@ The framework packages intentionally expose TypeScript source directly in the wo
 For npm publication, `publishConfig` rewrites the package metadata to built `dist` JavaScript and declaration exports.
 
 
+## Release validation
+
+Release validation has two tiers:
+
+1. **Workspace source interop.** The in-repository `example/*` packages keep
+   depending on `@domecs/*` through `workspace:*`. CI runs their normal
+   `test`, `typecheck`, and `build` scripts to catch source-level breakage
+   while the engine packages are edited in place.
+2. **Packed-package smoke tests.** Before publishing a new engine version, run
+   `pnpm run release:validate`. The harness builds `packages/*`, packs
+   `@domecs/core`, `@domecs/dom`, and `@domecs/input`, stages clean copies of
+   the example apps, rewrites their `@domecs/*` dependencies to the generated
+   tarballs, then runs each app's `test` and `build` scripts from that staged
+   install. This catches missing `dist` files, bad `publishConfig` metadata,
+   stale import names, package-manager assumptions, and static Vite build
+   regressions before npm publish.
+
+The staged smoke test must not rewrite source imports. Applications validate
+the public API by importing the scoped packages exactly as published:
+`@domecs/core`, `@domecs/dom`, and `@domecs/input`. The old unscoped package
+names (`domecs`, `domecs-dom`, `domecs-input`) are treated as a release
+validation failure.
+
+
 ## App packaging model
 
 A DOMECS application should be a Vite app with scripts like:
@@ -63,9 +89,9 @@ A DOMECS application should be a Vite app with scripts like:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "domecs": "^0.1.0",
-    "domecs-dom": "^0.1.0",
-    "domecs-input": "^0.1.0"
+    "@domecs/core": "^0.1.0",
+    "@domecs/dom": "^0.1.0",
+    "@domecs/input": "^0.1.0"
   },
   "devDependencies": {
     "vite": "^5.4.0",
@@ -145,7 +171,7 @@ my-game/
 ```
 
 The template should include:
-- vanilla DOM mounting with `domecs-dom`;
+- vanilla DOM mounting with `@domecs/dom`;
 - a minimal tick loop / fixed-step example;
 - CSS import and asset usage through Vite;
 - `dev`, `build`, `preview`, `typecheck`, and `test` scripts;
@@ -178,7 +204,7 @@ Track the following before calling Vite support first-class:
 2. **Workspace behavior** — keep examples resolving workspace packages cleanly
    under pnpm. Current `resolve.preserveSymlinks: false` is appropriate.
 3. **Dependency de-duplication** — document or encode any Vite `resolve.dedupe`
-   needs if multiple copies of `domecs` can break component identity.
+   needs if multiple copies of `@domecs/core` can break component identity.
 4. **Browser boundaries** — ensure DOM packages do not leak Node-only imports,
    and core packages do not require browser globals.
 5. **Static assets** — define a convention for CSS sprites, image/audio assets,
@@ -188,7 +214,7 @@ Track the following before calling Vite support first-class:
 7. **CSS side effects** — decide whether first-party packages ship CSS and, if
    so, mark package metadata so bundlers do not tree-shake required styles.
 8. **SSR/non-browser use** — keep core importable in Node and tests; keep DOM
-   APIs lazy enough that importing `domecs-dom` does not immediately require a
+   APIs lazy enough that importing `@domecs/dom` does not immediately require a
    live document.
 9. **Testing** — keep Vitest as the default test runner for templates and
    examples, with `happy-dom` only where DOM APIs are required.

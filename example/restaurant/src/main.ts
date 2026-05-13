@@ -1,6 +1,6 @@
-import { Has, type EntityView } from 'domecs'
-import { defineView, mountDOM } from 'domecs-dom'
-import { createInputPlugin } from 'domecs-input'
+import { Has, type EntityView } from '@domecs/core'
+import { defineView, mountDOM } from '@domecs/dom'
+import { createInputPlugin } from '@domecs/input'
 import {
   Customer,
   FireWaiterEvent,

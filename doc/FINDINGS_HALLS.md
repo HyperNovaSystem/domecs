@@ -6,6 +6,16 @@ This implementation was intentionally dependency-free and data-oriented. That ma
 
 ## Findings and suggestions
 
+### H-0: Static Halls cannot validate DOMECS package releases yet
+
+`halls_game` is still a dependency-free static prototype, so it does not
+exercise `@domecs/core`, `@domecs/dom`, packed package metadata, or Vite static
+deployment. Treat `domecs/example/roguelike` as the current roguelike release
+validator, or rebuild Halls on the scoped DOMECS packages before expecting it to
+participate in release validation.
+
+---
+
 ### H-1: Tile grids should not require one mounted DOM node per tile
 
 **Observation:** The game uses a 128×128 level (16,384 cells) but renders a fixed 48×32 viewport (1,536 cells). The renderer reuses viewport cells and projects them onto world coordinates.
@@ -15,7 +25,7 @@ This implementation was intentionally dependency-free and data-oriented. That ma
 - modeling each map cell as an entity and accidentally mounting 16k DOM nodes, or
 - abandoning ECS for tile rendering.
 
-**Suggestion:** Add/document a `TileMapView` or virtualized grid view for `domecs-dom` that renders a viewport window over data-backed tiles. It should support camera origin, cell reuse, and per-cell tooltip/accessibility text.
+**Suggestion:** Add/document a `TileMapView` or virtualized grid view for `@domecs/dom` that renders a viewport window over data-backed tiles. It should support camera origin, cell reuse, and per-cell tooltip/accessibility text.
 
 ---
 
@@ -110,7 +120,7 @@ The API could offer `firstAt(layer, x, y)`, `allAt(layer, x, y)`, and `isBlocked
 
 **Framework implication:** DOMECS should continue to treat rendering as views over state, not as one entity = one element.
 
-**Suggestion:** Add a roguelike UI recipe showing multi-view projection for map, HUD, inventory modal, tooltip, and log. This would validate the `domecs-dom` multi-view story with state-heavy UI.
+**Suggestion:** Add a roguelike UI recipe showing multi-view projection for map, HUD, inventory modal, tooltip, and log. This would validate the `@domecs/dom` multi-view story with state-heavy UI.
 
 ---
 
@@ -153,7 +163,7 @@ The API could offer `firstAt(layer, x, y)`, `allAt(layer, x, y)`, and `isBlocked
 
 **Observation:** This implementation handles keydown events directly and calls one action. No animation frame is required for the main simulation.
 
-**Framework implication:** `domecs-input` examples that poll key state through `requestAnimationFrame` are useful for held movement, but they can obscure the non-RAF turn model.
+**Framework implication:** `@domecs/input` examples that poll key state through `requestAnimationFrame` are useful for held movement, but they can obscure the non-RAF turn model.
 
 **Suggestion:** Add a discrete input mode/recipe: DOM key/click event → command → `world.turn(...)`, with optional repeat handling outside the simulation tick.
 

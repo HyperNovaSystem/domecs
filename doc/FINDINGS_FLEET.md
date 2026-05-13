@@ -10,6 +10,15 @@ The implementation exposed several dashboard-specific pressure points that shoul
 
 ## Findings
 
+### 2026-05-13: Release validation must use packed scoped packages
+
+Fleet now imports `@domecs/core`, `@domecs/dom`, and `@domecs/input`, so it can
+smoke-test the public package names. For local development the app can still
+point at `file:../domecs/packages/*`, but release validation should stage the
+app against packed tarballs. Folder-based npm lockfiles preserve workspace
+internals such as `workspace:*`, while packed tarballs prove the publish
+metadata, `dist` files, and static Vite build path.
+
 ### 1. Numeric range filters exist, but are not indexed
 
 Fleet Pulse uses `Where(Telemetry, t => t.speed > 80)` and similar predicates for alarm/range queries. This satisfies expressiveness, but `Where` is documented as a per-entity scan over matching archetypes.
@@ -81,7 +90,7 @@ Suggestion:
 
 ### 8. Aggregate dashboard panes are not naturally entity views
 
-The map pins and table rows fit `domecs-dom` entity views. Aggregate UI such as stats panels, alarm queues, chart summaries, and drill-down panes were painted manually from `tickEnd` subscribers. That works, but it means each dashboard invents its own mini-renderer for singleton/resources and aggregate lists.
+The map pins and table rows fit `@domecs/dom` entity views. Aggregate UI such as stats panels, alarm queues, chart summaries, and drill-down panes were painted manually from `tickEnd` subscribers. That works, but it means each dashboard invents its own mini-renderer for singleton/resources and aggregate lists.
 
 Suggestion:
 

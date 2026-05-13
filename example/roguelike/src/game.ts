@@ -7,7 +7,7 @@ import {
   Has,
   Not,
   type World,
-} from 'domecs'
+} from '@domecs/core'
 import {
   Actor,
   Highlight,

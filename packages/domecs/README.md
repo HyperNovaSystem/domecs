@@ -1,18 +1,18 @@
-# domecs
+# @domecs/core
 
 Core DOMECS runtime: entities, components, queries, systems, events, plugins,
 time, RNG, and snapshots.
 
 DOMECS is an ECS-first framework for DOM-heavy browser apps and games. This
-package is intentionally renderer-agnostic; pair it with `domecs-dom` for DOM
-views and `domecs-input` for browser input collection.
+package is intentionally renderer-agnostic; pair it with `@domecs/dom` for DOM
+views and `@domecs/input` for browser input collection.
 
 > Status: early alpha.
 
 ## Install
 
 ```bash
-npm install domecs
+npm install @domecs/core
 ```
 
 ## Quick start
@@ -24,7 +24,7 @@ import {
   entry,
   Has,
   type World,
-} from 'domecs'
+} from '@domecs/core'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
@@ -77,8 +77,8 @@ for (const entity of world.query(Has(Position)).entities) {
 
 ## Related packages
 
-- `domecs-dom` — retained-mode DOM renderer.
-- `domecs-input` — browser input collector plugin.
+- `@domecs/dom` — retained-mode DOM renderer.
+- `@domecs/input` — browser input collector plugin.
 
 ## License
 

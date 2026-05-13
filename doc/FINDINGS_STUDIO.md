@@ -1,5 +1,14 @@
 # DOMECS Findings — studio
 
+## 2026-05-13 - release validation must use packed scoped packages
+
+Studio now imports `@domecs/core` and `@domecs/dom`, so it can smoke-test the
+public package names. For local development the app can still point at
+`file:../domecs/packages/*`, but release validation should stage the app
+against packed tarballs. Folder-based npm lockfiles preserve workspace
+internals such as `workspace:*`, while packed tarballs prove the publish
+metadata, `dist` files, and static Vite build path.
+
 ## 2026-05-13 — schema reflection lacks field metadata
 
 `studio` can call `world.componentTypes()` to enumerate guest component types, but the returned `ComponentType` only exposes the name and `create()` helper. DOMECS Studio therefore has to keep its own `ReflectedComponentSchema` registry to know field names, primitive types, enum options, and numeric ranges for inspector widgets.

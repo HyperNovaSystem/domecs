@@ -23,7 +23,7 @@ Each test maps to a SPEC contract:
 - **PRNG determinism** — §2.8 seeded `world.rand`; two worlds with the same
   seed produce byte-identical maps and population.
 - **Query predicates** — `Has`, `And`, `Not` against the live archetype index.
-- **Browser DOM view** — `domecs-dom` renders tiles and renderable entities,
+- **Browser DOM view** — `@domecs/dom` renders tiles and renderable entities,
   with a camera transform over the larger map.
 
 See [`test/roguelike.test.ts`](./test/roguelike.test.ts) for the full
@@ -62,6 +62,6 @@ playable browser demo.
   here.
 - [`doc/findings.md`](../../doc/findings.md) — implementation findings surfaced
   while building this exemplar.
-- [`packages/domecs-dom`](../../packages/domecs-dom) — SPEC §5 renderer.
-- [`packages/domecs-input`](../../packages/domecs-input) — input collector used
+- [`packages/domecs-dom`](../../packages/domecs-dom) — `@domecs/dom`, SPEC §5 renderer.
+- [`packages/domecs-input`](../../packages/domecs-input) — `@domecs/input` collector used
   by the browser demo.

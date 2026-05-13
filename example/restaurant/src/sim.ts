@@ -4,7 +4,7 @@ import {
   entry,
   Has,
   type World,
-} from 'domecs'
+} from '@domecs/core'
 import {
   Customer,
   Restaurant,
@@ -376,7 +376,7 @@ function findTableByState(
 
 function findFirstQueuedCustomer(
   world: World,
-  customers: import('domecs').QueryResult,
+  customers: import('@domecs/core').QueryResult,
 ): number | null {
   let best = -1
   let bestTick = Number.POSITIVE_INFINITY

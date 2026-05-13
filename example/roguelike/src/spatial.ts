@@ -1,4 +1,4 @@
-import type { Capability, Plugin, World } from 'domecs'
+import type { Capability, Plugin, World } from '@domecs/core'
 import { Position } from './components.js'
 
 export const SPATIAL_INDEX_CAP = 'spatial-index' as const
@@ -11,7 +11,7 @@ export interface SpatialIndex {
   nearest(x: number, y: number, radius: number): number[]
 }
 
-declare module 'domecs' {
+declare module '@domecs/core' {
   interface Capability<K> {
     at: K extends 'spatial-index' ? (x: number, y: number) => readonly number[] : never
     rebuild: K extends 'spatial-index' ? () => void : never

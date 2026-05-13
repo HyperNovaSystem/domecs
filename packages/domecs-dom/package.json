@@ -1,5 +1,5 @@
 {
-  "name": "domecs-dom",
+  "name": "@domecs/dom",
   "version": "0.1.0-alpha.0",
   "description": "DOMECS renderer: views, slots, mount lifecycle, batched DOM commits (SPEC \u00a75).",
   "private": false,
@@ -33,7 +33,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "domecs": "workspace:*"
+    "@domecs/core": "workspace:*"
   },
   "devDependencies": {
     "happy-dom": "^15.11.7",

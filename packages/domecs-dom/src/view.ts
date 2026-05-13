@@ -1,4 +1,4 @@
-import type { ComponentType, EntityView, QueryShorthand } from 'domecs'
+import type { ComponentType, EntityView, QueryShorthand } from '@domecs/core'
 
 export interface ViewDef {
   readonly slot: string

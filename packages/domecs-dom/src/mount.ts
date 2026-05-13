@@ -1,5 +1,5 @@
-import type { Entity, EntityView, QueryResult, World } from 'domecs'
-import { Changed } from 'domecs'
+import type { Entity, EntityView, QueryResult, World } from '@domecs/core'
+import { Changed } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -35,7 +35,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
   for (const slotName of Object.keys(opts.slots)) {
     if (claimed.has(slotName)) {
       throw new Error(
-        `domecs-dom: slot "${slotName}" already mounted on this world (SPEC §5.6 — slot mounting is exclusive)`,
+        `@domecs/dom: slot "${slotName}" already mounted on this world (SPEC §5.6 — slot mounting is exclusive)`,
       )
     }
   }
@@ -47,7 +47,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
     const slotEl = opts.slots[def.slot]
     if (!slotEl) {
       throw new Error(
-        `domecs-dom: view targets slot "${def.slot}" which was not registered in mountDOM({ slots })`,
+        `@domecs/dom: view targets slot "${def.slot}" which was not registered in mountDOM({ slots })`,
       )
     }
     const q = world.query(def.query)
@@ -77,7 +77,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
   }
 
   const rendererPlugin = {
-    name: '__domecs-dom-renderer',
+    name: '@domecs/dom/renderer',
     install() {
       return {
         onRender() {

@@ -1,8 +1,8 @@
-# domecs-dom
+# @domecs/dom
 
 Retained-mode DOM renderer for DOMECS worlds.
 
-`domecs-dom` maps ECS queries to DOM elements. A view creates one element for
+`@domecs/dom` maps ECS queries to DOM elements. A view creates one element for
 each matching entity, updates it after render ticks, and destroys it when the
 entity stops matching.
 
@@ -11,14 +11,14 @@ entity stops matching.
 ## Install
 
 ```bash
-npm install domecs domecs-dom
+npm install @domecs/core @domecs/dom
 ```
 
 ## Quick start
 
 ```ts
-import { createWorld, defineComponent, entry } from 'domecs'
-import { defineView, mountDOM } from 'domecs-dom'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { defineView, mountDOM } from '@domecs/dom'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Label = defineComponent<{ text: string }>('Label')
@@ -82,8 +82,8 @@ world render phase, so it works with both manual `world.step()` loops and
 
 ## Related packages
 
-- `domecs` — core ECS runtime.
-- `domecs-input` — browser input collector plugin.
+- `@domecs/core` — core ECS runtime.
+- `@domecs/input` — browser input collector plugin.
 
 ## License
 
