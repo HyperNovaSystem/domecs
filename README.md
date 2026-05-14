@@ -133,11 +133,15 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
 
 const world = createWorld()
 
-world.use(mountDOM(world, {
+mountDOM(world, {
   slots: { stage: document.getElementById('stage')! },
-  views: {
-    sprite: defineView(Sprite, {
+  views: [
+    defineView({
       slot: 'stage',
+      // Tuple-form query — `view.Position` / `view.Sprite` are typed.
+      // `changedOn` is auto-derived from the query, so the view redraws
+      // only when one of its components is marked changed.
+      query: [Position, Sprite] as const,
       create: () => {
         const el = document.createElement('div')
         el.className = 'sprite'
@@ -148,8 +152,8 @@ world.use(mountDOM(world, {
         el.style.backgroundPosition = `-${e.Sprite.frame * 16}px 0`
       },
     }),
-  },
-}))
+  ],
+})
 
 world.system('movement', { query: [Position, Velocity] }, ({ entities, time }) => {
   for (const e of entities) {

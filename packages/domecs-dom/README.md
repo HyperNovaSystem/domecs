@@ -20,8 +20,12 @@ npm install @domecs/core @domecs/dom
 import { createWorld, defineComponent, entry } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 
-const Position = defineComponent<{ x: number; y: number }>('Position')
-const Label = defineComponent<{ text: string }>('Label')
+// Dual-type-arg form captures each component's literal name, so tuple-form
+// queries deliver a typed `entity.Position` / `entity.Label` to view
+// callbacks. The single-arg form `defineComponent<T>('Name')` still works
+// but the callbacks fall back to the unconstrained EntityView shape.
+const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
+const Label = defineComponent<{ text: string }, 'Label'>('Label')
 
 const world = createWorld()
 
@@ -30,26 +34,26 @@ world.spawn([
   entry(Label, { text: 'Player' }),
 ])
 
-function syncActor(el: HTMLElement, entity: { Position?: unknown; Label?: unknown }) {
-  const position = entity.Position as { x: number; y: number }
-  const label = entity.Label as { text: string }
-  el.textContent = label.text
-  el.style.transform = `translate(${position.x}px, ${position.y}px)`
-}
-
 const actorView = defineView({
   slot: 'actors',
-  query: [Position, Label],
-  changedOn: [Position, Label],
+  // Tuple query → typed `entity.Position` / `entity.Label` below.
+  // `changedOn` omitted: the renderer auto-derives [Position, Label] from
+  // the query's Has(T) leaves, so the view redraws when either component
+  // is marked changed and stays silent otherwise.
+  query: [Position, Label] as const,
 
   create(entity) {
     const el = document.createElement('div')
     el.className = 'actor'
-    syncActor(el, entity)
+    el.textContent = entity.Label.text
+    el.style.transform = `translate(${entity.Position.x}px, ${entity.Position.y}px)`
     return el
   },
 
-  update: syncActor,
+  update(el, entity) {
+    el.textContent = entity.Label.text
+    el.style.transform = `translate(${entity.Position.x}px, ${entity.Position.y}px)`
+  },
 })
 
 const mount = mountDOM(world, {
@@ -71,8 +75,10 @@ mount.teardown()
 - `mountDOM(world, { slots, views })` claims named DOM slots for one world.
 - Each view has a `query`; matching entities get mounted into the view's slot.
 - `create(entity)` returns the element for a matching entity.
-- `update(el, entity)` runs during render commits. Use `changedOn` to limit
-  updates to entities whose listed components changed.
+- `update(el, entity)` runs during render commits. By default it is gated
+  on `Changed(T)` for every `Has(T)` leaf in the view's `query`. Pass an
+  explicit `changedOn` array to narrow the gate, or `changedOn: []` to
+  redraw every tick (e.g. for time-driven animations).
 - `destroy(el, entity)` is called before an element is removed.
 - `teardown()` uninstalls the renderer plugin and removes mounted elements.
 

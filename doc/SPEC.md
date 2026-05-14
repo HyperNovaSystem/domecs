@@ -121,6 +121,43 @@ A node MUST be well-formed: its runtime payload must match its declared `kind`. 
 
 Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
 
+**EntityView shape (normative, P-1).** An `EntityView` exposes exactly the
+components currently attached to the entity — it MUST NOT carry keys for
+component types the entity does not hold. The engine derives the view from
+the entity's *archetype*, not from a sweep of every registered store;
+unrelated component types in other entities must not bleed into the view
+or contribute to its per-read cost.
+
+**EntityView caching (normative, P-2).** Within a stable archetype the
+engine reuses a single `EntityView` object per entity across query reads:
+two reads of `query.entities` on consecutive lines, or by two distinct
+systems within the same tick, MUST return the same view object instance
+for the same entity id. The cached view is invalidated when:
+
+- the entity gains or loses a component (`addComponent` / `removeComponent`
+  / `despawn`-induced reclaim), or
+- the world is restored from a snapshot.
+
+Component *values* are mutated in place by systems and through
+`world.getComponent`, so per-value invalidation is unnecessary: the cached
+view holds the same store references the live world does. Callers MUST NOT
+rely on view identity *across* archetype changes; that is exactly when the
+view is rebuilt.
+
+**EntityView typing (normative, D-2).** Tuple-form queries
+(`world.query([Position, Velocity] as const)`) MUST produce a
+`QueryResult` whose `EntityView` carries typed component fields keyed by
+each component's literal name. Combinator-form queries
+(`Has`/`And`/`Or`/`Not`/`Changed`/…) fall back to the unconstrained
+`EntityView` shape; callers either narrow at the call site or read
+component values through `world.getComponent`, which already carries
+typed `T`. Component types that need their literal name preserved by
+TypeScript MUST be declared with both type parameters
+(`defineComponent<T, 'Name'>('Name')`) — the single-arg form
+`defineComponent<T>('Name')` continues to work but widens the `Name`
+parameter to `string`, and views built from such types fall back to the
+unconstrained `EntityView` shape.
+
 **Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `Added` / `Removed` / `Changed` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
 Change-detection filters (`Changed`, `Added`, `Removed`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
@@ -185,6 +222,16 @@ interface TimeState {
 ```
 
 `scale = 0` disables `tick` and `fixed` systems; `event` systems still run (so UI responds to pause-menu events).
+
+**Scale-control rule (normative, D-3).** `world.setScale(0)` is observationally
+equivalent to `world.pause()`: scale falls to 0 and `tick` / `fixed` systems
+halt. `world.setScale(x > 0)` always updates the engine's stored
+*pre-pause scale*, so a subsequent `world.resume()` restores the most recent
+positive scale — regardless of whether the world is currently paused. As a
+corollary, `setScale(x > 0)` on a paused world resumes to `x` without a
+separate `resume()` call. Negative and non-finite scales (NaN, ±Infinity)
+MUST throw. This collapses the previous footgun where `setScale(0)` outside
+of `pause`/`resume` silently corrupted the pre-pause target.
 
 **Drift-free quantization rule (normative).** `scaledDelta` is ms-quantized so that the snapshot wire format and replay reproduce per-frame values exactly across machines. The quantization, however, MUST NOT entangle the fixed-step scheduler (§3 / §4 step 3): per-frame ms rounding accumulates ~2 % drift per second at non-ms-exact `fixedStep` values such as `1/60`. The implementation MUST therefore:
 
@@ -274,8 +321,16 @@ If there are no enabled `tick`/`fixed` systems that require continuous
 frames, no unfired `once` systems, no pending component work, and no queued
 events, the RAF loop sleeps.
 It resumes on external `world.emit()`, structural component mutations /
-`markChanged`, input activity through `@domecs/input`, `resume()`, or an
-explicit `world.start()`.
+`markChanged`, input activity through `@domecs/input`, `resume()`, an
+explicit `world.start()`, or a call to `world.requestTick()`.
+
+**External wake API (normative, D-4).** External event sources that mutate
+world state from outside a tick — input plugins, WebSocket feeds, custom
+drivers — MUST rouse the idle loop by calling `world.requestTick()`. The
+call is a no-op when the realtime driver is not running, when `idle: false`,
+or when already inside a tick. `requestTick` is the *only* supported wake
+path; reaching into engine-private members (such as the deprecated
+`world.__wake` alias, kept for one release cycle only) is not contractual.
 
 ### Headless mode
 
@@ -370,6 +425,25 @@ despawn or component removal
 ```
 
 Renderer commits are **batched** per slot. One DOM write per element per tick, regardless of how many components changed.
+
+**Update gating rule (normative, P-3).** A view's `update` callback is gated
+by a per-view set of *redraw triggers*:
+
+1. If `ViewDef.changedOn` is **omitted** (default), the renderer derives
+   the set from every `Has(T)` leaf in the view's `query` — explicitly
+   negated branches (`Not(...)`) are excluded. A view over
+   `[Position, Velocity]` thus auto-redraws when either component is
+   marked changed.
+2. If `ViewDef.changedOn` is an **explicit empty array** (`changedOn: []`),
+   the renderer falls back to the legacy "redraw every tick" behaviour.
+   Useful for time-driven animations whose view depends on `time.elapsed`
+   rather than component identity.
+3. If `ViewDef.changedOn` is an **explicit non-empty array**, redraws are
+   gated on exactly that set, ignoring whatever the query implies. Used
+   for finer-grained narrowing.
+
+`onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
+this gate; `create` and `destroy` always fire regardless of `changedOn`.
 
 ### 5.4 Style contract
 
