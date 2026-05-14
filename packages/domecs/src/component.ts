@@ -2,17 +2,26 @@ import type { ComponentOptions, ComponentType } from './types.js'
 
 const tag = Symbol('domecs.component')
 
-export interface InternalComponentType<T> extends ComponentType<T> {
+export interface InternalComponentType<T, Name extends string = string>
+  extends ComponentType<T, Name> {
   readonly __tag: symbol
   readonly __defaults: Partial<T> | undefined
   readonly __transient: boolean
   readonly __validate: ((value: T) => true | string) | undefined
 }
 
+export function defineComponent<T, const Name extends string>(
+  name: Name,
+  options?: ComponentOptions<T>,
+): ComponentType<T, Name>
+export function defineComponent<T>(
+  name: string,
+  options?: ComponentOptions<T>,
+): ComponentType<T, string>
 export function defineComponent<T>(
   name: string,
   options: ComponentOptions<T> = {},
-): ComponentType<T> {
+): ComponentType<T, string> {
   const defaults = options.defaults
   const validate = options.validate
   const shape = {
@@ -32,7 +41,7 @@ export function defineComponent<T>(
       return merged
     },
   }
-  return shape as unknown as ComponentType<T>
+  return shape as unknown as ComponentType<T, string>
 }
 
 export function internal<T>(type: ComponentType<T>): InternalComponentType<T> {

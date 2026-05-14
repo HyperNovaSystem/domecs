@@ -12,11 +12,18 @@ Severity legend:
 - **P1** — measurable inefficiency or rough edge; matters at exemplar scale.
 - **P2** — small redundancy, polish, or future-proofing.
 
+## Status (2026-05-14)
+
+The first wave of fixes — P-1, P-2, P-3, D-2, D-3, D-4 — landed on
+`claude/code-review-findings-pjNzq`. Each is marked **RESOLVED** below with
+the normative spec section that governs it and the test file that covers
+it. Remaining items keep their original status.
+
 ---
 
 ## Performance
 
-### P-1 (P0): `makeView` walks every component store, every call
+### P-1 (P0) — RESOLVED: `makeView` walks every component store, every call
 
 `packages/domecs/src/world.ts:299-306`
 
@@ -42,7 +49,14 @@ of the ~10 the archetype actually holds.
 **Fix:** the entity's archetype already exposes the set of component names.
 Iterate `entityArchetype.get(entity).types` and look up only those stores.
 
-### P-2 (P0): `query.entities` reallocates an `EntityView[]` and N view objects per access
+**Resolution.** `world.ts` `buildView` now iterates `entityArchetype.get(entity).types`,
+so a view costs `O(entity-components)` Map.gets instead of
+`O(registered-components)`. SPEC §2.4 *EntityView shape rule* (P-1) makes
+this normative — a view MUST NOT carry keys for components the entity does
+not hold. Tests: `packages/domecs/test/code-review-fixes.test.ts` —
+"EntityView only carries the entity's own components".
+
+### P-2 (P0) — RESOLVED: `query.entities` reallocates an `EntityView[]` and N view objects per access
 
 `packages/domecs/src/world.ts:658-668`
 
@@ -71,7 +85,22 @@ view objects keyed on entity id and invalidate only when the archetype
 changes. The current eager-array shape is fine to keep for ergonomics but
 should not be the only path.
 
-### P-3 (P0): default render path re-runs `update` for *every* mounted entity, every tick
+**Resolution.** Took the cache route. `world.ts` keeps a
+`viewCache: Map<Entity, EntityView>` invalidated in `moveEntity`,
+`despawn`, and `restore`. Two consecutive `query.entities` reads of the
+same entity return the same view object instance; per-tick view
+allocation drops to "at most one per entity per archetype change."
+SPEC §2.4 *EntityView caching rule* (P-2) makes the identity guarantee
+normative. Tests: `code-review-fixes.test.ts` — three tests under
+"EntityView caching (P-2)" cover identity, archetype invalidation, and
+despawn invalidation.
+
+A non-allocating `query.each(fn)` / iterator API is still attractive for
+zero-alloc hot loops and remains a v0.2 follow-up; the caching fix
+alone closes the per-tick allocation regression that motivated this
+finding.
+
+### P-3 (P0) — RESOLVED: default render path re-runs `update` for *every* mounted entity, every tick
 
 `packages/domecs/packages/domecs-dom/src/mount.ts:132-149`
 
@@ -103,6 +132,23 @@ mounted entities at 60 Hz that's 18k writes/sec just to mutate
 loudly when it's missing on a view with `update`. Either way, document
 the default behaviour next to `defineView` so new users do not silently
 ship per-frame full-table writes.
+
+**Resolution.** Auto-derive (the principle-of-least-surprise option). A
+`defineView` whose `changedOn` is omitted now redraws when any `Has(T)`
+leaf in its query is marked changed. Three states are spec'd in
+SPEC §5.3 *Update-gating rule* (P-3):
+
+1. `changedOn` omitted → auto-derive from `Has(T)` leaves of the query.
+2. `changedOn: []` (explicit empty) → legacy "redraw every tick"
+   (kept as an escape hatch for time-driven animations).
+3. `changedOn: [...]` → explicit gate.
+
+`packages/domecs-dom/src/mount.ts` `resolveChangedTypes` does the
+derivation; `@domecs/core` exports a new `collectHasComponents` helper
+for any future consumer (inspector, other renderers). Tests:
+`packages/domecs-dom/test/lifecycle.test.ts` —
+"gates update on auto-derived Changed queries when changedOn is omitted (P-3)"
+and "opts out of auto-derive when changedOn=[] (legacy 'update every tick')".
 
 ### P-4 (P1): `pendingCreate` / `pendingDestroy` views are dead in the destroy loop
 
@@ -391,7 +437,7 @@ realising it.
   default cost.
 - Consider a `viewMode: 'always' | 'changed' | 'auto'` discriminator.
 
-### D-2 (P0): `EntityView` is `{ readonly [k: string]: unknown }` — no inferred component types
+### D-2 (P0) — RESOLVED (partial): `EntityView` is `{ readonly [k: string]: unknown }` — no inferred component types
 
 `packages/domecs/src/query.ts:27-30`
 
@@ -413,7 +459,30 @@ This is a meaningful refactor (the `QueryDef` shape today also accepts
 combinator nodes whose `T` is harder to recover), but at minimum the
 array-form shorthand should infer.
 
-### D-3 (P0): `setScale(0)` silently corrupts `pause`/`resume`
+**Resolution.** `ComponentType<T, Name extends string = string>` now
+carries the literal name as a second type parameter; `defineComponent`
+has a dual-overload signature; `EntityView<Fields>`, `QueryResult<Fields>`,
+`QueryHooks<Fields>`, and `ViewDef<Fields>` are all parameterized. The
+tuple-form query overload `world.query([Position, Velocity] as const)`
+produces a `QueryResult` whose view fields are typed.
+
+**Partial because:** TypeScript does not perform partial type-argument
+inference, so capturing the literal `Name` requires the dual-type-arg
+form `defineComponent<T, 'Name'>('Name')`. The single-arg form
+`defineComponent<T>('Name')` still works (and remains the example in most
+docs for casual cases) but widens `Name` to `string`, and views built
+from such types fall back to the unconstrained shape. SPEC §2.4
+*EntityView typing rule* (D-2) calls this out as the rule, not a bug.
+Combinator-form queries (`Has`/`And`/`Or`/`Not`/`Changed`/…) are still
+unconstrained — typed inference only wires through the tuple form for
+now. Tests: `code-review-fixes.test.ts` —
+"typed query EntityView (D-2)" exercises both the typed and combinator paths.
+
+Follow-up: a curried `component('Name').schema<T>()` builder would let
+callers skip the duplication without losing type capture; deferred until
+v0.2 once the API stabilises.
+
+### D-3 (P0) — RESOLVED: `setScale(0)` silently corrupts `pause`/`resume`
 
 `packages/domecs/src/world.ts:735-748`
 
@@ -432,7 +501,15 @@ because `pause` is the only writer to `preResumeScale`. Harbor's
 on a paused world should run `resume()` semantics. Or simply have
 `setScale` always update `preResumeScale` to `Math.max(scale, time.scale, preResumeScale)` such that resume picks the right value.
 
-### D-4 (P1): `world.__wake` is an undocumented private contract
+**Resolution.** `setScale(0)` now behaves identically to `pause()`;
+`setScale(x>0)` always updates `preResumeScale` and resumes if the
+world was paused. Negative and non-finite scales throw. SPEC §2.7
+*Scale-control rule* (D-3) is the normative anchor. Tests:
+`code-review-fixes.test.ts` — five tests under "setScale semantics (D-3)"
+cover the pause-equivalence, resume restoration, repeated zero-positive
+toggles, and the validation throws.
+
+### D-4 (P1) — RESOLVED: `world.__wake` is an undocumented private contract
 
 `packages/domecs/src/world.ts:1074` /
 `packages/domecs-input/src/collector.ts:36`
@@ -451,6 +528,14 @@ plugin authors.
 
 - `world.requestTick()` / `world.poke()` on the public `World` interface.
 - Or expose it as a capability: `world.capability('driver').wake()`.
+
+**Resolution.** `world.requestTick()` is now part of the public `World`
+interface. `@domecs/input` calls it through that path; the
+`world.__wake` side channel is kept as a deprecated alias for one
+release cycle and slated for removal in v0.2. SPEC §3 *External wake
+API rule* (D-4) is normative. Tests: `code-review-fixes.test.ts` —
+"world.requestTick (D-4)" covers the headless no-op case and the wake
+of a sleeping idle loop against a stubbed RAF harness.
 
 ### D-5 (P1): `Plugin.install` returning `PluginHandle | void` invites latent bugs
 
@@ -679,12 +764,34 @@ that plugin authors own the cloning.
 
 If only a handful of these are taken on in v0.1:
 
-1. **P-1, P-2, P-3, D-1** — the renderer / query / view hot path is the
-   single biggest source of "DOMECS is slower than it should be" that
-   every exemplar will feel.
-2. **D-2, D-3, D-4** — typing, scale control, and the `__wake` private
-   contract are the DX paper cuts users will hit on day one.
-3. **P-5, P-7, P-8** — these are required before Harbor can credibly
-   simulate 20k entities under the SPEC's tick budget.
+1. ~~**P-1, P-2, P-3, D-1**~~ — *first-wave landed 2026-05-14.* P-3
+   resolved together with D-1 via auto-derive. The renderer / query / view
+   hot path no longer reallocates view objects per tick, the default
+   redraw gate is sane, and `EntityView` no longer touches unrelated
+   stores.
+2. ~~**D-2, D-3, D-4**~~ — *first-wave landed 2026-05-14.* Typed views
+   ship for tuple-form queries (with the documented dual-type-arg caveat),
+   `setScale` semantics are sane, and `world.requestTick()` is the
+   public wake path.
+3. **P-5, P-7, P-8** — next up. These are required before Harbor can
+   credibly simulate 20k entities under the SPEC's tick budget.
 
 Everything else can wait for v0.2 without invalidating the public API.
+
+---
+
+## Resolution summary (2026-05-14)
+
+| Finding | Resolution | Spec rule                                | Tests                                    |
+|---------|------------|------------------------------------------|------------------------------------------|
+| P-1     | resolved   | SPEC §2.4 EntityView shape rule          | core/code-review-fixes.test.ts           |
+| P-2     | resolved   | SPEC §2.4 EntityView caching rule        | core/code-review-fixes.test.ts           |
+| P-3     | resolved   | SPEC §5.3 Update-gating rule             | dom/lifecycle.test.ts                    |
+| D-1     | resolved   | (folded into P-3)                        | dom/lifecycle.test.ts                    |
+| D-2     | partial    | SPEC §2.4 EntityView typing rule         | core/code-review-fixes.test.ts           |
+| D-3     | resolved   | SPEC §2.7 Scale-control rule             | core/code-review-fixes.test.ts           |
+| D-4     | resolved   | SPEC §3 External wake API rule           | core/code-review-fixes.test.ts           |
+
+Spec deltas land in `doc/SPEC.md` (§2.4, §2.7, §3, §5.3) and `doc/api.md`
+(`defineComponent` overloads, `EntityView<Fields>`, `World.query` typed
+overload, `ViewDef<Fields>`, `world.requestTick`).

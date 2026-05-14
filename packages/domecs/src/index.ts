@@ -12,6 +12,8 @@ export {
   Removed,
   Changed,
   Where,
+  normalize as normalizeQuery,
+  collectHasComponents,
 } from './query.js'
 export type { World, WorldOptions, WorldSignals } from './world.js'
 export type { EventType, EventView } from './events.js'
@@ -45,4 +47,5 @@ export type {
   QueryShorthand,
   NodeOrComponent,
   EntityView,
+  FieldsFromComponents,
 } from './query.js'

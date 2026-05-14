@@ -24,16 +24,50 @@ export type QueryDef = QueryShorthand
  */
 export type NodeOrComponent = QueryNode | ComponentType<unknown>
 
-export interface EntityView {
+/**
+ * Maps a `ComponentType<T, Name>` to the field `{ [Name]: T }`. Used to project
+ * a tuple of component types into the typed body of an `EntityView` (D-2).
+ *
+ * Implementation note: we distribute over `T[number]` to build a union of
+ * single-field records, then collapse that union into one record via
+ * `UnionToIntersection`. A direct mapped type (`[K in T[number] as …]`) drops
+ * the per-element link between `Name` and `Value` because TypeScript infers
+ * the value position against the union as a whole — the resulting record's
+ * fields all end up typed as the union of every value type.
+ */
+type UnionToIntersection<U> = (
+  U extends unknown ? (x: U) => void : never
+) extends (x: infer I) => void
+  ? I
+  : never
+
+type ComponentTypeToField<C> = C extends ComponentType<infer V, infer N>
+  ? Readonly<{ [P in N]: V }>
+  : never
+
+export type FieldsFromComponents<
+  T extends ReadonlyArray<ComponentType<unknown, string>>,
+> = UnionToIntersection<ComponentTypeToField<T[number]>>
+
+/**
+ * Live read-only entity view returned by queries and renderer hooks.
+ *
+ * When a query is built from the array shorthand
+ * (`world.query([Position, Velocity])`), `Fields` is inferred so that
+ * `view.Position` and `view.Velocity` are typed. For combinator forms
+ * (`Has`/`And`/`Or`/…) where field inference is not currently wired up,
+ * `Fields` defaults to `Record<string, unknown>` and callers can fall back
+ * to `world.getComponent(view.id, T)` for typed access.
+ */
+export type EntityView<Fields = Record<string, unknown>> = Readonly<Fields> & {
   readonly id: Entity
-  readonly [componentName: string]: unknown
 }
 
-export interface QueryResult {
-  readonly entities: EntityView[]
+export interface QueryResult<Fields = Record<string, unknown>> {
+  readonly entities: ReadonlyArray<EntityView<Fields>>
   readonly size: number
-  onAdd(fn: (e: EntityView) => void): () => void
-  onRemove(fn: (e: EntityView) => void): () => void
+  onAdd(fn: (e: EntityView<Fields>) => void): () => void
+  onRemove(fn: (e: EntityView<Fields>) => void): () => void
   /**
    * Release this live query from the world's archetype indexes. After disposal,
    * `entities` is empty, `size` is 0, and add/remove subscriptions are cleared.
@@ -41,10 +75,10 @@ export interface QueryResult {
   dispose(): void
 }
 
-export interface QueryHooks {
-  onAdd?: (e: EntityView) => void
-  onRemove?: (e: EntityView) => void
-  onChange?: (e: EntityView) => void
+export interface QueryHooks<Fields = Record<string, unknown>> {
+  onAdd?: (e: EntityView<Fields>) => void
+  onRemove?: (e: EntityView<Fields>) => void
+  onChange?: (e: EntityView<Fields>) => void
 }
 
 function isQueryNode(arg: NodeOrComponent): arg is QueryNode {
@@ -119,5 +153,30 @@ export function collectTypesByKind(
     for (const c of node.children) collectTypesByKind(c, kind, out)
   }
   if (node.kind === 'not') collectTypesByKind(node.child, kind, out)
+  return out
+}
+
+/**
+ * Collect every `ComponentType` referenced by a `Has(T)` leaf anywhere in
+ * the tree, returning the actual type objects (not just their names).
+ *
+ * Used by the DOM renderer to auto-derive `changedOn` from a view's query
+ * when the caller omits it (P-3): "redraw when any component this view
+ * structurally depends on changes." Negative branches (`Not(...)`) are
+ * skipped — a `Not(Dead)` view doesn't want to redraw every time a `Dead`
+ * tag flips elsewhere.
+ */
+export function collectHasComponents(
+  node: QueryNode,
+  out: Map<string, ComponentType<unknown>> = new Map(),
+  inNot = false,
+): Map<string, ComponentType<unknown>> {
+  if (node.kind === 'has' && !inNot) {
+    out.set(node.type.name, node.type)
+  }
+  if (node.kind === 'or' || node.kind === 'and') {
+    for (const c of node.children) collectHasComponents(c, out, inNot)
+  }
+  if (node.kind === 'not') collectHasComponents(node.child, out, !inNot)
   return out
 }

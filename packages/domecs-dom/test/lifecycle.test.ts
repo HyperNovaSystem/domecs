@@ -50,11 +50,11 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     handle.teardown()
   })
 
-  it('does not allocate new world queries during render commits when changedOn is absent', () => {
+  it('auto-derives Changed queries from the view query when changedOn is omitted (P-3)', () => {
     const world = createWorld({ headless: true })
     let queryCalls = 0
     const originalQuery = world.query.bind(world)
-    ;(world as typeof world & { query(def: QueryDef): QueryResult }).query = (def) => {
+    ;(world as { query: (def: QueryDef) => QueryResult }).query = (def: QueryDef) => {
       queryCalls++
       return originalQuery(def)
     }
@@ -68,15 +68,44 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
       update() {},
     })
     const handle = mountDOM(world, { slots: { stage }, views: [view] })
-    expect(queryCalls).toBe(1)
+    // 1 structural query + 1 auto-derived Changed(Sprite) query at install.
+    // After install, render commits MUST NOT allocate further queries.
+    expect(queryCalls).toBe(2)
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
     world.step()
     world.step()
     world.step()
-    expect(queryCalls).toBe(1)
+    expect(queryCalls).toBe(2)
 
+    handle.teardown()
+  })
+
+  it('opts out of auto-derive when changedOn=[] (legacy "update every tick")', () => {
+    const world = createWorld({ headless: true })
+    let updateCalls = 0
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      changedOn: [], // explicit empty array — restore legacy redraw-every-tick.
+      create() {
+        return document.createElement('span')
+      },
+      update() {
+        updateCalls++
+      },
+    })
+    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const a = world.spawn()
+    world.addComponent(a, Sprite, { glyph: '@' })
+    world.step()
+    expect(updateCalls).toBe(1)
+    // No markChanged, but legacy mode still drives update every tick.
+    world.step()
+    expect(updateCalls).toBe(2)
+    world.step()
+    expect(updateCalls).toBe(3)
     handle.teardown()
   })
 
@@ -84,7 +113,7 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const world = createWorld({ headless: true })
     let queryCalls = 0
     const originalQuery = world.query.bind(world)
-    ;(world as typeof world & { query(def: QueryDef): QueryResult }).query = (def) => {
+    ;(world as { query: (def: QueryDef) => QueryResult }).query = (def: QueryDef) => {
       queryCalls++
       return originalQuery(def)
     }
@@ -144,6 +173,40 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     handle.teardown()
   })
 
+
+  it('gates update on auto-derived Changed queries when changedOn is omitted (P-3)', () => {
+    const world = createWorld({ headless: true })
+    let updateCalls = 0
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      // changedOn omitted — renderer should auto-derive [Sprite] from
+      // the query's Has(T) leaves.
+      create(e) {
+        const el = document.createElement('span')
+        el.textContent = (e as unknown as { Sprite: { glyph: string } }).Sprite.glyph
+        return el
+      },
+      update() {
+        updateCalls++
+      },
+    })
+    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+
+    const a = world.spawn()
+    world.addComponent(a, Sprite, { glyph: '@' })
+    world.step()
+    expect(updateCalls).toBe(0)
+    world.step()
+    // No markChanged yet → auto-derived gate keeps update silent.
+    expect(updateCalls).toBe(0)
+
+    world.markChanged(a, Sprite)
+    world.step()
+    expect(updateCalls).toBe(1)
+
+    handle.teardown()
+  })
 
   it('passes last mounted complete view to destroy after removal', () => {
     const world = createWorld({ headless: true })

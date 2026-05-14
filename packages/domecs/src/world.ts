@@ -24,6 +24,7 @@ import {
   normalize,
   treeHas,
   type EntityView,
+  type FieldsFromComponents,
   type QueryDef,
   type QueryHooks,
   type QueryNode,
@@ -52,6 +53,14 @@ export interface World {
    * current snapshot wholesale; there is no merge.
    */
   setInput(snap: InputSnapshot): void
+  /**
+   * Public idle-driver wake (D-4). External event sources — input plugins,
+   * WebSocket feeds, custom drivers — call `world.requestTick()` after they
+   * mutate world state from outside a tick so the idle RAF loop schedules a
+   * frame. No-op when the driver is not running, when `idle: false`, or when
+   * already inside a tick.
+   */
+  requestTick(): void
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -62,6 +71,12 @@ export interface World {
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
   system(name: string, def: SystemDef, fn: System): SystemHandle
+  /**
+   * Set the time-scale multiplier. `0` is equivalent to {@link pause}; any
+   * positive value updates the stored pre-pause scale, so a subsequent
+   * {@link resume} restores the most recent positive scale (D-3). Negative
+   * or non-finite values throw.
+   */
   setScale(scale: number): void
   pause(): void
   resume(): void
@@ -73,6 +88,13 @@ export interface World {
    */
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
+  /**
+   * Typed overload (D-2): an array of `ComponentType<T, Name>` produces a
+   * `QueryResult` whose `EntityView` exposes `view.Name: T` typed fields.
+   */
+  query<T extends ReadonlyArray<ComponentType<unknown, string>>>(
+    def: readonly [...T],
+  ): QueryResult<FieldsFromComponents<T>>
   query(def: QueryDef): QueryResult
   /**
    * Observe a query reactively and receive structural + optional per-tick
@@ -207,6 +229,14 @@ export function createWorld(options: WorldOptions = {}): World {
   let nextQueryId = 0
   let nextObserverId = 0
 
+  // P-1/P-2: EntityView cache. Each entity has at most one view object, reused
+  // across query reads. Invalidated on archetype change (the only event that
+  // changes which component-name keys a view should carry).
+  // Component values themselves are mutated in place by systems, so the cache
+  // does not need per-value invalidation — the view holds the same Map.get
+  // references the live store does.
+  const viewCache = new Map<Entity, EntityView>()
+
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
 
@@ -232,6 +262,9 @@ export function createWorld(options: WorldOptions = {}): World {
     if (prev) prev.entities.delete(entity)
     next.entities.add(entity)
     entityArchetype.set(entity, next)
+    // P-2: archetype changed — drop the cached view so the next read rebuilds
+    // it against the new key set.
+    viewCache.delete(entity)
 
     for (const q of queries) {
       const wasIn = prev ? q.matchingArchetypes.has(prev) : false
@@ -296,13 +329,32 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
-  function makeView(entity: Entity): EntityView {
+  function buildView(entity: Entity): EntityView {
+    // P-1: walk this entity's archetype, not every component store in the
+    // world. For a 30-component world with a 5-component entity this drops
+    // from O(30) Map.gets per view to O(5).
     const view: Record<string, unknown> = { id: entity }
-    for (const [name, store] of stores) {
-      const v = store.get(entity)
-      if (v !== undefined) view[name] = v
+    const arch = entityArchetype.get(entity)
+    if (arch) {
+      for (const name of arch.types) {
+        const v = stores.get(name)?.get(entity)
+        if (v !== undefined) view[name] = v
+      }
     }
     return view as EntityView
+  }
+
+  function makeView(entity: Entity): EntityView {
+    // P-2: reuse the cached view object across query reads. The cache is
+    // dropped whenever the entity's archetype changes (`moveEntity`) and
+    // when the entity is despawned. Within a single archetype the same
+    // object is handed back, so a system iterating the same query twice in
+    // one tick allocates zero views.
+    const cached = viewCache.get(entity)
+    if (cached) return cached
+    const fresh = buildView(entity)
+    viewCache.set(entity, fresh)
+    return fresh
   }
 
   function recordChange(
@@ -538,6 +590,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       entityArchetype.delete(entity)
       alive.delete(entity)
+      viewCache.delete(entity)
       sigEntityDespawned.emit(entity)
       wakeDriver()
     },
@@ -733,8 +786,23 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     setScale(scale: number): void {
+      // D-3: setScale(0) is the same observable state as pause(); setScale(x>0)
+      // both updates `preResumeScale` and (if currently paused) resumes. The
+      // old behaviour silently corrupted resume targets when callers passed 0
+      // outside of pause/resume.
+      if (!Number.isFinite(scale) || scale < 0) {
+        throw new Error(
+          `domecs: setScale requires a non-negative finite number; got ${scale}`,
+        )
+      }
+      if (scale === 0) {
+        if (time.scale !== 0) preResumeScale = time.scale
+        time.scale = 0
+        return
+      }
+      preResumeScale = scale
       time.scale = scale
-      if (scale > 0) wakeDriver()
+      wakeDriver()
     },
 
     pause(): void {
@@ -744,6 +812,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
     resume(): void {
       if (time.scale === 0) time.scale = preResumeScale
+      wakeDriver()
+    },
+
+    requestTick(): void {
       wakeDriver()
     },
 
@@ -1018,6 +1090,7 @@ export function createWorld(options: WorldOptions = {}): World {
       pendingAdded.clear()
       pendingRemoved.clear()
       pendingChanged.clear()
+      viewCache.clear()
       for (const q of queries) {
         const removed = prevMembers[q.id] ?? []
         if (q.onRemoveFns.size > 0) for (const id of removed) for (const fn of q.onRemoveFns) fn(makeView(id))
@@ -1071,6 +1144,9 @@ export function createWorld(options: WorldOptions = {}): World {
     },
   }
 
+  // D-4: `__wake` is the deprecated alias for `world.requestTick()`. Kept
+  // for one release cycle so any external plugins still on the private side
+  // channel continue to compile. Remove after v0.2.
   ;(world as World & { __wake?: () => void }).__wake = wakeDriver
   scheduler = createScheduler(world.query.bind(world), fixedStep)
   plugins = createPluginRegistry(world)

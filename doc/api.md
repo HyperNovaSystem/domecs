@@ -22,10 +22,18 @@ interface WorldOptions {
 ### `defineComponent`
 
 ```ts
+// Two overloads. The dual-type-arg form captures the literal `Name`, which
+// flows through `world.query([T1, T2, ...])` to produce a typed EntityView
+// (SPEC §2.4 EntityView typing rule, D-2). The single-type-arg form keeps
+// today's behaviour for callers who don't care about typed view fields.
+function defineComponent<T, const Name extends string>(
+  name:    Name,
+  options?: ComponentOptions<T>
+): ComponentType<T, Name>
 function defineComponent<T>(
   name:    string,
   options?: ComponentOptions<T>
-): ComponentType<T>
+): ComponentType<T, string>
 
 interface ComponentOptions<T> {
   defaults?:  Partial<T>
@@ -35,12 +43,30 @@ interface ComponentOptions<T> {
   validate?:  (value: T) => true | string
 }
 
-interface ComponentType<T> {
-  readonly name:   string
+interface ComponentType<T, Name extends string = string> {
+  readonly name:   Name
   readonly __tag:  unique symbol
   create(value?: Partial<T>): T
 }
 ```
+
+Two usage patterns:
+
+```ts
+// Untyped views — Position.name widens to `string`. View access is
+// `(view as Record<string, unknown>).Position`.
+const Position = defineComponent<{ x: number; y: number }>('Position')
+
+// Typed views — Position.name is the literal `'Position'`. View access is
+// `view.Position` (typed). Required for the tuple-form query overload to
+// produce typed EntityView fields.
+const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
+```
+
+The duplication of `'Position'` in the dual-type-arg form is a TypeScript
+limitation: partial type-argument inference does not fill in `Name` from
+the argument when `T` is supplied explicitly. The single-arg form remains
+fully supported for the common case.
 
 ### `World`
 
@@ -115,9 +141,18 @@ interface World {
 
   // time
   readonly time:  Readonly<TimeState>
+  // setScale(0) is equivalent to pause(); setScale(x>0) updates the stored
+  // pre-pause scale and resumes if paused. Negative or non-finite scales
+  // throw. SPEC §2.7 scale-control rule (D-3).
   setScale(scale: number): void
   pause():  void
   resume(): void
+
+  // Idle-driver wake (D-4). External event sources call this after mutating
+  // world state from outside a tick so the idle RAF loop schedules a frame.
+  // No-op when the driver is not running, when `idle: false`, or while
+  // inside a tick. SPEC §3 idle suspension.
+  requestTick(): void
 
   // random
   readonly rand: Rng
@@ -207,10 +242,30 @@ interface SystemContext {
   state:    unknown                        // system-local; read SystemDef.state
 }
 
-interface EntityView {
+// EntityView carries only the components the entity currently holds — never
+// keys for unrelated types (SPEC §2.4 EntityView shape rule, P-1). Within a
+// stable archetype, the engine returns the same view object across reads
+// (SPEC §2.4 EntityView caching rule, P-2).
+//
+// `Fields` is inferred by the typed tuple-form query overload, so
+// `world.query([Position, Velocity] as const).entities[0]` yields a view
+// whose `Position` / `Velocity` fields are typed. Combinator-form queries
+// fall back to the unconstrained shape and use `world.getComponent` for
+// typed access. SPEC §2.4 EntityView typing rule (D-2).
+type EntityView<Fields = Record<string, unknown>> = Readonly<Fields> & {
   readonly id: Entity
-  readonly [componentName: string]: unknown  // typed via module augmentation
 }
+
+// Project a tuple of `ComponentType<T, Name>` into the field record of a
+// typed `EntityView`. Capturing the literal `Name` requires declaring the
+// component with both type parameters:
+//   defineComponent<{x:number;y:number}, 'Position'>('Position')
+// The single-arg form `defineComponent<T>('Name')` still works but widens
+// `Name` to `string` and the resulting view falls back to the untyped
+// shape.
+type FieldsFromComponents<
+  T extends readonly ComponentType<unknown, string>[]
+> = /* …distributes over T[number] and intersects {Name: V}… */ unknown
 
 interface SystemHandle {
   name:     string
@@ -268,21 +323,36 @@ function Or(...args: NodeOrComponent[]): QueryNode
 // shorthand: a plain array is sugar for And(Has(A), Has(B), ...)
 type QueryShorthand = ComponentType<unknown>[] | QueryNode
 
-interface QueryResult {
-  readonly entities: EntityView[]
+// QueryResult is parameterized by the inferred view fields. Tuple-form
+// queries supply typed fields automatically; combinator-form queries leave
+// `Fields` at its default and the view stays untyped.
+interface QueryResult<Fields = Record<string, unknown>> {
+  readonly entities: ReadonlyArray<EntityView<Fields>>
   readonly size:     number
-  onAdd(fn: (e: EntityView) => void): () => void
-  onRemove(fn: (e: EntityView) => void): () => void
+  onAdd(fn: (e: EntityView<Fields>) => void): () => void
+  onRemove(fn: (e: EntityView<Fields>) => void): () => void
   dispose(): void // releases live archetype tracking; entities=[], size=0 after disposal
 }
 
-interface QueryHooks {
-  onAdd?:    (e: EntityView) => void
-  onRemove?: (e: EntityView) => void
+// World.query has two overloads. The tuple form infers typed fields:
+//   const q = world.query([Position, Velocity] as const)
+//   q.entities[0]!.Position.x  // typed as number
+// The combinator form returns a generic result:
+//   const q = world.query(And(Has(Position), Not(Dead)))
+interface WorldQuery {
+  <T extends readonly ComponentType<unknown, string>[]>(
+    def: readonly [...T],
+  ): QueryResult<FieldsFromComponents<T>>
+  (def: QueryDef): QueryResult
+}
+
+interface QueryHooks<Fields = Record<string, unknown>> {
+  onAdd?:    (e: EntityView<Fields>) => void
+  onRemove?: (e: EntityView<Fields>) => void
   // Requires a change-detection query (Added/Removed/Changed somewhere in
   // the tree). Fires at the reactive phase for every entity currently in the
   // query result after that tick's mutations are coalesced.
-  onChange?: (e: EntityView) => void
+  onChange?: (e: EntityView<Fields>) => void
 }
 ```
 
@@ -478,15 +548,34 @@ interface MountHandle {
   teardown(): void
 }
 
-interface ViewDef {
+// ViewDef carries optional typed `Fields` so tuple-form queries thread
+// component value types through to `create` / `update` / `destroy`.
+//
+// `changedOn` semantics (SPEC §5.3 update-gating rule, P-3):
+//   - omitted (default): redraws are gated by `Changed(T)` for every
+//     `Has(T)` leaf in `query`. A view over `[Position, Velocity]`
+//     auto-redraws when either component is marked changed.
+//   - `changedOn: []` (explicit empty): legacy "redraw every tick". Useful
+//     for time-driven animations where the view depends on `time.elapsed`
+//     rather than component identity.
+//   - `changedOn: [Type, ...]`: explicit gate. Overrides the auto-derive.
+interface ViewDef<Fields = Record<string, unknown>> {
   slot:         string
   query:        QueryShorthand
   changedOn?:   readonly ComponentType<unknown>[]
-  create(entity: EntityView): HTMLElement
-  update?(el: HTMLElement, entity: EntityView): void
-  destroy?(el: HTMLElement, entity: EntityView): void
+  create(entity: EntityView<Fields>): HTMLElement
+  update?(el: HTMLElement, entity: EntityView<Fields>): void
+  destroy?(el: HTMLElement, entity: EntityView<Fields>): void
 }
 
+// defineView has two overloads. The tuple-form `query` triggers typed
+// callbacks via `FieldsFromComponents<T>`; combinator forms return the
+// unconstrained shape.
+function defineView<T extends readonly ComponentType<unknown, string>[]>(
+  def: Omit<ViewDef<FieldsFromComponents<T>>, 'query'> & {
+    readonly query: readonly [...T]
+  },
+): ViewDef<FieldsFromComponents<T>>
 function defineView(def: ViewDef): ViewDef
 ```
 
@@ -628,8 +717,11 @@ mountDOM(world, {
   views: [
     defineView({
       slot: 'stage',
-      query: Has(Sprite),
-      changedOn: [Position, Sprite],
+      // Tuple-form query: `view.Position` and `view.Sprite` are typed.
+      // `changedOn` is auto-derived from the query's `Has(T)` leaves,
+      // so the view redraws when either Position or Sprite is marked
+      // changed and stays silent otherwise (SPEC §5.3, P-3).
+      query: [Position, Sprite] as const,
       create: () => {
         const el = document.createElement('div')
         el.className = 'sprite'
