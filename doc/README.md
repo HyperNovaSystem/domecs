@@ -9,6 +9,7 @@ Design documentation for DOMECS. These files are the living specification; the r
 3. **[SPEC.md](SPEC.md)** — Normative v0.1 specification: core model, scheduling, renderer, persistence, determinism contract, plugins, adapters.
 4. **[api.md](api.md)** — Draft TypeScript API surface for every public package.
 5. **[PACKAGING.md](PACKAGING.md)** — Packaging, publishing, Vite app templates, and deployment interop.
+6. **[../FINDINGS.md](../FINDINGS.md)** — Consolidated cross-package findings ledger and status tracker.
 
 ## Reading order
 
