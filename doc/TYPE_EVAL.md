@@ -1,16 +1,14 @@
 # DOMECS Type-System Evaluation
 
 Scope: TypeScript in `packages/domecs`, `packages/domecs-dom`, `packages/domecs-input`,
-and the three exemplar apps under `example/`. Snapshot date: 2026-05-15
+and the three exemplar apps under `example/`.
+Snapshot date: 2026-05-15
 (commit `claude/evaluate-type-system-PjTTi`).
 
-The codebase is opinionated and tight — `strict`, `noUncheckedIndexedAccess`,
-`exactOptionalPropertyTypes`, `noImplicitOverride`,
-`noFallthroughCasesInSwitch` are all on in `tsconfig.base.json`. There is
-exactly **one** load-bearing `any` in the entire `src/` tree, and it is
-documented. The bones are good. What's left is a handful of pockets where
-`unknown` is used as a stand-in for "I didn't wire the generic through" —
-those are the targets in §3.
+The codebase is opinionated and tight — `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `noFallthroughCasesInSwitch` are all on in `tsconfig.base.json`.
+There is exactly **one** load-bearing `any` in the entire `src/` tree, and it is documented.
+The bones are good.
+What's left is a handful of pockets where `unknown` is used as a stand-in for "I didn't wire the generic through" — those are the targets in §3.
 
 ---
 
@@ -19,17 +17,17 @@ those are the targets in §3.
 | Area                                | Verdict   | Notes |
 |-------------------------------------|-----------|-------|
 | Component identity & spawning       | Good      | `ComponentType<T, Name>`, `entry<T>()`, `ComponentEntry<T>` carry T through heterogeneous tuples without `as never` at call sites. |
-| Tuple-form query inference          | Good      | `FieldsFromComponents` + `UnionToIntersection` correctly distribute per-element T to per-Name fields. Justified type weight. |
+| Tuple-form query inference          | Good      | `FieldsFromComponents` + `UnionToIntersection` correctly distribute per-element T to per-Name fields.  Justified type weight. |
 | Event bus typing                    | Good      | `EventType<T>` is nominal via `eventTag` symbol; `EventView.of(T)` returns `readonly T[]`; internal `unknown[]` maps are correctly isolated. |
 | Signals                             | Good      | `Signal<T>` / `EmittableSignal<T>` are minimal and fully typed. |
 | RNG / time                          | Good      | Concrete shapes; no escape hatches. |
 | **System context (`ctx.entities`, `ctx.world`, `ctx.state`)** | **Anorexic** | The two pieces every system body actually touches are typed `unknown`. See §3.1. |
 | **Plugin options & snapshot hooks** | **Anorexic** | `Plugin.install(world, options?: unknown)`, `PluginHandle.onSnapshot/onRestore: (snap: unknown) => unknown`. See §3.2. |
-| **Capability registry**             | **Anorexic** | `Capability<K extends string>` is literally `{ name: K }`. Every consumer (e.g. `example/roguelike/src/game.ts`) casts `as unknown as { rebuild, at, … }`. See §3.3. |
+| **Capability registry**             | **Anorexic** | `Capability<K extends string>` is literally `{ name: K }`.  Every consumer (e.g. `example/roguelike/src/game.ts`) casts `as unknown as { rebuild, at, … }`. See §3.3. |
 | DOM `world.ts` globals shim         | Minor smell | `addEventListener: Function` and `globalThis as unknown as { … }`. See §3.4. |
 
-The library is **not bloated**. There is one moderately heavy type
-(`FieldsFromComponents` via `UnionToIntersection`) and it pays its rent.
+The library is **not bloated**.
+There is one moderately heavy type (`FieldsFromComponents` via `UnionToIntersection`) and it pays its rent.
 
 ---
 
@@ -46,10 +44,8 @@ export type ComponentBag =
 ```
 
 The accompanying comment explains why `any` (not `unknown`) here:
-`ComponentEntry<unknown>` re-introduces the `ComponentType<T>` invariance
-assignability failure between tuple elements that `entry<T>()` was built
-to avoid. **Keep as-is.** This is a deliberate, documented type-system
-escape valve, scoped to a single union variant.
+`ComponentEntry<unknown>` re-introduces the `ComponentType<T>` invariance assignability failure between tuple elements that `entry<T>()` was built to avoid.
+**Keep as-is.** This is a deliberate, documented type-system escape valve, scoped to a single union variant.
 
 ### 2.2 `unknown` usage by category
 
@@ -67,7 +63,7 @@ escape valve, scoped to a single union variant.
   generic structural clone; unavoidable.
 - `world.ts:472,973,1019` `globalThis as unknown as { requestAnimationFrame?, … }`
   — three RAF/visibility shims to dodge the DOM/Node lib mismatch when
-  `headless` worlds run under `@types/node`. Could be replaced with a single
+  `headless` worlds run under `@types/node`.  Could be replaced with a single
   small typed helper (see §3.4) but is not actively harmful.
 
 **Anorexic — should be tightened:**
@@ -362,18 +358,32 @@ No bloat to cut.
 
 ## 5. Suggested order of operations
 
-1. **§3.2 (b)** — typed snapshot hooks. ~5 lines, zero risk.
-2. **§3.3** — `CapabilityMap` augmentation point. Deletes 5 casts in the
-   roguelike and unblocks every future plugin from doing the same dance.
-3. **§3.1** — generic `SystemContext` + typed `World.system` overload.
+The error-handling proposal in [BETTER_ERRORS.md](./BETTER_ERRORS.md) is
+landing concurrently and **subsumes §3.2(a) and §3.2(b)** — both plugin
+API tightenings happen as part of BETTER_ERRORS Phase 1, in the same
+breaking-change wave that introduces Result-typed plugin install/lifecycle
+signatures. Splitting them is two breaking changes back-to-back; bundling
+them is one. The remaining items here are independent.
+
+1. **§3.1** — generic `SystemContext` + typed `World.system` overload.
    The high-value change. Touch surface is large (every example uses
    `world.system`) but no example actually relies on `ctx.entities`
    being `unknown`, so it's additive.
-4. **§3.2 (a)** — decide between dropping `options` from `Plugin` or
-   making it generic. Either way, an API decision, not a refactor.
-5. **§3.4** — `RuntimeHost` shim. Cosmetic.
+   **Lands as a prerequisite of BETTER_ERRORS Phase 1** — `SystemFault`
+   needs typed `Entity` and field shapes that only exist once context is
+   generic. Schedule both streams to land together.
+2. **§3.2 (a)** + **§3.2 (b)** — subsumed by BETTER_ERRORS Phase 1.
+   The new `Plugin.install: (world, options) => Result<…>` signature
+   already changes the type at that seam; the `options` generic and the
+   `WorldSnapshot`-typed `onSnapshot/onRestore` hooks fold into the same
+   API revision. Do not implement separately.
+3. **§3.3** — `CapabilityMap` augmentation point. Deletes 5 casts in the
+   roguelike and unblocks every future plugin from doing the same dance.
+   Independent of BETTER_ERRORS; can land in either order.
+4. **§3.4** — `RuntimeHost` shim. Cosmetic. Independent.
 
-After 1-3, the only remaining `unknown` in user-facing types is the one
-documented by `ComponentBag`, and the only `as unknown as` left in
-example code is gone. That puts the type system on the well-fed side of
-the line without adding any new heavy machinery.
+After §3.1 lands (in tandem with BETTER_ERRORS Phase 1) and §3.3 ships,
+the only remaining `unknown` in user-facing types is the one documented
+by `ComponentBag`, and the only `as unknown as` left in example code is
+gone. That puts the type system on the well-fed side of the line without
+adding any new heavy machinery.
