@@ -1,5 +1,5 @@
-import type { Entity, EntityView, QueryResult, World } from '@domecs/core'
-import { Changed } from '@domecs/core'
+import type { ComponentType, Entity, EntityView, QueryResult, World } from '@domecs/core'
+import { Changed, collectHasComponents, normalizeQuery } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -51,12 +51,13 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
       )
     }
     const q = world.query(def.query)
+    const changedTypes = resolveChangedTypes(def)
     const state: ViewState = {
       def,
       slotEl,
       query: q,
-      changedQueries: def.changedOn && def.changedOn.length > 0
-        ? def.changedOn.map((c) => world.query(Changed(c)))
+      changedQueries: changedTypes.length > 0
+        ? changedTypes.map((c) => world.query(Changed(c)))
         : null,
       mounted: new Map(),
       pendingCreate: new Map(),
@@ -157,4 +158,23 @@ function collectChanged(changedQueries: QueryResult[] | null): Set<Entity> | nul
     for (const e of q.entities) out.add(e.id)
   }
   return out
+}
+
+/**
+ * Resolve the set of components this view should treat as redraw triggers.
+ *
+ * - `changedOn` omitted (default): derive from the `Has(T)` leaves of the
+ *   view's query. This is the principle-of-least-surprise default — a view
+ *   over `[Position, Velocity]` redraws when either component changes. P-3.
+ * - `changedOn: []` (explicit empty): opt back into the legacy "redraw every
+ *   tick" behaviour. Useful for animation-style views that depend on time,
+ *   not component identity.
+ * - `changedOn: [Type, ...]`: explicit list. Used for finer-grained gating
+ *   (e.g. a view over `[Position, Sprite]` that only cares about `Position`).
+ */
+function resolveChangedTypes(def: ViewDef): ReadonlyArray<ComponentType<unknown>> {
+  if (def.changedOn !== undefined) return def.changedOn
+  if (!def.update) return []
+  const collected = collectHasComponents(normalizeQuery(def.query))
+  return Array.from(collected.values())
 }

@@ -2,8 +2,13 @@ export type Entity = number
 
 declare const __componentTag: unique symbol
 
-export interface ComponentType<T> {
-  readonly name: string
+/**
+ * Component schema. `Name` is the literal name string supplied at
+ * `defineComponent('Foo')` — it propagates through queries so the resulting
+ * `EntityView` has a typed `e.Foo` field instead of `unknown` (D-2).
+ */
+export interface ComponentType<T, Name extends string = string> {
+  readonly name: Name
   readonly [__componentTag]: symbol
   create(value?: Partial<T>): T
 }
