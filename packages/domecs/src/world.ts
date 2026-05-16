@@ -1,7 +1,20 @@
 import { internal } from './component.js'
+import type {
+  DomecsError,
+  FaultEntry,
+  SystemFault,
+  SystemResult,
+  SystemicFault,
+} from './errors.js'
 import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
+import {
+  CONSOLIDATE_FAULTS_NAME,
+  CONSOLIDATE_FAULTS_PRIORITY,
+  Faulted,
+} from './faulted.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
+import { toJsonValue, type Result } from './result.js'
 import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
@@ -21,6 +34,7 @@ import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, type TimeState } from './time.js'
 import type { ComponentBag, ComponentType, Entity } from './types.js'
 import {
+  Has,
   normalize,
   treeHas,
   type EntityView,
@@ -38,6 +52,13 @@ export interface WorldSignals {
   componentRemoved: Signal<{ entity: Entity; type: ComponentType<unknown> }>
   tickStart: Signal<Readonly<TimeState>>
   tickEnd: Signal<Readonly<TimeState>>
+  /**
+   * Inspector / error-stream channel for systemic faults (no `entity` on
+   * the returned `SystemFault`). Entity-scoped faults attach as `Faulted`
+   * components instead; this signal carries the ones that have no entity
+   * to attach to. See doc/BETTER_ERRORS.md.
+   */
+  faultRaised: Signal<SystemicFault>
 }
 
 export interface World {
@@ -70,6 +91,21 @@ export interface World {
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
+  /**
+   * Typed overload (TYPE_EVAL §3.1): when `def.query` is a tuple of
+   * `ComponentType<unknown, Name>` (typically with `as const`), the system's
+   * `ctx.entities` is typed as `ReadonlyArray<EntityView<{ Name: T }>>`.
+   */
+  system<
+    T extends ReadonlyArray<ComponentType<unknown, string>>,
+    S = unknown,
+  >(
+    name: string,
+    def: Omit<SystemDef<FieldsFromComponents<T>, S>, 'query'> & {
+      query: readonly [...T]
+    },
+    fn: System<FieldsFromComponents<T>, S>,
+  ): SystemHandle
   system(name: string, def: SystemDef, fn: System): SystemHandle
   /**
    * Set the time-scale multiplier. `0` is equivalent to {@link pause}; any
@@ -113,7 +149,13 @@ export interface World {
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   start(options?: StartOptions): () => void
   stop(): void
-  use(plugin: Plugin, options?: unknown): () => void
+  /**
+   * Install a plugin. Returns `Result<dispose, DomecsError>` — failed
+   * installs (thrown or returned `err()`) are quarantined: provided
+   * capabilities are unwound, the world keeps running, the caller decides
+   * how to surface the failure. See doc/BETTER_ERRORS.md.
+   */
+  use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
   snapshot(): WorldSnapshot
   restore(snap: WorldSnapshot): void
@@ -176,6 +218,7 @@ export function createWorld(options: WorldOptions = {}): World {
     createSignal()
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
+  const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
 
   const signals: WorldSignals = {
     entitySpawned: sigEntitySpawned,
@@ -184,6 +227,7 @@ export function createWorld(options: WorldOptions = {}): World {
     componentRemoved: sigComponentRemoved,
     tickStart: sigTickStart,
     tickEnd: sigTickEnd,
+    faultRaised: sigFaultRaised,
   }
 
   let scheduler!: Scheduler
@@ -449,7 +493,18 @@ export function createWorld(options: WorldOptions = {}): World {
       if (!s.ranOnce && isEnabled(s)) return true
     }
     for (const s of scheduler.systemsByMode('tick')) {
-      if (isEnabled(s)) return true
+      if (!isEnabled(s)) continue
+      // The built-in fault consolidator is framework infrastructure — it
+      // should not keep the idle driver awake when there's nothing to
+      // consolidate. Treat it as passive when its query is empty.
+      if (
+        s.name === CONSOLIDATE_FAULTS_NAME &&
+        s.query !== undefined &&
+        s.query.size === 0
+      ) {
+        continue
+      }
+      return true
     }
     if (time.scale !== 0) {
       for (const s of scheduler.systemsByMode('fixed')) {
@@ -493,7 +548,63 @@ export function createWorld(options: WorldOptions = {}): World {
       rand,
       state: s.state,
     }
-    s.fn(ctx)
+    // `System` is declared as `() => void`; we shape-check for a returned
+    // SystemResult at runtime (BETTER_ERRORS Phase 1: systems may opt into
+    // returning faults but the common case stays void).
+    const result = s.fn(ctx) as unknown
+    if (
+      result &&
+      typeof result === 'object' &&
+      Array.isArray((result as { errors?: unknown }).errors)
+    ) {
+      handleSystemResult(s, result as SystemResult)
+    }
+  }
+
+  function handleSystemResult(s: CompiledSystem, result: SystemResult): void {
+    const errors = result.errors
+    if (!errors || errors.length === 0) return
+    for (const fault of errors) {
+      const entry: FaultEntry = buildFaultEntry(s.name, fault)
+      if (fault.entity === undefined) {
+        sigFaultRaised.emit({ source: s.name, tick: time.tick, entry })
+      } else {
+        appendFault(fault.entity, entry)
+      }
+    }
+  }
+
+  function buildFaultEntry(source: string, fault: SystemFault): FaultEntry {
+    const { kind, ...rest } = fault.error as { kind: string } & Record<string, unknown>
+    const entry: FaultEntry = {
+      kind,
+      source,
+      tick: time.tick,
+      recoverable: fault.recoverable,
+    }
+    if (fault.component !== undefined) entry.component = fault.component
+    if (Object.keys(rest).length > 0) {
+      entry.detail = toJsonValue(rest)
+    }
+    return entry
+  }
+
+  function appendFault(entity: Entity, entry: FaultEntry): void {
+    // Despawned mid-tick: silently drop. The system reported a fault for
+    // an entity that no longer exists, which is a benign race during teardown.
+    if (!alive.has(entity)) return
+    const store = storeFor(Faulted)
+    const existing = store.get(entity)
+    if (existing) {
+      // Mutate in place so any cached EntityView keeps observing the
+      // same `faults` array reference (matches the ECS direct-access
+      // contract used elsewhere — e.g. `e.Position.x += dx`).
+      ;(existing.faults as FaultEntry[]).push(entry)
+      recordChange(tickChanged, pendingChanged, Faulted.name, entity)
+      wakeDriver()
+    } else {
+      world.addComponent(entity, Faulted, { faults: [entry] })
+    }
   }
 
   function frame(t: number): void {
@@ -819,7 +930,7 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
 
-    system(name, def, fn): SystemHandle {
+    system(name: string, def: SystemDef, fn: System): SystemHandle {
       const handle = scheduler.register(name, def, fn)
       wakeDriver()
       return handle
@@ -1031,10 +1142,10 @@ export function createWorld(options: WorldOptions = {}): World {
       }
     },
 
-    use(plugin: Plugin, options?: unknown): () => void {
-      const unuse = plugins.use(plugin, options)
-      wakeDriver()
-      return unuse
+    use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError> {
+      const result = plugins.use(plugin, options)
+      if (result.ok) wakeDriver()
+      return result
     },
 
     capability<K extends string>(name: K): Capability<K> {
@@ -1150,6 +1261,36 @@ export function createWorld(options: WorldOptions = {}): World {
   ;(world as World & { __wake?: () => void }).__wake = wakeDriver
   scheduler = createScheduler(world.query.bind(world), fixedStep)
   plugins = createPluginRegistry(world)
+
+  // Register the built-in end-of-tick fault consolidator (BETTER_ERRORS
+  // Phase 1). Collapses redundant entries by (source, kind, component)
+  // keeping the most recent. Userland may disable for forensic builds.
+  world.system(
+    CONSOLIDATE_FAULTS_NAME,
+    {
+      schedule: 'tick',
+      priority: CONSOLIDATE_FAULTS_PRIORITY,
+      query: Has(Faulted),
+    },
+    (ctx) => {
+      for (const view of ctx.entities) {
+        const stored = world.getComponent(view.id, Faulted)
+        if (!stored) continue
+        const faults = stored.faults
+        if (faults.length < 2) continue
+        const seen = new Map<string, FaultEntry>()
+        for (const f of faults) {
+          seen.set(`${f.source}|${f.kind}|${f.component ?? ''}`, f)
+        }
+        if (seen.size === faults.length) continue
+        const collapsed = Array.from(seen.values())
+        const mut = faults as FaultEntry[]
+        mut.length = 0
+        for (const f of collapsed) mut.push(f)
+        world.markChanged(view.id, Faulted)
+      }
+    },
+  )
 
   return world
 }

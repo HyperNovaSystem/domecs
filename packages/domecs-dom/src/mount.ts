@@ -1,5 +1,5 @@
 import type { ComponentType, Entity, EntityView, QueryResult, World } from '@domecs/core'
-import { Changed, collectHasComponents, normalizeQuery } from '@domecs/core'
+import { Changed, collectHasComponents, normalizeQuery, ok } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -80,14 +80,23 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
   const rendererPlugin = {
     name: '@domecs/dom/renderer',
     install() {
-      return {
+      return ok({
         onRender() {
           for (const state of states) commit(state)
         },
-      }
+      })
     },
   }
-  const unuse = world.use(rendererPlugin)
+  const useResult = world.use(rendererPlugin)
+  if (!useResult.ok) {
+    // Installing the in-process renderer is part of mountDOM's contract; a
+    // failure here is a programmer error (e.g. duplicate plugin name on the
+    // same world), not a recoverable seam — surface it loudly.
+    throw new Error(
+      `@domecs/dom: failed to install renderer plugin: ${useResult.error.kind}`,
+    )
+  }
+  const unuse = useResult.value
 
   return {
     teardown() {

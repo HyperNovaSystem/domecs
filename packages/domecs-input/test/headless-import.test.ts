@@ -29,7 +29,9 @@ describe('@domecs/input headless import contract', () => {
     ])
 
     const world = createWorld({ headless: true })
-    const dispose = world.use(createInputPlugin())
+    const useResult = world.use(createInputPlugin())
+    if (!useResult.ok) throw new Error(`expected ok install; got err(${useResult.error.kind})`)
+    const dispose = useResult.value
 
     world.step(1 / 60)
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { Has } from '../src/query.js'
+import { ok } from '../src/result.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
@@ -137,7 +138,7 @@ describe('snapshot — plugin hooks (SPEC §9.4)', () => {
     let restoredWith: unknown = null
     w.use({
       name: 'spy',
-      install: () => ({
+      install: () => ok({
         onSnapshot: (s) => {
           savedWith = s
           return s

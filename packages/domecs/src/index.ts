@@ -49,3 +49,41 @@ export type {
   EntityView,
   FieldsFromComponents,
 } from './query.js'
+
+// BETTER_ERRORS Phase 1 — Result discipline + errors as data.
+export {
+  ok,
+  err,
+  isOk,
+  isErr,
+  mapR,
+  mapErr,
+  andThen,
+  unwrapOr,
+  all,
+  attempt,
+  attemptAsync,
+  match,
+  assertNever,
+  normalizeCause,
+  toJsonValue,
+  MAX_CAUSE_DEPTH,
+} from './result.js'
+export type { Result, JsonValue, SerializedError } from './result.js'
+export type {
+  DomecsError,
+  PluginError,
+  PluginResult,
+  SystemFault,
+  SystemResult,
+  SystemicFault,
+  SystemId,
+  ComponentId,
+  EventId,
+  FaultEntry,
+} from './errors.js'
+export {
+  Faulted,
+  CONSOLIDATE_FAULTS_NAME,
+  CONSOLIDATE_FAULTS_PRIORITY,
+} from './faulted.js'

@@ -1,4 +1,5 @@
-import type { GamepadSnapshot, InputSnapshot, Plugin, PluginHandle, PointerSnapshot, World } from '@domecs/core'
+import type { DomecsError, GamepadSnapshot, InputSnapshot, Plugin, PluginHandle, PointerSnapshot, Result, World } from '@domecs/core'
+import { ok } from '@domecs/core'
 
 export interface InputPluginOptions {
   /** Element receiving keyboard events. Default: document. */
@@ -32,7 +33,7 @@ const DEFAULT_TEXT_SELECTOR = 'input,textarea,[contenteditable="true"]'
 export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
   return {
     name: '@domecs/input',
-    install(world: World): PluginHandle {
+    install(world: World): Result<PluginHandle, DomecsError> {
       // D-4: external event sources rouse the idle driver via the public
       // `world.requestTick()`. The plugin used to reach into a private
       // `world.__wake` symbol; that path is gone.
@@ -218,7 +219,7 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         }
       }
 
-      return {
+      return ok({
         onTickStart() {
           world.setInput(build())
         },
@@ -231,7 +232,7 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
           pointerTarget?.removeEventListener('pointerup', onPointerUp)
           wheelTarget?.removeEventListener('wheel', onWheel)
         },
-      }
+      })
     },
   }
 }

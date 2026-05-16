@@ -1,12 +1,17 @@
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
-import { normalize, treeHas, type QueryDef, type QueryNode, type QueryResult } from './query.js'
+import { normalize, treeHas, type EntityView, type QueryDef, type QueryNode, type QueryResult } from './query.js'
 import type { Rng } from './rng.js'
 import type { TimeState } from './time.js'
+// Type-only import breaks the scheduler<->world value cycle (TYPE_EVAL §3.1).
+import type { World } from './world.js'
 
 export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
 
-export interface SystemDef {
+export interface SystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> {
   query?: QueryDef
   schedule?: SystemSchedule
   priority?: number
@@ -14,20 +19,42 @@ export interface SystemDef {
   triggers?: EventType<unknown>[]
   reactsTo?: QueryDef
   enabled?: () => boolean
-  state?: unknown
+  state?: State
+  /**
+   * Erased Fields phantom — keeps a structural slot for the inferred field
+   * shape so callers can ascribe it explicitly when needed. The runtime
+   * never reads this; declaring it lets `system<T>(...)` propagate Fields
+   * into the system function signature.
+   */
+  readonly __fields?: Fields
 }
 
-export interface SystemContext {
-  entities: ReadonlyArray<unknown>
+export interface SystemContext<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> {
+  entities: ReadonlyArray<EntityView<Fields>>
   time: Readonly<TimeState>
   input: InputSnapshot
   events: EventView
-  world: unknown
+  world: World
   rand: Rng
-  state: unknown
+  state: State
 }
 
-export type System = (ctx: SystemContext) => void
+/**
+ * A system returns `void` (treated as success — no `Faulted` attached) or
+ * a `SystemResult` whose `errors` are appended to the targeted entities'
+ * `Faulted` buffer. The declared return type is `void` (TypeScript's
+ * void-return special rule lets the function return anything; the scheduler
+ * shape-checks for SystemResult at runtime). Authors who want compile-time
+ * validation should annotate the return type explicitly with
+ * `SystemResult<E>`. See doc/BETTER_ERRORS.md.
+ */
+export type System<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> = (ctx: SystemContext<Fields, State>) => void
 
 export interface SystemHandle {
   readonly name: string

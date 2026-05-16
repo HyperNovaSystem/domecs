@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createWorld } from '@domecs/core'
+import { createWorld, type DomecsError, type Result } from '@domecs/core'
 import { createInputPlugin } from '../src/collector.js'
 
 function kbd(type: 'keydown' | 'keyup', code: string, opts: KeyboardEventInit = {}): KeyboardEvent {
   return new KeyboardEvent(type, { code, key: code, bubbles: true, ...opts })
+}
+
+// BETTER_ERRORS Phase 1: world.use() returns Result. Unwrap for tests.
+function unuse(r: Result<() => void, DomecsError>): () => void {
+  if (!r.ok) throw new Error(`expected ok install; got err(${JSON.stringify(r.error)})`)
+  return r.value
 }
 
 describe('@domecs/input collector', () => {
@@ -21,7 +27,7 @@ describe('@domecs/input collector', () => {
 
   it('publishes empty snapshot before any events', () => {
     const world = createWorld()
-    const dispose = world.use(createInputPlugin({ pollGamepads: false }))
+    const dispose = unuse(world.use(createInputPlugin({ pollGamepads: false })))
     world.step(1 / 60)
     expect(world.input.keys.size).toBe(0)
     expect(world.input.keyDelta.pressed.size).toBe(0)
@@ -164,7 +170,7 @@ describe('@domecs/input collector', () => {
 
   it('teardown removes listeners', () => {
     const world = createWorld()
-    const dispose = world.use(createInputPlugin({ pollGamepads: false }))
+    const dispose = unuse(world.use(createInputPlugin({ pollGamepads: false })))
     dispose()
     document.dispatchEvent(kbd('keydown', 'KeyZ'))
     world.step(1 / 60)

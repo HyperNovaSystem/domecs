@@ -1,4 +1,5 @@
 import type { Capability, Plugin, World } from '@domecs/core'
+import { ok } from '@domecs/core'
 import { Position } from './components.js'
 
 export const SPATIAL_INDEX_CAP = 'spatial-index' as const
@@ -70,11 +71,11 @@ export function spatialIndexPlugin(): Plugin {
 
       rebuild()
 
-      return {
+      return ok({
         // Rebuild each tick-start; fast enough for 16k entities since it's a
         // single walk of the Has(Position) archetype cache.
         onTickStart: () => rebuild(),
-      }
+      })
     },
   }
 }
