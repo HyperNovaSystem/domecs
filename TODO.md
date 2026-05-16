@@ -6,8 +6,6 @@ This file tracks upcoming work only. Completed or rejected v0.1 scope decisions
 should be documented in `doc/SPEC.md`, `doc/api.md`, `doc/PACKAGING.md`, or a
 project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 
-## Next 
-
 - Wire `domecs_template_vite` into the future create flow:
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
   (Template itself is ready — only the `create-domecs` publisher package is
@@ -28,6 +26,9 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
   required styles (no first-party CSS ships today).
 - Vitest now defaults to the `node` environment in the template; DOM-only
   specs opt in via `*.dom.test.ts` + `environmentMatchGlobs` → `happy-dom`.
+
+
+## Next 
 
 ## Future
 
