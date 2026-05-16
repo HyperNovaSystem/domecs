@@ -528,13 +528,27 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
 - Type tests: adding a new `DomecsError` variant breaks every `match` site (representative samples).
 - Plugin error `kind` must satisfy the `${string}/${string}` template; a flat kind is a compile error.
 
-### Phase 2 — Persistence (1–2 days)
+### Phase 2 — Persistence (1–2 days) — **shipped**
 
-- Convert `@domecs/persist` `save` / `load` / `migrate` to Result returns.
-- `migrate` returns `Result<Snapshot, Extract<DomecsError, { kind: 'migration_failed' }>>` — same union as the rest of the system.
-- Document migration failure semantics: unrecoverable migrations mark the slot, do not corrupt it.
-- Hard-fail migrations by default; partial load/recovery stays explicit userland policy.
-- All persisted failure metadata routes through `normalizeCause`.
+- New `@domecs/persist` package wraps the core `world.snapshot()` /
+  `world.restore()` primitives. `save` / `load` / `migrate` all return
+  `Result`.
+- `migrate(snap, target, migrations)` returns
+  `Result<WorldSnapshot, Extract<DomecsError, { kind: 'migration_failed' }>>`.
+  Defensive guard: a step that fails to advance the version returns
+  `migration_failed` rather than infinite-looping.
+- Migration-failure semantics: on any failed step, `load` never writes
+  the partially-migrated snapshot back to storage. The original bytes
+  stay intact for inspection or a userland recovery flow — "mark the
+  slot, do not corrupt it."
+- Hard-fail by default. The single-step `Migration` signature returns
+  `Result`; partial load is layered on top by userland and never silent.
+- `JSON.stringify` / `JSON.parse` / `world.restore` throws are caught at
+  the boundary and normalized via `normalizeCause` into `persist_io`.
+- `Storage` is a slot-keyed text adapter (`read`/`write`/`remove`/`list`,
+  all Result-returning). A missing slot is `ok(null)`, not an error.
+  `createMemoryStorage()` ships for tests; filesystem / IndexedDB /
+  network adapters live outside this package.
 
 ### Phase 3 — Inspector integration (1–2 days)
 

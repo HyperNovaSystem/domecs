@@ -1,0 +1,101 @@
+import type { DomecsError, Result, World, WorldSnapshot } from '@domecs/core'
+import { SNAPSHOT_VERSION, err, normalizeCause, ok } from '@domecs/core'
+import { migrate, type MigrationMap } from './migrate.js'
+import type { Storage } from './storage.js'
+
+export interface LoadOptions {
+  /** Target version to migrate the snapshot to. Defaults to {@link SNAPSHOT_VERSION}. */
+  targetVersion?: number
+  /** Migration chain keyed by source version. Defaults to an empty map. */
+  migrations?: MigrationMap
+}
+
+/**
+ * Captures `world.snapshot()`, serializes to JSON, and writes to `slot`.
+ * Failures (non-serializable components, I/O) come back as `persist_io`
+ * with the cause normalized via `normalizeCause`. The slot is only
+ * touched when serialization succeeded — a serialization failure leaves
+ * any prior contents intact.
+ */
+export function save(world: World, storage: Storage, slot: string): Result<void, DomecsError> {
+  const snap = world.snapshot()
+  let serialized: string | undefined
+  try {
+    serialized = JSON.stringify(snap)
+  } catch (cause) {
+    return err({ kind: 'persist_io', op: 'save', cause: normalizeCause(cause) })
+  }
+  if (serialized === undefined) {
+    return err({
+      kind: 'persist_io',
+      op: 'save',
+      cause: normalizeCause(
+        new Error('JSON.stringify returned undefined (snapshot root was a function or symbol)'),
+      ),
+    })
+  }
+  return storage.write(slot, serialized)
+}
+
+/**
+ * Reads `slot`, parses it as a `WorldSnapshot`, migrates to
+ * `targetVersion` (default {@link SNAPSHOT_VERSION}), then calls
+ * `world.restore`. The slot bytes are read-only here — even when
+ * migration fails, the original snapshot remains intact for inspection
+ * or userland recovery flows.
+ *
+ * Errors:
+ * - `persist_io`: missing slot, malformed JSON, non-snapshot payload, or
+ *   a `world.restore` throw.
+ * - `migration_failed`: any step in the chain to `targetVersion` fails.
+ */
+export function load(
+  world: World,
+  storage: Storage,
+  slot: string,
+  opts: LoadOptions = {},
+): Result<void, DomecsError> {
+  const read = storage.read(slot)
+  if (!read.ok) return read
+  if (read.value === null) {
+    return err({
+      kind: 'persist_io',
+      op: 'load',
+      cause: normalizeCause(new Error(`slot "${slot}" is empty`)),
+    })
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(read.value)
+  } catch (cause) {
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+  }
+  if (!isWorldSnapshot(parsed)) {
+    return err({
+      kind: 'persist_io',
+      op: 'load',
+      cause: normalizeCause(new Error(`slot "${slot}" does not contain a WorldSnapshot`)),
+    })
+  }
+  const target = opts.targetVersion ?? SNAPSHOT_VERSION
+  const migrations: MigrationMap = opts.migrations ?? new Map()
+  const migrated = migrate(parsed, target, migrations)
+  if (!migrated.ok) return migrated
+  try {
+    world.restore(migrated.value)
+  } catch (cause) {
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+  }
+  return ok(undefined)
+}
+
+function isWorldSnapshot(v: unknown): v is WorldSnapshot {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o.version === 'number' &&
+    Array.isArray(o.seed) &&
+    typeof o.tick === 'number' &&
+    Array.isArray(o.entities)
+  )
+}
