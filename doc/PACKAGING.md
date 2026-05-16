@@ -199,29 +199,45 @@ to work with normal package imports.
 
 ## Vite interop requirements
 
-Track the following before calling Vite support first-class:
+Status of the original ten-item checklist:
 
-1. **Package exports** — publish runtime packages as ESM JavaScript plus
-   declaration files, not only TypeScript source.
-2. **Workspace behavior** — keep examples resolving workspace packages cleanly
-   under pnpm. Current `resolve.preserveSymlinks: false` is appropriate.
-3. **Dependency de-duplication** — document or encode any Vite `resolve.dedupe`
-   needs if multiple copies of `@domecs/core` can break component identity.
-4. **Browser boundaries** — ensure DOM packages do not leak Node-only imports,
-   and core packages do not require browser globals.
-5. **Static assets** — define a convention for CSS sprites, image/audio assets,
-   and generated manifests.
-6. **Base paths** — document Vite `base` for subdirectory deployment such as
-   GitHub Pages or itch.io.
-7. **CSS side effects** — decide whether first-party packages ship CSS and, if
-   so, mark package metadata so bundlers do not tree-shake required styles.
-8. **SSR/non-browser use** — keep core importable in Node and tests; keep DOM
-   APIs lazy enough that importing `@domecs/dom` does not immediately require a
-   live document.
-9. **Testing** — keep Vitest as the default test runner for templates and
-   examples, with `happy-dom` only where DOM APIs are required.
-10. **Deployment docs** — add copy-paste recipes for Vite static output on the
-    supported hosts.
+1. **Package exports** — `publishConfig` rewrites `main` / `types` / `exports`
+   to built `dist` ESM and declarations. **Resolved.**
+2. **Workspace behavior** — examples resolve `workspace:*` cleanly under pnpm
+   with `resolve.preserveSymlinks: false`. **Resolved.**
+3. **Dependency de-duplication** — the official template sets
+   `resolve.dedupe: ['@domecs/core', '@domecs/dom', '@domecs/input']`. This
+   guarantees a single `@domecs/core` instance so `defineComponent` identity
+   stays stable when an app also depends on a third-party package that
+   transitively pulls in `@domecs/core`. **Resolved (template).**
+4. **Browser boundaries** — core stays node-importable (tests run under the
+   `node` Vitest environment); DOM/input packages access `document`/`window`
+   only inside mount and plugin entry points. **Resolved.**
+5. **Static assets** — use Vite's first-class asset graph: import from
+   `src/assets/` and let the bundler hash and emit. Use the `?url`, `?inline`,
+   and `?raw` suffixes for explicit handling, and `import.meta.glob` for
+   sprite/animation manifests. No first-party CSS ships from `@domecs/*`
+   packages, so apps own all stylesheets. **Resolved.**
+6. **Base paths** — the template reads `BASE_PATH` from the build env and the
+   README documents recipes for GitHub Pages, itch.io, and subdirectory
+   hosting. **Resolved (template).**
+7. **CSS side effects** — `@domecs/core`, `@domecs/dom`, and `@domecs/input`
+   ship no CSS and are now marked `"sideEffects": false`, so bundlers can
+   tree-shake unused exports without dropping required styles. Future packages
+   that ship CSS must override this with a `sideEffects: ["**/*.css"]` array.
+   **Resolved.**
+8. **SSR/non-browser use** — `@domecs/core` is pure logic; `@domecs/dom` and
+   `@domecs/input` only touch the DOM inside `mountDOM` / plugin `install`.
+   Module-load is safe in node. **Resolved.**
+9. **Testing** — the template defaults the Vitest `environment` to `node` and
+   opts files into `happy-dom` via
+   `environmentMatchGlobs: [['**/*.dom.test.ts', 'happy-dom']]`. Workspace
+   examples use the same default and tag DOM specs explicitly.
+   **Resolved (template).**
+10. **Deployment docs** — README ships copy-paste recipes for generic static
+    hosts, GitHub Pages (project + user sites), itch.io, and arbitrary
+    subdirectory installs, plus `npm run preview` for local verification.
+    **Resolved (template).**
 
 
 ## Bottom line

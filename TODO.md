@@ -10,15 +10,24 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 
 - Wire `domecs_template_vite` into the future create flow:
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
-- Document Vite deployment recipes, including `base` for GitHub Pages, itch.io/subdirectory hosting, and static hosting of `dist/`.
+  (Template itself is ready — only the `create-domecs` publisher package is
+  pending.)
 - Wire `pnpm run release:validate` into CI once the packed-package smoke test is stable across the workspace and `HyperNovaSystem` app repositories.
-- Confirm Vite workspace interop for pnpm symlinks, dependency de-duplication,
-  and component identity if multiple copies of `@domecs/core` are installed.
-- Decide asset conventions for CSS sprites, image/audio files, generated
-  manifests, and whether any first-party package CSS needs `sideEffects`
-  metadata.
-- Keep Vitest as the default testing path for templates/examples, with
-  `happy-dom` only for DOM-specific tests.
+
+### Resolved 2026-05-16 (template/Vite interop)
+
+- Documented Vite deployment recipes (GitHub Pages project + user sites,
+  itch.io, generic static hosts, subdirectory installs) in the template
+  README; build now reads `BASE_PATH` from the env.
+- Confirmed workspace interop: template `vite.config.ts` sets
+  `resolve.dedupe` for `@domecs/{core,dom,input}` so component identity is
+  stable across hoisted pnpm graphs, and keeps `preserveSymlinks: false`.
+- Settled asset conventions on Vite's native graph (`src/assets/`, `?url`,
+  `?inline`, `?raw`, `import.meta.glob`); marked `@domecs/{core,dom,input}`
+  as `"sideEffects": false` so bundlers can tree-shake without dropping
+  required styles (no first-party CSS ships today).
+- Vitest now defaults to the `node` environment in the template; DOM-only
+  specs opt in via `*.dom.test.ts` + `environmentMatchGlobs` → `happy-dom`.
 
 ## Future
 
