@@ -550,13 +550,35 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
   `createMemoryStorage()` ships for tests; filesystem / IndexedDB /
   network adapters live outside this package.
 
-### Phase 3 — Inspector integration (1–2 days)
+### Phase 3 — Inspector integration (1–2 days) — **shipped**
 
-- Inspector panel surfaces `Faulted` entities by source system, by tick, by kind.
-- Buffer-aware view: expand an entity to see every fault entry, not just the latest.
-- Replay timeline shows fault attachments inline with state changes.
-- Filter views: only-faulted, hide-faulted, recoverable-only.
-- Surface systemic faults separately from entity-scoped `Faulted` components.
+- New `@domecs/inspector` package ships the data layer only (no DOM). UI
+  panels (Studio, custom devtools) wrap it. Splitting the surface keeps
+  this package usable by inspectors that don't render to the DOM and
+  prevents an early UI commitment from locking the schema.
+- Subscribes to live signals — never routes through `world.snapshot()`,
+  which would force `onSnapshot` redaction and clones (see
+  `FINDINGS_STUDIO.md` 2026-05-13). Sources: `signals.faultRaised`
+  (systemic), `observe(Has(Faulted))` onAdd, `observe(Changed(Faulted))`
+  onChange (entity-scoped). Dedupe is a `WeakSet<FaultEntry>` —
+  `FaultEntry` identity survives the consolidator's in-place rewrite
+  (verified at world.ts:1281-1289), so the WeakSet correctly skips
+  re-records after consolidation reorders or shrinks the buffer.
+- `InspectorView` is filter-composable and immutable per call. Filters
+  (`bySource`/`byKind`/`byTick`/`byTickRange`/`recoverableOnly`/
+  `onlyFaulted`/`hideFaulted`) capture the entries snapshot at call time
+  and return a leaf view; chaining is supported.
+- Buffer-aware per-entity view via `entriesFor(entity)` exposes every
+  recorded entry, not just the latest.
+- Optional replay timeline (`recordStateChanges: true`) interleaves
+  `spawn`/`despawn`/`componentAdded`/`componentRemoved`/`fault` events
+  ordered by ingestion. Off by default — timeline stays fault-only
+  unless requested.
+- Systemic and entity-scoped buckets are tracked separately
+  (`view.systemic` vs `view.entityScoped`) — systemic faults are never
+  forced into the entity-keyed log.
+- Ring buffer (default 1024) caps memory; oldest entries drop on
+  overflow. `clear()` empties both buffers.
 
 ### Phase 4 — DX guardrails and documentation (1 day)
 
