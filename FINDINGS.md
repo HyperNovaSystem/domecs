@@ -67,6 +67,15 @@ _Last updated: 2026-05-14._
 3. Async snapshot and worker-host readiness constraints.
 4. Virtualized renderer primitives (row/window/panel helpers).
 
+### Error-handling discipline (from `doc/BETTER_ERRORS.md`)
+
+| ID | Finding | Status | Notes |
+|---|---|---|---|
+| E-1 | Recoverable failures had no structural channel — systems threw, plugin installs threw, persistence threw. | **Resolved** | BETTER_ERRORS Phase 1 (commit 155baaf): closed `DomecsError` union, `Result<T, E>` at framework seams, `match()` exhaustive idiom, `Faulted` component buffer, plugin install Result + capability unwind. |
+| E-2 | `save` / `load` / `migrate` threw on expected failures; partial migrations could corrupt slots. | **Resolved** | BETTER_ERRORS Phase 2 (commit df7f7ad): `@domecs/persist` ships Result-typed `save`/`load`/`migrate` with hard-fail-by-default semantics. Migration failure preserves the slot bytes (`mark the slot, do not corrupt it`). |
+| E-3 | No first-party fault-observation surface for devtools. | **Resolved** | BETTER_ERRORS Phase 3 (commit 2cda637): `@domecs/inspector` is the headless data layer; live-signal sources (never `world.snapshot()`); WeakSet dedupe leverages consolidator's preserved entry identity; filter-composable view + opt-in replay timeline. |
+| E-4 | DX surface lacked a single cookbook for the new discipline. | **Resolved** | BETTER_ERRORS Phase 4: `doc/error-handling.md` (philosophy + cookbook), README "Errors as Components" section, optional `createWorld({ strictReturns: true })` dev-mode warning for silent fault-shape typos. |
+
 ## Process update
 
 Going forward, new findings should be recorded in the domain-specific file under `doc/` and then reflected here as a status row update, so this file stays the single “what is open vs resolved” checkpoint.

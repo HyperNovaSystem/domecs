@@ -580,14 +580,28 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
 - Ring buffer (default 1024) caps memory; oldest entries drop on
   overflow. `clear()` empties both buffers.
 
-### Phase 4 — DX guardrails and documentation (1 day)
+### Phase 4 — DX guardrails and documentation (1 day) — **shipped**
 
-- `doc/error-handling.md` — philosophy, `match`-first idiom, cookbook patterns.
-- README section: "Errors as Components."
-- Update `FINDINGS.md` with rationale and links to this proposal.
-- Cookbook examples: retry, escalation, degraded rendering, plugin error definition.
-- Add or document lint conventions for `Promise<Result<...>>` handling.
-- Add representative `match`-based type tests for `DomecsError`.
+- [`doc/error-handling.md`](error-handling.md) — philosophy, `match`-first
+  idiom, and a seven-section cookbook (returning faults; retry;
+  escalation; degraded rendering; defining a plugin error union;
+  `@domecs/persist` save/load/migrate; wrapping async work). Lint
+  conventions and type-test guarantees codified in the same doc.
+- README "Errors as Components" section: concise pitch with a worked
+  example, links to the cookbook + spec.
+- `FINDINGS.md` row E-1..E-4 records the four shipped phases with the
+  resolving commit SHAs.
+- The representative `match`-based type tests already shipped in Phase 1
+  (`packages/domecs/test/errors.test.ts §8/8b/9`) — the doc cross-
+  references them and documents how to add new `DomecsError` variants
+  without breaking the discipline.
+- **DX guardrail beyond the literal spec bullets**: optional
+  `createWorld({ strictReturns: true })` emits a one-time-per-system
+  `console.warn` when a system returns a non-`void`, non-`SystemResult`
+  value (e.g. a typo like `{ erorrs: [...] }`). Default off — the loose
+  `() => void` System signature stays ergonomic in production; tests
+  and dev builds opt in. Closes the recurring smell flagged in the
+  Phase 1–3 reviews.
 
 ### Phase 5 — Deferred (post-v0)
 

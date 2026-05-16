@@ -166,6 +166,14 @@ export interface WorldOptions {
   headless?: boolean
   fixedStep?: number
   idle?: boolean
+  /**
+   * Dev-mode guardrail (BETTER_ERRORS Phase 4). When true, a system that
+   * returns a non-void value not shaped like `SystemResult` (e.g. typo'd
+   * `{ erorrs: [...] }`) logs a one-shot console.warn naming the system.
+   * Off by default — production code should not pay the shape-check cost.
+   * See doc/error-handling.md.
+   */
+  strictReturns?: boolean
 }
 
 /**
@@ -203,6 +211,8 @@ export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
   const headless = options.headless === true
   const idle = options.idle !== false
+  const strictReturns = options.strictReturns === true
+  const warnedSystems = new Set<number>()
   let rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
@@ -558,6 +568,12 @@ export function createWorld(options: WorldOptions = {}): World {
       Array.isArray((result as { errors?: unknown }).errors)
     ) {
       handleSystemResult(s, result as SystemResult)
+    } else if (strictReturns && result != null && !warnedSystems.has(s.id)) {
+      warnedSystems.add(s.id)
+      // eslint-disable-next-line no-console
+      console.warn(
+        `domecs: system "${s.name}" returned a value that is not void or SystemResult; the value is ignored. See doc/error-handling.md.`,
+      )
     }
   }
 

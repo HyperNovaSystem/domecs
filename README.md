@@ -177,6 +177,32 @@ Mutating `e.Position.x` in a system updates `transform: translate(...)` on the n
 
 ---
 
+## Errors as Components
+
+DOMECS treats recoverable failures as data, not exceptions. Two channels, only two:
+
+- **`Result<T, E>`** at framework seams — system returns, plugin install, `save`/`load`/`migrate`. Closed `DomecsError` union plus an exhaustive `match()` mean adding a new variant breaks every call site until handled.
+- **`Faulted`** as a component — entity-scoped faults attach a buffer of `FaultEntry` records to the affected entity, so faults flow through the same query/system machinery as anything else. Render `[Sprite, Faulted]` as degraded; query `[Faulted, Retryable]` to retry; subscribe to `world.signals.faultRaised` for systemic faults that have no entity to attach to.
+
+```ts
+world.system('hp-validator', { query: [Health] as const }, ({ entities }) => ({
+  errors: entities
+    .filter((e) => e.Health.hp < 0)
+    .map((e) => ({
+      entity: e.id,
+      component: 'Health',
+      error: { kind: 'schema_mismatch', component: 'Health', expected: 'hp>=0', got: `hp=${e.Health.hp}` },
+      recoverable: true,
+    })),
+}))
+```
+
+Returning `void` is success. Returning a `SystemResult` is "I have something to report." Throwing is "the program is broken" — the framework never auto-promotes a throw into recoverable data.
+
+See [`doc/error-handling.md`](doc/error-handling.md) for the full cookbook (retry, escalation, degraded rendering, plugin error namespacing, persistence, async wrappers) and [`doc/BETTER_ERRORS.md`](doc/BETTER_ERRORS.md) for the design rationale.
+
+---
+
 ## Persistence
 
 ```ts

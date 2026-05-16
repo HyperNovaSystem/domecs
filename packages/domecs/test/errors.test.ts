@@ -14,7 +14,7 @@
  *   8. compile-time exhaustiveness (representative samples)
  *   9. plugin error `kind` must satisfy the `${string}/${string}` template
  */
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import type { DomecsError, FaultEntry, PluginError, SystemFault, SystemicFault } from '../src/errors.js'
 import { CONSOLIDATE_FAULTS_NAME, Faulted } from '../src/faulted.js'
@@ -247,5 +247,48 @@ describe('BETTER_ERRORS Phase 1 — compile-time guarantees', () => {
     // 'timeout' fails to satisfy `${string}/${string}`. We use expectTypeOf
     // (vitest's compile-time helper) to encode the constraint.
     expectTypeOf<PluginError['kind']>().toEqualTypeOf<`${string}/${string}`>()
+  })
+})
+
+describe('BETTER_ERRORS Phase 4 — strictReturns dev-mode guardrail', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('warns once when a system returns a value not shaped like SystemResult', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const w = createWorld({ strictReturns: true })
+    // Typo: `erorrs` instead of `errors`. Silent without the guardrail.
+    w.system('typo', { schedule: 'tick' }, () => ({ erorrs: [] }) as unknown as void)
+    w.step(0.016)
+    w.step(0.016)
+    expect(warn).toHaveBeenCalledTimes(1)
+    const [msg] = warn.mock.calls[0]!
+    expect(String(msg)).toContain('"typo"')
+    expect(String(msg)).toContain('doc/error-handling.md')
+  })
+
+  it('does not warn under default options (strictReturns off)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const w = createWorld()
+    w.system('typo', { schedule: 'tick' }, () => ({ erorrs: [] }) as unknown as void)
+    w.step(0.016)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('does not warn for well-formed SystemResult returns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const w = createWorld({ strictReturns: true })
+    w.system('well-formed', { schedule: 'tick' }, () => ({ errors: [] }))
+    w.step(0.016)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('does not warn for void returns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const w = createWorld({ strictReturns: true })
+    w.system('void', { schedule: 'tick' }, () => {})
+    w.step(0.016)
+    expect(warn).not.toHaveBeenCalled()
   })
 })
