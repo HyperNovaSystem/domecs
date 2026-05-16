@@ -6,6 +6,8 @@ import {
   entry,
   Has,
   Not,
+  type SystemFault,
+  type SystemResult,
   type World,
 } from '@domecs/core'
 import {
@@ -28,6 +30,14 @@ const ENEMY_DENSITY = 512
 const RESOURCE_DENSITY = 256
 
 export const MoveEvent = defineEvent<{ entity: number; dx: number; dy: number }>('Move')
+
+/**
+ * BETTER_ERRORS — app-level fault union for the roguelike. A blocked move is
+ * recoverable data on the actor's entity: the HUD can flash, an AI policy
+ * can pick a new direction, and the inspector timeline gets the diagnostic.
+ */
+export type RoguelikeFault =
+  | { kind: 'roguelike/move_blocked'; dx: number; dy: number; reason: 'wall' | 'edge' }
 
 export interface RoguelikeOptions {
   seed?: number
@@ -213,26 +223,46 @@ export function createRoguelike(options: RoguelikeOptions = {}): {
   world.system(
     'movement',
     { schedule: 'event', triggers: [MoveEvent] },
-    (ctx) => {
+    (ctx): SystemResult<RoguelikeFault> => {
       const cap = world.capability('spatial-index') as unknown as {
         at: (x: number, y: number) => readonly number[]
       }
+      const errors: SystemFault<RoguelikeFault>[] = []
       for (const m of ctx.events.of(MoveEvent)) {
         const pos = world.getComponent(m.entity, Position)
         if (!pos) continue
+        // Wait actions (dx=dy=0) are legal, not faults.
+        if (m.dx === 0 && m.dy === 0) continue
         const nx = pos.x + m.dx
         const ny = pos.y + m.dy
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+          errors.push({
+            entity: m.entity,
+            component: Position.name,
+            error: { kind: 'roguelike/move_blocked', dx: m.dx, dy: m.dy, reason: 'edge' },
+            recoverable: true,
+          })
+          continue
+        }
         const here = cap.at(nx, ny)
         const blocked = here.some((id) => {
           const t = world.getComponent(id, Tile)
           return t?.kind === 'wall'
         })
-        if (blocked) continue
+        if (blocked) {
+          errors.push({
+            entity: m.entity,
+            component: Position.name,
+            error: { kind: 'roguelike/move_blocked', dx: m.dx, dy: m.dy, reason: 'wall' },
+            recoverable: true,
+          })
+          continue
+        }
         pos.x = nx
         pos.y = ny
         world.markChanged(m.entity, Position)
       }
+      return { errors }
     },
   )
 

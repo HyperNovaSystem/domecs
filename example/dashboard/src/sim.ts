@@ -3,6 +3,9 @@ import {
   createWorld,
   defineEvent,
   entry,
+  Faulted,
+  type SystemFault,
+  type SystemResult,
   type World,
 } from '@domecs/core'
 import {
@@ -31,6 +34,18 @@ export const SetCommandEvent = defineEvent<{
   index: 0 | 1 | 2 | 3
   command: CylinderCommand
 }>('SetCommand')
+
+/**
+ * BETTER_ERRORS — app-level fault union for the lift sim. The `lift/` prefix
+ * mirrors the plugin-error namespacing convention even though this code is
+ * application-side: it keeps the kind globally unambiguous when faults flow
+ * through the inspector alongside other apps in the workspace.
+ */
+export type LiftFault = {
+  kind: 'lift/overpressure'
+  index: 0 | 1 | 2 | 3
+  pressureKpa: number
+}
 
 export const EStopEvent = defineEvent<{ engaged: boolean }>('EStop')
 export const ResetEvent = defineEvent<Record<string, never>>('Reset')
@@ -235,6 +250,40 @@ export function createLift(options: LiftOptions = {}): LiftRefs {
         c.atLimit = hitLimit
         if (changed) world.markChanged(id, Cylinder)
       }
+    },
+  )
+
+  // ─── Safety monitor (BETTER_ERRORS) ─────────────────────────────────
+  // A cylinder commanded against its end-stop is overdriving the hydraulics
+  // — surface that as data on the entity itself so views, retry policies,
+  // and inspector timelines all see the same signal.
+  world.system(
+    'safety-monitor',
+    { schedule: 'tick' },
+    (): SystemResult<LiftFault> => {
+      const errors: SystemFault<LiftFault>[] = []
+      for (const id of cylinderIds) {
+        const c = world.getComponent(id, Cylinder)
+        if (!c) continue
+        const overdriving = c.atLimit && c.command !== 0
+        const faulted = world.getComponent(id, Faulted)
+        const alreadyMarked =
+          faulted?.faults.some((f) => f.kind === 'lift/overpressure') ?? false
+        if (overdriving) {
+          if (!alreadyMarked) {
+            errors.push({
+              entity: id,
+              component: Cylinder.name,
+              error: { kind: 'lift/overpressure', index: c.index, pressureKpa: c.pressureKpa },
+              recoverable: true,
+            })
+          }
+        } else if (alreadyMarked) {
+          // Recovered — drop the buffer so query [Faulted] reflects current state.
+          world.removeComponent(id, Faulted)
+        }
+      }
+      return { errors }
     },
   )
 

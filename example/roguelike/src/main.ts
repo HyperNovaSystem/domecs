@@ -1,4 +1,4 @@
-import { And, Changed, Has, type EntityView } from '@domecs/core'
+import { And, Changed, Has, match, type DomecsError, type EntityView } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
 import {
@@ -117,12 +117,28 @@ mountDOM(world, {
   views: [tileView, actorView],
 })
 
-world.use(
+const inputInstall = world.use(
   createInputPlugin({
     // Treat arrow keys, space, WASD as handled — prevent browser scroll.
     preventDefaultKeys: true,
   }),
 )
+if (!inputInstall.ok) {
+  // BETTER_ERRORS — input failure is data; play continues in read-only mode.
+  console.error('domecs: input plugin failed to install:', summarizeError(inputInstall.error))
+}
+
+function summarizeError(e: DomecsError): string {
+  return match<DomecsError, string>(e, {
+    plugin_install_failed: (x) => `plugin "${x.plugin}" failed: ${x.cause.message}`,
+    system_threw:          (x) => `system "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
+    persist_io:            (x) => `persist ${x.op} I/O: ${x.cause.message}`,
+    migration_failed:      (x) => `migration ${x.from}→${x.to}: ${x.reason}`,
+    schema_mismatch:       (x) => `${x.component} expected ${x.expected}, got ${x.got}`,
+    query_invalid:         (x) => `query: ${x.reason}`,
+    event_handler_threw:   (x) => `event "${x.event}": ${x.cause.message}`,
+  })
+}
 
 function paintStatus(): void {
   const pos = world.getComponent(playerId, Position)

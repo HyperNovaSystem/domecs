@@ -8,6 +8,7 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 
 ## Next
 
+1. Review and decide on implementing Phase 5 of BETTER_ERRORS.md
 - Verify the npm publish path before first release: workspace packages use source exports for local dev, while `publishConfig` rewrites published metadata to built `dist` ESM + `.d.ts` exports.
 - Wire `domecs_template_vite` into the future create flow:
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.

@@ -3,8 +3,21 @@ import {
   defineEvent,
   entry,
   Has,
+  type SystemFault,
+  type SystemResult,
   type World,
 } from '@domecs/core'
+
+/**
+ * BETTER_ERRORS — app-level fault union for the restaurant sim. Each walked
+ * customer is a recoverable, queryable fact on the restaurant entity so
+ * dashboards / retry policies / inspector timelines can react.
+ */
+export type RestaurantFault = {
+  kind: 'restaurant/customer_walked'
+  customerId: number
+  patienceSec: number
+}
 import {
   Customer,
   Restaurant,
@@ -124,9 +137,10 @@ export function createRestaurant(options: RestaurantOptions = {}): RestaurantRef
   world.system(
     'patience',
     { schedule: 'tick' },
-    () => {
+    (): SystemResult<RestaurantFault> => {
       const dt = world.time.scaledDelta
-      if (dt <= 0) return
+      if (dt <= 0) return {}
+      const r = world.getComponent(restaurantId, Restaurant)
       const stats = world.getComponent(restaurantId, Stats)
       const toWalk: number[] = []
       for (const e of customers.entities) {
@@ -138,11 +152,22 @@ export function createRestaurant(options: RestaurantOptions = {}): RestaurantRef
         if (c.patience <= 0) toWalk.push(e.id)
         else world.markChanged(e.id, Customer)
       }
+      const errors: SystemFault<RestaurantFault>[] = []
       for (const id of toWalk) {
+        errors.push({
+          entity: restaurantId,
+          error: {
+            kind: 'restaurant/customer_walked',
+            customerId: id,
+            patienceSec: r?.customerPatienceSec ?? 0,
+          },
+          recoverable: true,
+        })
         world.despawn(id)
         if (stats) stats.walked += 1
       }
       if (toWalk.length > 0 && stats) world.markChanged(restaurantId, Stats)
+      return { errors }
     },
   )
 

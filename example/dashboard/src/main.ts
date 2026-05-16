@@ -1,4 +1,4 @@
-import { Has, type EntityView } from '@domecs/core'
+import { Has, match, type DomecsError, type EntityView } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
 import {
@@ -169,11 +169,28 @@ mountDOM(world, {
   views: [platformView, cylinderStageView, gaugeView],
 })
 
-world.use(
+const inputInstall = world.use(
   createInputPlugin({
     preventDefaultKeys: true,
   }),
 )
+if (!inputInstall.ok) {
+  // BETTER_ERRORS — failed plugin installs are quarantined data, not throws.
+  // The dashboard runs in degraded read-only mode without input.
+  console.error('domecs: input plugin failed to install:', summarizeError(inputInstall.error))
+}
+
+function summarizeError(e: DomecsError): string {
+  return match<DomecsError, string>(e, {
+    plugin_install_failed: (x) => `plugin "${x.plugin}" failed: ${x.cause.message}`,
+    system_threw:          (x) => `system "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
+    persist_io:            (x) => `persist ${x.op} I/O: ${x.cause.message}`,
+    migration_failed:      (x) => `migration ${x.from}→${x.to}: ${x.reason}`,
+    schema_mismatch:       (x) => `${x.component} expected ${x.expected}, got ${x.got}`,
+    query_invalid:         (x) => `query: ${x.reason}`,
+    event_handler_threw:   (x) => `event "${x.event}": ${x.cause.message}`,
+  })
+}
 
 // ─── Input → events ─────────────────────────────────────────────────────
 const EXTEND_KEYS: Record<string, 0 | 1 | 2 | 3> = {
