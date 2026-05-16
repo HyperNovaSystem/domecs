@@ -121,7 +121,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
 }
 
 function commit(state: ViewState): void {
-  for (const [id, view] of state.pendingDestroy) {
+  for (const id of state.pendingDestroy.keys()) {
     const rec = state.mounted.get(id)
     if (rec) {
       state.def.destroy?.(rec.el, rec.view)

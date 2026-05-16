@@ -56,3 +56,18 @@ Suggested follow-up: add reusable keyed reconciliation helpers for transient pro
 Studio can restore snapshots into an existing demo guest world because all guest `ComponentType` objects have already been registered. A real editor will load arbitrary scene files before all game modules are necessarily active, and the current name-keyed restore path can hold component bags that are difficult to validate, inspect, or migrate until matching component types are registered later.
 
 Suggested follow-up: define an explicit scene-load/schema registry flow: restore should accept or consult component schemas/codecs, report unknown component types, and surface them to tools as inspectable unknown components rather than silently relying on later lazy registration.
+
+## 2026-05-16 — `Plugin.install` Result migration breaks PluginHandle inference for studio bridge
+
+Same drift as in `lighthouse_novel`: `createDomecsStudioPlugin` returned a bare `PluginHandle` from `install`. Under the post-Phase-1 contract the handle must be wrapped in `ok(...)`. The handle's lifecycle methods (`onTickEnd`, `onSnapshot`) also lost their previously inferred parameter types because the bare return shape no longer flows into `PluginHandle`; explicit `World` and `WorldSnapshot` annotations were required to recover the typing.
+
+Suggested follow-up:
+
+- Provide a tiny `definePlugin({ name, install })` helper in `@domecs/core` that wraps a returned object in `ok` and annotates the handle from `PluginHandle`. The repetitive `return ok({ onTickEnd(world: World) {…} })` boilerplate is the kind of papercut a one-line helper removes.
+- Inspector/Studio coupling: with `@domecs/inspector` now present in `domecs/packages/`, the Studio bridge should consume `createInspector` instead of re-implementing redaction + ring-buffer snapshots. That migration is its own work item, but it would also close out the v0.2 *"Schema reflection"* and *"Diff-based snapshot ring buffer"* rows from `doc/exemplars.md`.
+
+## 2026-05-16 — studio does not yet consume `@domecs/inspector`
+
+`@domecs/inspector` shipped (see `doc/BETTER_ERRORS.md` Phase 3), but `studio` still wires its own `SnapshotRingBuffer` and `redactDevOnlyState` helpers directly in `src/plugin.ts`. The exemplar therefore demonstrates the *editor* surface (entity tree, component inspector) without exercising the first-party inspector observation surface that real devtools will sit on.
+
+Suggested follow-up: have studio import `createInspector` and project its `InspectorView` into the existing editor entity tree, leaving redaction + ring buffer behavior as a thin app-level wrapper. That converts studio from an isolated demo into the canonical reference integration for `@domecs/inspector`.
