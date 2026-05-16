@@ -6,10 +6,8 @@ This file tracks upcoming work only. Completed or rejected v0.1 scope decisions
 should be documented in `doc/SPEC.md`, `doc/api.md`, `doc/PACKAGING.md`, or a
 project-specific `doc/FINDINGS_*.md` file before they are removed from here.
 
-## Next
+## Next 
 
-1. Review and decide on implementing Phase 5 of BETTER_ERRORS.md
-- Verify the npm publish path before first release: workspace packages use source exports for local dev, while `publishConfig` rewrites published metadata to built `dist` ESM + `.d.ts` exports.
 - Wire `domecs_template_vite` into the future create flow:
   `npm create domecs@latest my-game` / `pnpm create domecs my-game`.
 - Document Vite deployment recipes, including `base` for GitHub Pages, itch.io/subdirectory hosting, and static hosting of `dist/`.
@@ -40,6 +38,7 @@ project-specific `doc/FINDINGS_*.md` file before they are removed from here.
   frame animation.
 - Build `@domecs/inspector` after persistence and diff snapshot foundations
   exist.
+- Review and decide on implementing Phase 5 of BETTER_ERRORS.md
 - Build `@domecs/worker` after persistence and structured-clone messaging
   contracts are stable.
 - Add an optional `@domecs/vite` plugin only for higher-level framework value:
