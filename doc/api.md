@@ -439,11 +439,16 @@ interface WorldSnapshot {
 ### Plugin
 
 ```ts
-interface Plugin {
+interface Plugin<O = void> {
   name:      string
+  version?:  string                        // informational; surfaced in diagnostics
   depends?:  readonly string[]
   provides?: readonly string[]
-  install(world: World, options?: unknown): PluginHandle | void
+  // `install` participates in the Result contract (BETTER_ERRORS Phase 1):
+  // success carries an optional PluginHandle, failure a DomecsError that the
+  // registry quarantines (provided capabilities are unwound, world keeps
+  // running). A throw is normalized to { kind: 'plugin_install_failed', … }.
+  install(world: World, options: O): Result<PluginHandle | void, DomecsError>
 }
 
 interface PluginHandle {
@@ -454,6 +459,20 @@ interface PluginHandle {
   onSnapshot?:  (snap: WorldSnapshot) => WorldSnapshot
   onRestore?:   (snap: WorldSnapshot) => WorldSnapshot
 }
+
+// Preferred authoring path. `install` may return a bare PluginHandle, void,
+// or a Result; definePlugin auto-wraps bare/void in ok() and passes an
+// explicit Result through. Writing plugins this way keeps a bare-handle
+// return valid without hand-rolling ok()/err().
+interface PluginSpec<O = void> {
+  name:      string
+  version?:  string
+  depends?:  readonly string[]
+  provides?: readonly string[]
+  install(world: World, options: O):
+    PluginHandle | void | Result<PluginHandle | void, DomecsError>
+}
+function definePlugin<O = void>(spec: PluginSpec<O>): Plugin<O>
 
 interface Capability<K extends string> {
   readonly name: K
@@ -477,7 +496,7 @@ declare module '@domecs/core' {
   }
 }
 
-export const physicsPlugin: Plugin = {
+export const physicsPlugin = definePlugin({
   name: '@domecs/physics',
   provides: ['spatial-index'],
   install(world) {
@@ -485,15 +504,16 @@ export const physicsPlugin: Plugin = {
     const cap = world.capability('spatial-index')
     ;(cap as any).query   = (b) => index.query(b)
     ;(cap as any).nearest = (x, y, r) => index.nearest(x, y, r)
+    // No explicit Result needed — definePlugin wraps the void return as ok().
   },
-}
+})
 
 // ── in consumer code (e.g., @domecs/pathfinding) ────────────────────
 const hits = world.capability('spatial-index').query({ x: 0, y: 0, w: 64, h: 64 })
 //    ^? Entity[]  — the augmentation makes this fully typed
 ```
 
-Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` (or `peerDepends`) and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
+Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
 
 ---
 

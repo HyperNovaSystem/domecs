@@ -577,19 +577,42 @@ The inspector can run an authoritative system in a sandbox and detect violations
 ### 9.1 Shape
 
 ```ts
-interface Plugin {
-  name:     string
-  depends?: string[]           // plugin names required
-  provides?: string[]          // capability keys exported (spatial index, etc.)
-  install(world: World): {
-    teardown?:     () => void
-    onTickStart?:  (world: World) => void
-    onTickEnd?:    (world: World) => void
-    onRender?:     (world: World) => void
-    onSnapshot?:   (snap: WorldSnapshot) => WorldSnapshot
-    onRestore?:    (snap: WorldSnapshot) => WorldSnapshot
-  } | void
+interface PluginHandle {
+  teardown?:     () => void
+  onTickStart?:  (world: World) => void
+  onTickEnd?:    (world: World) => void
+  onRender?:     (world: World) => void
+  onSnapshot?:   (snap: WorldSnapshot) => WorldSnapshot
+  onRestore?:    (snap: WorldSnapshot) => WorldSnapshot
 }
+
+interface Plugin<O = void> {
+  name:     string
+  version?: string             // informational; surfaced in diagnostics
+  depends?: readonly string[]  // plugin names required (topological order, §9.2)
+  provides?: readonly string[] // capability keys exported (spatial index, etc.)
+  // Result contract (BETTER_ERRORS Phase 1): success → optional PluginHandle,
+  // failure → DomecsError (quarantined: provided capabilities unwound, world
+  // survives). A throw normalizes to { kind: 'plugin_install_failed', … }.
+  install(world: World, options: O): Result<PluginHandle | void, DomecsError>
+}
+```
+
+**Authoring (normative recommendation).** Author plugins with
+`definePlugin(spec)` rather than the raw `Plugin` literal. `definePlugin`
+lets `install` return a bare `PluginHandle`, `void`, or a `Result`,
+auto-wrapping the bare/void forms in `ok()` and passing an explicit `Result`
+through — so the common "no failure mode" plugin needs no `ok()`/`err()`
+boilerplate and stays valid under the Result contract:
+
+```ts
+const physics = definePlugin({
+  name: '@domecs/physics',
+  provides: ['spatial-index'],
+  install(world) {
+    /* register capability; void return is wrapped as ok() */
+  },
+})
 ```
 
 ### 9.2 Registration

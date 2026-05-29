@@ -30,6 +30,55 @@ export interface PluginHandle {
   onRestore?(snap: WorldSnapshot): WorldSnapshot
 }
 
+/**
+ * Authoring spec for {@link definePlugin}. Differs from {@link Plugin} only
+ * in `install`'s return: an author may return a bare `PluginHandle`, nothing
+ * (`void`), or a full `Result` — `definePlugin` normalizes all three to the
+ * `Result` contract the registry consumes.
+ */
+export interface PluginSpec<O = void> {
+  readonly name: string
+  readonly version?: string
+  readonly depends?: readonly string[]
+  readonly provides?: readonly string[]
+  install(
+    world: World,
+    options: O,
+  ): PluginHandle | void | Result<PluginHandle | void, DomecsError>
+}
+
+function isResultLike(
+  r: PluginHandle | void | Result<PluginHandle | void, DomecsError>,
+): r is Result<PluginHandle | void, DomecsError> {
+  return (
+    typeof r === 'object' &&
+    r !== null &&
+    'ok' in r &&
+    typeof (r as { ok: unknown }).ok === 'boolean'
+  )
+}
+
+/**
+ * Author a plugin without hand-writing the `Result` boilerplate. `install`
+ * may return a bare `PluginHandle`, `void`, or a `Result`; a bare/void return
+ * is auto-wrapped in `ok()`, while an explicit `Result` (success or failure)
+ * is passed through untouched. This keeps a bare-handle return valid through
+ * the Result-contract migration — the footgun that bit lighthouse-class
+ * plugins. `name`/`version`/`depends`/`provides` pass through unchanged.
+ */
+export function definePlugin<O = void>(spec: PluginSpec<O>): Plugin<O> {
+  return {
+    name: spec.name,
+    ...(spec.version !== undefined ? { version: spec.version } : {}),
+    ...(spec.depends !== undefined ? { depends: spec.depends } : {}),
+    ...(spec.provides !== undefined ? { provides: spec.provides } : {}),
+    install(world, options) {
+      const r = spec.install(world, options)
+      return isResultLike(r) ? r : ok(r ?? undefined)
+    },
+  }
+}
+
 export interface Capability<K extends string> {
   readonly name: K
 }
