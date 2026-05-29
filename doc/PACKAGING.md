@@ -61,13 +61,16 @@ Release validation has two tiers:
    `test`, `typecheck`, and `build` scripts to catch source-level breakage
    while the engine packages are edited in place.
 2. **Packed-package smoke tests.** Before publishing a new engine version, run
-   `pnpm run release:validate`. The harness builds `packages/*`, packs
-   `@domecs/core`, `@domecs/dom`, and `@domecs/input`, stages clean copies of
-   the example apps, rewrites their `@domecs/*` dependencies to the generated
-   tarballs, then runs each app's `test` and `build` scripts from that staged
-   install. This catches missing `dist` files, bad `publishConfig` metadata,
-   stale import names, package-manager assumptions, and static Vite build
-   regressions before npm publish.
+   `pnpm run release:validate`. The harness builds `packages/*`, packs all five
+   published packages — `@domecs/core`, `@domecs/dom`, `@domecs/input`,
+   `@domecs/inspector`, and `@domecs/persist` — stages clean copies of the
+   example apps, rewrites their `@domecs/*` dependencies to the generated
+   tarballs, runs a **Node ESM import probe** (`node --input-type=module -e`)
+   that dynamically imports each packed package the app uses, then runs each
+   app's `test` and `build` scripts from that staged install. This catches
+   missing `dist` files, bad `publishConfig`/`exports` metadata, CJS/ESM
+   interop breakage, stale import names, package-manager assumptions, and
+   static Vite build regressions before npm publish.
 
 The staged smoke test must not rewrite source imports. Applications validate
 the public API by importing the scoped packages exactly as published:
