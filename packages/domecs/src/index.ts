@@ -73,6 +73,7 @@ export {
   MAX_CAUSE_DEPTH,
 } from './result.js'
 export type { Result, JsonValue, SerializedError } from './result.js'
+export { describeError } from './errors.js'
 export type {
   DomecsError,
   PluginError,

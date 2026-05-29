@@ -4,6 +4,7 @@
  */
 import type { Entity } from './types.js'
 import type { JsonValue, Result, SerializedError } from './result.js'
+import { match } from './result.js'
 
 export type SystemId = string
 export type ComponentId = string
@@ -27,6 +28,31 @@ export type DomecsError =
   | { kind: 'schema_mismatch'; component: ComponentId; expected: string; got: string }
   | { kind: 'query_invalid'; reason: string }
   | { kind: 'event_handler_threw'; event: EventId; cause: SerializedError }
+
+/**
+ * Render a {@link DomecsError} as a single human-readable line for logs,
+ * toasts, and inspector UI. Built on {@link match}, so adding a variant to
+ * the union breaks this at compile time until a case is supplied — no
+ * silent `[object Object]` fallthrough. Pairs with `tapErr` (review #5):
+ * `tapErr(world.use(p), (e) => console.warn(describeError(e)))`.
+ */
+export function describeError(e: DomecsError): string {
+  return match(e, {
+    plugin_install_failed: (x) =>
+      `Plugin "${x.plugin}" failed to install: ${x.cause.message}`,
+    system_threw: (x) =>
+      `System "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
+    persist_io: (x) => `Persistence ${x.op} failed: ${x.cause.message}`,
+    migration_failed: (x) =>
+      `Snapshot migration ${x.from}→${x.to} failed ` +
+      `(${x.recoverable ? 'recoverable' : 'unrecoverable'}): ${x.reason}`,
+    schema_mismatch: (x) =>
+      `Component "${x.component}" schema mismatch: expected ${x.expected}, got ${x.got}`,
+    query_invalid: (x) => `Invalid query: ${x.reason}`,
+    event_handler_threw: (x) =>
+      `Event "${x.event}" handler threw: ${x.cause.message}`,
+  })
+}
 
 /**
  * Template-literal constraint forces plugin error kinds to carry a

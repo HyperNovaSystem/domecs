@@ -499,6 +499,7 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
 - Add `mapR`, `mapErr`, `andThen`, `unwrapOr`, `tap`, `tapErr`, `all`.
 - Add `attempt`, `attemptAsync`.
 - Add `match` (primary idiom) and `assertNever` (escape hatch).
+- Add `describeError(e: DomecsError): string` — total `match`-based formatter for logs/toasts/inspector UI.
 - Add `JsonValue`, `SerializedError`, `normalizeCause` with `MAX_CAUSE_DEPTH = 3`.
 
 **Error union and plugin namespacing:**
