@@ -550,7 +550,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function runSystem(s: CompiledSystem, view: EventView): void {
     const ctx: SystemContext = {
-      entities: s.query ? s.query.entities : [],
+      // Explicit `query` wins; otherwise a reactive system's `reactsTo` delta
+      // is delivered as ctx.entities (SPEC: reactive systems see the query
+      // delta). Falls back to [] for systems with neither.
+      entities: s.query ? s.query.entities : s.reactsTo ? s.reactsTo.entities : [],
       time,
       input,
       events: view,
@@ -1206,7 +1209,15 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // Wipe world state (preserve plugins, system registrations, signals).
-      const prevMembers = queries.map((q) => Array.from(q.structuralMembers))
+      // Capture each live query's current members AS POPULATED VIEWS before the
+      // wipe: `buildView` reads stores eagerly, so views materialized here keep
+      // their component values after the stores are cleared. Index positionally
+      // — `q.id` is a world-global monotonic counter, NOT an index into the live
+      // `queries` array (disposed queries are spliced out), so `prevMembers[q.id]`
+      // looked up the wrong/undefined set after any dispose and onRemove misfired.
+      const prevViews = queries.map((q) =>
+        q.onRemoveFns.size > 0 ? Array.from(q.structuralMembers, (id) => makeView(id)) : null,
+      )
       alive.clear()
       stores.clear()
       archetypes.clear()
@@ -1218,12 +1229,12 @@ export function createWorld(options: WorldOptions = {}): World {
       pendingRemoved.clear()
       pendingChanged.clear()
       viewCache.clear()
-      for (const q of queries) {
-        const removed = prevMembers[q.id] ?? []
-        if (q.onRemoveFns.size > 0) for (const id of removed) for (const fn of q.onRemoveFns) fn(makeView(id))
+      queries.forEach((q, i) => {
+        const views = prevViews[i]
+        if (views) for (const view of views) for (const fn of q.onRemoveFns) fn(view)
         q.matchingArchetypes.clear()
         q.structuralMembers.clear()
-      }
+      })
       emptyArch = ensureArchetype(new Set<string>())
 
       // PRNG state + tick.

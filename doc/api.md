@@ -233,6 +233,10 @@ interface SystemDef {
 type System = (ctx: SystemContext) => void
 
 interface SystemContext {
+  // For `tick`/`fixed`/`once` systems: the `query` result. For `reactive`
+  // systems with only `reactsTo` and no explicit `query`: the `reactsTo`
+  // change delta for this tick (an explicit `query` takes precedence). Empty
+  // when neither is declared.
   entities: EntityView[]
   time:     TimeState
   input:    InputSnapshot

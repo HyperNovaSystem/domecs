@@ -131,6 +131,33 @@ describe('restore — roundtrip (SPEC §7.1)', () => {
     expect(adds.length).toBeGreaterThan(0)
   })
 
+  it('fires onRemove on restore after earlier queries were disposed (q.id != array index)', () => {
+    const w = createWorld()
+    // Dispose throwaway queries so the next query's world-global id diverges
+    // from its position in the live `queries` array. Regression guard for the
+    // `prevMembers[q.id]` lookup against a positionally-built array.
+    w.query(Has(Position)).dispose()
+    w.query(Has(Velocity)).dispose()
+    w.query(Has(Position)).dispose()
+
+    const removes: Array<{ id: number; x: number }> = []
+    const q = w.query(Has(Position))
+    q.onRemove((e) =>
+      removes.push({ id: e.id, x: (e as unknown as { Position: { x: number } }).Position.x }),
+    )
+
+    const a = w.spawn([entry(Position, { x: 42, y: 7 })])
+    w.step(0.016)
+
+    // Restore a snapshot that LACKS entity `a`; onRemove must fire for it,
+    // and the view handed to onRemove must still carry its component value.
+    const emptySnap = createWorld().snapshot()
+    w.restore(emptySnap)
+
+    expect(removes.map((r) => r.id)).toContain(a)
+    expect(removes.find((r) => r.id === a)?.x).toBe(42)
+  })
+
 describe('snapshot — plugin hooks (SPEC §9.4)', () => {
   it('onSnapshot and onRestore receive the snap', () => {
     const w = createWorld()

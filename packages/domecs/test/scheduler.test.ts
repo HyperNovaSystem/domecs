@@ -194,6 +194,27 @@ describe('system scheduler — `reactive` mode', () => {
     expect(calls).toBe(1)
   })
 
+  it('delivers the reactsTo delta as ctx.entities when no explicit query is given', () => {
+    // SPEC §§ reactive systems "see the query delta". With only `reactsTo`
+    // supplied (no explicit `query`), ctx.entities must be the change delta,
+    // not empty.
+    const w = createWorld()
+    const seen: number[][] = []
+    const a = w.spawn([entry(Position, { x: 0, y: 0 })])
+    w.spawn([entry(Position, { x: 1, y: 1 })])
+    w.system(
+      'react',
+      { schedule: 'reactive', reactsTo: Changed(Position) },
+      (ctx) => {
+        seen.push(ctx.entities.map((v) => v.id))
+      },
+    )
+    w.step(0.016) // nothing changed -> system does not fire
+    w.markChanged(a, Position)
+    w.step(0.016) // only `a` changed
+    expect(seen).toEqual([[a]])
+  })
+
   it('rejects reactive registration without a change-detection node (F-5)', () => {
     const w = createWorld()
     // Structural-only reactsTo has no tick-scoped edge — must throw.
