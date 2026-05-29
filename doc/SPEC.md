@@ -394,6 +394,13 @@ MUST throw even if the host environment exposes `requestAnimationFrame`;
 Equivalent to headless with a thin driver: `world.turn(action)` emits the action as an event, calls `world.step()`, returns when systems have quiesced.
 Roguelike default.
 
+**Command result (`action`, normative).** `world.action(type, payload, opts?)` is `turn()` with a structured return — `turn()` stays the void fire-and-forget form. It emits the action event, advances one tick (so the action flushes at step 1 and its handlers run in steps 3–6), then returns `{ accepted, consumedTurn, reason?, events, snapshot? }`:
+
+- `events` is the set of events emitted *during* that tick — the command's downstream effects, captured from the buffer that step 1 of the *next* tick would flush. The action event itself was consumed at step 1 and is **not** included. Order is deterministic: by first-emit of each event type, then payload order within a type.
+- `accepted` / `consumedTurn` / `reason` come from an optional `opts.resolve({ events, world })` verdict — game policy, which the engine does not interpret. The default verdict is `{ accepted: true, consumedTurn: true }`; when a resolver omits `consumedTurn` it defaults to `accepted` (an accepted command spends the turn, a rejected one does not). `consumedTurn` is a *reported* value for the caller's turn bookkeeping — `action` always advances exactly one tick regardless, because turn-consumption policy can only be decided by systems that run *inside* the tick.
+- `snapshot` is attached only when `opts.snapshot` is set (`true` for defaults, or a `SnapshotOptions` object to forward e.g. `pruneEmptyEntities`).
+- `opts.dt` is forwarded to `step`; omit it for a turn-based tick advance (as `turn()` does). A non-positive explicit `dt` is a heartbeat (§4.0) and will not process the action.
+
 ---
 
 ## 4. Tick order (normative)

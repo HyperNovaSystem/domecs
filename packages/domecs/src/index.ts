@@ -17,8 +17,17 @@ export {
   normalize as normalizeQuery,
   collectHasComponents,
 } from './query.js'
-export type { World, WorldOptions, WorldSignals } from './world.js'
-export type { EventType, EventView } from './events.js'
+export type {
+  World,
+  WorldOptions,
+  WorldSignals,
+  ActionEvent,
+  ActionVerdict,
+  ActionResolver,
+  ActionOptions,
+  ActionResult,
+} from './world.js'
+export type { EventType, EventView, EmittedEvent } from './events.js'
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js'
 export type {
   System,

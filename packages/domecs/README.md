@@ -75,6 +75,10 @@ for (const entity of world.query(Has(Position)).entities) {
 - `world.system(name, def, fn)` — register `tick`, `fixed`, `event`, `once`, or
   `reactive` systems.
 - `defineEvent<T>(name)`, `world.emit(...)`, `world.on(...)` — buffered events.
+- `world.turn(type, payload, dt?)` — fire-and-forget turn-based command.
+- `world.action(type, payload, opts?)` — turn-based command with a structured
+  `{ accepted, consumedTurn, reason?, events, snapshot? }` result; the verdict
+  comes from an optional `opts.resolve`.
 - `world.snapshot()` / `world.restore(...)` — serialize and restore world state.
 - `world.use(plugin)` — install plugins.
 

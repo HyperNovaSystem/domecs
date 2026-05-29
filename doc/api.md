@@ -188,6 +188,15 @@ interface World {
   // Turn-based action: emit an event and advance one tick.
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
 
+  // Turn-based command with a structured result (#17). Like turn(), but
+  // returns { accepted, consumedTurn, reason?, events, snapshot? }. `events`
+  // are the events emitted during the action's tick (downstream effects; the
+  // action event itself was consumed at step 1). The verdict comes from
+  // opts.resolve (default { accepted: true, consumedTurn: true }; an omitted
+  // consumedTurn mirrors accepted). action always advances one tick;
+  // consumedTurn is a reported value, not engine-enforced. SPEC §3.
+  action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+
   // entities
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
@@ -302,6 +311,38 @@ type Entity = number
 interface StartOptions {
   dtClampMs?:    number   // default 100
   pauseOnHidden?: boolean // default true
+}
+
+// world.action types (#17). EmittedEvent pairs a buffered payload with its
+// originating EventType.
+interface EmittedEvent { readonly type: EventType<unknown>; readonly payload: unknown }
+type ActionEvent = EmittedEvent
+
+// Game policy: derive the verdict from the tick's events + world. Omit to
+// default to { accepted: true, consumedTurn: true }.
+type ActionResolver = (ctx: {
+  events: readonly ActionEvent[]
+  world:  World
+}) => ActionVerdict
+
+interface ActionVerdict {
+  accepted:      boolean
+  consumedTurn?: boolean   // defaults to `accepted` when omitted
+  reason?:       string
+}
+
+interface ActionOptions {
+  dt?:       number                      // forwarded to step(); omit for a turn-based advance
+  resolve?:  ActionResolver
+  snapshot?: boolean | SnapshotOptions   // true = defaults; object = forwarded options
+}
+
+interface ActionResult {
+  accepted:     boolean
+  consumedTurn: boolean
+  reason?:      string
+  events:       readonly ActionEvent[]   // emitted during the action's tick
+  snapshot?:    WorldSnapshot            // present only when opts.snapshot set
 }
 
 // Observation channel returned from `World.signals`. Subscribers fire

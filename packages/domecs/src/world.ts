@@ -7,7 +7,13 @@ import type {
   SystemResult,
   SystemicFault,
 } from './errors.js'
-import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
+import {
+  createEventBus,
+  type EmittedEvent,
+  type EventBus,
+  type EventType,
+  type EventView,
+} from './events.js'
 import {
   CONSOLIDATE_FAULTS_NAME,
   CONSOLIDATE_FAULTS_PRIORITY,
@@ -235,6 +241,16 @@ export interface World {
   step(dt?: number): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
+  /**
+   * Turn-based command with a structured result (#17). Emits `type`, advances
+   * one tick (like `turn()`), then reports `{ accepted, consumedTurn, reason,
+   * events, snapshot? }`. `events` are the events emitted *during* the tick
+   * (the command's downstream effects — the action event itself was flushed
+   * and consumed at step 1). `accepted`/`consumedTurn`/`reason` come from
+   * `opts.resolve` (default `{ accepted: true, consumedTurn: true }`).
+   * `turn()` remains the void fire-and-forget form.
+   */
+  action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
   start(options?: StartOptions): () => void
   stop(): void
   /**
@@ -276,6 +292,56 @@ export interface StartOptions {
   /** Pause via {@link World.pause} when `document.hidden` flips true, resume
    *  on re-show. Default true; has no effect outside a DOM. */
   pauseOnHidden?: boolean
+}
+
+/** An event emitted during an {@link World.action} tick. */
+export type ActionEvent = EmittedEvent
+
+/**
+ * The game's verdict on an action, produced by an {@link ActionResolver}.
+ * `consumedTurn` defaults to `accepted` when omitted (an accepted command
+ * spends the turn; a rejected one does not). `reason` is for diagnostics /
+ * UI on rejection.
+ */
+export interface ActionVerdict {
+  accepted: boolean
+  consumedTurn?: boolean
+  reason?: string
+}
+
+/**
+ * Derives the verdict from the events the action produced this tick and the
+ * resulting world. Policy lives here, in game code — the engine stays
+ * agnostic about what "accepted" means. Omit it to default to
+ * `{ accepted: true, consumedTurn: true }`.
+ */
+export type ActionResolver = (ctx: {
+  events: readonly ActionEvent[]
+  world: World
+}) => ActionVerdict
+
+export interface ActionOptions {
+  /** dt forwarded to the underlying `step`. Omit for a turn-based tick
+   *  advance (like `turn()`); a non-positive explicit dt is a heartbeat and
+   *  will not process the action (see §4.0). */
+  dt?: number
+  /** Compute accepted/consumedTurn/reason from the tick's events + world. */
+  resolve?: ActionResolver
+  /** Attach `world.snapshot()` to the result. `true` uses defaults; pass a
+   *  `SnapshotOptions` object to forward options (e.g. `pruneEmptyEntities`). */
+  snapshot?: boolean | SnapshotOptions
+}
+
+/**
+ * Structured result of {@link World.action}: did the command land, did it
+ * spend the turn, why not, what events it produced, and an optional snapshot.
+ */
+export interface ActionResult {
+  accepted: boolean
+  consumedTurn: boolean
+  reason?: string
+  events: readonly ActionEvent[]
+  snapshot?: WorldSnapshot
 }
 
 interface ArchetypeBucket {
@@ -1354,6 +1420,33 @@ export function createWorld(options: WorldOptions = {}): World {
       // Because events flush at next step's step 1, we emit first then step.
       bus.emit(type, payload)
       world.step(dt)
+    },
+
+    action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // #17: a typed turn() that surfaces a structured command result. Emit the
+      // action, advance one tick (the action flushes at step 1 and its handlers
+      // run during steps 3–6), then read back the events those handlers emitted
+      // — they are now buffered as "pending" for next tick, so bus.pendingEvents
+      // is exactly the command's downstream effects (the action event itself was
+      // already consumed and is not included).
+      bus.emit(type, payload)
+      world.step(opts.dt)
+      const events = bus.pendingEvents()
+      const verdict = opts.resolve
+        ? opts.resolve({ events, world })
+        : { accepted: true, consumedTurn: true }
+      const consumedTurn = verdict.consumedTurn ?? verdict.accepted
+      const result: ActionResult = {
+        accepted: verdict.accepted,
+        consumedTurn,
+        events,
+        ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+      }
+      if (opts.snapshot) {
+        result.snapshot =
+          typeof opts.snapshot === 'object' ? world.snapshot(opts.snapshot) : world.snapshot()
+      }
+      return result
     },
 
     start(options?: StartOptions): () => void {
