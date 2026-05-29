@@ -41,6 +41,31 @@ interface ComponentOptions<T> {
   // Called after defaults are merged by ComponentType.create() and
   // world.addComponent(). Return true to accept, or a string message to throw.
   validate?:  (value: T) => true | string
+  // Optional reflection schema (#14). Surfaced by world.describeComponent so
+  // dev tools build edit widgets from the world alone. When omitted,
+  // describeComponent infers field kinds from `defaults`.
+  schema?:    ComponentSchema
+}
+
+// Reflection descriptors (#14). describeComponent resolves `fields` from the
+// explicit schema, else infers from defaults, else empty.
+type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+interface FieldSchema {
+  readonly kind:      FieldKind
+  readonly min?:      number
+  readonly max?:      number
+  readonly step?:     number
+  readonly options?:  ReadonlyArray<string | number>  // enum widget
+  readonly label?:    string
+  readonly readonly?: boolean
+}
+interface ComponentSchema { readonly fields: Readonly<Record<string, FieldSchema>> }
+interface ComponentDescriptor {
+  readonly name:         string
+  readonly transient:    boolean
+  readonly defaults:     Record<string, unknown> | undefined  // independent clone
+  readonly fields:       Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'defaults' | 'none'
 }
 
 interface ComponentType<T, Name extends string = string> {
@@ -180,6 +205,9 @@ interface World {
   // less ceremony at the call-site (F-10).
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
+  // Reflect a component's name/transient/defaults/field-schema (#14). Works on
+  // any ComponentType without prior registration; enumerate via componentTypes().
+  describeComponent(type: ComponentType<unknown>): ComponentDescriptor
 
   // snapshots
   // options.pruneEmptyEntities (default false): drop entities whose

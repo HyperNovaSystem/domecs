@@ -87,6 +87,16 @@ Component types are **serializable** by default.  If a schema includes non-clona
 
 Component instances are **owned by the world**.
 
+**Reflection (#14).** A component type MAY carry an optional `schema` — a
+field-name → `FieldSchema` map (`kind` plus widget hints: numeric range/step,
+enum `options`, label, readonly). `world.describeComponent(type)` returns a
+`ComponentDescriptor` with the component's name, transient flag, a cloned
+`defaults`, and a resolved `fields` map: the explicit schema when declared
+(`fieldsSource: 'schema'`), otherwise inferred from `defaults` by runtime
+`typeof` (`'defaults'`), otherwise empty (`'none'`). This lets dev tools render
+edit widgets from the world alone, with no per-app schema registry. Reflection
+is descriptive only — it does not validate or constrain component values.
+
 **Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
 
 v0.1 treats I-1 as a caller contract, not as a proxy-enforced runtime feature. Stale-reference poisoning is deferred until the diagnostics surface is designed, so the current core does not expose a dev/prod split for component wrapper behavior.

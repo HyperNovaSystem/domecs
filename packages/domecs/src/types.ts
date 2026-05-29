@@ -26,6 +26,52 @@ export interface ComponentOptions<T> {
   defaults?: Partial<T>
   transient?: boolean
   validate?: (value: T) => true | string
+  /**
+   * Optional field-level schema for reflection (review #14). Lets dev tools
+   * render edit widgets for this component from the world alone via
+   * `world.describeComponent(type)` — no hand-rolled per-app schema registry.
+   * When omitted, `describeComponent` infers field kinds from `defaults`.
+   */
+  schema?: ComponentSchema
+}
+
+/** Field kinds a reflection widget can render (review #14). */
+export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+
+/**
+ * Per-field reflection metadata. `kind` is required; the rest are optional
+ * widget hints (numeric range/step, enum `options`, display `label`,
+ * `readonly`). Field names are plain strings, not keyed to `T` — this is a
+ * runtime descriptor consumed by tooling, not a type-level constraint.
+ */
+export interface FieldSchema {
+  readonly kind: FieldKind
+  readonly min?: number
+  readonly max?: number
+  readonly step?: number
+  readonly options?: ReadonlyArray<string | number>
+  readonly label?: string
+  readonly readonly?: boolean
+}
+
+/** A component's field schema: a map of field name → {@link FieldSchema}. */
+export interface ComponentSchema {
+  readonly fields: Readonly<Record<string, FieldSchema>>
+}
+
+/**
+ * Result of `world.describeComponent(type)`. `fields` is resolved: the
+ * explicit `schema.fields` when one was declared (`fieldsSource: 'schema'`),
+ * otherwise inferred from `defaults` by runtime `typeof`
+ * (`fieldsSource: 'defaults'`), otherwise empty (`fieldsSource: 'none'`).
+ * `defaults` is an independent clone safe for tooling to read or mutate.
+ */
+export interface ComponentDescriptor {
+  readonly name: string
+  readonly transient: boolean
+  readonly defaults: Record<string, unknown> | undefined
+  readonly fields: Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'defaults' | 'none'
 }
 
 /**

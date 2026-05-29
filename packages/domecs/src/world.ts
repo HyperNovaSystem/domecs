@@ -33,7 +33,14 @@ import {
 } from './scheduler.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, type TimeState } from './time.js'
-import type { ComponentBag, ComponentType, Entity } from './types.js'
+import type {
+  ComponentBag,
+  ComponentDescriptor,
+  ComponentType,
+  Entity,
+  FieldKind,
+  FieldSchema,
+} from './types.js'
 import {
   Has,
   normalize,
@@ -54,6 +61,23 @@ const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'removed',
 ])
 const oneshotWhereKind: ReadonlySet<QueryNode['kind']> = new Set(['where'])
+
+// Infer a reflection FieldKind from a default value's runtime type. Used by
+// describeComponent when a component declares no explicit schema (#14).
+function inferFieldKind(value: unknown): FieldKind {
+  switch (typeof value) {
+    case 'number':
+      return 'number'
+    case 'string':
+      return 'string'
+    case 'boolean':
+      return 'boolean'
+    case 'object':
+      return value === null ? 'unknown' : 'object'
+    default:
+      return 'unknown'
+  }
+}
 
 export interface WorldSignals {
   entitySpawned: Signal<Entity>
@@ -134,6 +158,15 @@ export interface World {
    */
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
+  /**
+   * Reflect a component's name, transient flag, default value, and field
+   * schema (review #14). `fields` resolves to the explicit `schema.fields`
+   * when one was declared, otherwise it is inferred from `defaults` by runtime
+   * `typeof`. Lets dev tools build edit widgets from the world alone — no
+   * per-app schema registry. Works on any `ComponentType` without prior
+   * registration; enumerate with `componentTypes()`.
+   */
+  describeComponent(type: ComponentType<unknown>): ComponentDescriptor
   /**
    * Typed overload (D-2): an array of `ComponentType<T, Name>` produces a
    * `QueryResult` whose `EntityView` exposes `view.Name: T` typed fields.
@@ -837,6 +870,30 @@ export function createWorld(options: WorldOptions = {}): World {
         if (t) out.push(t)
       }
       return out
+    },
+
+    describeComponent(type: ComponentType<unknown>): ComponentDescriptor {
+      const meta = internal(type)
+      const defaults =
+        meta.__defaults !== undefined
+          ? cloneSerializable(meta.__defaults as Record<string, unknown>)
+          : undefined
+      let fields: Record<string, FieldSchema>
+      let fieldsSource: ComponentDescriptor['fieldsSource']
+      if (meta.__schema) {
+        fields = { ...meta.__schema.fields }
+        fieldsSource = 'schema'
+      } else if (defaults && Object.keys(defaults).length > 0) {
+        fields = {}
+        for (const [key, value] of Object.entries(defaults)) {
+          fields[key] = { kind: inferFieldKind(value) }
+        }
+        fieldsSource = 'defaults'
+      } else {
+        fields = {}
+        fieldsSource = 'none'
+      }
+      return { name: type.name, transient: meta.__transient, defaults, fields, fieldsSource }
     },
 
     query(def: QueryDef): QueryResult {

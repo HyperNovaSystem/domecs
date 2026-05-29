@@ -39,6 +39,10 @@ export type {
   ComponentOptions,
   ComponentBag,
   ComponentEntry,
+  ComponentDescriptor,
+  ComponentSchema,
+  FieldSchema,
+  FieldKind,
   Entity,
 } from './types.js'
 export type {

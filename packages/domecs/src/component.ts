@@ -1,4 +1,4 @@
-import type { ComponentOptions, ComponentType } from './types.js'
+import type { ComponentOptions, ComponentSchema, ComponentType } from './types.js'
 
 const tag = Symbol('domecs.component')
 
@@ -8,6 +8,7 @@ export interface InternalComponentType<T, Name extends string = string>
   readonly __defaults: Partial<T> | undefined
   readonly __transient: boolean
   readonly __validate: ((value: T) => true | string) | undefined
+  readonly __schema: ComponentSchema | undefined
 }
 
 export function defineComponent<T, const Name extends string>(
@@ -30,6 +31,7 @@ export function defineComponent<T>(
     __defaults: defaults,
     __transient: options.transient ?? false,
     __validate: validate,
+    __schema: options.schema,
     create(value?: Partial<T>): T {
       const merged = { ...(defaults ?? {}), ...(value ?? {}) } as T
       if (validate) {
