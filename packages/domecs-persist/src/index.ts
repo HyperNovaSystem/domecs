@@ -16,3 +16,10 @@ export {
   type MigrationMap,
 } from './migrate.js'
 export { createMemoryStorage, type Storage } from './storage.js'
+export {
+  createSnapshotHistory,
+  diffSnapshots,
+  type SnapshotHistory,
+  type SnapshotHistoryOptions,
+  type SnapshotDiff,
+} from './history.js'

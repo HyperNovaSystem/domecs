@@ -46,8 +46,13 @@ if (!loaded.ok) console.error(loaded.error)
 - `pruneTransientOnlyEntities()` — plugin; install once to strip
   transient-only / bare entities from every saved envelope (the persisted-path
   equivalent of core's `snapshot({ pruneEmptyEntities: true })`).
+- `createSnapshotHistory(world, opts?)` — bounded undo/redo ring over
+  snapshots: `push` / `undo` / `redo` / `canUndo` / `canRedo` / `clear`, with
+  redo-branch truncation, a `limit` ring, and `toJSON` / `load` for export.
+- `diffSnapshots(prev, next)` — entity-level diff (added / removed / changed).
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
-- Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`, `Storage`.
+- Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`, `Storage`,
+  `SnapshotHistory`, `SnapshotHistoryOptions`, `SnapshotDiff`.
 
 ## Related packages
 
