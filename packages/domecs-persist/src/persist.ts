@@ -10,15 +10,48 @@ export interface LoadOptions {
   migrations?: MigrationMap
 }
 
+export interface SaveOptions {
+  /**
+   * Extra metadata merged into the snapshot envelope's `meta`. Sits on top
+   * of any plugin-provided `meta` (from `onSnapshot`) and below the
+   * auto-stamped `savedAt`, so a caller key wins over a plugin key.
+   */
+  meta?: Record<string, unknown>
+  /**
+   * Override the `savedAt` timestamp (ms epoch) written into `meta`.
+   * Defaults to `Date.now()`. Provided primarily for deterministic tests.
+   */
+  savedAt?: number
+}
+
 /**
  * Captures `world.snapshot()`, serializes to JSON, and writes to `slot`.
  * Failures (non-serializable components, I/O) come back as `persist_io`
  * with the cause normalized via `normalizeCause`. The slot is only
  * touched when serialization succeeded — a serialization failure leaves
  * any prior contents intact.
+ *
+ * The optional `opts` populate the snapshot envelope's `meta`: a numeric
+ * `savedAt` is always stamped (override via `opts.savedAt`) and `opts.meta`
+ * keys are merged in. Three-argument callers are unaffected. The envelope is
+ * `{ savedAt, ...snapshot.meta, ...opts.meta }` so a caller key overrides a
+ * plugin-provided one, while `savedAt` is the default floor.
  */
-export function save(world: World, storage: Storage, slot: string): Result<void, DomecsError> {
-  const snap = world.snapshot()
+export function save(
+  world: World,
+  storage: Storage,
+  slot: string,
+  opts: SaveOptions = {},
+): Result<void, DomecsError> {
+  const base = world.snapshot()
+  const snap: WorldSnapshot = {
+    ...base,
+    meta: {
+      savedAt: opts.savedAt ?? Date.now(),
+      ...base.meta,
+      ...opts.meta,
+    },
+  }
   let serialized: string | undefined
   try {
     serialized = JSON.stringify(snap)

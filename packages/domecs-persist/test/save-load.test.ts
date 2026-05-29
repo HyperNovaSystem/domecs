@@ -127,6 +127,60 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(h?.hp).toBe(11)
   })
 
+  it('save stamps a numeric savedAt into the snapshot meta (review #9)', () => {
+    const w = createWorld()
+    w.spawn([entry(Health, { hp: 1 })])
+    expect(save(w, storage, 'slot').ok).toBe(true)
+    const read = storage.read('slot')
+    expect(read.ok).toBe(true)
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('save merges caller meta into the envelope (review #9)', () => {
+    const w = createWorld()
+    expect(save(w, storage, 'slot', { meta: { label: 'checkpoint', n: 3 } }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.label).toBe('checkpoint')
+    expect(snap.meta?.n).toBe(3)
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('an explicit savedAt opt is honored verbatim (review #9)', () => {
+    const w = createWorld()
+    expect(save(w, storage, 'slot', { savedAt: 1234567 }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.savedAt).toBe(1234567)
+  })
+
+  it('save preserves plugin-provided snapshot meta alongside savedAt (review #9)', () => {
+    const w = createWorld()
+    w.use({
+      name: 'stamp',
+      install: () =>
+        ok({
+          onSnapshot: (s: WorldSnapshot) => ({ ...s, meta: { ...s.meta, source: 'plugin' } }),
+        }),
+    })
+    expect(save(w, storage, 'slot', { meta: { label: 'x' } }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.source).toBe('plugin')
+    expect(snap.meta?.label).toBe('x')
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('3-arg save is unchanged and round-trips via load (review #9 back-compat)', () => {
+    const w1 = createWorld()
+    const e = w1.spawn([entry(Health, { hp: 5 })])
+    expect(save(w1, storage, 'slot').ok).toBe(true)
+    const w2 = createWorld()
+    expect(load(w2, storage, 'slot').ok).toBe(true)
+    expect(w2.getComponent(e, Health)?.hp).toBe(5)
+  })
+
   it('migration that returns err propagates the kind through load', () => {
     const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
     storage.write('legacy', JSON.stringify(v0))

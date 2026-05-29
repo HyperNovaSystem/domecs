@@ -2,7 +2,7 @@
  * @domecs/persist — Result-typed save / load / migrate over WorldSnapshot.
  * See doc/BETTER_ERRORS.md Phase 2 for the discipline this enforces.
  */
-export { load, save, type LoadOptions } from './persist.js'
+export { load, save, type LoadOptions, type SaveOptions } from './persist.js'
 export {
   migrate,
   type Migration,
