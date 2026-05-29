@@ -61,6 +61,8 @@ export {
   mapErr,
   andThen,
   unwrapOr,
+  tap,
+  tapErr,
   all,
   attempt,
   attemptAsync,
