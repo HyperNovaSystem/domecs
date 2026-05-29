@@ -504,6 +504,8 @@ interface WorldSnapshot {
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
+`snapshot(options?)` accepts `SnapshotOptions`. `pruneEmptyEntities` (default `false`) drops entities whose serializable bag is empty once transient components are excluded — transient-only and bare `spawn()` entities. The default records every alive entity so id/archetype membership round-trips exactly. `@domecs/persist`'s `pruneTransientOnlyEntities()` plugin applies the same prune on the no-arg `save()` path via `onSnapshot`.
+
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
 ### 7.2 Autosave — eventually consistent

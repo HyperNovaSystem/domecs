@@ -2,6 +2,18 @@ import type { Entity } from './types.js'
 
 export const SNAPSHOT_VERSION = 1
 
+/** Options for `world.snapshot()`. */
+export interface SnapshotOptions {
+  /**
+   * Drop entities whose serializable component bag is empty after transient
+   * components are excluded — transient-only entities and bare `spawn()`
+   * entities. Default `false` (every alive entity is recorded). Persisting
+   * with this on keeps save files lean; the persist plugin
+   * `pruneTransientOnlyEntities()` applies it to the no-arg `save()` path.
+   */
+  readonly pruneEmptyEntities?: boolean
+}
+
 export interface WorldSnapshot {
   readonly version: number
   readonly seed: readonly [number, number, number, number]

@@ -19,6 +19,7 @@ import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
+  type SnapshotOptions,
   type WorldSnapshot,
 } from './snapshot.js'
 import {
@@ -157,7 +158,7 @@ export interface World {
    */
   use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
-  snapshot(): WorldSnapshot
+  snapshot(options?: SnapshotOptions): WorldSnapshot
   restore(snap: WorldSnapshot): void
 }
 
@@ -1171,7 +1172,8 @@ export function createWorld(options: WorldOptions = {}): World {
       return plugins.capability(name)
     },
 
-    snapshot(): WorldSnapshot {
+    snapshot(options?: SnapshotOptions): WorldSnapshot {
+      const pruneEmpty = options?.pruneEmptyEntities === true
       const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
       const sortedAlive = Array.from(alive).sort((a, b) => a - b)
       for (const id of sortedAlive) {
@@ -1186,6 +1188,7 @@ export function createWorld(options: WorldOptions = {}): World {
           const v = store.get(id)
           if (v !== undefined) components[name] = cloneSerializable(v)
         }
+        if (pruneEmpty && Object.keys(components).length === 0) continue
         entities.push({ id, components })
       }
       let snap: WorldSnapshot = {

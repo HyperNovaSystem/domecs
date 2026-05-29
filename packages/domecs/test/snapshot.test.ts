@@ -158,6 +158,41 @@ describe('restore — roundtrip (SPEC §7.1)', () => {
     expect(removes.find((r) => r.id === a)?.x).toBe(42)
   })
 
+describe('snapshot — pruneEmptyEntities (review #12)', () => {
+  it('by default keeps entities that have only transient components (empty bag)', () => {
+    const w = createWorld()
+    const e = w.spawn([entry(Ephemeral, { tag: 'temp' })])
+    const snap = w.snapshot()
+    const captured = snap.entities.find((r) => r.id === e)
+    expect(captured).toBeDefined()
+    expect(Object.keys(captured!.components)).toHaveLength(0)
+  })
+
+  it('pruneEmptyEntities drops transient-only and bare entities', () => {
+    const w = createWorld()
+    const real = w.spawn([entry(Position, { x: 1, y: 2 })])
+    const transientOnly = w.spawn([entry(Ephemeral, { tag: 'temp' })])
+    const bare = w.spawn()
+    const snap = w.snapshot({ pruneEmptyEntities: true })
+    const ids = snap.entities.map((r) => r.id)
+    expect(ids).toContain(real)
+    expect(ids).not.toContain(transientOnly)
+    expect(ids).not.toContain(bare)
+  })
+
+  it('pruneEmptyEntities keeps entities that still carry a persistent component', () => {
+    const w = createWorld()
+    const mixed = w.spawn([
+      entry(Position, { x: 3, y: 4 }),
+      entry(Ephemeral, { tag: 'temp' }),
+    ])
+    const snap = w.snapshot({ pruneEmptyEntities: true })
+    const captured = snap.entities.find((r) => r.id === mixed)
+    expect(captured?.components.Position).toEqual({ x: 3, y: 4 })
+    expect(captured?.components.Ephemeral).toBeUndefined()
+  })
+})
+
 describe('snapshot — plugin hooks (SPEC §9.4)', () => {
   it('onSnapshot and onRestore receive the snap', () => {
     const w = createWorld()

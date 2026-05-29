@@ -174,7 +174,11 @@ interface World {
   archetype(entity: Entity): ComponentType<unknown>[]
 
   // snapshots
-  snapshot(): WorldSnapshot
+  // options.pruneEmptyEntities (default false): drop entities whose
+  // serializable bag is empty once transient components are excluded —
+  // transient-only and bare spawn() entities. Persist's
+  // pruneTransientOnlyEntities() plugin applies this on the no-arg save() path.
+  snapshot(options?: SnapshotOptions): WorldSnapshot
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
   restore(snap: WorldSnapshot): void
@@ -433,6 +437,12 @@ interface WorldSnapshot {
     components: Record<string, unknown>
   }>
   readonly meta?: Record<string, unknown>
+}
+
+interface SnapshotOptions {
+  // Drop entities whose serializable bag is empty once transient components
+  // are excluded. Default false (every alive entity is recorded).
+  readonly pruneEmptyEntities?: boolean
 }
 ```
 

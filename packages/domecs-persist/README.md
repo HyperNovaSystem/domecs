@@ -43,6 +43,9 @@ if (!loaded.ok) console.error(loaded.error)
 - `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`,
   then restore.
 - `migrate(snapshot, target, migrations)` — run a version migration chain.
+- `pruneTransientOnlyEntities()` — plugin; install once to strip
+  transient-only / bare entities from every saved envelope (the persisted-path
+  equivalent of core's `snapshot({ pruneEmptyEntities: true })`).
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
 - Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`, `Storage`.
 

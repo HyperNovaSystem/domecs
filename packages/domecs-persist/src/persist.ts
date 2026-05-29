@@ -1,5 +1,5 @@
-import type { DomecsError, Result, World, WorldSnapshot } from '@domecs/core'
-import { SNAPSHOT_VERSION, err, normalizeCause, ok } from '@domecs/core'
+import type { DomecsError, Plugin, Result, World, WorldSnapshot } from '@domecs/core'
+import { SNAPSHOT_VERSION, definePlugin, err, normalizeCause, ok } from '@domecs/core'
 import { migrate, type MigrationMap } from './migrate.js'
 import type { Storage } from './storage.js'
 
@@ -120,6 +120,27 @@ export function load(
     return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
   }
   return ok(undefined)
+}
+
+/**
+ * Plugin that strips entities with an empty serializable component bag from
+ * every `world.snapshot()` envelope via `onSnapshot`. Because `save()` calls
+ * the no-arg `world.snapshot()`, this is the declarative way to get the core
+ * `snapshot({ pruneEmptyEntities: true })` behavior on the persisted path:
+ * transient-only entities (their components are excluded at snapshot time) and
+ * bare `spawn()` entities never reach disk. Install once per world. Entities
+ * that still carry any persistent component are untouched.
+ */
+export function pruneTransientOnlyEntities(): Plugin {
+  return definePlugin({
+    name: 'persist:prune-transient-only-entities',
+    install: () => ({
+      onSnapshot: (snap) => ({
+        ...snap,
+        entities: snap.entities.filter((e) => Object.keys(e.components).length > 0),
+      }),
+    }),
+  })
 }
 
 function isWorldSnapshot(v: unknown): v is WorldSnapshot {
