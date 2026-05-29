@@ -121,6 +121,18 @@ A node MUST be well-formed: its runtime payload must match its declared `kind`. 
 
 Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
 
+**One-shot selectors (normative).** `world.query(def)` returns a *live*
+`QueryResult` that the engine registers and keeps up to date until
+`dispose()`; reading `.entities.length` for a one-off count and dropping the
+result leaks a registered query. For ad-hoc reads the engine MUST provide
+leak-free one-shot selectors that evaluate the current world without
+registering anything: `count(def) → number`, `entitiesMatching(def) →
+Entity[]`, and `select(def) → EntityView[]` (the latter carrying typed fields
+for the tuple shorthand, as `query()` does). One-shot selectors accept the
+structural node set (`Has`/`Not`/`And`/`Or`/`Where`) and MUST reject reactive
+nodes (`Added`/`Changed`/`Removed`), whose per-tick deltas are only defined for
+a registered query or reactive system.
+
 **EntityView shape (normative, P-1).** An `EntityView` exposes exactly the
 components currently attached to the entity — it MUST NOT carry keys for
 component types the entity does not hold. The engine derives the view from

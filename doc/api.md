@@ -134,6 +134,14 @@ interface World {
 
   // queries
   query(def: QueryDef): QueryResult
+  // Leak-free one-shot selectors: evaluate the current world without
+  // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
+  // reactive nodes (Added/Changed/Removed) throw — use query()/observe() for
+  // per-tick deltas. count → number, entitiesMatching → Entity[], select →
+  // EntityView[] (typed fields for the array shorthand, like query()).
+  count(def: QueryDef): number
+  entitiesMatching(def: QueryDef): Entity[]
+  select(def: QueryDef): EntityView[]
   // Convenience over query(...).onAdd/onRemove. If hooks.onChange is present,
   // def must contain at least one Added/Removed/Changed node; callbacks fire
   // at step 6 reactive time, once per matching entity for that tick.

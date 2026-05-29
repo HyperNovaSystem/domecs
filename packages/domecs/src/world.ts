@@ -46,6 +46,15 @@ import {
   type QueryResult,
 } from './query.js'
 
+// Reactive delta nodes a one-shot selector cannot evaluate, and the `where`
+// kind that forces per-entity predicate filtering. Shared, allocation-free.
+const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'changed',
+  'removed',
+])
+const oneshotWhereKind: ReadonlySet<QueryNode['kind']> = new Set(['where'])
+
 export interface WorldSignals {
   entitySpawned: Signal<Entity>
   entityDespawned: Signal<Entity>
@@ -133,6 +142,22 @@ export interface World {
     def: readonly [...T],
   ): QueryResult<FieldsFromComponents<T>>
   query(def: QueryDef): QueryResult
+  /**
+   * Leak-free one-shot selectors. Unlike `query()`, these evaluate against the
+   * world's current state WITHOUT registering a live query — there is nothing
+   * to dispose, so they never leak. Use them for ad-hoc reads (UI labels, AI
+   * decisions, asserts) where a persistent live query would accumulate. They
+   * accept the same structural defs as `query()` — `Has`/`Not`/`And`/`Or`/
+   * `Where` — but reject reactive nodes (`Added`/`Changed`/`Removed`), which
+   * need the per-tick delta tracking only a live query or reactive system
+   * provides.
+   */
+  count(def: QueryDef): number
+  entitiesMatching(def: QueryDef): Entity[]
+  select<T extends ReadonlyArray<ComponentType<unknown, string>>>(
+    def: readonly [...T],
+  ): EntityView<FieldsFromComponents<T>>[]
+  select(def: QueryDef): EntityView[]
   /**
    * Observe a query reactively and receive structural + optional per-tick
    * change callbacks. Returns an unsubscribe function.
@@ -373,6 +398,21 @@ export function createWorld(options: WorldOptions = {}): World {
   function hasType(entity: Entity, name: string): boolean {
     const s = stores.get(name)
     return s ? s.has(entity) : false
+  }
+
+  // Normalize + validate a def for the one-shot selectors (count/select/
+  // entitiesMatching). Reactive nodes track per-tick deltas that only a
+  // registered query maintains, so they are a misuse here; reject loudly.
+  function oneshotNode(def: QueryDef): { node: QueryNode; needsEntityFilter: boolean } {
+    const node = normalize(def)
+    if (treeHas(node, oneshotReactiveKinds)) {
+      throw new Error(
+        'domecs: count/select/entitiesMatching are one-shot selectors and ' +
+          'cannot evaluate reactive nodes (Added/Changed/Removed) — those need ' +
+          'per-tick delta tracking; use a live query() or a reactive system instead',
+      )
+    }
+    return { node, needsEntityFilter: treeHas(node, oneshotWhereKind) }
   }
 
   function evaluateQueryAgainstArchetype(
@@ -882,6 +922,46 @@ export function createWorld(options: WorldOptions = {}): World {
         },
       }
       return result
+    },
+
+    count(def: QueryDef): number {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      let n = 0
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        if (!needsEntityFilter) {
+          n += arch.entities.size
+          continue
+        }
+        for (const e of arch.entities) if (evalEntity(node, e)) n++
+      }
+      return n
+    },
+
+    entitiesMatching(def: QueryDef): Entity[] {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      const out: Entity[] = []
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        for (const e of arch.entities) {
+          if (needsEntityFilter && !evalEntity(node, e)) continue
+          out.push(e)
+        }
+      }
+      return out
+    },
+
+    select(def: QueryDef): EntityView[] {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      const out: EntityView[] = []
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        for (const e of arch.entities) {
+          if (needsEntityFilter && !evalEntity(node, e)) continue
+          out.push(makeView(e))
+        }
+      }
+      return out
     },
 
     observe(def: QueryDef, hooks: QueryHooks): () => void {
