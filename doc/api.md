@@ -97,6 +97,56 @@ limitation: partial type-argument inference does not fill in `Name` from
 the argument when `T` is supplied explicitly. The single-arg form remains
 fully supported for the common case.
 
+### `defineResource`
+
+World-level named value (SPEC §2.11) — the home for game-global state (score,
+level, gravity, the active turn command). Same name-keyed identity discipline
+as `defineComponent`: two distinct resource objects sharing a name collide and
+the engine throws on the second registration.
+
+```ts
+// Two overloads mirroring defineComponent. The dual-type-arg form captures
+// the literal Name; the single-arg form widens Name to string.
+function defineResource<T, const Name extends string>(
+  name:    Name,
+  options?: ResourceOptions<T>
+): ResourceType<T, Name>
+function defineResource<T>(
+  name:    string,
+  options?: ResourceOptions<T>
+): ResourceType<T, string>
+
+interface ResourceOptions<T> {
+  // Function default = per-world factory, called lazily on first read.
+  // Non-function default = deep-cloned per world (worlds never share it).
+  default?:  T | (() => T)
+  // Run by setResource and by a materialized default. Return true to accept,
+  // or a string message to throw.
+  validate?: (value: T) => true | string
+}
+
+interface ResourceType<T, Name extends string = string> {
+  readonly name: Name
+  readonly [__resourceTag]: symbol
+}
+
+// Extract a resource's value type:  type S = ResourceValue<typeof Score>
+type ResourceValue<R> = R extends ResourceType<infer T, string> ? T : never
+```
+
+```ts
+const Score = defineResource<number>('Score', { default: 0 })
+const Config = defineResource<Cfg, 'Config'>('Config', { default: () => makeConfig() })
+
+world.setResource(Score, 10)      // validates, stores, marks changed
+world.resource(Score)             // → 10 (materializes default on first read)
+world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
+```
+
+Reactive systems observe resource edges via `ChangedResource(R)` in `reactsTo`
+(see Query builder below and SPEC §4 step 6). Resources are part of
+`snapshot()` / `restore()` (Snapshot below).
+
 ### `World`
 
 ```ts
@@ -154,6 +204,15 @@ interface World {
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
+  // resources (SPEC §2.11). Same buffer-and-swap discipline as markChanged.
+  // resource() returns undefined only when there is no value and no default;
+  // a default is materialized (validated, stored) on first read. setResource
+  // validates + stores + marks changed; markResourceChanged marks without
+  // replacing (for in-place mutation). Both wake an idle driver.
+  resource<T>(type: ResourceType<T>): T | undefined
+  setResource<T>(type: ResourceType<T>, value: T): void
+  markResourceChanged<T>(type: ResourceType<T>): void
+
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
 
@@ -161,8 +220,8 @@ interface World {
   query(def: QueryDef): QueryResult
   // Leak-free one-shot selectors: evaluate the current world without
   // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
-  // reactive nodes (Added/Changed/Removed) throw — use query()/observe() for
-  // per-tick deltas. count → number, entitiesMatching → Entity[], select →
+  // reactive nodes (Added/Changed/Removed/ChangedResource) throw — use
+  // query()/observe() for per-tick deltas. count → number, entitiesMatching → Entity[], select →
   // EntityView[] (typed fields for the array shorthand, like query()).
   count(def: QueryDef): number
   entitiesMatching(def: QueryDef): Entity[]
@@ -348,6 +407,7 @@ type QueryNode =
   | { kind: 'added';    type: ComponentType<unknown> }
   | { kind: 'removed';  type: ComponentType<unknown> }
   | { kind: 'where';    type: ComponentType<unknown>; predicate: (v: unknown) => boolean }
+  | { kind: 'changedResource'; resource: ResourceType<unknown> }
   | { kind: 'not';      child: QueryNode }
   | { kind: 'and';      children: QueryNode[] }
   | { kind: 'or';       children: QueryNode[] }
@@ -358,6 +418,14 @@ function Changed<T>(t: ComponentType<T>): QueryNode
 function Added<T>(t: ComponentType<T>): QueryNode
 function Removed<T>(t: ComponentType<T>): QueryNode
 function Where<T>(t: ComponentType<T>, p: (v: T) => boolean): QueryNode
+
+// Resource change-detection node (SPEC §2.11): fires when resource R changed
+// in the previous tick. Structurally neutral — matches every entity on a
+// change tick, none otherwise — so And(Has(T), ChangedResource(R)) yields the
+// T entities only on R-change ticks; a bare ChangedResource(R) is a
+// world-level edge a reactive system reacts to even in an empty world.
+// Counts as a change-detection node for the reactsTo contract (SPEC §4 step 6).
+function ChangedResource<T>(r: ResourceType<T>): QueryNode
 
 // Predicate combinators: take child QueryNodes, OR a bare ComponentType as a
 // one-arg shortcut for Has(T). `Not(Player)` and `Not(Has(Player))` are
@@ -397,9 +465,9 @@ interface WorldQuery {
 interface QueryHooks<Fields = Record<string, unknown>> {
   onAdd?:    (e: EntityView<Fields>) => void
   onRemove?: (e: EntityView<Fields>) => void
-  // Requires a change-detection query (Added/Removed/Changed somewhere in
-  // the tree). Fires at the reactive phase for every entity currently in the
-  // query result after that tick's mutations are coalesced.
+  // Requires a change-detection query (Added/Removed/Changed/ChangedResource
+  // somewhere in the tree). Fires at the reactive phase for every entity
+  // currently in the query result after that tick's mutations are coalesced.
   onChange?: (e: EntityView<Fields>) => void
 }
 ```
@@ -464,6 +532,10 @@ interface TimeState {
 ### Snapshot
 
 ```ts
+// SNAPSHOT_VERSION === 2. v2 added `resources` (SPEC §2.11); @domecs/persist
+// ships a built-in 1→2 migration so legacy v1 saves load transparently.
+const SNAPSHOT_VERSION = 2
+
 interface WorldSnapshot {
   readonly version:  number
   readonly seed:     readonly [number, number, number, number]
@@ -472,6 +544,10 @@ interface WorldSnapshot {
     id:         Entity
     components: Record<string, unknown>
   }>
+  // name → deep-cloned value. Omitted entirely when no resource has a value.
+  // restore() clears live resources first, so an absent map falls back to
+  // resource defaults. (v2+)
+  readonly resources?: Record<string, unknown>
   readonly meta?: Record<string, unknown>
 }
 
@@ -742,6 +818,35 @@ interface SaveSlot {
   tick:      number
   thumbnail?: string
 }
+```
+
+**Implemented surface (v0.1).** The shipped package exposes Result-typed
+free functions over a `Storage`, not the `createPersistence` facade above
+(that remains aspirational). `load()` migrates the envelope by `version`
+before `world.restore`:
+
+```ts
+function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
+function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
+
+interface LoadOptions {
+  targetVersion?: number    // default SNAPSHOT_VERSION (2)
+  // Caller migration chain, overlaid on BUILTIN_MIGRATIONS (caller keys win).
+  // Default = just the built-ins, so a legacy v1 save upgrades transparently.
+  migrations?: MigrationMap
+}
+
+// A single-step migration: version N → N+1. Returning err halts the chain.
+type Migration    = (snap: WorldSnapshot) => Result<WorldSnapshot, MigrationFailedError>
+type MigrationMap  = ReadonlyMap<number, Migration>   // keyed by source version
+
+function migrate(snap: WorldSnapshot, targetVersion: number, migrations: MigrationMap): Result<WorldSnapshot, MigrationFailedError>
+
+// Framework-supplied steps applied as the floor beneath any user chain.
+// Ships the 1→2 resources bump (SPEC §7.1/§2.11) as the sole built-in.
+const BUILTIN_MIGRATIONS: MigrationMap
+// Overlay user steps on the built-ins (user keys win); built-ins unchanged when empty.
+function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 ```
 
 ---

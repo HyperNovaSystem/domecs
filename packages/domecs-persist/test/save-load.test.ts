@@ -181,6 +181,33 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w2.getComponent(e, Health)?.hp).toBe(5)
   })
 
+  it('loads a legacy v1 snapshot via the built-in 1->2 migration (review #16)', () => {
+    // A v1 save predates resources. Loading it with the default target
+    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2 step,
+    // restoring entities with an empty resource set.
+    const v1: WorldSnapshot = {
+      version: 1,
+      seed: [1, 2, 3, 4],
+      tick: 3,
+      entities: [{ id: 0 as never, components: { Health: { hp: 8 } } }],
+    }
+    storage.write('legacy', JSON.stringify(v1))
+    const w = createWorld()
+    const r = load(w, storage, 'legacy') // default target = current version
+    expect(r.ok).toBe(true)
+    expect(w.time.tick).toBe(3)
+    expect(w.getComponent(0 as never, Health)?.hp).toBe(8)
+  })
+
+  it('built-in migrations do not paper over pre-v1 gaps (v0 with no user migration fails)', () => {
+    const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
+    storage.write('ancient', JSON.stringify(v0))
+    const w = createWorld()
+    const r = load(w, storage, 'ancient') // default target, only the built-in 1->2
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('migration_failed')
+  })
+
   it('migration that returns err propagates the kind through load', () => {
     const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
     storage.write('legacy', JSON.stringify(v0))

@@ -1,4 +1,5 @@
 import { internal } from './component.js'
+import { internalResource, type InternalResourceType } from './resource.js'
 import type {
   DomecsError,
   FaultEntry,
@@ -40,9 +41,12 @@ import type {
   Entity,
   FieldKind,
   FieldSchema,
+  ResourceType,
 } from './types.js'
 import {
   Has,
+  collectChangedResourceNames,
+  collectHasComponents,
   normalize,
   treeHas,
   type EntityView,
@@ -59,8 +63,18 @@ const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'added',
   'changed',
   'removed',
+  'changedResource',
 ])
 const oneshotWhereKind: ReadonlySet<QueryNode['kind']> = new Set(['where'])
+// Per-tick delta kinds that force a query to run the per-entity filter pass.
+const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'changed',
+  'removed',
+  'where',
+  'changedResource',
+])
+const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
 
 // Infer a reflection FieldKind from a default value's runtime type. Used by
 // describeComponent when a component declares no explicit schema (#14).
@@ -123,6 +137,21 @@ export interface World {
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
+  /**
+   * Read a world-singleton resource (review #16). Returns the current value,
+   * lazily materializing the declared default on first read, or `undefined`
+   * when no default was declared and nothing has been set. The returned object
+   * is the live singleton — mutating it mutates the resource.
+   */
+  resource<T>(type: ResourceType<T>): T | undefined
+  /** Replace a resource's value, validate it, and mark it changed this tick. */
+  setResource<T>(type: ResourceType<T>, value: T): void
+  /**
+   * Flag a resource as changed without replacing its value — for in-place
+   * edits (`world.resource(Cfg)!.v = 2`). Fires `ChangedResource(type)` gates
+   * on the next tick (or the current one, if called inside a tick).
+   */
+  markResourceChanged<T>(type: ResourceType<T>): void
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
   /**
@@ -337,6 +366,17 @@ export function createWorld(options: WorldOptions = {}): World {
   const pendingChanged = new Map<string, Set<Entity>>()
   let inTick = false
 
+  // World-singleton resources (review #16). `resources` holds materialized
+  // values by name; `resourceRegistry` guards against two ResourceType objects
+  // colliding on a name (mirrors typeRegistry). Resource-change tracking mirrors
+  // the component change sets: in-tick marks land in `tickResourcesChanged`,
+  // between-tick marks buffer in `pendingResourcesChanged` and are promoted at
+  // step 0 of the next tick (symmetric with tickChanged/pendingChanged).
+  const resources = new Map<string, unknown>()
+  const resourceRegistry = new Map<string, ResourceType<unknown>>()
+  const tickResourcesChanged = new Set<string>()
+  const pendingResourcesChanged = new Set<string>()
+
   // queries
   const queries: CompiledQuery[] = []
   let nextQueryId = 0
@@ -408,6 +448,10 @@ export function createWorld(options: WorldOptions = {}): World {
       case 'changed': requireRegisteredType(node.type); return types.has(node.type.name)
       case 'removed': return true
       case 'where': requireRegisteredType(node.type); return types.has(node.type.name)
+      // Structurally neutral: a resource gate does not constrain which entities
+      // match (it is a per-tick gate evaluated in evalEntity), so it must not
+      // prune the And() it sits inside. See ChangedResource (#16).
+      case 'changedResource': return true
     }
   }
 
@@ -425,6 +469,11 @@ export function createWorld(options: WorldOptions = {}): World {
         if (v === undefined) return false
         return node.predicate(v)
       }
+      // Entity-independent: true for every candidate on ticks where the
+      // resource changed, false otherwise — so an entity-scoped query like
+      // And(Has(X), ChangedResource(R)) yields the X entities only on change
+      // ticks. See ChangedResource (#16).
+      case 'changedResource': return tickResourcesChanged.has(node.resource.name)
     }
   }
 
@@ -535,6 +584,35 @@ export function createWorld(options: WorldOptions = {}): World {
     storeFor(type)
   }
 
+  function requireRegisteredResource(
+    type: ResourceType<unknown>,
+  ): InternalResourceType<unknown> {
+    const existing = resourceRegistry.get(type.name)
+    if (existing && existing !== type) {
+      throw new Error(
+        `domecs: two distinct ResourceType objects share the name "${type.name}"`,
+      )
+    }
+    if (!existing) resourceRegistry.set(type.name, type)
+    return internalResource(type)
+  }
+
+  function validateResource(
+    meta: InternalResourceType<unknown>,
+    value: unknown,
+    name: string,
+  ): void {
+    if (!meta.__validate) return
+    const verdict = meta.__validate(value)
+    if (verdict !== true) {
+      throw new Error(`domecs: invalid resource "${name}": ${verdict}`)
+    }
+  }
+
+  function recordResourceChange(name: string): void {
+    ;(inTick ? tickResourcesChanged : pendingResourcesChanged).add(name)
+  }
+
   function iterateBag(
     bag: ComponentBag,
   ): Iterable<readonly [ComponentType<unknown>, unknown]> {
@@ -570,6 +648,20 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function hasPendingComponentWork(): boolean {
     return pendingAdded.size > 0 || pendingRemoved.size > 0 || pendingChanged.size > 0
+  }
+
+  // #16: only consulted when a reactive system's reactsTo yielded zero members
+  // this tick. Fires iff the reactsTo is purely resource-gated (no structural
+  // Has dependency) and one of its ChangedResource targets changed this tick.
+  function reactiveResourceFallback(s: CompiledSystem): boolean {
+    if (!s.def.reactsTo) return false
+    const node = normalize(s.def.reactsTo)
+    if (!treeHas(node, changedResourceKind)) return false
+    if (collectHasComponents(node).size > 0) return false
+    for (const name of collectChangedResourceNames(node)) {
+      if (tickResourcesChanged.has(name)) return true
+    }
+    return false
   }
 
   function hasFrameSystems(): boolean {
@@ -850,6 +942,32 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
 
+    resource<T>(type: ResourceType<T>): T | undefined {
+      const meta = requireRegisteredResource(type as ResourceType<unknown>)
+      if (resources.has(type.name)) return resources.get(type.name) as T
+      if (meta.__default) {
+        const value = (meta.__default as () => T)()
+        validateResource(meta, value, type.name)
+        resources.set(type.name, value)
+        return value
+      }
+      return undefined
+    },
+
+    setResource<T>(type: ResourceType<T>, value: T): void {
+      const meta = requireRegisteredResource(type as ResourceType<unknown>)
+      validateResource(meta, value, type.name)
+      resources.set(type.name, value)
+      recordResourceChange(type.name)
+      wakeDriver()
+    },
+
+    markResourceChanged<T>(type: ResourceType<T>): void {
+      requireRegisteredResource(type as ResourceType<unknown>)
+      recordResourceChange(type.name)
+      wakeDriver()
+    },
+
     componentTypes(): ComponentType<unknown>[] {
       return Array.from(typeRegistry.values())
     },
@@ -898,10 +1016,7 @@ export function createWorld(options: WorldOptions = {}): World {
 
     query(def: QueryDef): QueryResult {
       const node = normalize(def)
-      const hasTickFilter = treeHas(
-        node,
-        new Set<QueryNode['kind']>(['added', 'changed', 'removed', 'where']),
-      )
+      const hasTickFilter = treeHas(node, tickFilterKinds)
       const hasRemoved = treeHas(node, new Set<QueryNode['kind']>(['removed']))
       const q: CompiledQuery = {
         id: nextQueryId++,
@@ -1127,6 +1242,10 @@ export function createWorld(options: WorldOptions = {}): World {
       drainInto(pendingAdded, tickAdded)
       drainInto(pendingRemoved, tickRemoved)
       drainInto(pendingChanged, tickChanged)
+      // #16: same buffer-and-swap for resource-change marks.
+      tickResourcesChanged.clear()
+      for (const name of pendingResourcesChanged) tickResourcesChanged.add(name)
+      pendingResourcesChanged.clear()
 
       const scaledDt = d * time.scale
       // F-3: accumulate unquantized scaled time, then derive ms-quantized
@@ -1203,8 +1322,16 @@ export function createWorld(options: WorldOptions = {}): World {
         // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
         for (const s of scheduler.systemsByMode('reactive')) {
           if (!isEnabled(s) || !s.reactsTo) continue
-          if (s.reactsTo.size === 0) continue
-          runSystem(s, eventView)
+          if (s.reactsTo.size > 0) {
+            runSystem(s, eventView)
+            continue
+          }
+          // #16: a reactsTo with no structural entity dependency (no Has leaf)
+          // still fires when one of its ChangedResource targets changed this
+          // tick — supports world-level resource reactions in entity-empty
+          // worlds where the structural member count is zero. Entity-scoped
+          // reactsTo (any Has leaf) is governed by `size` above only.
+          if (reactiveResourceFallback(s)) runSystem(s, eventView)
         }
 
         // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
@@ -1328,11 +1455,23 @@ export function createWorld(options: WorldOptions = {}): World {
         if (pruneEmpty && Object.keys(components).length === 0) continue
         entities.push({ id, components })
       }
+      // #16: serialize materialized resources by name (deep-cloned like
+      // component values). Omit the field entirely when there are none so a
+      // resource-free world's snapshot is byte-identical to the pre-v2 shape
+      // (modulo `version`).
+      let resourcesSnap: Record<string, unknown> | undefined
+      if (resources.size > 0) {
+        resourcesSnap = {}
+        for (const [name, value] of resources) {
+          resourcesSnap[name] = cloneSerializable(value)
+        }
+      }
       let snap: WorldSnapshot = {
         version: SNAPSHOT_VERSION,
         seed: rand.seed(),
         tick: time.tick,
         entities,
+        ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
       }
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
@@ -1368,6 +1507,11 @@ export function createWorld(options: WorldOptions = {}): World {
       pendingAdded.clear()
       pendingRemoved.clear()
       pendingChanged.clear()
+      // #16: resource values are part of the snapshot; clear then rehydrate.
+      // `resourceRegistry` (type identity) persists like `typeRegistry`.
+      resources.clear()
+      tickResourcesChanged.clear()
+      pendingResourcesChanged.clear()
       viewCache.clear()
       queries.forEach((q, i) => {
         const views = prevViews[i]
@@ -1419,6 +1563,14 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       nextId = maxId + 1
+
+      // #16: rehydrate resources by name (v1 snapshots have no `resources`,
+      // leaving the world's resource set empty — defaults re-materialize lazily).
+      if (s.resources) {
+        for (const [name, value] of Object.entries(s.resources)) {
+          resources.set(name, cloneSerializable(value))
+        }
+      }
     },
   }
 

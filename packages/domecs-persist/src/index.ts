@@ -11,6 +11,8 @@ export {
 } from './persist.js'
 export {
   migrate,
+  BUILTIN_MIGRATIONS,
+  withBuiltinMigrations,
   type Migration,
   type MigrationFailedError,
   type MigrationMap,

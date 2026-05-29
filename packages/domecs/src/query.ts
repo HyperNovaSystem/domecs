@@ -1,4 +1,4 @@
-import type { ComponentType, Entity } from './types.js'
+import type { ComponentType, Entity, ResourceType } from './types.js'
 
 export type QueryNode =
   | { kind: 'has'; type: ComponentType<unknown> }
@@ -10,6 +10,7 @@ export type QueryNode =
       type: ComponentType<unknown>
       predicate: (value: unknown) => boolean
     }
+  | { kind: 'changedResource'; resource: ResourceType<unknown> }
   | { kind: 'not'; child: QueryNode }
   | { kind: 'and'; children: QueryNode[] }
   | { kind: 'or'; children: QueryNode[] }
@@ -120,6 +121,16 @@ export function Where<T>(
     predicate: predicate as (value: unknown) => boolean,
   }
 }
+/**
+ * Tick-gate that is true on ticks where the world resource `resource` changed
+ * (review #16). Structurally neutral — it constrains *when* a query matches,
+ * not *which* entities. Bare `ChangedResource(R)` matches the whole world on
+ * change ticks; compose with `And(Has(X), ChangedResource(R))` to scope the
+ * reaction to `X` entities. Reactive only: rejected by the one-shot selectors.
+ */
+export function ChangedResource<T>(resource: ResourceType<T>): QueryNode {
+  return { kind: 'changedResource', resource: resource as ResourceType<unknown> }
+}
 
 export function normalize(def: QueryDef): QueryNode {
   if (Array.isArray(def)) {
@@ -139,6 +150,24 @@ export function treeHas(
   }
   if (node.kind === 'not') return treeHas(node.child, kinds)
   return false
+}
+
+/**
+ * Collect the names of every resource referenced by a `ChangedResource(R)`
+ * leaf anywhere in the tree (review #16). Used by the reactive scheduler's
+ * resource-only fallback to fire a `reactsTo: ChangedResource(R)` system in an
+ * entity-empty world where the structural member count is zero.
+ */
+export function collectChangedResourceNames(
+  node: QueryNode,
+  out: Set<string> = new Set(),
+): Set<string> {
+  if (node.kind === 'changedResource') out.add(node.resource.name)
+  if (node.kind === 'or' || node.kind === 'and') {
+    for (const c of node.children) collectChangedResourceNames(c, out)
+  }
+  if (node.kind === 'not') collectChangedResourceNames(node.child, out)
+  return out
 }
 
 export function collectTypesByKind(

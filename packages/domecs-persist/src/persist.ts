@@ -1,12 +1,17 @@
 import type { DomecsError, Plugin, Result, World, WorldSnapshot } from '@domecs/core'
 import { SNAPSHOT_VERSION, definePlugin, err, normalizeCause, ok } from '@domecs/core'
-import { migrate, type MigrationMap } from './migrate.js'
+import { migrate, withBuiltinMigrations, type MigrationMap } from './migrate.js'
 import type { Storage } from './storage.js'
 
 export interface LoadOptions {
   /** Target version to migrate the snapshot to. Defaults to {@link SNAPSHOT_VERSION}. */
   targetVersion?: number
-  /** Migration chain keyed by source version. Defaults to an empty map. */
+  /**
+   * Migration chain keyed by source version, overlaid on the framework's
+   * {@link BUILTIN_MIGRATIONS} (caller keys win). Defaults to just the
+   * built-ins, so e.g. a legacy v1 save upgrades to the current version
+   * transparently.
+   */
   migrations?: MigrationMap
 }
 
@@ -111,7 +116,9 @@ export function load(
     })
   }
   const target = opts.targetVersion ?? SNAPSHOT_VERSION
-  const migrations: MigrationMap = opts.migrations ?? new Map()
+  // Built-in framework migrations (e.g. the v1->v2 resources bump) form the
+  // floor; caller-supplied steps overlay and win on collision (#16).
+  const migrations: MigrationMap = withBuiltinMigrations(opts.migrations)
   const migrated = migrate(parsed, target, migrations)
   if (!migrated.ok) return migrated
   try {

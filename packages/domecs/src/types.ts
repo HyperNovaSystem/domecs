@@ -1,6 +1,7 @@
 export type Entity = number
 
 declare const __componentTag: unique symbol
+declare const __resourceTag: unique symbol
 
 /**
  * Component schema. `Name` is the literal name string supplied at
@@ -72,6 +73,34 @@ export interface ComponentDescriptor {
   readonly defaults: Record<string, unknown> | undefined
   readonly fields: Readonly<Record<string, FieldSchema>>
   readonly fieldsSource: 'schema' | 'defaults' | 'none'
+}
+
+/**
+ * A world-singleton value, addressed by identity rather than per-entity
+ * (review #16). Defined with {@link defineResource}; read/written via
+ * `world.resource(type)` / `world.setResource(type, value)`. The distinct
+ * brand (`__resourceTag`) keeps resources from being passed where a
+ * `ComponentType` is expected and vice-versa.
+ */
+export interface ResourceType<T, Name extends string = string> {
+  readonly name: Name
+  readonly [__resourceTag]: symbol
+}
+
+/** Extract a resource's value type from its `ResourceType`. */
+export type ResourceValue<R> = R extends ResourceType<infer T, string> ? T : never
+
+export interface ResourceOptions<T> {
+  /**
+   * Initial value, materialized lazily on first `resource()` read. A function
+   * is treated as a per-world factory (called once per world) so object/array
+   * defaults are not shared across worlds; any other value is deep-cloned per
+   * world. For a resource whose value is itself a function, wrap it:
+   * `default: () => myFn`.
+   */
+  default?: T | (() => T)
+  /** Reject invalid values on `setResource` / lazy default; return `true` or a message. */
+  validate?: (value: T) => true | string
 }
 
 /**

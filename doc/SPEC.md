@@ -119,6 +119,10 @@ A query is a composable predicate over component presence and values. Queries ar
 - `Removed(T)` — component type was removed in the previous tick.
 - `Where(T, predicate)` — component is present and `predicate(value)` is true.
 
+**Resource change-detection node** carries a single `ResourceType` (see §2.11) and produces a leaf node:
+
+- `ChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) in the previous tick. Structurally neutral: it matches *every* entity on a change tick and *no* entity otherwise, so `And(Has(T), ChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `ChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
+
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
 - `Not(node)` — true when `node` is false. Unary.
@@ -140,8 +144,8 @@ registering anything: `count(def) → number`, `entitiesMatching(def) →
 Entity[]`, and `select(def) → EntityView[]` (the latter carrying typed fields
 for the tuple shorthand, as `query()` does). One-shot selectors accept the
 structural node set (`Has`/`Not`/`And`/`Or`/`Where`) and MUST reject reactive
-nodes (`Added`/`Changed`/`Removed`), whose per-tick deltas are only defined for
-a registered query or reactive system.
+nodes (`Added`/`Changed`/`Removed`/`ChangedResource`), whose per-tick deltas are
+only defined for a registered query or reactive system.
 
 **EntityView shape (normative, P-1).** An `EntityView` exposes exactly the
 components currently attached to the entity — it MUST NOT carry keys for
@@ -310,6 +314,30 @@ Corollary: `componentRemoved` delivers *before* the component's bag is released,
 
 **Despawn ordering rule (normative, F-9).** `entityDespawned` MUST fire *after* the engine has reclaimed the entity: by the time a subscriber runs, `world.has(id, T)` returns `false` for every component, the entity is no longer alive, and `getComponent(id, T)` returns `undefined`. Subscribers thus receive a clean reverse-index opportunity — the canonical pattern for inter-entity references is to register one `signals.entityDespawned` listener that scrubs every component holding the dying id as a foreign key. The order within a single `despawn` call is fixed: `componentRemoved` (per type, with bag still readable) → store/archetype reclaim → `entityDespawned`. A subscriber that calls `world.despawn` re-entrantly is well-defined; ordering of nested despawns is the call order of the subscribers.
 
+### 2.11 Resources
+
+A **resource** is a single named value scoped to the world rather than to any entity — the canonical home for game-global state (score, current level, gravity, the active turn's command, config). Resources are declared with `defineResource` and reach for the same name-keyed identity discipline as components (§2.2):
+
+```ts
+const Score = defineResource<number>('Score', { default: 0 })
+const Config = defineResource<Cfg>('Config', {
+  default: () => makeConfig(),          // function = per-world factory, called lazily
+  validate: (v) => v.fps > 0 || 'fps must be positive',
+})
+
+world.setResource(Score, 10)
+world.resource(Score)          // → 10
+world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
+```
+
+**Identity and registration (normative).** A `ResourceType` is an opaque token carrying a `name` and a brand. As with components, two distinct resource objects sharing a name are a collision — the engine MUST throw on the second registration. A resource is registered the first time it is read, set, or marked.
+
+**Default materialization (normative).** `defineResource` accepts `default?: T | (() => T)` and `validate?`. A function default is a **per-world factory** called lazily the first time `resource(R)` is read on a world that has not set the value; a non-function default is **deep-cloned per world** (so two worlds never share a mutable default object). `resource(R)` returns `undefined` only when there is no value and no default. `setResource` and a materialized default both run `validate`; a `string` return is thrown as a validation error.
+
+**Change tracking (normative).** Resource changes participate in the same buffer-and-swap discipline as component marks (§2.9): `setResource` and `markResourceChanged` record the resource name into the live tick set when called inside a tick, or the pending set when called between ticks, promoted at step 0. `ChangedResource(R)` (§2.4) reports exactly the resources changed in the previous tick. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
+
+**Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
+
 ---
 
 ## 3. Scheduling modes
@@ -320,7 +348,7 @@ Corollary: `componentRemoved` delivers *before* the component's bag is released,
 | `fixed`    | every `fixedStep` of scaled time        | integrated fixed delta              |
 | `tick`     | every render frame                      | scaled delta                        |
 | `event`    | events buffered from previous tick      | event view                          |
-| `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) |
+| `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) or resource change |
 
 Priorities disambiguate within a mode.
 Systems registered with the same priority run in **registration order**.
@@ -397,7 +425,9 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
 
    **`ctx.entities` for reactive systems (normative).** When a reactive system supplies only `reactsTo` (no explicit `query`), its `ctx.entities` MUST be the `reactsTo` change delta for the tick — the same set that triggered the invocation — not the empty array. When an explicit `query` is also supplied it takes precedence and `ctx.entities` reflects that query; authors who want both the trigger and a broader/narrower view use the explicit `query` for iteration and the change itself as the trigger.
 
-   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`Added`, `Removed`, or `Changed`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
+   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`Added`, `Removed`, `Changed`, or `ChangedResource`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error.
+
+   **Resource-gated reactive fire (normative).** A `reactsTo` query whose only change-detection node is `ChangedResource(R)` and that carries no `Has` leaf is a *world-level* trigger: it fires whenever `R` changed, even in an empty world, with `ctx.entities` empty. When such a query also carries a `Has(T)` leaf (e.g. `And(Has(T), ChangedResource(R))`) it is entity-scoped and fires with the `T` entities on `R`-change ticks — and does not fire in a world with no `T`, matching the structural semantics of `ChangedResource` in §2.4. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
 8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
 
@@ -516,13 +546,16 @@ Keybinding layer is *not* part of core — it is a plugin that translates `Input
 
 ```ts
 interface WorldSnapshot {
-  version:    number
+  version:    number                             // current SNAPSHOT_VERSION = 2
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
   entities:   { id: number; components: Record<string, unknown> }[]
+  resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
   meta?:      Record<string, unknown>
 }
 ```
+
+`SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
@@ -570,6 +603,8 @@ createPersistence(world, {
 
 Migrations are per-component, not per-world.
 The codec system allows one component schema to evolve without forcing monolithic world-level migration.
+
+**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a non-advancing step, or a snapshot newer than the target. `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
 
 ### 7.4 Ring buffer (time-travel)
 

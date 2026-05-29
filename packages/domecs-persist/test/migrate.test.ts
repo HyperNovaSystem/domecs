@@ -1,7 +1,7 @@
 import type { WorldSnapshot } from '@domecs/core'
 import { err, ok } from '@domecs/core'
 import { describe, expect, it } from 'vitest'
-import { migrate, type Migration } from '../src/migrate.js'
+import { BUILTIN_MIGRATIONS, migrate, type Migration } from '../src/migrate.js'
 
 function snap(version: number, extras: Partial<WorldSnapshot> = {}): WorldSnapshot {
   return {
@@ -86,6 +86,14 @@ describe('@domecs/persist — migrate', () => {
     const r = migrate(snap(1), 2, new Map([[1, lazy]]))
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.reason).toMatch(/did not advance/)
+  })
+
+  it('BUILTIN_MIGRATIONS carries a 1->2 step that bumps the version (review #16)', () => {
+    const step = BUILTIN_MIGRATIONS.get(1)
+    expect(step).toBeDefined()
+    const r = step!(snap(1))
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.version).toBe(2)
   })
 
   it('errors out when the snapshot is newer than the supported target', () => {

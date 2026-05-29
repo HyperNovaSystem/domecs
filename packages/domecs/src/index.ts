@@ -1,4 +1,5 @@
 export { defineComponent } from './component.js'
+export { defineResource } from './resource.js'
 export { createWorld } from './world.js'
 export { defineEvent } from './events.js'
 export { createRng, restoreRng, seedToState } from './rng.js'
@@ -12,6 +13,7 @@ export {
   Removed,
   Changed,
   Where,
+  ChangedResource,
   normalize as normalizeQuery,
   collectHasComponents,
 } from './query.js'
@@ -43,6 +45,9 @@ export type {
   ComponentSchema,
   FieldSchema,
   FieldKind,
+  ResourceType,
+  ResourceValue,
+  ResourceOptions,
   Entity,
 } from './types.js'
 export type {

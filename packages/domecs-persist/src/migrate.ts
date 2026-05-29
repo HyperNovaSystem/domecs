@@ -15,6 +15,30 @@ export type Migration = (snap: WorldSnapshot) => Result<WorldSnapshot, Migration
 export type MigrationMap = ReadonlyMap<number, Migration>
 
 /**
+ * Framework-supplied migration steps, applied as the floor beneath any
+ * user-supplied chain in {@link load} (user keys win on collision).
+ *
+ * - `1 → 2` (review #16): resources were added to `WorldSnapshot` at v2. A v1
+ *   snapshot simply lacks them, so the step is a pure version bump —
+ *   `world.restore` treats the absent `resources` as an empty set.
+ */
+export const BUILTIN_MIGRATIONS: MigrationMap = new Map<number, Migration>([
+  [1, (snap) => ok({ ...snap, version: 2 })],
+])
+
+/**
+ * Overlay `user` migrations on top of {@link BUILTIN_MIGRATIONS} so framework
+ * version bumps load transparently while letting callers override or extend
+ * any step. Returns the built-ins unchanged when `user` is empty.
+ */
+export function withBuiltinMigrations(user?: MigrationMap): MigrationMap {
+  if (!user || user.size === 0) return BUILTIN_MIGRATIONS
+  const merged = new Map<number, Migration>(BUILTIN_MIGRATIONS)
+  for (const [from, step] of user) merged.set(from, step)
+  return merged
+}
+
+/**
  * Applies the chain starting at `snap.version` until reaching
  * `targetVersion`. Hard-fail by default; partial loads are an explicit
  * userland recovery flow built on top of this primitive.

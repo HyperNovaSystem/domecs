@@ -40,9 +40,17 @@ if (!loaded.ok) console.error(loaded.error)
 
 - `save(world, storage, slot, opts?)` — serialize a snapshot; `opts.meta` is
   merged into the envelope and a numeric `savedAt` is stamped.
-- `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`,
-  then restore.
+- `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`
+  (default `SNAPSHOT_VERSION`), then restore. `opts.migrations` is overlaid on
+  `BUILTIN_MIGRATIONS` (caller keys win), so a legacy v1 save upgrades
+  transparently with no caller config.
 - `migrate(snapshot, target, migrations)` — run a version migration chain.
+- `BUILTIN_MIGRATIONS` — framework-supplied steps applied as the floor beneath
+  any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply
+  lacks `resources`, so the step is a pure version bump).
+- `withBuiltinMigrations(user?)` — overlay a caller `MigrationMap` on the
+  built-ins (caller keys win); returns the built-ins unchanged when `user` is
+  empty. `load()` uses this internally.
 - `pruneTransientOnlyEntities()` — plugin; install once to strip
   transient-only / bare entities from every saved envelope (the persisted-path
   equivalent of core's `snapshot({ pruneEmptyEntities: true })`).
@@ -51,8 +59,9 @@ if (!loaded.ok) console.error(loaded.error)
   redo-branch truncation, a `limit` ring, and `toJSON` / `load` for export.
 - `diffSnapshots(prev, next)` — entity-level diff (added / removed / changed).
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
-- Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`, `Storage`,
-  `SnapshotHistory`, `SnapshotHistoryOptions`, `SnapshotDiff`.
+- Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`,
+  `MigrationFailedError`, `Storage`, `SnapshotHistory`,
+  `SnapshotHistoryOptions`, `SnapshotDiff`.
 
 ## Related packages
 
