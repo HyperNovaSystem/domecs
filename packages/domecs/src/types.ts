@@ -13,6 +13,15 @@ export interface ComponentType<T, Name extends string = string> {
   create(value?: Partial<T>): T
 }
 
+/**
+ * Extract a component's value type from its `ComponentType`. Replaces the
+ * `ReturnType<typeof X.create>` idiom that proliferated across consumers:
+ * `ComponentValue<typeof Ship>` instead of `ReturnType<typeof Ship.create>`.
+ */
+export type ComponentValue<C> = C extends ComponentType<infer T, string>
+  ? T
+  : never
+
 export interface ComponentOptions<T> {
   defaults?: Partial<T>
   transient?: boolean

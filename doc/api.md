@@ -48,6 +48,10 @@ interface ComponentType<T, Name extends string = string> {
   readonly __tag:  unique symbol
   create(value?: Partial<T>): T
 }
+
+// Extract a component's value type. Prefer over `ReturnType<typeof X.create>`:
+//   type Ship = ComponentValue<typeof Ship>
+type ComponentValue<C> = C extends ComponentType<infer T, string> ? T : never
 ```
 
 Two usage patterns:

@@ -34,6 +34,7 @@ export type { TimeState } from './time.js'
 export { entry } from './types.js'
 export type {
   ComponentType,
+  ComponentValue,
   ComponentOptions,
   ComponentBag,
   ComponentEntry,
