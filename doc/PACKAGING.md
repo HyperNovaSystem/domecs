@@ -221,9 +221,11 @@ Status of the original ten-item checklist:
 6. **Base paths** — the template reads `BASE_PATH` from the build env and the
    README documents recipes for GitHub Pages, itch.io, and subdirectory
    hosting. **Resolved (template).**
-7. **CSS side effects** — `@domecs/core`, `@domecs/dom`, and `@domecs/input`
-   ship no CSS and are now marked `"sideEffects": false`, so bundlers can
-   tree-shake unused exports without dropping required styles. Future packages
+7. **CSS side effects** — all five published packages — `@domecs/core`,
+   `@domecs/dom`, `@domecs/input`, `@domecs/inspector`, and `@domecs/persist`
+   — ship no CSS and are marked `"sideEffects": false`, so bundlers can
+   tree-shake unused exports without dropping required styles. Each also
+   ships a `README.md` + `LICENSE` (advertised in `files`). Future packages
    that ship CSS must override this with a `sideEffects: ["**/*.css"]` array.
    **Resolved.**
 8. **SSR/non-browser use** — `@domecs/core` is pure logic; `@domecs/dom` and
