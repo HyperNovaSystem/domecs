@@ -6,6 +6,7 @@ import {
   entry,
   Has,
   Not,
+  type ActionResult,
   type SystemFault,
   type SystemResult,
   type World,
@@ -309,14 +310,52 @@ export function describePlayerTile(world: World, playerId: number): string | nul
   return null
 }
 
-/** Query helper: living enemies. */
-export function enemyCount(world: World): number {
-  return world.query(And(Has(Actor), Not(Player))).size
+/**
+ * Turn-based player command (#17). Emits a MoveEvent, advances exactly one
+ * turn, and reports a structured verdict. A move blocked by a wall or the map
+ * edge leaves the player's Position unchanged, so it is rejected and does not
+ * consume the turn — the HUD can flash and the player retries. A wait
+ * (dx=dy=0) is a legal turn even though Position is unchanged.
+ *
+ * The verdict is derived from the actual Position delta rather than the
+ * player's `Faulted` buffer: recoverable move_blocked faults accumulate on the
+ * entity (the consolidator dedupes but never clears them), so a fault-based
+ * check would go stale after the first blocked move.
+ */
+export function attemptMove(
+  world: World,
+  entity: number,
+  dx: number,
+  dy: number,
+): ActionResult {
+  const before = world.getComponent(entity, Position)
+  const bx = before?.x
+  const by = before?.y
+  return world.action(
+    MoveEvent,
+    { entity, dx, dy },
+    {
+      resolve: ({ world }) => {
+        // A wait is a legal turn even though the position does not change.
+        if (dx === 0 && dy === 0) return { accepted: true, consumedTurn: true }
+        const after = world.getComponent(entity, Position)
+        const moved = after !== undefined && (after.x !== bx || after.y !== by)
+        return moved
+          ? { accepted: true, consumedTurn: true }
+          : { accepted: false, consumedTurn: false, reason: 'blocked' }
+      },
+    },
+  )
 }
 
-/** Query helper: uncollected resource pickups. */
+/** Query helper: living enemies. Leak-free one-shot count (#13). */
+export function enemyCount(world: World): number {
+  return world.count(And(Has(Actor), Not(Player)))
+}
+
+/** Query helper: uncollected resource pickups. Leak-free one-shot count (#13). */
 export function resourceCount(world: World): number {
-  return world.query(Has(Resource)).size
+  return world.count(Has(Resource))
 }
 
 /** Debug helper: highlight an entity (uses a transient component — omitted from snapshots). */

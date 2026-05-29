@@ -50,6 +50,7 @@ describe('BETTER_ERRORS — dashboard safety-monitor', () => {
     const { world } = createLift()
     world.emit(SetCommandEvent, { index: 0, command: 1 })
     runSeconds((d) => world.step(d), 1)
-    expect(world.query(Has(Faulted)).size).toBe(0)
+    // Leak-free one-shot count (#13): no live query registered for the assert.
+    expect(world.count(Has(Faulted))).toBe(0)
   })
 })

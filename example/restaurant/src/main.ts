@@ -1,4 +1,4 @@
-import { Has, match, type DomecsError, type EntityView } from '@domecs/core'
+import { describeError, Has, tapErr, type EntityView } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
 import {
@@ -89,10 +89,11 @@ function paintHUD(): void {
   const stats = world.getComponent(restaurantId, Stats)
   if (!r || !stats) return
 
-  // Queue dots: query customers, render queued ones (fade as patience runs out).
+  // Queue dots: render queued customers (fade as patience runs out). select()
+  // is a leak-free one-shot read (#13) — paintHUD runs every tickEnd, so a live
+  // world.query() here would register an undisposed query each frame.
   const queued: Array<{ id: number; patience: number }> = []
-  const customerQ = world.query(Has(Customer))
-  for (const e of customerQ.entities) {
+  for (const e of world.select(Has(Customer))) {
     const c = world.getComponent(e.id, Customer)
     if (c && c.state === 'queued') queued.push({ id: e.id, patience: c.patience })
   }
@@ -104,11 +105,10 @@ function paintHUD(): void {
     })
     .join('')
 
-  // Waiter pills.
-  const waiters = world.query(Has(Waiter))
+  // Waiter pills. Leak-free one-shot read (#13), same rationale as above.
   const pills: string[] = []
   const idx: number[] = []
-  for (const e of waiters.entities) {
+  for (const e of world.select(Has(Waiter))) {
     const w = world.getComponent(e.id, Waiter)
     if (!w) continue
     idx.push(w.index)
@@ -150,23 +150,13 @@ function paintChrome(): void {
 }
 
 // ─── Input plugin + edge-triggered hotkeys ──────────────────────────
-const inputInstall = world.use(createInputPlugin({ preventDefaultKeys: true }))
-if (!inputInstall.ok) {
-  // BETTER_ERRORS — failed installs are quarantined data; sim runs without hotkeys.
-  console.error('domecs: input plugin failed to install:', summarizeError(inputInstall.error))
-}
-
-function summarizeError(e: DomecsError): string {
-  return match<DomecsError, string>(e, {
-    plugin_install_failed: (x) => `plugin "${x.plugin}" failed: ${x.cause.message}`,
-    system_threw:          (x) => `system "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
-    persist_io:            (x) => `persist ${x.op} I/O: ${x.cause.message}`,
-    migration_failed:      (x) => `migration ${x.from}→${x.to}: ${x.reason}`,
-    schema_mismatch:       (x) => `${x.component} expected ${x.expected}, got ${x.got}`,
-    query_invalid:         (x) => `query: ${x.reason}`,
-    event_handler_threw:   (x) => `event "${x.event}": ${x.cause.message}`,
-  })
-}
+// BETTER_ERRORS — failed installs are quarantined data; sim runs without
+// hotkeys. tapErr (#5) handles the Err branch; describeError (#4) renders the
+// DomecsError union so the app keeps no parallel case table.
+tapErr(
+  world.use(createInputPlugin({ preventDefaultKeys: true })),
+  (e) => console.error('domecs: input plugin failed to install:', describeError(e)),
+)
 
 world.system(
   'input-dispatch',

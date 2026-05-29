@@ -1,5 +1,5 @@
 import type { Capability, Plugin, World } from '@domecs/core'
-import { ok } from '@domecs/core'
+import { definePlugin, ok } from '@domecs/core'
 import { Position } from './components.js'
 
 export const SPATIAL_INDEX_CAP = 'spatial-index' as const
@@ -25,7 +25,7 @@ declare module '@domecs/core' {
  * Swapped in via the domecs capability registry (SPEC §9.3).
  */
 export function spatialIndexPlugin(): Plugin {
-  return {
+  return definePlugin({
     name: '@roguelike/spatial-index',
     provides: [SPATIAL_INDEX_CAP],
     install(world: World) {
@@ -77,5 +77,5 @@ export function spatialIndexPlugin(): Plugin {
         onTickStart: () => rebuild(),
       })
     },
-  }
+  })
 }

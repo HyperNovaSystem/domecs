@@ -1,15 +1,15 @@
-import { And, Changed, Has, match, type DomecsError, type EntityView } from '@domecs/core'
+import { And, Changed, describeError, Has, tapErr, Where, type EntityView } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
 import {
   Actor,
+  attemptMove,
   cameraOrigin,
   createRoguelike,
   enemyCount,
   Highlight,
   isWaitKey,
   movementDeltaFromKeys,
-  MoveEvent,
   Player,
   Position,
   Renderable,
@@ -117,35 +117,25 @@ mountDOM(world, {
   views: [tileView, actorView],
 })
 
-const inputInstall = world.use(
-  createInputPlugin({
-    // Treat arrow keys, space, WASD as handled — prevent browser scroll.
-    preventDefaultKeys: true,
-  }),
+// BETTER_ERRORS — input failure is data; play continues in read-only mode.
+// tapErr (#5) runs the side effect on the Err branch and passes the Result
+// through; describeError (#4) renders the closed DomecsError union so the app
+// no longer maintains a parallel case table.
+tapErr(
+  world.use(
+    createInputPlugin({
+      // Treat arrow keys, space, WASD as handled — prevent browser scroll.
+      preventDefaultKeys: true,
+    }),
+  ),
+  (e) => console.error('domecs: input plugin failed to install:', describeError(e)),
 )
-if (!inputInstall.ok) {
-  // BETTER_ERRORS — input failure is data; play continues in read-only mode.
-  console.error('domecs: input plugin failed to install:', summarizeError(inputInstall.error))
-}
-
-function summarizeError(e: DomecsError): string {
-  return match<DomecsError, string>(e, {
-    plugin_install_failed: (x) => `plugin "${x.plugin}" failed: ${x.cause.message}`,
-    system_threw:          (x) => `system "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
-    persist_io:            (x) => `persist ${x.op} I/O: ${x.cause.message}`,
-    migration_failed:      (x) => `migration ${x.from}→${x.to}: ${x.reason}`,
-    schema_mismatch:       (x) => `${x.component} expected ${x.expected}, got ${x.got}`,
-    query_invalid:         (x) => `query: ${x.reason}`,
-    event_handler_threw:   (x) => `event "${x.event}": ${x.cause.message}`,
-  })
-}
 
 function paintStatus(): void {
   const pos = world.getComponent(playerId, Position)
   if (!pos) return
-  const visibleCount = world
-    .query(Has(Tile))
-    .entities.filter((v) => world.getComponent(v.id, Visible)?.seen).length
+  // Leak-free one-shot count (#13): no live query registered per repaint.
+  const visibleCount = world.count(And(Has(Tile), Where(Visible, (v) => v.seen)))
   statusEl.textContent = [
     `map: ${width}×${height}`,
     `view: ${VIEW_W}×${VIEW_H}`,
@@ -182,17 +172,27 @@ statusEl.textContent += '\nwelcome!'
 let lastRepeatAt = 0
 const REPEAT_MS = 130
 
+function flashBlocked(): void {
+  // A blocked move does not change Position, so the observe(Changed(Position))
+  // repaint never fires — append the hint directly; the next accepted move
+  // rebuilds the status line and clears it.
+  statusEl.textContent += '\n⊘ blocked'
+}
+
 function tryMoveFromKeys(pressed: ReadonlySet<string>, held: ReadonlySet<string>): void {
   if (pressed.size > 0) {
     const d = movementDeltaFromKeys(pressed, held)
     if (d) {
-      world.turn(MoveEvent, { entity: playerId, dx: d[0], dy: d[1] })
+      // world.action (#17): a structured verdict for the player command. A move
+      // into a wall/edge is rejected and the turn is not consumed, so flash.
+      const r = attemptMove(world, playerId, d[0], d[1])
+      if (!r.accepted) flashBlocked()
       lastRepeatAt = performance.now()
       return
     }
     for (const code of pressed) {
       if (isWaitKey(code)) {
-        world.turn(MoveEvent, { entity: playerId, dx: 0, dy: 0 })
+        attemptMove(world, playerId, 0, 0)
         return
       }
     }
@@ -202,7 +202,8 @@ function tryMoveFromKeys(pressed: ReadonlySet<string>, held: ReadonlySet<string>
   if (now - lastRepeatAt >= REPEAT_MS) {
     const d = movementDeltaFromKeys(new Set(), held)
     if (d) {
-      world.turn(MoveEvent, { entity: playerId, dx: d[0], dy: d[1] })
+      // Auto-repeat: don't flash on every blocked repeat frame.
+      attemptMove(world, playerId, d[0], d[1])
       lastRepeatAt = now
     }
   }

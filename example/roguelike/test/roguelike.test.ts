@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { entry, Has } from '@domecs/core'
+import { entry, Faulted, Has } from '@domecs/core'
 import {
+  attemptMove,
   cameraOrigin,
   createRoguelike,
   describePlayerTile,
@@ -30,7 +31,7 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
 
   it('spawns a 128x128 grid + player/resources/enemies without mounting DOM (headless)', () => {
     const { world, width, height } = createRoguelike({ seed: 1 })
-    const tiles = world.query(Has(Tile)).size
+    const tiles = world.count(Has(Tile))
     expect(tiles).toBe(width * height)
     // ~16k tile entities, plus actors and resource pickups.
     expect(tiles).toBeGreaterThanOrEqual(16000)
@@ -60,8 +61,8 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     expect(resourceCount(world)).toBe(5)
 
     const monsters = world
-      .query(Has(Actor))
-      .entities.filter((e) => world.getComponent(e.id, Actor)?.faction === 'monster')
+      .select(Has(Actor))
+      .filter((e) => world.getComponent(e.id, Actor)?.faction === 'monster')
     expect(monsters).toHaveLength(3)
     for (const e of monsters) {
       const pos = world.getComponent(e.id, Position)
@@ -70,7 +71,7 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
       expect(floorAt(pos!.x, pos!.y)).toBe(true)
     }
 
-    for (const e of world.query(Has(Resource)).entities) {
+    for (const e of world.select(Has(Resource))) {
       const pos = world.getComponent(e.id, Position)
       const resource = world.getComponent(e.id, Resource)
       expect(pos).toBeTruthy()
@@ -179,7 +180,7 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     w2.restore(snap)
     expect(w2.getComponent(playerId, Position)).toEqual(posBefore)
     expect(w2.rand.next()).toBe(prngBefore)
-    expect(w2.query(Has(Tile)).size).toBe(16 * 16)
+    expect(w2.count(Has(Tile))).toBe(16 * 16)
   })
 
   it('transient components (Highlight) are excluded from snapshots', () => {
@@ -222,8 +223,8 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
     const { world, playerId } = createRoguelike({ seed: 11, width: 20, height: 20 })
     world.turn(MoveEvent, { entity: playerId, dx: 1, dy: 0 })
     // A few tiles adjacent to the player should now be Visible.
-    const visible = world.query(Has(Tile))
-      .entities.map((v) => v as unknown as { id: number; Visible?: { seen: boolean } })
+    const visible = world.select(Has(Tile))
+      .map((v) => v as unknown as { id: number; Visible?: { seen: boolean } })
       .filter((v) => v.Visible?.seen)
     expect(visible.length).toBeGreaterThan(5)
   })
@@ -252,14 +253,80 @@ describe('roguelike — v0.1 surface validation (SPEC exemplar #1)', () => {
       enemyCount: 0,
       resourceCount: 0,
     })
-    expect(world.query(Has(Actor)).size).toBe(1)
+    expect(world.count(Has(Actor))).toBe(1)
     world.spawn([
       entry(Position, { x: 3, y: 3 }),
       entry(Actor, { name: 'Rat', hp: 2, faction: 'monster' as const }),
     ])
-    expect(world.query(Has(Actor)).size).toBe(2)
+    expect(world.count(Has(Actor))).toBe(2)
     expect(enemyCount(world)).toBe(1)
     // Player still addressable.
     expect(world.getComponent(playerId, Actor)?.name).toBe('You')
+  })
+})
+
+describe('roguelike — world.action move verdict (#17)', () => {
+  it('reports accepted:false / consumedTurn:false when a move is blocked', () => {
+    const { world, playerId } = createRoguelike({ seed: 3, width: 5, height: 5 })
+    // x=0 is the west wall column. Walk west until the move is rejected.
+    let r = attemptMove(world, playerId, -1, 0)
+    for (let i = 0; i < 10 && r.accepted; i++) {
+      r = attemptMove(world, playerId, -1, 0)
+    }
+    expect(r.accepted).toBe(false)
+    expect(r.consumedTurn).toBe(false)
+    expect(r.reason).toBe('blocked')
+  })
+
+  it('reports accepted:true / consumedTurn:true for a legal move', () => {
+    const { world, playerId } = createRoguelike({ seed: 5, width: 8, height: 8 })
+    const dirs: Array<[number, number]> = [[1, 0], [0, 1], [-1, 0], [0, -1]]
+    let landed = false
+    for (const [dx, dy] of dirs) {
+      const r = attemptMove(world, playerId, dx, dy)
+      if (r.accepted) {
+        expect(r.consumedTurn).toBe(true)
+        expect(r.reason).toBeUndefined()
+        landed = true
+        break
+      }
+    }
+    expect(landed).toBe(true)
+  })
+
+  it('treats a wait (0,0) as an accepted, turn-consuming action that does not move', () => {
+    const { world, playerId } = createRoguelike({ seed: 2, width: 8, height: 8 })
+    const before = { ...world.getComponent(playerId, Position)! }
+    const r = attemptMove(world, playerId, 0, 0)
+    expect(r.accepted).toBe(true)
+    expect(r.consumedTurn).toBe(true)
+    expect(world.getComponent(playerId, Position)).toEqual(before)
+  })
+
+  it('verdict is not stale: a legal move after a blocked move is still accepted', () => {
+    const { world, playerId } = createRoguelike({ seed: 5, width: 8, height: 8 })
+    // Drive west into a wall to accumulate a recoverable move_blocked fault.
+    let r = attemptMove(world, playerId, -1, 0)
+    for (let i = 0; i < 10 && r.accepted; i++) {
+      r = attemptMove(world, playerId, -1, 0)
+    }
+    expect(r.accepted).toBe(false)
+    // The fault lingers — the consolidator dedupes but never clears it.
+    expect(world.has(playerId, Faulted)).toBe(true)
+    // A subsequent move that actually changes Position must read as accepted,
+    // proving the verdict is derived from the move, not the stale fault buffer.
+    const dirs: Array<[number, number]> = [[1, 0], [0, 1], [0, -1]]
+    let landed = false
+    for (const [dx, dy] of dirs) {
+      const beforePos = { ...world.getComponent(playerId, Position)! }
+      const m = attemptMove(world, playerId, dx, dy)
+      const afterPos = world.getComponent(playerId, Position)!
+      if (afterPos.x !== beforePos.x || afterPos.y !== beforePos.y) {
+        expect(m.accepted).toBe(true)
+        landed = true
+        break
+      }
+    }
+    expect(landed).toBe(true)
   })
 })
