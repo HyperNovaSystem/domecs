@@ -1,7 +1,8 @@
 # DOMECS Type-System Evaluation
 
 Scope: TypeScript in `packages/domecs`, `packages/domecs-dom`, `packages/domecs-input`,
-and the three exemplar apps under `example/`.
+and the three exemplar apps (then under `example/`, now the standalone
+`HyperNovaSystem/{dashboard,restaurant,roguelike}` repos).
 Snapshot date: 2026-05-15
 (commit `claude/evaluate-type-system-PjTTi`).
 
@@ -23,7 +24,7 @@ What's left is a handful of pockets where `unknown` is used as a stand-in for "I
 | RNG / time                          | Good      | Concrete shapes; no escape hatches. |
 | **System context (`ctx.entities`, `ctx.world`, `ctx.state`)** | **Anorexic** | The two pieces every system body actually touches are typed `unknown`. See §3.1. |
 | **Plugin options & snapshot hooks** | **Anorexic** | `Plugin.install(world, options?: unknown)`, `PluginHandle.onSnapshot/onRestore: (snap: unknown) => unknown`. See §3.2. |
-| **Capability registry**             | **Anorexic** | `Capability<K extends string>` is literally `{ name: K }`.  Every consumer (e.g. `example/roguelike/src/game.ts`) casts `as unknown as { rebuild, at, … }`. See §3.3. |
+| **Capability registry**             | **Anorexic** | `Capability<K extends string>` is literally `{ name: K }`.  Every consumer (e.g. `HyperNovaSystem/roguelike` `src/game.ts`) casts `as unknown as { rebuild, at, … }`. See §3.3. |
 | DOM `world.ts` globals shim         | Minor smell | `addEventListener: Function` and `globalThis as unknown as { … }`. See §3.4. |
 
 The library is **not bloated**.
@@ -85,8 +86,8 @@ The accompanying comment explains why `any` (not `unknown`) here:
 
 ### 2.3 Casts (`as unknown as …`) in examples
 
-Four casts in `example/roguelike/src/game.ts` (lines 103, 217, 251, 271)
-follow the pattern:
+Four casts in `HyperNovaSystem/roguelike` `src/game.ts` (lines 114, 228, 282,
+302) follow the pattern:
 
 ```ts
 const cap = world.capability('spatial-index') as unknown as {
@@ -98,7 +99,7 @@ const cap = world.capability('spatial-index') as unknown as {
 
 Every one of these is a direct consequence of §3.3 (Capability is
 anorexic). The plugin itself goes through the same dance in
-`spatial.ts:62-69` to *publish* the capability. Fixing §3.3 deletes all
+`src/spatial.ts:63-69` to *publish* the capability. Fixing §3.3 deletes all
 five sites.
 
 There are zero `@ts-ignore` / `@ts-nocheck` directives in src/. One
@@ -128,8 +129,9 @@ export interface SystemContext {
 }
 ```
 
-Every system body (`example/restaurant/src/sim.ts`, `example/dashboard/src/sim.ts`,
-`example/roguelike/src/game.ts`) sidesteps the `unknown` by ignoring
+Every system body (`HyperNovaSystem/restaurant` `src/sim.ts`,
+`HyperNovaSystem/dashboard` `src/sim.ts`, `HyperNovaSystem/roguelike`
+`src/game.ts`) sidesteps the `unknown` by ignoring
 `ctx.entities`/`ctx.world` entirely and closing over the outer
 `world` / `customers` query references. The provided context is *less typed
 than the closure*, which is the giveaway that the generic isn't wired up.
@@ -346,7 +348,7 @@ type aliases, redundant overloads.
   the same reason. Justified.
 - No dead type aliases found. `QueryDef = QueryShorthand` (`query.ts:18`)
   is a one-line re-export with a meaningful name; keep.
-- Module augmentation in `example/roguelike/src/spatial.ts:14-20`
+- Module augmentation in `HyperNovaSystem/roguelike` `src/spatial.ts:15-21`
   augments `Capability<K>` with `K extends 'spatial-index' ?: never`
   branches. This is a code smell driven by §3.3 (the spec encourages
   declaration merging on a per-method basis instead of on a single

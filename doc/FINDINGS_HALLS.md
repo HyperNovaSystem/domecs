@@ -10,8 +10,8 @@ This implementation was intentionally dependency-free and data-oriented. That ma
 
 `halls_game` is still a dependency-free static prototype, so it does not
 exercise `@domecs/core`, `@domecs/dom`, packed package metadata, or Vite static
-deployment. Treat `domecs/example/roguelike` as the current roguelike release
-validator, or rebuild Halls on the scoped DOMECS packages before expecting it to
+deployment. Treat the standalone `HyperNovaSystem/roguelike` repo as the current roguelike
+release validator, or rebuild Halls on the scoped DOMECS packages before expecting it to
 participate in release validation.
 
 ---

@@ -13,7 +13,7 @@ Recommended split:
 
 ```txt
 @domecs/core / @domecs/dom / @domecs/input  = runtime libraries, bundler-agnostic
-example/*                                    = Vite applications
+HyperNovaSystem/<app> repos                 = Vite applications
 create-domecs template(s)                    = Vite by default
 @domecs/vite                                 = optional advanced Vite plugin
 ```
@@ -25,9 +25,9 @@ input collector as `@domecs/input`. The older unscoped names (`domecs`,
 `domecs-dom`, `domecs-input`) are not official first-release package names.
 
 The GitHub organization is `HyperNovaSystem`. The engine repository is
-`HyperNovaSystem/domecs`, and example applications may live either in this
-workspace's `example/*` packages or as separate downstream app repositories in
-the same GitHub organization.
+`HyperNovaSystem/domecs`, and the example applications live as separate
+downstream app repositories in the same GitHub organization
+(`HyperNovaSystem/dashboard`, `/restaurant`, `/roguelike`, `/railroad`, `/fleet`).
 
 This keeps DOMECS pleasant for app authors without preventing use from other
 bundlers, embedded pages, React/Svelte shells, or plain browser module graphs.
@@ -35,12 +35,13 @@ bundlers, embedded pages, React/Svelte shells, or plain browser module graphs.
 
 ## Current repository and org state
 
-The in-repository examples already validate the intended direction:
+The standalone example app repos already validate the intended direction:
 
-- `example/restaurant` uses `vite`, `vite build`, and `vite preview`.
-- `example/dashboard` uses the same pattern.
-- `example/roguelike` also has Vite configuration.
-- examples depend on local workspace packages via `workspace:*`.
+- `HyperNovaSystem/restaurant` uses `vite`, `vite build`, and `vite preview`.
+- `HyperNovaSystem/dashboard` uses the same pattern.
+- `HyperNovaSystem/roguelike` also has Vite configuration.
+- each app depends on the runtime packages via `file:../domecs/packages/*`,
+  cloned alongside this repo, so it resolves the engine's TypeScript source directly.
 
 Separate example app repositories under `HyperNovaSystem` should validate the
 published-package path: fresh installs from npm or packed tarballs, template
@@ -56,10 +57,11 @@ For npm publication, `publishConfig` rewrites the package metadata to built `dis
 
 Release validation has two tiers:
 
-1. **Workspace source interop.** The in-repository `example/*` packages keep
-   depending on `@domecs/*` through `workspace:*`. CI runs their normal
-   `test`, `typecheck`, and `build` scripts to catch source-level breakage
-   while the engine packages are edited in place.
+1. **Source interop.** The standalone example app repos depend on `@domecs/*`
+   through `file:../domecs/packages/*`, resolving the engine's TypeScript
+   source directly. Running their normal `test`, `typecheck`, and `build`
+   scripts catches source-level breakage while the engine packages are edited
+   in place.
 2. **Packed-package smoke tests.** Before publishing a new engine version, run
    `pnpm run release:validate`. The harness builds `packages/*`, packs all five
    published packages — `@domecs/core`, `@domecs/dom`, `@domecs/input`,

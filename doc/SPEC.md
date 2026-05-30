@@ -789,8 +789,8 @@ Each published package measures and publishes its own min+gzip size.
 ## 14. Testing
 
 - Core and persistence must have full feature coverage.
-- Every exemplar in `doc/exemplars.md` has a corresponding `example/` project or `HyperNovaSystem` app repository that CI builds and smoke-tests.
-- Workspace examples validate source interop through `workspace:*`; release validation must also stage clean app copies against packed/published `@domecs/*` packages and run their normal `test` and static `build` scripts.
+- Every exemplar in `doc/exemplars.md` has a corresponding `HyperNovaSystem` app repository that CI builds and smoke-tests.
+- The standalone example app repos validate source interop through `file:../domecs/packages/*`; release validation must also stage clean app copies against packed/published `@domecs/*` packages and run their normal `test` and static `build` scripts.
 - Determinism is tested by running two worlds in parallel with identical seed+inputs and asserting byte-identical snapshots.
 - Renderer is tested via `@testing-library/dom`.
 
