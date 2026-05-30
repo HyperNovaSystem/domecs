@@ -127,6 +127,87 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(h?.hp).toBe(11)
   })
 
+  it('save stamps a numeric savedAt into the snapshot meta (review #9)', () => {
+    const w = createWorld()
+    w.spawn([entry(Health, { hp: 1 })])
+    expect(save(w, storage, 'slot').ok).toBe(true)
+    const read = storage.read('slot')
+    expect(read.ok).toBe(true)
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('save merges caller meta into the envelope (review #9)', () => {
+    const w = createWorld()
+    expect(save(w, storage, 'slot', { meta: { label: 'checkpoint', n: 3 } }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.label).toBe('checkpoint')
+    expect(snap.meta?.n).toBe(3)
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('an explicit savedAt opt is honored verbatim (review #9)', () => {
+    const w = createWorld()
+    expect(save(w, storage, 'slot', { savedAt: 1234567 }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.savedAt).toBe(1234567)
+  })
+
+  it('save preserves plugin-provided snapshot meta alongside savedAt (review #9)', () => {
+    const w = createWorld()
+    w.use({
+      name: 'stamp',
+      install: () =>
+        ok({
+          onSnapshot: (s: WorldSnapshot) => ({ ...s, meta: { ...s.meta, source: 'plugin' } }),
+        }),
+    })
+    expect(save(w, storage, 'slot', { meta: { label: 'x' } }).ok).toBe(true)
+    const read = storage.read('slot')
+    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    expect(snap.meta?.source).toBe('plugin')
+    expect(snap.meta?.label).toBe('x')
+    expect(typeof snap.meta?.savedAt).toBe('number')
+  })
+
+  it('3-arg save is unchanged and round-trips via load (review #9 back-compat)', () => {
+    const w1 = createWorld()
+    const e = w1.spawn([entry(Health, { hp: 5 })])
+    expect(save(w1, storage, 'slot').ok).toBe(true)
+    const w2 = createWorld()
+    expect(load(w2, storage, 'slot').ok).toBe(true)
+    expect(w2.getComponent(e, Health)?.hp).toBe(5)
+  })
+
+  it('loads a legacy v1 snapshot via the built-in 1->2 migration (review #16)', () => {
+    // A v1 save predates resources. Loading it with the default target
+    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2 step,
+    // restoring entities with an empty resource set.
+    const v1: WorldSnapshot = {
+      version: 1,
+      seed: [1, 2, 3, 4],
+      tick: 3,
+      entities: [{ id: 0 as never, components: { Health: { hp: 8 } } }],
+    }
+    storage.write('legacy', JSON.stringify(v1))
+    const w = createWorld()
+    const r = load(w, storage, 'legacy') // default target = current version
+    expect(r.ok).toBe(true)
+    expect(w.time.tick).toBe(3)
+    expect(w.getComponent(0 as never, Health)?.hp).toBe(8)
+  })
+
+  it('built-in migrations do not paper over pre-v1 gaps (v0 with no user migration fails)', () => {
+    const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
+    storage.write('ancient', JSON.stringify(v0))
+    const w = createWorld()
+    const r = load(w, storage, 'ancient') // default target, only the built-in 1->2
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('migration_failed')
+  })
+
   it('migration that returns err propagates the kind through load', () => {
     const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
     storage.write('legacy', JSON.stringify(v0))

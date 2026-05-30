@@ -41,6 +41,31 @@ interface ComponentOptions<T> {
   // Called after defaults are merged by ComponentType.create() and
   // world.addComponent(). Return true to accept, or a string message to throw.
   validate?:  (value: T) => true | string
+  // Optional reflection schema (#14). Surfaced by world.describeComponent so
+  // dev tools build edit widgets from the world alone. When omitted,
+  // describeComponent infers field kinds from `defaults`.
+  schema?:    ComponentSchema
+}
+
+// Reflection descriptors (#14). describeComponent resolves `fields` from the
+// explicit schema, else infers from defaults, else empty.
+type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+interface FieldSchema {
+  readonly kind:      FieldKind
+  readonly min?:      number
+  readonly max?:      number
+  readonly step?:     number
+  readonly options?:  ReadonlyArray<string | number>  // enum widget
+  readonly label?:    string
+  readonly readonly?: boolean
+}
+interface ComponentSchema { readonly fields: Readonly<Record<string, FieldSchema>> }
+interface ComponentDescriptor {
+  readonly name:         string
+  readonly transient:    boolean
+  readonly defaults:     Record<string, unknown> | undefined  // independent clone
+  readonly fields:       Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'defaults' | 'none'
 }
 
 interface ComponentType<T, Name extends string = string> {
@@ -48,6 +73,10 @@ interface ComponentType<T, Name extends string = string> {
   readonly __tag:  unique symbol
   create(value?: Partial<T>): T
 }
+
+// Extract a component's value type. Prefer over `ReturnType<typeof X.create>`:
+//   type Ship = ComponentValue<typeof Ship>
+type ComponentValue<C> = C extends ComponentType<infer T, string> ? T : never
 ```
 
 Two usage patterns:
@@ -67,6 +96,56 @@ The duplication of `'Position'` in the dual-type-arg form is a TypeScript
 limitation: partial type-argument inference does not fill in `Name` from
 the argument when `T` is supplied explicitly. The single-arg form remains
 fully supported for the common case.
+
+### `defineResource`
+
+World-level named value (SPEC §2.11) — the home for game-global state (score,
+level, gravity, the active turn command). Same name-keyed identity discipline
+as `defineComponent`: two distinct resource objects sharing a name collide and
+the engine throws on the second registration.
+
+```ts
+// Two overloads mirroring defineComponent. The dual-type-arg form captures
+// the literal Name; the single-arg form widens Name to string.
+function defineResource<T, const Name extends string>(
+  name:    Name,
+  options?: ResourceOptions<T>
+): ResourceType<T, Name>
+function defineResource<T>(
+  name:    string,
+  options?: ResourceOptions<T>
+): ResourceType<T, string>
+
+interface ResourceOptions<T> {
+  // Function default = per-world factory, called lazily on first read.
+  // Non-function default = deep-cloned per world (worlds never share it).
+  default?:  T | (() => T)
+  // Run by setResource and by a materialized default. Return true to accept,
+  // or a string message to throw.
+  validate?: (value: T) => true | string
+}
+
+interface ResourceType<T, Name extends string = string> {
+  readonly name: Name
+  readonly [__resourceTag]: symbol
+}
+
+// Extract a resource's value type:  type S = ResourceValue<typeof Score>
+type ResourceValue<R> = R extends ResourceType<infer T, string> ? T : never
+```
+
+```ts
+const Score = defineResource<number>('Score', { default: 0 })
+const Config = defineResource<Cfg, 'Config'>('Config', { default: () => makeConfig() })
+
+world.setResource(Score, 10)      // validates, stores, marks changed
+world.resource(Score)             // → 10 (materializes default on first read)
+world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
+```
+
+Reactive systems observe resource edges via `ChangedResource(R)` in `reactsTo`
+(see Query builder below and SPEC §4 step 6). Resources are part of
+`snapshot()` / `restore()` (Snapshot below).
 
 ### `World`
 
@@ -109,6 +188,15 @@ interface World {
   // Turn-based action: emit an event and advance one tick.
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
 
+  // Turn-based command with a structured result (#17). Like turn(), but
+  // returns { accepted, consumedTurn, reason?, events, snapshot? }. `events`
+  // are the events emitted during the action's tick (downstream effects; the
+  // action event itself was consumed at step 1). The verdict comes from
+  // opts.resolve (default { accepted: true, consumedTurn: true }; an omitted
+  // consumedTurn mirrors accepted). action always advances one tick;
+  // consumedTurn is a reported value, not engine-enforced. SPEC §3.
+  action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+
   // entities
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
@@ -125,11 +213,28 @@ interface World {
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
+  // resources (SPEC §2.11). Same buffer-and-swap discipline as markChanged.
+  // resource() returns undefined only when there is no value and no default;
+  // a default is materialized (validated, stored) on first read. setResource
+  // validates + stores + marks changed; markResourceChanged marks without
+  // replacing (for in-place mutation). Both wake an idle driver.
+  resource<T>(type: ResourceType<T>): T | undefined
+  setResource<T>(type: ResourceType<T>, value: T): void
+  markResourceChanged<T>(type: ResourceType<T>): void
+
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
 
   // queries
   query(def: QueryDef): QueryResult
+  // Leak-free one-shot selectors: evaluate the current world without
+  // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
+  // reactive nodes (Added/Changed/Removed/ChangedResource) throw — use
+  // query()/observe() for per-tick deltas. count → number, entitiesMatching → Entity[], select →
+  // EntityView[] (typed fields for the array shorthand, like query()).
+  count(def: QueryDef): number
+  entitiesMatching(def: QueryDef): Entity[]
+  select(def: QueryDef): EntityView[]
   // Convenience over query(...).onAdd/onRemove. If hooks.onChange is present,
   // def must contain at least one Added/Removed/Changed node; callbacks fire
   // at step 6 reactive time, once per matching entity for that tick.
@@ -168,9 +273,16 @@ interface World {
   // less ceremony at the call-site (F-10).
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
+  // Reflect a component's name/transient/defaults/field-schema (#14). Works on
+  // any ComponentType without prior registration; enumerate via componentTypes().
+  describeComponent(type: ComponentType<unknown>): ComponentDescriptor
 
   // snapshots
-  snapshot(): WorldSnapshot
+  // options.pruneEmptyEntities (default false): drop entities whose
+  // serializable bag is empty once transient components are excluded —
+  // transient-only and bare spawn() entities. Persist's
+  // pruneTransientOnlyEntities() plugin applies this on the no-arg save() path.
+  snapshot(options?: SnapshotOptions): WorldSnapshot
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
   restore(snap: WorldSnapshot): void
@@ -199,6 +311,38 @@ type Entity = number
 interface StartOptions {
   dtClampMs?:    number   // default 100
   pauseOnHidden?: boolean // default true
+}
+
+// world.action types (#17). EmittedEvent pairs a buffered payload with its
+// originating EventType.
+interface EmittedEvent { readonly type: EventType<unknown>; readonly payload: unknown }
+type ActionEvent = EmittedEvent
+
+// Game policy: derive the verdict from the tick's events + world. Omit to
+// default to { accepted: true, consumedTurn: true }.
+type ActionResolver = (ctx: {
+  events: readonly ActionEvent[]
+  world:  World
+}) => ActionVerdict
+
+interface ActionVerdict {
+  accepted:      boolean
+  consumedTurn?: boolean   // defaults to `accepted` when omitted
+  reason?:       string
+}
+
+interface ActionOptions {
+  dt?:       number                      // forwarded to step(); omit for a turn-based advance
+  resolve?:  ActionResolver
+  snapshot?: boolean | SnapshotOptions   // true = defaults; object = forwarded options
+}
+
+interface ActionResult {
+  accepted:     boolean
+  consumedTurn: boolean
+  reason?:      string
+  events:       readonly ActionEvent[]   // emitted during the action's tick
+  snapshot?:    WorldSnapshot            // present only when opts.snapshot set
 }
 
 // Observation channel returned from `World.signals`. Subscribers fire
@@ -233,6 +377,10 @@ interface SystemDef {
 type System = (ctx: SystemContext) => void
 
 interface SystemContext {
+  // For `tick`/`fixed`/`once` systems: the `query` result. For `reactive`
+  // systems with only `reactsTo` and no explicit `query`: the `reactsTo`
+  // change delta for this tick (an explicit `query` takes precedence). Empty
+  // when neither is declared.
   entities: EntityView[]
   time:     TimeState
   input:    InputSnapshot
@@ -300,6 +448,7 @@ type QueryNode =
   | { kind: 'added';    type: ComponentType<unknown> }
   | { kind: 'removed';  type: ComponentType<unknown> }
   | { kind: 'where';    type: ComponentType<unknown>; predicate: (v: unknown) => boolean }
+  | { kind: 'changedResource'; resource: ResourceType<unknown> }
   | { kind: 'not';      child: QueryNode }
   | { kind: 'and';      children: QueryNode[] }
   | { kind: 'or';       children: QueryNode[] }
@@ -310,6 +459,14 @@ function Changed<T>(t: ComponentType<T>): QueryNode
 function Added<T>(t: ComponentType<T>): QueryNode
 function Removed<T>(t: ComponentType<T>): QueryNode
 function Where<T>(t: ComponentType<T>, p: (v: T) => boolean): QueryNode
+
+// Resource change-detection node (SPEC §2.11): fires when resource R changed
+// in the previous tick. Structurally neutral — matches every entity on a
+// change tick, none otherwise — so And(Has(T), ChangedResource(R)) yields the
+// T entities only on R-change ticks; a bare ChangedResource(R) is a
+// world-level edge a reactive system reacts to even in an empty world.
+// Counts as a change-detection node for the reactsTo contract (SPEC §4 step 6).
+function ChangedResource<T>(r: ResourceType<T>): QueryNode
 
 // Predicate combinators: take child QueryNodes, OR a bare ComponentType as a
 // one-arg shortcut for Has(T). `Not(Player)` and `Not(Has(Player))` are
@@ -349,9 +506,9 @@ interface WorldQuery {
 interface QueryHooks<Fields = Record<string, unknown>> {
   onAdd?:    (e: EntityView<Fields>) => void
   onRemove?: (e: EntityView<Fields>) => void
-  // Requires a change-detection query (Added/Removed/Changed somewhere in
-  // the tree). Fires at the reactive phase for every entity currently in the
-  // query result after that tick's mutations are coalesced.
+  // Requires a change-detection query (Added/Removed/Changed/ChangedResource
+  // somewhere in the tree). Fires at the reactive phase for every entity
+  // currently in the query result after that tick's mutations are coalesced.
   onChange?: (e: EntityView<Fields>) => void
 }
 ```
@@ -416,6 +573,10 @@ interface TimeState {
 ### Snapshot
 
 ```ts
+// SNAPSHOT_VERSION === 2. v2 added `resources` (SPEC §2.11); @domecs/persist
+// ships a built-in 1→2 migration so legacy v1 saves load transparently.
+const SNAPSHOT_VERSION = 2
+
 interface WorldSnapshot {
   readonly version:  number
   readonly seed:     readonly [number, number, number, number]
@@ -424,18 +585,33 @@ interface WorldSnapshot {
     id:         Entity
     components: Record<string, unknown>
   }>
+  // name → deep-cloned value. Omitted entirely when no resource has a value.
+  // restore() clears live resources first, so an absent map falls back to
+  // resource defaults. (v2+)
+  readonly resources?: Record<string, unknown>
   readonly meta?: Record<string, unknown>
+}
+
+interface SnapshotOptions {
+  // Drop entities whose serializable bag is empty once transient components
+  // are excluded. Default false (every alive entity is recorded).
+  readonly pruneEmptyEntities?: boolean
 }
 ```
 
 ### Plugin
 
 ```ts
-interface Plugin {
+interface Plugin<O = void> {
   name:      string
+  version?:  string                        // informational; surfaced in diagnostics
   depends?:  readonly string[]
   provides?: readonly string[]
-  install(world: World, options?: unknown): PluginHandle | void
+  // `install` participates in the Result contract (BETTER_ERRORS Phase 1):
+  // success carries an optional PluginHandle, failure a DomecsError that the
+  // registry quarantines (provided capabilities are unwound, world keeps
+  // running). A throw is normalized to { kind: 'plugin_install_failed', … }.
+  install(world: World, options: O): Result<PluginHandle | void, DomecsError>
 }
 
 interface PluginHandle {
@@ -446,6 +622,20 @@ interface PluginHandle {
   onSnapshot?:  (snap: WorldSnapshot) => WorldSnapshot
   onRestore?:   (snap: WorldSnapshot) => WorldSnapshot
 }
+
+// Preferred authoring path. `install` may return a bare PluginHandle, void,
+// or a Result; definePlugin auto-wraps bare/void in ok() and passes an
+// explicit Result through. Writing plugins this way keeps a bare-handle
+// return valid without hand-rolling ok()/err().
+interface PluginSpec<O = void> {
+  name:      string
+  version?:  string
+  depends?:  readonly string[]
+  provides?: readonly string[]
+  install(world: World, options: O):
+    PluginHandle | void | Result<PluginHandle | void, DomecsError>
+}
+function definePlugin<O = void>(spec: PluginSpec<O>): Plugin<O>
 
 interface Capability<K extends string> {
   readonly name: K
@@ -469,7 +659,7 @@ declare module '@domecs/core' {
   }
 }
 
-export const physicsPlugin: Plugin = {
+export const physicsPlugin = definePlugin({
   name: '@domecs/physics',
   provides: ['spatial-index'],
   install(world) {
@@ -477,15 +667,16 @@ export const physicsPlugin: Plugin = {
     const cap = world.capability('spatial-index')
     ;(cap as any).query   = (b) => index.query(b)
     ;(cap as any).nearest = (x, y, r) => index.nearest(x, y, r)
+    // No explicit Result needed — definePlugin wraps the void return as ok().
   },
-}
+})
 
 // ── in consumer code (e.g., @domecs/pathfinding) ────────────────────
 const hits = world.capability('spatial-index').query({ x: 0, y: 0, w: 64, h: 64 })
 //    ^? Entity[]  — the augmentation makes this fully typed
 ```
 
-Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` (or `peerDepends`) and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
+Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
 
 ---
 
@@ -668,6 +859,35 @@ interface SaveSlot {
   tick:      number
   thumbnail?: string
 }
+```
+
+**Implemented surface (v0.1).** The shipped package exposes Result-typed
+free functions over a `Storage`, not the `createPersistence` facade above
+(that remains aspirational). `load()` migrates the envelope by `version`
+before `world.restore`:
+
+```ts
+function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
+function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
+
+interface LoadOptions {
+  targetVersion?: number    // default SNAPSHOT_VERSION (2)
+  // Caller migration chain, overlaid on BUILTIN_MIGRATIONS (caller keys win).
+  // Default = just the built-ins, so a legacy v1 save upgrades transparently.
+  migrations?: MigrationMap
+}
+
+// A single-step migration: version N → N+1. Returning err halts the chain.
+type Migration    = (snap: WorldSnapshot) => Result<WorldSnapshot, MigrationFailedError>
+type MigrationMap  = ReadonlyMap<number, Migration>   // keyed by source version
+
+function migrate(snap: WorldSnapshot, targetVersion: number, migrations: MigrationMap): Result<WorldSnapshot, MigrationFailedError>
+
+// Framework-supplied steps applied as the floor beneath any user chain.
+// Ships the 1→2 resources bump (SPEC §7.1/§2.11) as the sole built-in.
+const BUILTIN_MIGRATIONS: MigrationMap
+// Overlay user steps on the built-ins (user keys win); built-ins unchanged when empty.
+function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 ```
 
 ---

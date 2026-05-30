@@ -36,6 +36,26 @@ export function unwrapOr<T, E>(r: Result<T, E>, fallback: T): T {
   return r.ok ? r.value : fallback
 }
 
+/**
+ * Run a side effect on the success value and pass the Result through
+ * unchanged. For logging/telemetry in a Result pipeline without unwrapping:
+ * `tap(world.use(p), () => log('plugin installed'))`.
+ */
+export function tap<T, E>(r: Result<T, E>, f: (t: T) => void): Result<T, E> {
+  if (r.ok) f(r.value)
+  return r
+}
+
+/**
+ * Run a side effect on the error and pass the Result through unchanged.
+ * Pairs with {@link describeError}:
+ * `tapErr(world.use(p), (e) => console.warn(describeError(e)))`.
+ */
+export function tapErr<T, E>(r: Result<T, E>, f: (e: E) => void): Result<T, E> {
+  if (!r.ok) f(r.error)
+  return r
+}
+
 export function all<T, E>(
   rs: ReadonlyArray<Result<T, E>>,
 ): Result<readonly T[], E> {

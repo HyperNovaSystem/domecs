@@ -13,6 +13,8 @@ const runtimePackages = [
   { name: '@domecs/core', dir: 'packages/domecs' },
   { name: '@domecs/dom', dir: 'packages/domecs-dom' },
   { name: '@domecs/input', dir: 'packages/domecs-input' },
+  { name: '@domecs/inspector', dir: 'packages/domecs-inspector' },
+  { name: '@domecs/persist', dir: 'packages/domecs-persist' },
 ]
 
 const packageAliases = new Map([
@@ -22,6 +24,9 @@ const packageAliases = new Map([
   ['@domecs/core', '@domecs/core'],
   ['@domecs/dom', '@domecs/dom'],
   ['@domecs/input', '@domecs/input'],
+  // inspector/persist never had unscoped legacy names — scoped only.
+  ['@domecs/inspector', '@domecs/inspector'],
+  ['@domecs/persist', '@domecs/persist'],
 ])
 
 const dependencySections = [
@@ -71,6 +76,29 @@ export function findLegacyDomecsImportSpecifiers(source) {
     }
   }
   return matches
+}
+
+// Conservative allow-list: scoped (@scope/name) or bare npm names, the only
+// shapes a published @domecs package can take. Anything else is rejected so a
+// crafted name can't escape the string literal in the generated probe.
+const SAFE_PACKAGE_NAME = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
+
+/**
+ * Build a Node ESM probe that dynamically imports each package and prints a
+ * sentinel. Run with `node --input-type=module -e <probe>` against the staged
+ * install, it proves each packed package actually resolves and loads as ESM
+ * (catching missing `dist`, bad `exports` maps, or CJS/ESM interop breakage)
+ * — a class of failure the app `test`/`build` scripts can miss when they only
+ * touch a subset of packages.
+ */
+export function buildEsmImportProbe(packageNames) {
+  for (const name of packageNames) {
+    if (!SAFE_PACKAGE_NAME.test(name)) {
+      throw new Error(`invalid package name for ESM import probe: ${JSON.stringify(name)}`)
+    }
+  }
+  const imports = packageNames.map((name) => `await import('${name}')`).join('\n')
+  return `${imports}\nconsole.log('domecs-esm-smoke-ok')`
 }
 
 export function rewriteDomecsDependencies(packageJson, tarballSpecs) {
@@ -351,6 +379,12 @@ function runAppSmoke(app, options) {
   } else {
     run('npm', ['install', '--package-lock=false'], { cwd: app.stageDir })
   }
+
+  // ESM import smoke: prove every packed @domecs package this app uses
+  // actually loads from the staged install before exercising the app scripts.
+  run('node', ['--input-type=module', '-e', buildEsmImportProbe(app.usedPackages)], {
+    cwd: app.stageDir,
+  })
 
   if (scripts.test) {
     run(installCommand, installCommand === 'pnpm' ? ['test'] : ['test'], {

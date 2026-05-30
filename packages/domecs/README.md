@@ -62,16 +62,23 @@ for (const entity of world.query(Has(Position)).entities) {
 
 - `createWorld(options)` — create an ECS world.
 - `defineComponent<T>(name, options?)` — define typed component handles.
+- `defineResource<T>(name, options?)` — define a world-level named value
+  (score, level, gravity); `world.resource(R)` / `setResource(R, v)` /
+  `markResourceChanged(R)`. React to changes with `ChangedResource(R)`.
 - `entry(component, value)` — typed helper for heterogeneous spawn arrays.
 - `world.spawn(...)` / `world.despawn(...)` — manage entities.
 - `world.addComponent(...)`, `getComponent(...)`, `removeComponent(...)` —
   manage component data.
 - `world.query(...)` / `world.observe(...)` — query and observe entity sets.
 - Query helpers: `Has`, `Not`, `Or`, `And`, `Added`, `Removed`, `Changed`,
-  `Where`.
+  `Where`, `ChangedResource`.
 - `world.system(name, def, fn)` — register `tick`, `fixed`, `event`, `once`, or
   `reactive` systems.
 - `defineEvent<T>(name)`, `world.emit(...)`, `world.on(...)` — buffered events.
+- `world.turn(type, payload, dt?)` — fire-and-forget turn-based command.
+- `world.action(type, payload, opts?)` — turn-based command with a structured
+  `{ accepted, consumedTurn, reason?, events, snapshot? }` result; the verdict
+  comes from an optional `opts.resolve`.
 - `world.snapshot()` / `world.restore(...)` — serialize and restore world state.
 - `world.use(plugin)` — install plugins.
 

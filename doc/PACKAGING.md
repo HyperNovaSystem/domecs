@@ -61,13 +61,16 @@ Release validation has two tiers:
    `test`, `typecheck`, and `build` scripts to catch source-level breakage
    while the engine packages are edited in place.
 2. **Packed-package smoke tests.** Before publishing a new engine version, run
-   `pnpm run release:validate`. The harness builds `packages/*`, packs
-   `@domecs/core`, `@domecs/dom`, and `@domecs/input`, stages clean copies of
-   the example apps, rewrites their `@domecs/*` dependencies to the generated
-   tarballs, then runs each app's `test` and `build` scripts from that staged
-   install. This catches missing `dist` files, bad `publishConfig` metadata,
-   stale import names, package-manager assumptions, and static Vite build
-   regressions before npm publish.
+   `pnpm run release:validate`. The harness builds `packages/*`, packs all five
+   published packages — `@domecs/core`, `@domecs/dom`, `@domecs/input`,
+   `@domecs/inspector`, and `@domecs/persist` — stages clean copies of the
+   example apps, rewrites their `@domecs/*` dependencies to the generated
+   tarballs, runs a **Node ESM import probe** (`node --input-type=module -e`)
+   that dynamically imports each packed package the app uses, then runs each
+   app's `test` and `build` scripts from that staged install. This catches
+   missing `dist` files, bad `publishConfig`/`exports` metadata, CJS/ESM
+   interop breakage, stale import names, package-manager assumptions, and
+   static Vite build regressions before npm publish.
 
 The staged smoke test must not rewrite source imports. Applications validate
 the public API by importing the scoped packages exactly as published:
@@ -221,9 +224,11 @@ Status of the original ten-item checklist:
 6. **Base paths** — the template reads `BASE_PATH` from the build env and the
    README documents recipes for GitHub Pages, itch.io, and subdirectory
    hosting. **Resolved (template).**
-7. **CSS side effects** — `@domecs/core`, `@domecs/dom`, and `@domecs/input`
-   ship no CSS and are now marked `"sideEffects": false`, so bundlers can
-   tree-shake unused exports without dropping required styles. Future packages
+7. **CSS side effects** — all five published packages — `@domecs/core`,
+   `@domecs/dom`, `@domecs/input`, `@domecs/inspector`, and `@domecs/persist`
+   — ship no CSS and are marked `"sideEffects": false`, so bundlers can
+   tree-shake unused exports without dropping required styles. Each also
+   ships a `README.md` + `LICENSE` (advertised in `files`). Future packages
    that ship CSS must override this with a `sideEffects: ["**/*.css"]` array.
    **Resolved.**
 8. **SSR/non-browser use** — `@domecs/core` is pure logic; `@domecs/dom` and

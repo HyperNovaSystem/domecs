@@ -20,6 +20,12 @@ export interface EventView {
   emit<T>(type: EventType<T>, payload: T): void
 }
 
+/** A single buffered emission, paired with its originating `EventType`. */
+export interface EmittedEvent {
+  readonly type: EventType<unknown>
+  readonly payload: unknown
+}
+
 export interface EventBus {
   /** Enqueue for delivery at step 1 of next tick. */
   emit<T>(type: EventType<T>, payload: T): void
@@ -31,6 +37,13 @@ export interface EventBus {
   view(): EventView
   /** Whether any events are queued for the next tick. */
   hasPending(): boolean
+  /**
+   * Snapshot the currently-pending emissions as `{ type, payload }` pairs in
+   * deterministic order: by first-emit of each type, then payload order within
+   * a type. Used by `world.action` to report the events a command produced
+   * during its tick (which are buffered for next tick at the time of reading).
+   */
+  pendingEvents(): EmittedEvent[]
 }
 
 export function createEventBus(): EventBus {
@@ -38,6 +51,10 @@ export function createEventBus(): EventBus {
   let pending = new Map<symbol, unknown[]>()
   let current = new Map<symbol, unknown[]>()
   const subs = new Map<symbol, Set<(e: unknown) => void>>()
+  // Reverse map tag -> EventType so pendingEvents can reconstruct typed pairs;
+  // the pending/current maps only carry the symbol. Populated on first emit of
+  // each type and never cleared (bounded by the number of distinct types).
+  const typeByTag = new Map<symbol, EventType<unknown>>()
 
   const makeView = (src: Map<symbol, unknown[]>): EventView => ({
     of<T>(type: EventType<T>): readonly T[] {
@@ -46,6 +63,7 @@ export function createEventBus(): EventBus {
     },
     emit<T>(type: EventType<T>, payload: T): void {
       const key = type[eventTag]
+      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
       let a = pending.get(key)
       if (!a) {
         a = []
@@ -58,6 +76,7 @@ export function createEventBus(): EventBus {
   return {
     emit<T>(type: EventType<T>, payload: T): void {
       const key = type[eventTag]
+      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
       let a = pending.get(key)
       if (!a) {
         a = []
@@ -94,6 +113,15 @@ export function createEventBus(): EventBus {
     },
     hasPending(): boolean {
       return pending.size > 0
+    },
+    pendingEvents(): EmittedEvent[] {
+      const out: EmittedEvent[] = []
+      for (const [key, arr] of pending) {
+        const type = typeByTag.get(key)
+        if (!type) continue
+        for (const payload of arr) out.push({ type, payload })
+      }
+      return out
     },
   }
 }

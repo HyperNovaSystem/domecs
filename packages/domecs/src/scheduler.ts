@@ -128,11 +128,16 @@ export function createScheduler(
           )
         }
         const rNode = normalize(def.reactsTo) as QueryNode
-        const CHANGE_KINDS = new Set<QueryNode['kind']>(['added', 'removed', 'changed'])
+        const CHANGE_KINDS = new Set<QueryNode['kind']>([
+          'added',
+          'removed',
+          'changed',
+          'changedResource',
+        ])
         if (!treeHas(rNode, CHANGE_KINDS)) {
           throw new Error(
-            `domecs: reactive system "${name}" reactsTo query must contain at least one change-detection node (Added/Removed/Changed). ` +
-              `SPEC §4 step 6: reactive fires on queries that changed in steps 3–5; a reactsTo query that contains no Added/Removed/Changed leaves nothing to change.`,
+            `domecs: reactive system "${name}" reactsTo query must contain at least one change-detection node (Added/Removed/Changed/ChangedResource). ` +
+              `SPEC §4 step 6: reactive fires on queries that changed in steps 3–5; a reactsTo query that contains no Added/Removed/Changed/ChangedResource leaves nothing to change.`,
           )
         }
       }

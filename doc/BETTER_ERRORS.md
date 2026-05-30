@@ -287,6 +287,16 @@ export function unwrapOr<T, E>(r: Result<T, E>, fallback: T): T {
   return r.ok ? r.value : fallback
 }
 
+export function tap<T, E>(r: Result<T, E>, f: (t: T) => void): Result<T, E> {
+  if (r.ok) f(r.value)
+  return r
+}
+
+export function tapErr<T, E>(r: Result<T, E>, f: (e: E) => void): Result<T, E> {
+  if (!r.ok) f(r.error)
+  return r
+}
+
 export function all<T, E>(rs: ReadonlyArray<Result<T, E>>): Result<readonly T[], E> {
   const out: T[] = []
   for (const r of rs) {
@@ -486,9 +496,10 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
 **Core Result primitives (`@domecs/core`):**
 
 - Add `Result`, `ok`, `err`, `isOk`, `isErr`.
-- Add `mapR`, `mapErr`, `andThen`, `unwrapOr`, `all`.
+- Add `mapR`, `mapErr`, `andThen`, `unwrapOr`, `tap`, `tapErr`, `all`.
 - Add `attempt`, `attemptAsync`.
 - Add `match` (primary idiom) and `assertNever` (escape hatch).
+- Add `describeError(e: DomecsError): string` — total `match`-based formatter for logs/toasts/inspector UI.
 - Add `JsonValue`, `SerializedError`, `normalizeCause` with `MAX_CAUSE_DEPTH = 3`.
 
 **Error union and plugin namespacing:**
@@ -676,7 +687,7 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
    The intent: most developers never explicitly reason about which realm of error they are handling — the type system asks the questions for them.
 
 9. **Core Result helpers.**
-   `@domecs/core` exports a fixed minimal set: `ok`, `err`, `isOk`, `isErr`, `mapR`, `mapErr`, `andThen`, `unwrapOr`, `all`, `attempt`, `attemptAsync`, `match`, `assertNever`, `normalizeCause`.
+   `@domecs/core` exports a fixed minimal set: `ok`, `err`, `isOk`, `isErr`, `mapR`, `mapErr`, `andThen`, `unwrapOr`, `tap`, `tapErr`, `all`, `attempt`, `attemptAsync`, `match`, `assertNever`, `normalizeCause`.
    These are sufficient to keep call sites flat without growing core into a full FP library.
    Richer combinators (`pipe`, `Task`, `TaskEither`, do-notation) stay in userland.
 

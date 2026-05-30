@@ -87,6 +87,16 @@ Component types are **serializable** by default.  If a schema includes non-clona
 
 Component instances are **owned by the world**.
 
+**Reflection (#14).** A component type MAY carry an optional `schema` — a
+field-name → `FieldSchema` map (`kind` plus widget hints: numeric range/step,
+enum `options`, label, readonly). `world.describeComponent(type)` returns a
+`ComponentDescriptor` with the component's name, transient flag, a cloned
+`defaults`, and a resolved `fields` map: the explicit schema when declared
+(`fieldsSource: 'schema'`), otherwise inferred from `defaults` by runtime
+`typeof` (`'defaults'`), otherwise empty (`'none'`). This lets dev tools render
+edit widgets from the world alone, with no per-app schema registry. Reflection
+is descriptive only — it does not validate or constrain component values.
+
 **Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
 
 v0.1 treats I-1 as a caller contract, not as a proxy-enforced runtime feature. Stale-reference poisoning is deferred until the diagnostics surface is designed, so the current core does not expose a dev/prod split for component wrapper behavior.
@@ -109,6 +119,10 @@ A query is a composable predicate over component presence and values. Queries ar
 - `Removed(T)` — component type was removed in the previous tick.
 - `Where(T, predicate)` — component is present and `predicate(value)` is true.
 
+**Resource change-detection node** carries a single `ResourceType` (see §2.11) and produces a leaf node:
+
+- `ChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) in the previous tick. Structurally neutral: it matches *every* entity on a change tick and *no* entity otherwise, so `And(Has(T), ChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `ChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
+
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
 - `Not(node)` — true when `node` is false. Unary.
@@ -120,6 +134,18 @@ The combinators MUST also accept a bare `ComponentType` as a one-arg shortcut fo
 A node MUST be well-formed: its runtime payload must match its declared `kind`. Engine implementations MUST reject a node whose payload disagrees with its kind (statically via a discriminated union; in dev builds, additionally at runtime). A combinator presented with neither a `QueryNode` nor a `ComponentType` is a contract violation, not a constant-true predicate.
 
 Queries are **archetype-cached**. A query computes an index the first time it is used; subsequent ticks reuse it. `onAdd` and `onRemove` hooks fire when entity composition changes in a way that enters or exits the query's archetype set.
+
+**One-shot selectors (normative).** `world.query(def)` returns a *live*
+`QueryResult` that the engine registers and keeps up to date until
+`dispose()`; reading `.entities.length` for a one-off count and dropping the
+result leaks a registered query. For ad-hoc reads the engine MUST provide
+leak-free one-shot selectors that evaluate the current world without
+registering anything: `count(def) → number`, `entitiesMatching(def) →
+Entity[]`, and `select(def) → EntityView[]` (the latter carrying typed fields
+for the tuple shorthand, as `query()` does). One-shot selectors accept the
+structural node set (`Has`/`Not`/`And`/`Or`/`Where`) and MUST reject reactive
+nodes (`Added`/`Changed`/`Removed`/`ChangedResource`), whose per-tick deltas are
+only defined for a registered query or reactive system.
 
 **EntityView shape (normative, P-1).** An `EntityView` exposes exactly the
 components currently attached to the entity — it MUST NOT carry keys for
@@ -288,6 +314,30 @@ Corollary: `componentRemoved` delivers *before* the component's bag is released,
 
 **Despawn ordering rule (normative, F-9).** `entityDespawned` MUST fire *after* the engine has reclaimed the entity: by the time a subscriber runs, `world.has(id, T)` returns `false` for every component, the entity is no longer alive, and `getComponent(id, T)` returns `undefined`. Subscribers thus receive a clean reverse-index opportunity — the canonical pattern for inter-entity references is to register one `signals.entityDespawned` listener that scrubs every component holding the dying id as a foreign key. The order within a single `despawn` call is fixed: `componentRemoved` (per type, with bag still readable) → store/archetype reclaim → `entityDespawned`. A subscriber that calls `world.despawn` re-entrantly is well-defined; ordering of nested despawns is the call order of the subscribers.
 
+### 2.11 Resources
+
+A **resource** is a single named value scoped to the world rather than to any entity — the canonical home for game-global state (score, current level, gravity, the active turn's command, config). Resources are declared with `defineResource` and reach for the same name-keyed identity discipline as components (§2.2):
+
+```ts
+const Score = defineResource<number>('Score', { default: 0 })
+const Config = defineResource<Cfg>('Config', {
+  default: () => makeConfig(),          // function = per-world factory, called lazily
+  validate: (v) => v.fps > 0 || 'fps must be positive',
+})
+
+world.setResource(Score, 10)
+world.resource(Score)          // → 10
+world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
+```
+
+**Identity and registration (normative).** A `ResourceType` is an opaque token carrying a `name` and a brand. As with components, two distinct resource objects sharing a name are a collision — the engine MUST throw on the second registration. A resource is registered the first time it is read, set, or marked.
+
+**Default materialization (normative).** `defineResource` accepts `default?: T | (() => T)` and `validate?`. A function default is a **per-world factory** called lazily the first time `resource(R)` is read on a world that has not set the value; a non-function default is **deep-cloned per world** (so two worlds never share a mutable default object). `resource(R)` returns `undefined` only when there is no value and no default. `setResource` and a materialized default both run `validate`; a `string` return is thrown as a validation error.
+
+**Change tracking (normative).** Resource changes participate in the same buffer-and-swap discipline as component marks (§2.9): `setResource` and `markResourceChanged` record the resource name into the live tick set when called inside a tick, or the pending set when called between ticks, promoted at step 0. `ChangedResource(R)` (§2.4) reports exactly the resources changed in the previous tick. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
+
+**Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
+
 ---
 
 ## 3. Scheduling modes
@@ -298,7 +348,7 @@ Corollary: `componentRemoved` delivers *before* the component's bag is released,
 | `fixed`    | every `fixedStep` of scaled time        | integrated fixed delta              |
 | `tick`     | every render frame                      | scaled delta                        |
 | `event`    | events buffered from previous tick      | event view                          |
-| `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) |
+| `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) or resource change |
 
 Priorities disambiguate within a mode.
 Systems registered with the same priority run in **registration order**.
@@ -344,6 +394,13 @@ MUST throw even if the host environment exposes `requestAnimationFrame`;
 Equivalent to headless with a thin driver: `world.turn(action)` emits the action as an event, calls `world.step()`, returns when systems have quiesced.
 Roguelike default.
 
+**Command result (`action`, normative).** `world.action(type, payload, opts?)` is `turn()` with a structured return — `turn()` stays the void fire-and-forget form. It emits the action event, advances one tick (so the action flushes at step 1 and its handlers run in steps 3–6), then returns `{ accepted, consumedTurn, reason?, events, snapshot? }`:
+
+- `events` is the set of events emitted *during* that tick — the command's downstream effects, captured from the buffer that step 1 of the *next* tick would flush. The action event itself was consumed at step 1 and is **not** included. Order is deterministic: by first-emit of each event type, then payload order within a type.
+- `accepted` / `consumedTurn` / `reason` come from an optional `opts.resolve({ events, world })` verdict — game policy, which the engine does not interpret. The default verdict is `{ accepted: true, consumedTurn: true }`; when a resolver omits `consumedTurn` it defaults to `accepted` (an accepted command spends the turn, a rejected one does not). `consumedTurn` is a *reported* value for the caller's turn bookkeeping — `action` always advances exactly one tick regardless, because turn-consumption policy can only be decided by systems that run *inside* the tick.
+- `snapshot` is attached only when `opts.snapshot` is set (`true` for defaults, or a `SnapshotOptions` object to forward e.g. `pruneEmptyEntities`).
+- `opts.dt` is forwarded to `step`; omit it for a turn-based tick advance (as `turn()` does). A non-positive explicit `dt` is a heartbeat (§4.0) and will not process the action.
+
 ---
 
 ## 4. Tick order (normative)
@@ -373,7 +430,11 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
 5. **Run `event` systems.** For events buffered in step 1. Events emitted during 3–4 were buffered for *next* tick.
 6. **Run `reactive` systems.** For queries that changed in steps 3–5. Debouncing rule (normative): multiple component mutations within one tick that hit the same reactive system's `reactsTo` query **coalesce into one invocation** with a combined delta (the union of added/removed/changed entity sets observed across steps 3–5). A reactive system sees each entity at most once per tick. If a reactive system's execution mutates state that would re-trigger a reactive system earlier in priority order within this same step 6, the re-trigger is **deferred to the next tick's step 6** — the tick does not iterate to a fixed point. This matches the event-buffering rule in §2.6.
 
-   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`Added`, `Removed`, or `Changed`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
+   **`ctx.entities` for reactive systems (normative).** When a reactive system supplies only `reactsTo` (no explicit `query`), its `ctx.entities` MUST be the `reactsTo` change delta for the tick — the same set that triggered the invocation — not the empty array. When an explicit `query` is also supplied it takes precedence and `ctx.entities` reflects that query; authors who want both the trigger and a broader/narrower view use the explicit `query` for iteration and the change itself as the trigger.
+
+   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`Added`, `Removed`, `Changed`, or `ChangedResource`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error.
+
+   **Resource-gated reactive fire (normative).** A `reactsTo` query whose only change-detection node is `ChangedResource(R)` and that carries no `Has` leaf is a *world-level* trigger: it fires whenever `R` changed, even in an empty world, with `ctx.entities` empty. When such a query also carries a `Has(T)` leaf (e.g. `And(Has(T), ChangedResource(R))`) it is entity-scoped and fires with the `T` entities on `R`-change ticks — and does not fire in a world with no `T`, matching the structural semantics of `ChangedResource` in §2.4. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
 8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
 
@@ -492,15 +553,20 @@ Keybinding layer is *not* part of core — it is a plugin that translates `Input
 
 ```ts
 interface WorldSnapshot {
-  version:    number
+  version:    number                             // current SNAPSHOT_VERSION = 2
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
   entities:   { id: number; components: Record<string, unknown> }[]
+  resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
   meta?:      Record<string, unknown>
 }
 ```
 
+`SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
+
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
+
+`snapshot(options?)` accepts `SnapshotOptions`. `pruneEmptyEntities` (default `false`) drops entities whose serializable bag is empty once transient components are excluded — transient-only and bare `spawn()` entities. The default records every alive entity so id/archetype membership round-trips exactly. `@domecs/persist`'s `pruneTransientOnlyEntities()` plugin applies the same prune on the no-arg `save()` path via `onSnapshot`.
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
@@ -545,6 +611,8 @@ createPersistence(world, {
 Migrations are per-component, not per-world.
 The codec system allows one component schema to evolve without forcing monolithic world-level migration.
 
+**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a non-advancing step, or a snapshot newer than the target. `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
+
 ### 7.4 Ring buffer (time-travel)
 
 The inspector (§10) consumes a bounded ring buffer of **diff snapshots**: each entry records only the components that changed since the previous snapshot.
@@ -575,19 +643,42 @@ The inspector can run an authoritative system in a sandbox and detect violations
 ### 9.1 Shape
 
 ```ts
-interface Plugin {
-  name:     string
-  depends?: string[]           // plugin names required
-  provides?: string[]          // capability keys exported (spatial index, etc.)
-  install(world: World): {
-    teardown?:     () => void
-    onTickStart?:  (world: World) => void
-    onTickEnd?:    (world: World) => void
-    onRender?:     (world: World) => void
-    onSnapshot?:   (snap: WorldSnapshot) => WorldSnapshot
-    onRestore?:    (snap: WorldSnapshot) => WorldSnapshot
-  } | void
+interface PluginHandle {
+  teardown?:     () => void
+  onTickStart?:  (world: World) => void
+  onTickEnd?:    (world: World) => void
+  onRender?:     (world: World) => void
+  onSnapshot?:   (snap: WorldSnapshot) => WorldSnapshot
+  onRestore?:    (snap: WorldSnapshot) => WorldSnapshot
 }
+
+interface Plugin<O = void> {
+  name:     string
+  version?: string             // informational; surfaced in diagnostics
+  depends?: readonly string[]  // plugin names required (topological order, §9.2)
+  provides?: readonly string[] // capability keys exported (spatial index, etc.)
+  // Result contract (BETTER_ERRORS Phase 1): success → optional PluginHandle,
+  // failure → DomecsError (quarantined: provided capabilities unwound, world
+  // survives). A throw normalizes to { kind: 'plugin_install_failed', … }.
+  install(world: World, options: O): Result<PluginHandle | void, DomecsError>
+}
+```
+
+**Authoring (normative recommendation).** Author plugins with
+`definePlugin(spec)` rather than the raw `Plugin` literal. `definePlugin`
+lets `install` return a bare `PluginHandle`, `void`, or a `Result`,
+auto-wrapping the bare/void forms in `ok()` and passing an explicit `Result`
+through — so the common "no failure mode" plugin needs no `ok()`/`err()`
+boilerplate and stays valid under the Result contract:
+
+```ts
+const physics = definePlugin({
+  name: '@domecs/physics',
+  provides: ['spatial-index'],
+  install(world) {
+    /* register capability; void return is wrapped as ok() */
+  },
+})
 ```
 
 ### 9.2 Registration

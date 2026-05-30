@@ -1,4 +1,5 @@
 import { internal } from './component.js'
+import { internalResource, type InternalResourceType } from './resource.js'
 import type {
   DomecsError,
   FaultEntry,
@@ -6,7 +7,13 @@ import type {
   SystemResult,
   SystemicFault,
 } from './errors.js'
-import { createEventBus, type EventBus, type EventType, type EventView } from './events.js'
+import {
+  createEventBus,
+  type EmittedEvent,
+  type EventBus,
+  type EventType,
+  type EventView,
+} from './events.js'
 import {
   CONSOLIDATE_FAULTS_NAME,
   CONSOLIDATE_FAULTS_PRIORITY,
@@ -19,6 +26,7 @@ import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
+  type SnapshotOptions,
   type WorldSnapshot,
 } from './snapshot.js'
 import {
@@ -32,9 +40,19 @@ import {
 } from './scheduler.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, type TimeState } from './time.js'
-import type { ComponentBag, ComponentType, Entity } from './types.js'
+import type {
+  ComponentBag,
+  ComponentDescriptor,
+  ComponentType,
+  Entity,
+  FieldKind,
+  FieldSchema,
+  ResourceType,
+} from './types.js'
 import {
   Has,
+  collectChangedResourceNames,
+  collectHasComponents,
   normalize,
   treeHas,
   type EntityView,
@@ -44,6 +62,42 @@ import {
   type QueryNode,
   type QueryResult,
 } from './query.js'
+
+// Reactive delta nodes a one-shot selector cannot evaluate, and the `where`
+// kind that forces per-entity predicate filtering. Shared, allocation-free.
+const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'changed',
+  'removed',
+  'changedResource',
+])
+const oneshotWhereKind: ReadonlySet<QueryNode['kind']> = new Set(['where'])
+// Per-tick delta kinds that force a query to run the per-entity filter pass.
+const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'changed',
+  'removed',
+  'where',
+  'changedResource',
+])
+const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
+
+// Infer a reflection FieldKind from a default value's runtime type. Used by
+// describeComponent when a component declares no explicit schema (#14).
+function inferFieldKind(value: unknown): FieldKind {
+  switch (typeof value) {
+    case 'number':
+      return 'number'
+    case 'string':
+      return 'string'
+    case 'boolean':
+      return 'boolean'
+    case 'object':
+      return value === null ? 'unknown' : 'object'
+    default:
+      return 'unknown'
+  }
+}
 
 export interface WorldSignals {
   entitySpawned: Signal<Entity>
@@ -89,6 +143,21 @@ export interface World {
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
+  /**
+   * Read a world-singleton resource (review #16). Returns the current value,
+   * lazily materializing the declared default on first read, or `undefined`
+   * when no default was declared and nothing has been set. The returned object
+   * is the live singleton — mutating it mutates the resource.
+   */
+  resource<T>(type: ResourceType<T>): T | undefined
+  /** Replace a resource's value, validate it, and mark it changed this tick. */
+  setResource<T>(type: ResourceType<T>, value: T): void
+  /**
+   * Flag a resource as changed without replacing its value — for in-place
+   * edits (`world.resource(Cfg)!.v = 2`). Fires `ChangedResource(type)` gates
+   * on the next tick (or the current one, if called inside a tick).
+   */
+  markResourceChanged<T>(type: ResourceType<T>): void
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
   /**
@@ -125,6 +194,15 @@ export interface World {
   entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   /**
+   * Reflect a component's name, transient flag, default value, and field
+   * schema (review #14). `fields` resolves to the explicit `schema.fields`
+   * when one was declared, otherwise it is inferred from `defaults` by runtime
+   * `typeof`. Lets dev tools build edit widgets from the world alone — no
+   * per-app schema registry. Works on any `ComponentType` without prior
+   * registration; enumerate with `componentTypes()`.
+   */
+  describeComponent(type: ComponentType<unknown>): ComponentDescriptor
+  /**
    * Typed overload (D-2): an array of `ComponentType<T, Name>` produces a
    * `QueryResult` whose `EntityView` exposes `view.Name: T` typed fields.
    */
@@ -132,6 +210,22 @@ export interface World {
     def: readonly [...T],
   ): QueryResult<FieldsFromComponents<T>>
   query(def: QueryDef): QueryResult
+  /**
+   * Leak-free one-shot selectors. Unlike `query()`, these evaluate against the
+   * world's current state WITHOUT registering a live query — there is nothing
+   * to dispose, so they never leak. Use them for ad-hoc reads (UI labels, AI
+   * decisions, asserts) where a persistent live query would accumulate. They
+   * accept the same structural defs as `query()` — `Has`/`Not`/`And`/`Or`/
+   * `Where` — but reject reactive nodes (`Added`/`Changed`/`Removed`), which
+   * need the per-tick delta tracking only a live query or reactive system
+   * provides.
+   */
+  count(def: QueryDef): number
+  entitiesMatching(def: QueryDef): Entity[]
+  select<T extends ReadonlyArray<ComponentType<unknown, string>>>(
+    def: readonly [...T],
+  ): EntityView<FieldsFromComponents<T>>[]
+  select(def: QueryDef): EntityView[]
   /**
    * Observe a query reactively and receive structural + optional per-tick
    * change callbacks. Returns an unsubscribe function.
@@ -147,6 +241,16 @@ export interface World {
   step(dt?: number): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
+  /**
+   * Turn-based command with a structured result (#17). Emits `type`, advances
+   * one tick (like `turn()`), then reports `{ accepted, consumedTurn, reason,
+   * events, snapshot? }`. `events` are the events emitted *during* the tick
+   * (the command's downstream effects — the action event itself was flushed
+   * and consumed at step 1). `accepted`/`consumedTurn`/`reason` come from
+   * `opts.resolve` (default `{ accepted: true, consumedTurn: true }`).
+   * `turn()` remains the void fire-and-forget form.
+   */
+  action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
   start(options?: StartOptions): () => void
   stop(): void
   /**
@@ -157,7 +261,7 @@ export interface World {
    */
   use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
-  snapshot(): WorldSnapshot
+  snapshot(options?: SnapshotOptions): WorldSnapshot
   restore(snap: WorldSnapshot): void
 }
 
@@ -188,6 +292,56 @@ export interface StartOptions {
   /** Pause via {@link World.pause} when `document.hidden` flips true, resume
    *  on re-show. Default true; has no effect outside a DOM. */
   pauseOnHidden?: boolean
+}
+
+/** An event emitted during an {@link World.action} tick. */
+export type ActionEvent = EmittedEvent
+
+/**
+ * The game's verdict on an action, produced by an {@link ActionResolver}.
+ * `consumedTurn` defaults to `accepted` when omitted (an accepted command
+ * spends the turn; a rejected one does not). `reason` is for diagnostics /
+ * UI on rejection.
+ */
+export interface ActionVerdict {
+  accepted: boolean
+  consumedTurn?: boolean
+  reason?: string
+}
+
+/**
+ * Derives the verdict from the events the action produced this tick and the
+ * resulting world. Policy lives here, in game code — the engine stays
+ * agnostic about what "accepted" means. Omit it to default to
+ * `{ accepted: true, consumedTurn: true }`.
+ */
+export type ActionResolver = (ctx: {
+  events: readonly ActionEvent[]
+  world: World
+}) => ActionVerdict
+
+export interface ActionOptions {
+  /** dt forwarded to the underlying `step`. Omit for a turn-based tick
+   *  advance (like `turn()`); a non-positive explicit dt is a heartbeat and
+   *  will not process the action (see §4.0). */
+  dt?: number
+  /** Compute accepted/consumedTurn/reason from the tick's events + world. */
+  resolve?: ActionResolver
+  /** Attach `world.snapshot()` to the result. `true` uses defaults; pass a
+   *  `SnapshotOptions` object to forward options (e.g. `pruneEmptyEntities`). */
+  snapshot?: boolean | SnapshotOptions
+}
+
+/**
+ * Structured result of {@link World.action}: did the command land, did it
+ * spend the turn, why not, what events it produced, and an optional snapshot.
+ */
+export interface ActionResult {
+  accepted: boolean
+  consumedTurn: boolean
+  reason?: string
+  events: readonly ActionEvent[]
+  snapshot?: WorldSnapshot
 }
 
 interface ArchetypeBucket {
@@ -278,6 +432,17 @@ export function createWorld(options: WorldOptions = {}): World {
   const pendingChanged = new Map<string, Set<Entity>>()
   let inTick = false
 
+  // World-singleton resources (review #16). `resources` holds materialized
+  // values by name; `resourceRegistry` guards against two ResourceType objects
+  // colliding on a name (mirrors typeRegistry). Resource-change tracking mirrors
+  // the component change sets: in-tick marks land in `tickResourcesChanged`,
+  // between-tick marks buffer in `pendingResourcesChanged` and are promoted at
+  // step 0 of the next tick (symmetric with tickChanged/pendingChanged).
+  const resources = new Map<string, unknown>()
+  const resourceRegistry = new Map<string, ResourceType<unknown>>()
+  const tickResourcesChanged = new Set<string>()
+  const pendingResourcesChanged = new Set<string>()
+
   // queries
   const queries: CompiledQuery[] = []
   let nextQueryId = 0
@@ -349,6 +514,10 @@ export function createWorld(options: WorldOptions = {}): World {
       case 'changed': requireRegisteredType(node.type); return types.has(node.type.name)
       case 'removed': return true
       case 'where': requireRegisteredType(node.type); return types.has(node.type.name)
+      // Structurally neutral: a resource gate does not constrain which entities
+      // match (it is a per-tick gate evaluated in evalEntity), so it must not
+      // prune the And() it sits inside. See ChangedResource (#16).
+      case 'changedResource': return true
     }
   }
 
@@ -366,12 +535,32 @@ export function createWorld(options: WorldOptions = {}): World {
         if (v === undefined) return false
         return node.predicate(v)
       }
+      // Entity-independent: true for every candidate on ticks where the
+      // resource changed, false otherwise — so an entity-scoped query like
+      // And(Has(X), ChangedResource(R)) yields the X entities only on change
+      // ticks. See ChangedResource (#16).
+      case 'changedResource': return tickResourcesChanged.has(node.resource.name)
     }
   }
 
   function hasType(entity: Entity, name: string): boolean {
     const s = stores.get(name)
     return s ? s.has(entity) : false
+  }
+
+  // Normalize + validate a def for the one-shot selectors (count/select/
+  // entitiesMatching). Reactive nodes track per-tick deltas that only a
+  // registered query maintains, so they are a misuse here; reject loudly.
+  function oneshotNode(def: QueryDef): { node: QueryNode; needsEntityFilter: boolean } {
+    const node = normalize(def)
+    if (treeHas(node, oneshotReactiveKinds)) {
+      throw new Error(
+        'domecs: count/select/entitiesMatching are one-shot selectors and ' +
+          'cannot evaluate reactive nodes (Added/Changed/Removed) — those need ' +
+          'per-tick delta tracking; use a live query() or a reactive system instead',
+      )
+    }
+    return { node, needsEntityFilter: treeHas(node, oneshotWhereKind) }
   }
 
   function evaluateQueryAgainstArchetype(
@@ -461,6 +650,35 @@ export function createWorld(options: WorldOptions = {}): World {
     storeFor(type)
   }
 
+  function requireRegisteredResource(
+    type: ResourceType<unknown>,
+  ): InternalResourceType<unknown> {
+    const existing = resourceRegistry.get(type.name)
+    if (existing && existing !== type) {
+      throw new Error(
+        `domecs: two distinct ResourceType objects share the name "${type.name}"`,
+      )
+    }
+    if (!existing) resourceRegistry.set(type.name, type)
+    return internalResource(type)
+  }
+
+  function validateResource(
+    meta: InternalResourceType<unknown>,
+    value: unknown,
+    name: string,
+  ): void {
+    if (!meta.__validate) return
+    const verdict = meta.__validate(value)
+    if (verdict !== true) {
+      throw new Error(`domecs: invalid resource "${name}": ${verdict}`)
+    }
+  }
+
+  function recordResourceChange(name: string): void {
+    ;(inTick ? tickResourcesChanged : pendingResourcesChanged).add(name)
+  }
+
   function iterateBag(
     bag: ComponentBag,
   ): Iterable<readonly [ComponentType<unknown>, unknown]> {
@@ -496,6 +714,20 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function hasPendingComponentWork(): boolean {
     return pendingAdded.size > 0 || pendingRemoved.size > 0 || pendingChanged.size > 0
+  }
+
+  // #16: only consulted when a reactive system's reactsTo yielded zero members
+  // this tick. Fires iff the reactsTo is purely resource-gated (no structural
+  // Has dependency) and one of its ChangedResource targets changed this tick.
+  function reactiveResourceFallback(s: CompiledSystem): boolean {
+    if (!s.def.reactsTo) return false
+    const node = normalize(s.def.reactsTo)
+    if (!treeHas(node, changedResourceKind)) return false
+    if (collectHasComponents(node).size > 0) return false
+    for (const name of collectChangedResourceNames(node)) {
+      if (tickResourcesChanged.has(name)) return true
+    }
+    return false
   }
 
   function hasFrameSystems(): boolean {
@@ -550,7 +782,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function runSystem(s: CompiledSystem, view: EventView): void {
     const ctx: SystemContext = {
-      entities: s.query ? s.query.entities : [],
+      // Explicit `query` wins; otherwise a reactive system's `reactsTo` delta
+      // is delivered as ctx.entities (SPEC: reactive systems see the query
+      // delta). Falls back to [] for systems with neither.
+      entities: s.query ? s.query.entities : s.reactsTo ? s.reactsTo.entities : [],
       time,
       input,
       events: view,
@@ -773,6 +1008,32 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
 
+    resource<T>(type: ResourceType<T>): T | undefined {
+      const meta = requireRegisteredResource(type as ResourceType<unknown>)
+      if (resources.has(type.name)) return resources.get(type.name) as T
+      if (meta.__default) {
+        const value = (meta.__default as () => T)()
+        validateResource(meta, value, type.name)
+        resources.set(type.name, value)
+        return value
+      }
+      return undefined
+    },
+
+    setResource<T>(type: ResourceType<T>, value: T): void {
+      const meta = requireRegisteredResource(type as ResourceType<unknown>)
+      validateResource(meta, value, type.name)
+      resources.set(type.name, value)
+      recordResourceChange(type.name)
+      wakeDriver()
+    },
+
+    markResourceChanged<T>(type: ResourceType<T>): void {
+      requireRegisteredResource(type as ResourceType<unknown>)
+      recordResourceChange(type.name)
+      wakeDriver()
+    },
+
     componentTypes(): ComponentType<unknown>[] {
       return Array.from(typeRegistry.values())
     },
@@ -795,12 +1056,33 @@ export function createWorld(options: WorldOptions = {}): World {
       return out
     },
 
+    describeComponent(type: ComponentType<unknown>): ComponentDescriptor {
+      const meta = internal(type)
+      const defaults =
+        meta.__defaults !== undefined
+          ? cloneSerializable(meta.__defaults as Record<string, unknown>)
+          : undefined
+      let fields: Record<string, FieldSchema>
+      let fieldsSource: ComponentDescriptor['fieldsSource']
+      if (meta.__schema) {
+        fields = { ...meta.__schema.fields }
+        fieldsSource = 'schema'
+      } else if (defaults && Object.keys(defaults).length > 0) {
+        fields = {}
+        for (const [key, value] of Object.entries(defaults)) {
+          fields[key] = { kind: inferFieldKind(value) }
+        }
+        fieldsSource = 'defaults'
+      } else {
+        fields = {}
+        fieldsSource = 'none'
+      }
+      return { name: type.name, transient: meta.__transient, defaults, fields, fieldsSource }
+    },
+
     query(def: QueryDef): QueryResult {
       const node = normalize(def)
-      const hasTickFilter = treeHas(
-        node,
-        new Set<QueryNode['kind']>(['added', 'changed', 'removed', 'where']),
-      )
+      const hasTickFilter = treeHas(node, tickFilterKinds)
       const hasRemoved = treeHas(node, new Set<QueryNode['kind']>(['removed']))
       const q: CompiledQuery = {
         id: nextQueryId++,
@@ -878,6 +1160,46 @@ export function createWorld(options: WorldOptions = {}): World {
         },
       }
       return result
+    },
+
+    count(def: QueryDef): number {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      let n = 0
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        if (!needsEntityFilter) {
+          n += arch.entities.size
+          continue
+        }
+        for (const e of arch.entities) if (evalEntity(node, e)) n++
+      }
+      return n
+    },
+
+    entitiesMatching(def: QueryDef): Entity[] {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      const out: Entity[] = []
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        for (const e of arch.entities) {
+          if (needsEntityFilter && !evalEntity(node, e)) continue
+          out.push(e)
+        }
+      }
+      return out
+    },
+
+    select(def: QueryDef): EntityView[] {
+      const { node, needsEntityFilter } = oneshotNode(def)
+      const out: EntityView[] = []
+      for (const arch of archetypes.values()) {
+        if (!evalStructural(node, arch.types)) continue
+        for (const e of arch.entities) {
+          if (needsEntityFilter && !evalEntity(node, e)) continue
+          out.push(makeView(e))
+        }
+      }
+      return out
     },
 
     observe(def: QueryDef, hooks: QueryHooks): () => void {
@@ -986,6 +1308,10 @@ export function createWorld(options: WorldOptions = {}): World {
       drainInto(pendingAdded, tickAdded)
       drainInto(pendingRemoved, tickRemoved)
       drainInto(pendingChanged, tickChanged)
+      // #16: same buffer-and-swap for resource-change marks.
+      tickResourcesChanged.clear()
+      for (const name of pendingResourcesChanged) tickResourcesChanged.add(name)
+      pendingResourcesChanged.clear()
 
       const scaledDt = d * time.scale
       // F-3: accumulate unquantized scaled time, then derive ms-quantized
@@ -1062,8 +1388,16 @@ export function createWorld(options: WorldOptions = {}): World {
         // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
         for (const s of scheduler.systemsByMode('reactive')) {
           if (!isEnabled(s) || !s.reactsTo) continue
-          if (s.reactsTo.size === 0) continue
-          runSystem(s, eventView)
+          if (s.reactsTo.size > 0) {
+            runSystem(s, eventView)
+            continue
+          }
+          // #16: a reactsTo with no structural entity dependency (no Has leaf)
+          // still fires when one of its ChangedResource targets changed this
+          // tick — supports world-level resource reactions in entity-empty
+          // worlds where the structural member count is zero. Entity-scoped
+          // reactsTo (any Has leaf) is governed by `size` above only.
+          if (reactiveResourceFallback(s)) runSystem(s, eventView)
         }
 
         // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
@@ -1086,6 +1420,33 @@ export function createWorld(options: WorldOptions = {}): World {
       // Because events flush at next step's step 1, we emit first then step.
       bus.emit(type, payload)
       world.step(dt)
+    },
+
+    action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // #17: a typed turn() that surfaces a structured command result. Emit the
+      // action, advance one tick (the action flushes at step 1 and its handlers
+      // run during steps 3–6), then read back the events those handlers emitted
+      // — they are now buffered as "pending" for next tick, so bus.pendingEvents
+      // is exactly the command's downstream effects (the action event itself was
+      // already consumed and is not included).
+      bus.emit(type, payload)
+      world.step(opts.dt)
+      const events = bus.pendingEvents()
+      const verdict = opts.resolve
+        ? opts.resolve({ events, world })
+        : { accepted: true, consumedTurn: true }
+      const consumedTurn = verdict.consumedTurn ?? verdict.accepted
+      const result: ActionResult = {
+        accepted: verdict.accepted,
+        consumedTurn,
+        events,
+        ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+      }
+      if (opts.snapshot) {
+        result.snapshot =
+          typeof opts.snapshot === 'object' ? world.snapshot(opts.snapshot) : world.snapshot()
+      }
+      return result
     },
 
     start(options?: StartOptions): () => void {
@@ -1168,7 +1529,8 @@ export function createWorld(options: WorldOptions = {}): World {
       return plugins.capability(name)
     },
 
-    snapshot(): WorldSnapshot {
+    snapshot(options?: SnapshotOptions): WorldSnapshot {
+      const pruneEmpty = options?.pruneEmptyEntities === true
       const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
       const sortedAlive = Array.from(alive).sort((a, b) => a - b)
       for (const id of sortedAlive) {
@@ -1183,13 +1545,26 @@ export function createWorld(options: WorldOptions = {}): World {
           const v = store.get(id)
           if (v !== undefined) components[name] = cloneSerializable(v)
         }
+        if (pruneEmpty && Object.keys(components).length === 0) continue
         entities.push({ id, components })
+      }
+      // #16: serialize materialized resources by name (deep-cloned like
+      // component values). Omit the field entirely when there are none so a
+      // resource-free world's snapshot is byte-identical to the pre-v2 shape
+      // (modulo `version`).
+      let resourcesSnap: Record<string, unknown> | undefined
+      if (resources.size > 0) {
+        resourcesSnap = {}
+        for (const [name, value] of resources) {
+          resourcesSnap[name] = cloneSerializable(value)
+        }
       }
       let snap: WorldSnapshot = {
         version: SNAPSHOT_VERSION,
         seed: rand.seed(),
         tick: time.tick,
         entities,
+        ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
       }
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
@@ -1206,7 +1581,15 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // Wipe world state (preserve plugins, system registrations, signals).
-      const prevMembers = queries.map((q) => Array.from(q.structuralMembers))
+      // Capture each live query's current members AS POPULATED VIEWS before the
+      // wipe: `buildView` reads stores eagerly, so views materialized here keep
+      // their component values after the stores are cleared. Index positionally
+      // — `q.id` is a world-global monotonic counter, NOT an index into the live
+      // `queries` array (disposed queries are spliced out), so `prevMembers[q.id]`
+      // looked up the wrong/undefined set after any dispose and onRemove misfired.
+      const prevViews = queries.map((q) =>
+        q.onRemoveFns.size > 0 ? Array.from(q.structuralMembers, (id) => makeView(id)) : null,
+      )
       alive.clear()
       stores.clear()
       archetypes.clear()
@@ -1217,13 +1600,18 @@ export function createWorld(options: WorldOptions = {}): World {
       pendingAdded.clear()
       pendingRemoved.clear()
       pendingChanged.clear()
+      // #16: resource values are part of the snapshot; clear then rehydrate.
+      // `resourceRegistry` (type identity) persists like `typeRegistry`.
+      resources.clear()
+      tickResourcesChanged.clear()
+      pendingResourcesChanged.clear()
       viewCache.clear()
-      for (const q of queries) {
-        const removed = prevMembers[q.id] ?? []
-        if (q.onRemoveFns.size > 0) for (const id of removed) for (const fn of q.onRemoveFns) fn(makeView(id))
+      queries.forEach((q, i) => {
+        const views = prevViews[i]
+        if (views) for (const view of views) for (const fn of q.onRemoveFns) fn(view)
         q.matchingArchetypes.clear()
         q.structuralMembers.clear()
-      }
+      })
       emptyArch = ensureArchetype(new Set<string>())
 
       // PRNG state + tick.
@@ -1268,6 +1656,14 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       nextId = maxId + 1
+
+      // #16: rehydrate resources by name (v1 snapshots have no `resources`,
+      // leaving the world's resource set empty — defaults re-materialize lazily).
+      if (s.resources) {
+        for (const [name, value] of Object.entries(s.resources)) {
+          resources.set(name, cloneSerializable(value))
+        }
+      }
     },
   }
 

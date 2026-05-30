@@ -59,6 +59,22 @@ The architecture below is the design target.
 
 ---
 
+## Live demos
+
+Five standalone exemplar apps — each its own repo, each deployed to GitHub Pages.
+They consume the `@domecs/*` packages from this repo via `file:../domecs/packages/*`,
+so clone any of them **alongside** `domecs` to develop on it.
+
+| Demo | What it exercises | Live | Source |
+|------|-------------------|------|--------|
+| **Dashboard** | PID-controlled hydraulic lift; keyboard control, E-stop | [▶ open](https://hypernovasystem.github.io/dashboard/) | [repo](https://github.com/HyperNovaSystem/dashboard) |
+| **Restaurant** | Real-time sim: seating, orders, service, pause/resume | [▶ open](https://hypernovasystem.github.io/restaurant/) | [repo](https://github.com/HyperNovaSystem/restaurant) |
+| **Roguelike** | 128×128 dungeon, reactive FOV, spatial-index plugin, following camera | [▶ open](https://hypernovasystem.github.io/roguelike/) | [repo](https://github.com/HyperNovaSystem/roguelike) |
+| **Railroad** | Iron Dynasty — real-time railroad tycoon; persistence + inspector | [▶ open](https://hypernovasystem.github.io/railroad/) | [repo](https://github.com/HyperNovaSystem/railroad) |
+| **Fleet Pulse** | 400-vehicle telemetry dashboard; coalesced bursts, virtual table | [▶ open](https://hypernovasystem.github.io/fleet/) | [repo](https://github.com/HyperNovaSystem/fleet) |
+
+---
+
 ## Install
 
 If you're consuming the published packages:
@@ -76,8 +92,7 @@ npm install @domecs/inspector   # in-browser entity/component debugger
 ```
 
 This repository itself is a `pnpm` workspace. If you're developing in
-this repo or running the examples, use the workspace setup below rather
-than `npm install`.
+this repo, use the workspace setup below rather than `npm install`.
 
 ---
 
@@ -89,22 +104,8 @@ Install all workspace packages from the repository root:
 pnpm install
 ```
 
-The examples in [`example/`](./example) depend on the local packages in
-[`packages/`](./packages) via `workspace:*`, so they must be installed
-through the workspace to resolve `@domecs/core`, `@domecs/dom`, and
-`@domecs/input` correctly.
-
-If you previously ran `npm install` in the repo root and an example
-fails with "dependencies are imported but could not be resolved",
-remove the npm-generated install artifacts and reinstall with `pnpm`.
-
-Run the examples from the repository root:
-
-```bash
-pnpm --filter @domecs-example/restaurant dev
-pnpm --filter @domecs-example/dashboard dev
-pnpm --filter @domecs-example/roguelike test
-```
+The packages in [`packages/`](./packages) depend on each other via
+`workspace:*`, so they must be installed through the workspace.
 
 Workspace-wide commands:
 
@@ -115,9 +116,13 @@ pnpm typecheck
 pnpm run release:validate
 ```
 
-`release:validate` builds and packs the runtime packages, stages clean example
-apps against those tarballs, then runs each staged app's `test` and `build`
+`release:validate` builds and packs the runtime packages, stages the available
+demo apps against those tarballs, then runs each app's `test` and `build`
 scripts. Use it before publishing a new `@domecs/*` version.
+
+The exemplar apps that used to live in `example/` are now standalone repos —
+see [Live demos](#live-demos) above. Each consumes these packages via
+`file:../domecs/packages/*`, so clone it next to this repo to develop on it.
 
 ---
 
