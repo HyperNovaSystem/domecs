@@ -39,7 +39,7 @@ the rollout (§8) and the consumer map (§10).
 
 | # | Change | Sections | Kind | Payoff | Migration |
 |---|--------|----------|------|--------|-----------|
-| 1 | Rebuild `dist/.d.ts` from src (core/persist/migrate/snapshot) + CI no-drift gate | V.1, V.3, VII.2 | additive | high | none |
+| 1 | Commit a generated API-surface snapshot (`dist/` is gitignored) + first CI gate (typecheck/build/test/no-drift) | V.1, V.3, VII.2 | additive | high | none |
 | 2 | `DomecsError` self-describing: `retryable` on every variant + `getErrorRepairHint` + `ERROR_KINDS` | I.3, IV.1–3, II.2 | breaking | high | medium |
 | 3 | Split `SystemDef` into schedule-discriminated union | VIII.1, II.4, I.1 | breaking | high | medium |
 | 4 | Unify selector family: `countEntities`/`listEntities`/`selectViews`/`iterEntitiesWith` | II.3, V.4, VI.2 | breaking | high | low |
@@ -166,14 +166,18 @@ live world.
 
 ## 7. Drift-fix, persist canonical path, examples (additive)
 
-- **Rebuild `dist/.d.ts` from `src/` across all packages + CI gate (rank 1).** Restores the
-  machine-readable contract: missing `world` methods
-  (`resource`/`setResource`/`markResourceChanged`/`count`/`entitiesMatching`/`select`/
-  `describeComponent`/`action`/`snapshot(options?)`); missing `index` exports
-  (`defineResource`/`ChangedResource`/`ResourceType`/snapshot-history exports);
-  `SNAPSHOT_VERSION = 2` + `WorldSnapshot.resources` + `SnapshotOptions`; `persist` `SaveOptions`;
-  `migrate` `BUILTIN_MIGRATIONS`/`withBuiltinMigrations`. This is the prerequisite for every other
-  change to be *visible*. Zero runtime change.
+- **Committed API-surface snapshot + first CI gate (rank 1).** *Premise correction (verified
+  2026-05-30):* `packages/*/dist/` is **gitignored**, consumers import **source**
+  (`exports → ./src/index.ts`), and a **fresh** `pnpm -r build` emits a `dist/index.d.ts` that
+  faithfully mirrors `src/index.ts` — `defineResource`/`ResourceType`/`ChangedResource`/
+  `SNAPSHOT_VERSION` etc. are all present. The symbols that looked "missing" were a **stale local
+  `dist/` build artifact**, not a source bug. So the real gap is not "rebuild dist" — it is that
+  there is **no committed, reviewable machine-readable contract** (dist can't be committed) and **no
+  CI** (none exists). Fix: a generator script writes each package's emitted barrel to a committed
+  `doc/api-surface/<pkg>.d.ts`; the first CI workflow runs typecheck → build → regenerate snapshot →
+  `git diff --exit-code` (the no-drift gate) → test. This makes the public surface a reviewed,
+  diffable artifact and is the prerequisite for every later change to be *visible*. Zero runtime
+  change.
 - **Persist canonical-path decision (decided 2026-05-30).** `api.md` documents an aspirational
   `createPersistence` / `Persistence` facade that the package does **not** ship; the shipped reality
   is Result-typed free functions (`save`/`load`/`migrate` over a `Storage`). **Decision: bless the
