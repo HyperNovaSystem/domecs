@@ -57,7 +57,7 @@ the rollout (§8) and the consumer map (§10).
 
 ## 3. `LEGIBILITY.md` — the contributor guideline (§2 deliverable / the spine)
 
-A standing review checklist for every future public change. Lands at `domecs/LEGIBILITY.md`. Six laws:
+A standing review checklist for every future public change. Lands at `domecs/doc/LEGIBILITY.md`. Six laws:
 
 - **L1 — The shipped `.d.ts` is the contract.** Regenerate `dist/` on every public change; CI gates
   no-drift between `src/` and `dist/`. `api.md` is a derived view: regenerate it or banner-mark it
@@ -137,9 +137,28 @@ live world.
   optional payload schema becomes the event's self-description; `describeEvent()`; docstring that
   `name` is an opaque diagnostic label (identity is the internal symbol); tested define→emit→
   subscribe→tick-delay doctest.
-- **Root.** `world.describe(): WorldManifest { components: ComponentDescriptor[]; resources:
-  ResourceDescriptor[]; events: {name}[]; systems: {name; schedule}[]; plugins: InstalledPlugin[];
-  capabilities: string[]; snapshotVersion: number }`. Composes the partial reflectors.
+- **Root.** `world.describe(): WorldManifest` composes the partial reflectors and carries the
+  debug-tooling necessaries so an inspector/agent can render world state without further probing:
+  ```ts
+  interface WorldManifest {
+    // schema surface (composed from the describe* family)
+    components: ComponentDescriptor[]
+    resources: ResourceDescriptor[]
+    events: { name: string }[]
+    systems: { name: string; schedule: SystemSchedule; enabled: boolean }[]
+    plugins: InstalledPlugin[]
+    capabilities: string[]
+    snapshotVersion: number
+    // debug-tooling necessaries (decided 2026-05-30)
+    entityCount: number                                   // total live entities
+    componentCounts: Record<string, number>               // componentName → instances
+    archetypes: { components: string[]; entityCount: number }[]  // distinct component-set populations
+  }
+  ```
+  The schema fields answer "what *can* exist"; the debug fields answer "what *does* exist right now"
+  — archetype populations + per-component instance counts + total entity count are the minimum an
+  inspector needs to summarize a running world. All counts are O(1)/O(archetype) reads, not full
+  scans, so `describe()` stays cheap enough to poll.
 - **Inspector.** `InspectorView.export(): InspectorSnapshot` (currently records faults/timeline but
   is human-only); document `PluginRegistry`/`InstalledPlugin` in `api.md`.
 
@@ -155,11 +174,13 @@ live world.
   `SNAPSHOT_VERSION = 2` + `WorldSnapshot.resources` + `SnapshotOptions`; `persist` `SaveOptions`;
   `migrate` `BUILTIN_MIGRATIONS`/`withBuiltinMigrations`. This is the prerequisite for every other
   change to be *visible*. Zero runtime change.
-- **Persist canonical-path decision.** `api.md` documents an aspirational `createPersistence` /
-  `Persistence` facade that the package does **not** ship; the shipped reality is Result-typed free
-  functions (`save`/`load`/`migrate` over a `Storage`). **Decision (recommended, confirm): bless the
-  shipped free functions as canonical and delete the facade from `api.md`** (§II.1 one canonical
-  path; the free functions are already the more legible, Result-typed surface).
+- **Persist canonical-path decision (decided 2026-05-30).** `api.md` documents an aspirational
+  `createPersistence` / `Persistence` facade that the package does **not** ship; the shipped reality
+  is Result-typed free functions (`save`/`load`/`migrate` over a `Storage`). **Decision: bless the
+  shipped free functions as canonical and delete the `createPersistence`/`Persistence` facade from
+  `api.md`** (§II.1 one canonical path; the free functions are already the more legible, Result-typed
+  surface). No code change — this is an `api.md` correction folded into Phase 4 sync; no consumer
+  migration (nothing imported the facade because it never shipped).
 - **Tested doctests + sync.** Export `DEFAULT_INPUT_OPTIONS` (machine-readable input defaults);
   snippet-CI'd examples for input defaults+override+read, event tick-delay, all four `changedOn`
   modes, and `Result` error handling. Fix `api.md` prose-vs-type drifts (`InspectorOptions` real
@@ -266,13 +287,60 @@ mechanical-vs-manual. This is the smoothing artifact — it tells each repo exac
 and lets the lockstep migration proceed repo-by-repo with a known scope. Generated as part of Phase 2,
 before any engine rename is published.
 
+### 10.4 Per-repo upgrade runbook (the sufficient-info guarantee)
+
+This is the ordered procedure each consumer repo follows once Phase 2 renames are published. The
+codemod (10.2A) + manual checklist (10.2B) + coverage matrix (10.3) together are the *complete*
+upgrade guide — no repo should need to re-derive anything from the engine diff.
+
+**Preconditions (from the deployment topology — see memory `domecs-demo-apps-deployment`):**
+- Every app resolves the engine via `file:../domecs/packages/*` exporting **source** (`exports →
+  ./src/index.ts`, no pre-build). So the upgraded engine must be checked out **alongside** the app
+  at the matching commit; there is no published npm version to bump — the break is felt at the app's
+  next `tsc`/`vite build`.
+- The load-bearing `"domecs-workspace": "file:../domecs"` dep stays (npm re-adds it; harmless). Do
+  not strip it during the upgrade.
+- `vite base: './'` stays (required for the `/<repo>/` GH Pages subpath).
+
+**Per-repo steps:**
+1. **Pin the engine.** Check out the upgraded `domecs` at the Phase-2 commit beside the app; `npm
+   install` so the `file:` link resolves to the new source.
+2. **Baseline scan.** Run the codemod **dry-run** (10.2A) + manual-touch grep (10.2B) → this repo's
+   column of the coverage matrix. If every cell is empty, the repo is unaffected — record and skip.
+3. **Apply the mechanical codemod.** Runs the scoped renames + rewrites `@domecs/*` named-import
+   lists. Commit this as an isolated "mechanical rename" commit so the structural diff stays legible.
+4. **Resolve the review-list.** The ambiguous tokens (`.select`/`.next`/`.count`/`.start`/`.int`/
+   `.range`/`.roll`) the codemod refused to blind-replace — confirm each receiver by hand.
+5. **Apply manual touch-points** in matrix order: `mountDOM`→`Result` unwrap, `changedOn`→union,
+   `DomecsError.match` `retryable` arms, any `SystemDef` invalid-combo, drop `InternalComponentType`/
+   `__`-field reach-ins (→ `describeComponent`).
+6. **Verify (red/green gate — task is not done until these pass):**
+   `tsc --noEmit` clean → `vite build` clean → app boots (first-paint smoke; for input-driven apps
+   confirm `tickStart`/`changedOn:[]` first-paint per `domecs-browser-app-gotchas`).
+7. **Deploy** per repo: `npm run deploy` (`vite build && gh-pages -d dist`).
+8. **Engine-side gate.** After all consumers are green, run `domecs` `scripts/validate-release.mjs`
+   (`release:validate`) — it discovers org sibling apps and pins local `../fleet_app`; a missing
+   `example/` falls back to org siblings. This is the lockstep "all consumers migrated" check.
+
+**Ordering across repos:** generate the coverage matrix (10.3) for *all* repos **before** publishing
+any rename, then migrate in dependency-free order (apps are mutually independent). The external
+snapshot-history repos (studio/tessera/lighthouse) are the only ones with a non-rename structural
+edit (hand-rolled history → `createSnapshotHistory`); schedule them last and treat their migration as
+its own touch-point row. Each repo's existing `doc/FINDINGS_*.md` (where present) is the prior-art
+reference for what that app exercises.
+
 ---
 
-## 11. Open questions
+## 11. Decisions (resolved 2026-05-30)
 
-1. **Persist facade** — confirm "bless shipped free functions, delete `createPersistence` from
-   `api.md`" (§7). Recommended.
-2. **Spec/guideline home** — this spec lives at `domecs/doc/`; guideline proposed at
-   `domecs/LEGIBILITY.md`. Confirm vs. the brainstorming default `docs/superpowers/specs/`.
-3. **`world.describe()` shape** — is the proposed `WorldManifest` field set sufficient, or should it
-   also carry archetype/entity-count summaries for debug tooling?
+All three open questions are resolved; the spec body above reflects them.
+
+1. **Persist facade — RESOLVED.** Bless the shipped Result-typed free functions as the canonical
+   path and delete the `createPersistence`/`Persistence` facade from `api.md` (§7). No code change,
+   no consumer migration.
+2. **Guideline home — RESOLVED.** The contributor guideline lands at **`domecs/doc/LEGIBILITY.md`**
+   (alongside this spec and `api.md`), not `domecs/LEGIBILITY.md` and not the brainstorming default
+   `docs/superpowers/specs/` (§3).
+3. **`world.describe()` shape — RESOLVED.** `WorldManifest` carries the debug-tooling necessaries:
+   `entityCount`, `componentCounts`, and an `archetypes` summary, in addition to the base schema
+   field set (§6).
