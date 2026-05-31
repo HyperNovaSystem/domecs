@@ -57,6 +57,7 @@ import {
   treeHas,
   type EntityView,
   type FieldsFromComponents,
+  type OneShotQueryDef,
   type QueryDef,
   type QueryHooks,
   type QueryNode,
@@ -216,16 +217,18 @@ export interface World {
    * to dispose, so they never leak. Use them for ad-hoc reads (UI labels, AI
    * decisions, asserts) where a persistent live query would accumulate. They
    * accept the same structural defs as `query()` — `Has`/`Not`/`And`/`Or`/
-   * `Where` — but reject reactive nodes (`Added`/`Changed`/`Removed`), which
-   * need the per-tick delta tracking only a live query or reactive system
-   * provides.
+   * `Where` — but reject reactive `On*` nodes (`OnAdded`/`OnChanged`/
+   * `OnRemoved`/`OnChangedResource`) at *compile time* via the `OneShotQueryDef`
+   * negative brand, since those need per-tick delta tracking only a live query
+   * or reactive system provides. (Untyped JS callers are still rejected at
+   * runtime by the `oneshotNode()` guard.)
    */
-  countEntities(def: QueryDef): number
-  listEntities(def: QueryDef): Entity[]
+  countEntities(def: OneShotQueryDef): number
+  listEntities(def: OneShotQueryDef): Entity[]
   selectViews<T extends ReadonlyArray<ComponentType<unknown, string>>>(
     def: readonly [...T],
   ): EntityView<FieldsFromComponents<T>>[]
-  selectViews(def: QueryDef): EntityView[]
+  selectViews(def: OneShotQueryDef): EntityView[]
   /**
    * Observe a query reactively and receive structural + optional per-tick
    * change callbacks. Returns an unsubscribe function.

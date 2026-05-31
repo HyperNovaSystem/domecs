@@ -16,6 +16,7 @@ export {
   OnChangedResource,
   normalize as normalizeQuery,
   collectHasComponents,
+  QueryNodeKind,
 } from './query.js'
 export type {
   World,
@@ -71,6 +72,8 @@ export type {
   QueryResult,
   QueryShorthand,
   NodeOrComponent,
+  OneShotQueryDef,
+  TemporalQueryNode,
   EntityView,
   FieldsFromComponents,
 } from './query.js'

@@ -105,18 +105,40 @@ describe('world.selectViews — leak-free view list (review #13)', () => {
 })
 
 describe('one-shot selectors reject reactive nodes (review #13)', () => {
-  it('countEntities throws on Added (per-tick delta needs a live query)', () => {
+  it('rejects temporal On* nodes at compile time', () => {
     const w = createWorld()
-    expect(() => w.countEntities(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.countEntities(OnAdded(Enemy)))
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.selectViews(OnAdded(Enemy)))
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.listEntities(OnAdded(Enemy)))
   })
 
-  it('selectViews throws on Added', () => {
+  it('still accepts non-temporal queries (guards against over-narrowing)', () => {
     const w = createWorld()
-    expect(() => w.selectViews(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    // These must compile without error — array shorthand, plain node, combinators.
+    void (() => w.countEntities([Enemy]))
+    void (() => w.countEntities(Has(Enemy)))
+    void (() => w.countEntities(And(Has(Enemy), Not(Position))))
+    void (() => w.listEntities(Has(Enemy)))
+    void (() => w.selectViews([Position]))
+    void (() => w.selectViews(Has(Enemy)))
+    expect(true).toBe(true)
   })
 
-  it('listEntities throws on Added', () => {
+  it('countEntities still throws at runtime on Added (untyped JS-caller guard)', () => {
     const w = createWorld()
-    expect(() => w.listEntities(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    expect(() => w.countEntities(OnAdded(Enemy) as never)).toThrow(/reactive|Added|one-shot/i)
+  })
+
+  it('selectViews still throws at runtime on Added (untyped JS-caller guard)', () => {
+    const w = createWorld()
+    expect(() => w.selectViews(OnAdded(Enemy) as never)).toThrow(/reactive|Added|one-shot/i)
+  })
+
+  it('listEntities still throws at runtime on Added (untyped JS-caller guard)', () => {
+    const w = createWorld()
+    expect(() => w.listEntities(OnAdded(Enemy) as never)).toThrow(/reactive|Added|one-shot/i)
   })
 })

@@ -19,6 +19,49 @@ export type QueryShorthand = ReadonlyArray<ComponentType<unknown>> | QueryNode
 export type QueryDef = QueryShorthand
 
 /**
+ * The set of `kind` discriminants in the `QueryNode` union, as a runtime const
+ * and a derived literal type. Keep in sync with the `QueryNode` union above.
+ */
+export const QueryNodeKind = [
+  'has',
+  'changed',
+  'added',
+  'removed',
+  'where',
+  'changedResource',
+  'not',
+  'and',
+  'or',
+] as const
+export type QueryNodeKind = (typeof QueryNodeKind)[number]
+
+declare const TEMPORAL: unique symbol
+/**
+ * A temporal query node (`OnAdded`/`OnRemoved`/`OnChanged`/`OnChangedResource`).
+ * Structurally a `QueryNode`, but carries a phantom brand (`[TEMPORAL]: true`)
+ * so the one-shot selectors can reject it at compile time. The brand has no
+ * runtime representation — the constructors return the same plain node object.
+ *
+ * Defined as an *intersection* (not `interface extends QueryNode`): `QueryNode`
+ * is a union, and an interface cannot extend a union (TS2312), nor would the
+ * result stay assignable back to `QueryNode`. The intersection keeps temporal
+ * nodes usable everywhere a `QueryNode` is accepted (reactive `reactsTo`,
+ * `And`/`Or` nesting) while still carrying the brand.
+ */
+export type TemporalQueryNode = QueryNode & { readonly [TEMPORAL]: true }
+
+/**
+ * Query accepted by the one-shot selectors (`countEntities` / `listEntities` /
+ * `selectViews`). Plain `QueryNode`s and component arrays are allowed; temporal
+ * `On*` nodes are excluded via a *negative brand*: the optional `[TEMPORAL]?:
+ * never` rejects the `true` carried by `TemporalQueryNode`, while a plain
+ * `QueryNode` (brand absent) satisfies the optional-`never` prop by absence.
+ */
+export type OneShotQueryDef =
+  | ReadonlyArray<ComponentType<unknown>>
+  | (QueryNode & { readonly [TEMPORAL]?: never })
+
+/**
  * Argument accepted by predicate combinators (`Not` / `And` / `Or`):
  * either a `QueryNode` or a bare `ComponentType` (auto-wrapped as `Has(T)`).
  * SPEC §2.4.
@@ -102,14 +145,14 @@ export function Or(...args: NodeOrComponent[]): QueryNode {
 export function And(...args: NodeOrComponent[]): QueryNode {
   return { kind: 'and', children: args.map(asNode) }
 }
-export function OnChanged<T>(type: ComponentType<T>): QueryNode {
-  return { kind: 'changed', type: type as ComponentType<unknown> }
+export function OnChanged<T>(type: ComponentType<T>): TemporalQueryNode {
+  return { kind: 'changed', type: type as ComponentType<unknown> } as TemporalQueryNode
 }
-export function OnAdded<T>(type: ComponentType<T>): QueryNode {
-  return { kind: 'added', type: type as ComponentType<unknown> }
+export function OnAdded<T>(type: ComponentType<T>): TemporalQueryNode {
+  return { kind: 'added', type: type as ComponentType<unknown> } as TemporalQueryNode
 }
-export function OnRemoved<T>(type: ComponentType<T>): QueryNode {
-  return { kind: 'removed', type: type as ComponentType<unknown> }
+export function OnRemoved<T>(type: ComponentType<T>): TemporalQueryNode {
+  return { kind: 'removed', type: type as ComponentType<unknown> } as TemporalQueryNode
 }
 export function Where<T>(
   type: ComponentType<T>,
@@ -128,8 +171,11 @@ export function Where<T>(
  * change ticks; compose with `And(Has(X), OnChangedResource(R))` to scope the
  * reaction to `X` entities. Reactive only: rejected by the one-shot selectors.
  */
-export function OnChangedResource<T>(resource: ResourceType<T>): QueryNode {
-  return { kind: 'changedResource', resource: resource as ResourceType<unknown> }
+export function OnChangedResource<T>(resource: ResourceType<T>): TemporalQueryNode {
+  return {
+    kind: 'changedResource',
+    resource: resource as ResourceType<unknown>,
+  } as TemporalQueryNode
 }
 
 export function normalize(def: QueryDef): QueryNode {

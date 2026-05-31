@@ -162,9 +162,17 @@ describe('ChangedResource — live query (review #16)', () => {
   it('one-shot selectors reject ChangedResource (it is per-tick reactive)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
-    expect(() => w.countEntities(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.listEntities(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.selectViews(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    // Temporal OnChangedResource is rejected at compile time by OneShotQueryDef;
+    // the `as never` casts exercise the surviving runtime guard for untyped JS callers.
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.countEntities(OnChangedResource(Score)))
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.listEntities(OnChangedResource(Score)))
+    // @ts-expect-error temporal On* nodes are illegal in one-shot selectors
+    void (() => w.selectViews(OnChangedResource(Score)))
+    expect(() => w.countEntities(OnChangedResource(Score) as never)).toThrow(/one-shot|reactive/i)
+    expect(() => w.listEntities(OnChangedResource(Score) as never)).toThrow(/one-shot|reactive/i)
+    expect(() => w.selectViews(OnChangedResource(Score) as never)).toThrow(/one-shot|reactive/i)
   })
 })
 
