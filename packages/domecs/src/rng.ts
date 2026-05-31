@@ -1,11 +1,11 @@
 export type RngState = readonly [number, number, number, number]
 
 export interface Rng {
-  next(): number
-  int(max: number): number
-  range(lo: number, hi: number): number
+  uniform(): number
+  uniformInt(max: number): number
+  uniformRange(lo: number, hi: number): number
   pick<T>(arr: readonly T[]): T
-  roll(sides: number): number
+  uniformRoll(sides: number): number
   seed(): RngState
   fork(label: string): Rng
 }
@@ -61,25 +61,25 @@ export function createRng(initial: number | RngState): Rng {
   const state = seedToState(initial)
 
   const api: Rng = {
-    next(): number {
+    uniform(): number {
       const u = xoshiroStep(state)
       return u / U32
     },
-    int(max: number): number {
+    uniformInt(max: number): number {
       if (max <= 0 || !Number.isFinite(max)) {
-        throw new Error(`rng.int: max must be a positive finite number; got ${max}`)
+        throw new Error(`rng.uniformInt: max must be a positive finite number; got ${max}`)
       }
-      return Math.floor(api.next() * max)
+      return Math.floor(api.uniform() * max)
     },
-    range(lo: number, hi: number): number {
-      return lo + api.next() * (hi - lo)
+    uniformRange(lo: number, hi: number): number {
+      return lo + api.uniform() * (hi - lo)
     },
     pick<T>(arr: readonly T[]): T {
       if (arr.length === 0) throw new Error('rng.pick: empty array')
-      return arr[api.int(arr.length)]!
+      return arr[api.uniformInt(arr.length)]!
     },
-    roll(sides: number): number {
-      return api.int(sides) + 1
+    uniformRoll(sides: number): number {
+      return api.uniformInt(sides) + 1
     },
     seed(): RngState {
       return [state[0], state[1], state[2], state[3]] as RngState

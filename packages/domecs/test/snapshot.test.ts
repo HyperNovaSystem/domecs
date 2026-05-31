@@ -73,13 +73,13 @@ describe('restore — roundtrip (SPEC §7.1)', () => {
     const w = createWorld({ seed: 0xabc })
     w.step(0.016)
     w.step(0.016)
-    for (let i = 0; i < 3; i++) w.rand.next()
+    for (let i = 0; i < 3; i++) w.rand.uniform()
     const snap = w.snapshot()
-    const original = [w.rand.next(), w.rand.next(), w.rand.next()]
+    const original = [w.rand.uniform(), w.rand.uniform(), w.rand.uniform()]
 
     const w2 = createWorld()
     w2.restore(snap)
-    const replayed = [w2.rand.next(), w2.rand.next(), w2.rand.next()]
+    const replayed = [w2.rand.uniform(), w2.rand.uniform(), w2.rand.uniform()]
     expect(replayed).toEqual(original)
   })
 

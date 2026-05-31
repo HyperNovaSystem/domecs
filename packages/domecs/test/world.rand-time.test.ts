@@ -6,15 +6,15 @@ describe('world.rand', () => {
     const a = createWorld({ seed: 0xBADCAB })
     const b = createWorld({ seed: 0xBADCAB })
     for (let i = 0; i < 50; i++) {
-      expect(a.rand.next()).toBe(b.rand.next())
+      expect(a.rand.uniform()).toBe(b.rand.uniform())
     }
   })
 
   it('differs for different seeds', () => {
     const a = createWorld({ seed: 1 })
     const b = createWorld({ seed: 2 })
-    const av = a.rand.next()
-    const bv = b.rand.next()
+    const av = a.rand.uniform()
+    const bv = b.rand.uniform()
     expect(av).not.toBe(bv)
   })
 })
