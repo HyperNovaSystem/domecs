@@ -1,5 +1,9 @@
 # DOMECS — API Reference (Draft v0.1)
 
+> **Authoritative source:** the committed type surface in
+> [`doc/api-surface/`](./api-surface/) is the contract; this file is a
+> derived, human-readable view. Where they disagree, the types win.
+
 Concrete type and function signatures for the public API described in `SPEC.md`. Anything not listed here is internal and may change without notice.
 
 ---
@@ -630,10 +634,10 @@ interface SnapshotOptions {
 
 ```ts
 interface Plugin<O = void> {
-  name:      string
-  version?:  string                        // informational; surfaced in diagnostics
-  depends?:  readonly string[]
-  provides?: readonly string[]
+  readonly name:      string
+  readonly version?:  string               // informational; surfaced in diagnostics
+  readonly depends?:  readonly string[]
+  readonly provides?: readonly string[]
   // `install` participates in the Result contract (BETTER_ERRORS Phase 1):
   // success carries an optional PluginHandle, failure a DomecsError that the
   // registry quarantines (provided capabilities are unwound, world keeps
@@ -808,8 +812,8 @@ assert.equal(opts.clearOnBlur, true)        // untouched default survives
 function mountDOM(world: World, options: MountOptions): MountHandle
 
 interface MountOptions {
-  slots: Record<string, HTMLElement>     // e.g. { stage: el, hud: el, portal: document.body }
-  views: readonly ViewDef[]
+  readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
+  readonly views: ReadonlyArray<ViewDef>
 }
 
 interface MountHandle {
@@ -921,56 +925,38 @@ interface AnimationClip {
 
 ## `@domecs/persist`
 
+There is no `createPersistence` facade — persistence is a set of
+`Result`-typed free functions over a `Storage`. The free functions are the
+one canonical path. Every operation returns a `Result<..., DomecsError>`;
+`save`/`load` never throw on expected I/O or migration failures.
+
+`Storage` is a slot-keyed text store; a missing slot reads as `ok(null)`,
+not an error. `createMemoryStorage` ships an in-memory adapter.
+
 ```ts
-function createPersistence(world: World, options: PersistOptions): Persistence
-
-interface PersistOptions {
-  database:  string
-  version:   number
-  codecs?:   Record<string, ComponentCodec<unknown>>
-  autosave?: { everyMs?: number; everyTicks?: number; slot?: string }
+interface Storage {
+  read(slot: string):                Result<string | null, DomecsError>
+  write(slot: string, data: string): Result<void, DomecsError>
+  remove(slot: string):              Result<void, DomecsError>
+  list():                            Result<readonly string[], DomecsError>
 }
 
-interface ComponentCodec<T> {
-  read:  (snapVersion: number, value: unknown) => T
-  write: (value: T) => unknown
-}
-
-interface Persistence {
-  save(slot: string): Promise<void>
-  load(slot: string): Promise<void>
-  list():             Promise<SaveSlot[]>
-  remove(slot: string): Promise<void>
-  export(slot: string): Promise<string>   // JSON string
-  import(json: string, slot: string): Promise<void>
-  autosave(options?: AutosaveOptions): () => void
-
-  // time travel
-  ringBuffer(options?: { size?: number; everyTicks?: number }): RingBuffer
-}
-
-interface RingBuffer {
-  snapshots(): readonly WorldSnapshot[]
-  scrubTo(tick: number): void
-  clear(): void
-}
-
-interface SaveSlot {
-  name:      string
-  savedAt:   number
-  tick:      number
-  thumbnail?: string
-}
+function createMemoryStorage(initial?: Readonly<Record<string, string>>): Storage
 ```
 
-**Implemented surface (v0.1).** The shipped package exposes Result-typed
-free functions over a `Storage`, not the `createPersistence` facade above
-(that remains aspirational). `load()` migrates the envelope by `version`
-before `world.restore`:
+**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
+serializes to JSON, and writes to `slot`. `load` reads `slot`, parses it,
+migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 2)
+before calling `world.restore`.
 
 ```ts
 function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
+
+interface SaveOptions {
+  meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)
+  savedAt?: number                    // override stamped ms-epoch timestamp; default Date.now()
+}
 
 interface LoadOptions {
   targetVersion?: number    // default SNAPSHOT_VERSION (2)
@@ -979,17 +965,62 @@ interface LoadOptions {
   migrations?: MigrationMap
 }
 
+// Plugin: strips entities with an empty serializable component bag from every
+// world.snapshot() envelope via onSnapshot — the declarative way to get
+// pruneEmptyEntities on the persisted save() path. Install once per world.
+function pruneTransientOnlyEntities(): Plugin
+```
+
+**Migration.** A `Migration` is a single-step `N → N+1` transform; `migrate`
+walks the chain to `targetVersion`. `BUILTIN_MIGRATIONS` is the framework
+floor (the 1→2 resources bump, SPEC §7.1/§2.11); `withBuiltinMigrations`
+overlays user steps on top (user keys win).
+
+```ts
 // A single-step migration: version N → N+1. Returning err halts the chain.
 type Migration    = (snap: WorldSnapshot) => Result<WorldSnapshot, MigrationFailedError>
-type MigrationMap  = ReadonlyMap<number, Migration>   // keyed by source version
+type MigrationMap = ReadonlyMap<number, Migration>   // keyed by source version
 
 function migrate(snap: WorldSnapshot, targetVersion: number, migrations: MigrationMap): Result<WorldSnapshot, MigrationFailedError>
 
-// Framework-supplied steps applied as the floor beneath any user chain.
-// Ships the 1→2 resources bump (SPEC §7.1/§2.11) as the sole built-in.
 const BUILTIN_MIGRATIONS: MigrationMap
-// Overlay user steps on the built-ins (user keys win); built-ins unchanged when empty.
 function withBuiltinMigrations(user?: MigrationMap): MigrationMap
+```
+
+**Snapshot history (undo/redo).** `createSnapshotHistory` is an in-memory
+undo/redo ring over `WorldSnapshot`s; `diffSnapshots` is an entity-level diff
+between two snapshots.
+
+```ts
+function createSnapshotHistory(world: World, opts?: SnapshotHistoryOptions): SnapshotHistory
+
+interface SnapshotHistoryOptions {
+  limit?:          number    // max checkpoints retained (ring); default 50, must be >= 1
+  captureInitial?: boolean   // snapshot current state as baseline at creation; default true
+}
+
+interface SnapshotHistory {
+  push():   void                              // snapshot world, append as new current checkpoint
+  undo():   boolean                           // restore previous; false at oldest
+  redo():   boolean                           // restore next; false at newest
+  canUndo(): boolean
+  canRedo(): boolean
+  clear():  void
+  readonly length: number                     // checkpoints retained
+  readonly index:  number                     // cursor; -1 when empty
+  snapshots(): readonly WorldSnapshot[]        // oldest-first
+  current():   WorldSnapshot | undefined
+  toJSON():    string
+  load(json: string): Result<void, DomecsError>
+}
+
+function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot): SnapshotDiff
+
+interface SnapshotDiff {
+  readonly addedEntities:   readonly Entity[]
+  readonly removedEntities: readonly Entity[]
+  readonly changedEntities: readonly Entity[]
+}
 ```
 
 ---
@@ -1000,12 +1031,9 @@ function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 function createInspector(options?: InspectorOptions): Plugin
 
 interface InspectorOptions {
-  slot?:     string                // default: 'chrome'
-  hotkey?:   string                // default: 'F1'
-  detect?:   {
-    wallClock?: boolean            // default true in dev
-    mathRandom?: boolean           // default true in dev
-  }
+  bufferSize?: number          // ring-buffer capacity for fault/state entries; default 1024
+  recordStateChanges?: boolean // interleave component-change events into the timeline; default false
+  timelineBufferSize?: number  // max timeline entries; defaults to bufferSize, only used when recordStateChanges is true
 }
 ```
 
