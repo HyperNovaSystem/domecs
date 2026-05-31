@@ -95,7 +95,7 @@ describe('world — entity & component basics', () => {
     world.addComponent(b, Position, { x: 2, y: 2 })
     world.addComponent(c, Velocity, { dx: 9, dy: 9 }) // not a Position carrier
     const seen = new Map<number, { x: number; y: number }>()
-    for (const { id, value } of world.entitiesWith(Position)) seen.set(id, value)
+    for (const { id, value } of world.iterEntitiesWith(Position)) seen.set(id, value)
     expect(seen.size).toBe(2)
     expect(seen.get(a)).toEqual({ x: 1, y: 1 })
     expect(seen.get(b)).toEqual({ x: 2, y: 2 })
@@ -105,7 +105,7 @@ describe('world — entity & component basics', () => {
   it('entitiesWith yields nothing for an unregistered type', () => {
     const world = createWorld()
     const Mood = defineComponent<{ happy: boolean }>('Mood')
-    expect(Array.from(world.entitiesWith(Mood))).toEqual([])
+    expect(Array.from(world.iterEntitiesWith(Mood))).toEqual([])
   })
 
   // F-9: signals.entityDespawned fires AFTER reclaim. Subscribers see a

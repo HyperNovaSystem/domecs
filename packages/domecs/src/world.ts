@@ -149,7 +149,7 @@ export interface World {
    * when no default was declared and nothing has been set. The returned object
    * is the live singleton — mutating it mutates the resource.
    */
-  resource<T>(type: ResourceType<T>): T | undefined
+  getResource<T>(type: ResourceType<T>): T | undefined
   /** Replace a resource's value, validate it, and mark it changed this tick. */
   setResource<T>(type: ResourceType<T>, value: T): void
   /**
@@ -191,7 +191,7 @@ export interface World {
    * with its value. Convenience over `world.query(Has(type))` + per-entity
    * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
    */
-  entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   /**
    * Reflect a component's name, transient flag, default value, and field
@@ -220,12 +220,12 @@ export interface World {
    * need the per-tick delta tracking only a live query or reactive system
    * provides.
    */
-  count(def: QueryDef): number
-  entitiesMatching(def: QueryDef): Entity[]
-  select<T extends ReadonlyArray<ComponentType<unknown, string>>>(
+  countEntities(def: QueryDef): number
+  listEntities(def: QueryDef): Entity[]
+  selectViews<T extends ReadonlyArray<ComponentType<unknown, string>>>(
     def: readonly [...T],
   ): EntityView<FieldsFromComponents<T>>[]
-  select(def: QueryDef): EntityView[]
+  selectViews(def: QueryDef): EntityView[]
   /**
    * Observe a query reactively and receive structural + optional per-tick
    * change callbacks. Returns an unsubscribe function.
@@ -1008,7 +1008,7 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
 
-    resource<T>(type: ResourceType<T>): T | undefined {
+    getResource<T>(type: ResourceType<T>): T | undefined {
       const meta = requireRegisteredResource(type as ResourceType<unknown>)
       if (resources.has(type.name)) return resources.get(type.name) as T
       if (meta.__default) {
@@ -1038,7 +1038,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return Array.from(typeRegistry.values())
     },
 
-    *entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
+    *iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
       requireRegisteredType(type)
       const store = stores.get(type.name) as Map<Entity, T> | undefined
       if (!store) return
@@ -1162,7 +1162,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return result
     },
 
-    count(def: QueryDef): number {
+    countEntities(def: QueryDef): number {
       const { node, needsEntityFilter } = oneshotNode(def)
       let n = 0
       for (const arch of archetypes.values()) {
@@ -1176,7 +1176,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return n
     },
 
-    entitiesMatching(def: QueryDef): Entity[] {
+    listEntities(def: QueryDef): Entity[] {
       const { node, needsEntityFilter } = oneshotNode(def)
       const out: Entity[] = []
       for (const arch of archetypes.values()) {
@@ -1189,7 +1189,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return out
     },
 
-    select(def: QueryDef): EntityView[] {
+    selectViews(def: QueryDef): EntityView[] {
       const { node, needsEntityFilter } = oneshotNode(def)
       const out: EntityView[] = []
       for (const arch of archetypes.values()) {

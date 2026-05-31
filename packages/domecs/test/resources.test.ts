@@ -6,40 +6,40 @@ import { SNAPSHOT_VERSION } from '../src/snapshot.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
-describe('defineResource + world.resource/setResource (review #16)', () => {
-  it('resource() returns the declared default (lazily materialized)', () => {
+describe('defineResource + world.getResource/setResource (review #16)', () => {
+  it('getResource() returns the declared default (lazily materialized)', () => {
     const Count = defineResource<number>('Count', { default: 7 })
     const w = createWorld()
-    expect(w.resource(Count)).toBe(7)
+    expect(w.getResource(Count)).toBe(7)
   })
 
-  it('resource() returns undefined when no default is declared', () => {
+  it('getResource() returns undefined when no default is declared', () => {
     const Opt = defineResource<number>('Opt')
     const w = createWorld()
-    expect(w.resource(Opt)).toBeUndefined()
+    expect(w.getResource(Opt)).toBeUndefined()
   })
 
-  it('setResource then resource() returns the stored value', () => {
+  it('setResource then getResource() returns the stored value', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
     w.setResource(Score, 42)
-    expect(w.resource(Score)).toBe(42)
+    expect(w.getResource(Score)).toBe(42)
   })
 
   it('a function default is treated as a per-world factory (no cross-world sharing)', () => {
     const List = defineResource<number[]>('List', { default: () => [] })
     const w1 = createWorld()
     const w2 = createWorld()
-    w1.resource(List)!.push(1)
-    expect(w1.resource(List)).toEqual([1])
-    expect(w2.resource(List)).toEqual([])
+    w1.getResource(List)!.push(1)
+    expect(w1.getResource(List)).toEqual([1])
+    expect(w2.getResource(List)).toEqual([])
   })
 
   it('a returned resource object is the live, mutable singleton', () => {
     const Cfg = defineResource<{ v: number }>('Cfg', { default: { v: 1 } })
     const w = createWorld()
-    w.resource(Cfg)!.v = 9
-    expect(w.resource(Cfg)!.v).toBe(9)
+    w.getResource(Cfg)!.v = 9
+    expect(w.getResource(Cfg)!.v).toBe(9)
   })
 
   it('setResource runs the validator and throws on a rejected value', () => {
@@ -137,7 +137,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     w.system('react', { schedule: 'reactive', reactsTo: OnChangedResource(Cfg) }, () => {
       fired++
     })
-    w.resource(Cfg)!.v = 2 // mutate in place
+    w.getResource(Cfg)!.v = 2 // mutate in place
     w.markResourceChanged(Cfg) // between ticks -> pending
     w.step()
     expect(fired).toBe(1)
@@ -162,9 +162,9 @@ describe('ChangedResource — live query (review #16)', () => {
   it('one-shot selectors reject ChangedResource (it is per-tick reactive)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
-    expect(() => w.count(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.entitiesMatching(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.select(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.countEntities(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.listEntities(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.selectViews(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
   })
 })
 
@@ -187,8 +187,8 @@ describe('snapshot.resources — round-trip (review #16)', () => {
 
     const w2 = createWorld()
     w2.restore(snap)
-    expect(w2.resource(Score)).toBe(42)
-    expect(w2.resource(Phase)).toEqual({ name: 'combat' })
+    expect(w2.getResource(Score)).toBe(42)
+    expect(w2.getResource(Phase)).toEqual({ name: 'combat' })
   })
 
   it('deep-clones resource values (post-snapshot mutation does not leak)', () => {
@@ -196,7 +196,7 @@ describe('snapshot.resources — round-trip (review #16)', () => {
     const w = createWorld()
     w.setResource(Phase, { name: 'a' })
     const snap = w.snapshot()
-    w.resource(Phase)!.name = 'b'
+    w.getResource(Phase)!.name = 'b'
     expect((snap.resources!.Phase as { name: string }).name).toBe('a')
   })
 
@@ -212,6 +212,6 @@ describe('snapshot.resources — round-trip (review #16)', () => {
     w.setResource(Score, 5)
     const empty = createWorld().snapshot() // no resources
     w.restore(empty)
-    expect(w.resource(Score)).toBe(0) // back to default; the 5 is gone
+    expect(w.getResource(Score)).toBe(0) // back to default; the 5 is gone
   })
 })
