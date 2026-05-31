@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "doc/.doctest/dist",
     "noEmit": false,
+    "noEmitOnError": true,
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,

@@ -48,6 +48,8 @@ export function extractDoctests(markdown, source) {
     const nameMatch = /\bname=([\w-]+)/.exec(open[1])
     const body = []
     i += 1
+    // Assumes api.md uses non-indented triple-backtick fences (no nested or
+    // 4-backtick fences); the closing fence is a line of bare ``` + whitespace.
     while (i < lines.length && !/^```\s*$/.test(lines[i])) {
       body.push(lines[i])
       i += 1
@@ -69,23 +71,35 @@ export function tempFileName(block) {
 
 /**
  * Build a shim `@domecs/<key>` package in the temp `node_modules` whose
- * `exports` point at the workspace package's built `dist/index.{js,d.ts}` via
- * file symlinks. Node forbids `..` in an `exports` target, so the targets are
- * package-local symlinks rather than relative paths escaping the shim dir.
+ * `exports` point at the workspace package's built `dist/` via a single
+ * directory link named `dist`. A directory junction (Windows) / dir symlink
+ * (POSIX) needs no elevated privilege, unlike per-file file symlinks which
+ * throw `EPERM` on Windows without Developer Mode/admin. The link target's
+ * realpath is the real `dist`, so relative imports inside it (e.g.
+ * `./component.js`) still resolve.
  */
 function linkPackages() {
   const scope = join(TMP_DIR, 'node_modules', '@domecs')
   for (const [key, dir] of Object.entries(DOMECS_PACKAGES)) {
-    const distJs = join(ROOT, dir, 'dist', 'index.js')
-    const distDts = join(ROOT, dir, 'dist', 'index.d.ts')
+    const absDistDir = join(ROOT, dir, 'dist')
+    const distJs = join(absDistDir, 'index.js')
+    const distDts = join(absDistDir, 'index.d.ts')
     if (!existsSync(distJs) || !existsSync(distDts)) {
       console.error(`doctest: missing build output for @domecs/${key} (${dir}/dist). Run \`pnpm build\` first.`)
       process.exit(1)
     }
     const pkgDir = join(scope, key)
     mkdirSync(pkgDir, { recursive: true })
-    symlinkSync(distJs, join(pkgDir, 'index.js'), 'file')
-    symlinkSync(distDts, join(pkgDir, 'index.d.ts'), 'file')
+    // 'junction' is honored on Windows (no privilege needed) and ignored on
+    // POSIX, where Node creates a plain directory symlink instead.
+    try {
+      symlinkSync(absDistDir, join(pkgDir, 'dist'), 'junction')
+    } catch (err) {
+      console.error(
+        `doctest: failed to link @domecs/${key} dist (${err.code}) — on Windows enable Developer Mode or run as admin`,
+      )
+      process.exit(1)
+    }
     writeFileSync(
       join(pkgDir, 'package.json'),
       JSON.stringify(
@@ -93,7 +107,7 @@ function linkPackages() {
           name: `@domecs/${key}`,
           version: '0.0.0',
           type: 'module',
-          exports: { '.': { types: './index.d.ts', default: './index.js' } },
+          exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
         },
         null,
         2,
@@ -108,10 +122,17 @@ function run() {
   linkPackages()
 
   const all = []
+  const seen = new Set()
   for (const source of SOURCES) {
     const md = readFileSync(join(ROOT, source), 'utf8')
     for (const block of extractDoctests(md, source)) {
-      const file = join(TMP_DIR, tempFileName(block))
+      const name = tempFileName(block)
+      if (seen.has(name)) {
+        console.error(`doctest: duplicate snippet name \`${block.name}\` — two doctest fences resolve to the same temp file ${name}`)
+        process.exit(1)
+      }
+      seen.add(name)
+      const file = join(TMP_DIR, name)
       writeFileSync(file, block.code.replace(/\r\n/g, '\n').replace(/\n*$/, '\n'))
       all.push({ ...block, file })
     }
