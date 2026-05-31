@@ -1,6 +1,6 @@
-# DOMECS — Specification v0.1 (Draft)
+# DOMECS — Specification v1.0
 
-**Status:** Draft. Incorporates the critique in `critique.md` and the exemplar requirements in `exemplars.md`. Source of truth until code ships; README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: all five `@domecs/*` packages are published at 1.0.0. Incorporates the critique in `critique.md` and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -114,14 +114,14 @@ A query is a composable predicate over component presence and values. Queries ar
 **Component shortcuts** carry a single `ComponentType` and produce a leaf node:
 
 - `Has(T)` — component type present on the entity.
-- `Changed(T)` — `markChanged(e, T)` was called in the previous tick.
-- `Added(T)` — component type was added in the previous tick.
-- `Removed(T)` — component type was removed in the previous tick.
+- `OnChanged(T)` — `markChanged(e, T)` was called in the previous tick.
+- `OnAdded(T)` — component type was added in the previous tick.
+- `OnRemoved(T)` — component type was removed in the previous tick.
 - `Where(T, predicate)` — component is present and `predicate(value)` is true.
 
 **Resource change-detection node** carries a single `ResourceType` (see §2.11) and produces a leaf node:
 
-- `ChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) in the previous tick. Structurally neutral: it matches *every* entity on a change tick and *no* entity otherwise, so `And(Has(T), ChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `ChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
+- `OnChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) in the previous tick. Structurally neutral: it matches *every* entity on a change tick and *no* entity otherwise, so `And(Has(T), OnChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `OnChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
 
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
@@ -144,7 +144,7 @@ registering anything: `count(def) → number`, `entitiesMatching(def) →
 Entity[]`, and `select(def) → EntityView[]` (the latter carrying typed fields
 for the tuple shorthand, as `query()` does). One-shot selectors accept the
 structural node set (`Has`/`Not`/`And`/`Or`/`Where`) and MUST reject reactive
-nodes (`Added`/`Changed`/`Removed`/`ChangedResource`), whose per-tick deltas are
+nodes (`OnAdded`/`OnChanged`/`OnRemoved`/`OnChangedResource`), whose per-tick deltas are
 only defined for a registered query or reactive system.
 
 **EntityView shape (normative, P-1).** An `EntityView` exposes exactly the
@@ -174,7 +174,7 @@ view is rebuilt.
 (`world.query([Position, Velocity] as const)`) MUST produce a
 `QueryResult` whose `EntityView` carries typed component fields keyed by
 each component's literal name. Combinator-form queries
-(`Has`/`And`/`Or`/`Not`/`Changed`/…) fall back to the unconstrained
+(`Has`/`And`/`Or`/`Not`/`OnChanged`/…) fall back to the unconstrained
 `EntityView` shape; callers either narrow at the call site or read
 component values through `world.getComponent`, which already carries
 typed `T`. Component types that need their literal name preserved by
@@ -184,9 +184,9 @@ TypeScript MUST be declared with both type parameters
 parameter to `string`, and views built from such types fall back to the
 unconstrained `EntityView` shape.
 
-**Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `Added` / `Removed` / `Changed` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
+**Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `OnAdded` / `OnRemoved` / `OnChanged` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
-Change-detection filters (`Changed`, `Added`, `Removed`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
+Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
 
 ### 2.5 System
 
@@ -275,11 +275,11 @@ Result: `scaledDelta` keeps its §7 wire-format guarantee, and a `fixed` system 
 
 ### 2.9 Change tracking
 
-`world.markChanged(entity, type)` is the input to `Changed(T)` queries. It is **explicit**: the core does not auto-detect component mutations. In v0.1 the path is proxy-free in every build: `markChanged` records the entity/type pair for the next tick's change filters, with no write interception, no per-field version bookkeeping, no `WorldOptions.dev`, and no `world.diag` surface.
+`world.markChanged(entity, type)` is the input to `OnChanged(T)` queries. It is **explicit**: the core does not auto-detect component mutations. In v0.1 the path is proxy-free in every build: `markChanged` records the entity/type pair for the next tick's change filters, with no write interception, no per-field version bookkeeping, no `WorldOptions.dev`, and no `world.diag` surface.
 
-Post-v0.1 diagnostics may warn about mutation-without-mark or mark-without-mutation patterns through a plugin or inspector surface, but those warnings must not change `Changed(T)` semantics. Missed marks remain caller bugs; extra defensive marks remain legal.
+Post-v0.1 diagnostics may warn about mutation-without-mark or mark-without-mutation patterns through a plugin or inspector surface, but those warnings must not change `OnChanged(T)` semantics. Missed marks remain caller bugs; extra defensive marks remain legal.
 
-**Invariant (I-2 — explicit marks).**  `Changed(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; future diagnostics may help find them, but the core does not paper over them.
+**Invariant (I-2 — explicit marks).**  `OnChanged(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; future diagnostics may help find them, but the core does not paper over them.
 
 This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
 
@@ -334,7 +334,7 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 
 **Default materialization (normative).** `defineResource` accepts `default?: T | (() => T)` and `validate?`. A function default is a **per-world factory** called lazily the first time `resource(R)` is read on a world that has not set the value; a non-function default is **deep-cloned per world** (so two worlds never share a mutable default object). `resource(R)` returns `undefined` only when there is no value and no default. `setResource` and a materialized default both run `validate`; a `string` return is thrown as a validation error.
 
-**Change tracking (normative).** Resource changes participate in the same buffer-and-swap discipline as component marks (§2.9): `setResource` and `markResourceChanged` record the resource name into the live tick set when called inside a tick, or the pending set when called between ticks, promoted at step 0. `ChangedResource(R)` (§2.4) reports exactly the resources changed in the previous tick. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
+**Change tracking (normative).** Resource changes participate in the same buffer-and-swap discipline as component marks (§2.9): `setResource` and `markResourceChanged` record the resource name into the live tick set when called inside a tick, or the pending set when called between ticks, promoted at step 0. `OnChangedResource(R)` (§2.4) reports exactly the resources changed in the previous tick. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
 
 **Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
 
@@ -432,9 +432,9 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
 
    **`ctx.entities` for reactive systems (normative).** When a reactive system supplies only `reactsTo` (no explicit `query`), its `ctx.entities` MUST be the `reactsTo` change delta for the tick — the same set that triggered the invocation — not the empty array. When an explicit `query` is also supplied it takes precedence and `ctx.entities` reflects that query; authors who want both the trigger and a broader/narrower view use the explicit `query` for iteration and the change itself as the trigger.
 
-   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`Added`, `Removed`, `Changed`, or `ChangedResource`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error.
+   **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`OnAdded`, `OnRemoved`, `OnChanged`, or `OnChangedResource`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error.
 
-   **Resource-gated reactive fire (normative).** A `reactsTo` query whose only change-detection node is `ChangedResource(R)` and that carries no `Has` leaf is a *world-level* trigger: it fires whenever `R` changed, even in an empty world, with `ctx.entities` empty. When such a query also carries a `Has(T)` leaf (e.g. `And(Has(T), ChangedResource(R))`) it is entity-scoped and fires with the `T` entities on `R`-change ticks — and does not fire in a world with no `T`, matching the structural semantics of `ChangedResource` in §2.4. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
+   **Resource-gated reactive fire (normative).** A `reactsTo` query whose only change-detection node is `OnChangedResource(R)` and that carries no `Has` leaf is a *world-level* trigger: it fires whenever `R` changed, even in an empty world, with `ctx.entities` empty. When such a query also carries a `Has(T)` leaf (e.g. `And(Has(T), OnChangedResource(R))`) it is entity-scoped and fires with the `T` entities on `R`-change ticks — and does not fire in a world with no `T`, matching the structural semantics of `OnChangedResource` in §2.4. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
 8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
 
@@ -748,7 +748,7 @@ The inspector is **not** part of core; production builds omit it.
 The integration surface is:
 
 - `World.signals` (listener-gated, see `api.md`) — subscribe from any reactive system to be notified of entity/component/tick events.
-- `world.markChanged(entity, type)` — explicit change tracking, the input to `Changed(T)` queries.
+- `world.markChanged(entity, type)` — explicit change tracking, the input to `OnChanged(T)` queries.
 - `WorldSnapshot` — structural clone suitable for any store that can hold a plain object.
 
 Any framework (Svelte, React, Solid, Vue, Lit, or vanilla DOM) can layer on top by subscribing to signals and mapping them into its own reactivity model.  Such integrations are **user code**, not core, not blessed, not versioned in lockstep with DOMECS.
@@ -758,7 +758,7 @@ Any framework (Svelte, React, Solid, Vue, Lit, or vanilla DOM) can layer on top 
 - **Scope.**  Two adapters × two reactivity models doubles the surface the spec has to defend.  v0.1 picks one path and proves it.
 - **Honesty.**  A Svelte `$state`-wrapped component store is not the same object as a vanilla component instance; systems written against one do not trivially port to the other.  Tiered adapters hid that asymmetry behind a marketing story.
 - **Invariant I-1.**  The cross-tick reference rule (§2.2) is uniform for vanilla.  Adapter-wrapped references introduce per-adapter lifetime questions; deferring them lets the invariant stay simple.
-- **`markChanged` is the API.**  With no "auto-detect in Svelte" alternative, explicit marking is not an ergonomics regression — it is the contract (see §2.9 for the full change-tracking contract).  This closes the `Changed(T)` correctness question by removing the branch where discipline varies.
+- **`markChanged` is the API.**  With no "auto-detect in Svelte" alternative, explicit marking is not an ergonomics regression — it is the contract (see §2.9 for the full change-tracking contract).  This closes the `OnChanged(T)` correctness question by removing the branch where discipline varies.
 
 ### 11.2 What ships after v0.1
 

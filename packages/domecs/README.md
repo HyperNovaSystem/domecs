@@ -7,7 +7,7 @@ DOMECS is an ECS-first framework for DOM-heavy browser apps and games. This
 package is intentionally renderer-agnostic; pair it with `@domecs/dom` for DOM
 views and `@domecs/input` for browser input collection.
 
-> Status: early alpha.
+> Status: v1.0 — stable.
 
 ## Install
 
@@ -41,7 +41,7 @@ world.system(
   { schedule: 'fixed', query: [Position, Velocity] },
   ({ world }) => {
     const w = world as World
-    for (const { id, value: pos } of w.entitiesWith(Position)) {
+    for (const { id, value: pos } of w.iterEntitiesWith(Position)) {
       const vel = w.getComponent(id, Velocity)
       if (!vel) continue
       pos.x += vel.dx
@@ -64,14 +64,14 @@ for (const entity of world.query(Has(Position)).entities) {
 - `defineComponent<T>(name, options?)` — define typed component handles.
 - `defineResource<T>(name, options?)` — define a world-level named value
   (score, level, gravity); `world.resource(R)` / `setResource(R, v)` /
-  `markResourceChanged(R)`. React to changes with `ChangedResource(R)`.
+  `markResourceChanged(R)`. React to changes with `OnChangedResource(R)`.
 - `entry(component, value)` — typed helper for heterogeneous spawn arrays.
 - `world.spawn(...)` / `world.despawn(...)` — manage entities.
 - `world.addComponent(...)`, `getComponent(...)`, `removeComponent(...)` —
   manage component data.
 - `world.query(...)` / `world.observe(...)` — query and observe entity sets.
-- Query helpers: `Has`, `Not`, `Or`, `And`, `Added`, `Removed`, `Changed`,
-  `Where`, `ChangedResource`.
+- Query helpers: `Has`, `Not`, `Or`, `And`, `OnAdded`, `OnRemoved`, `OnChanged`,
+  `Where`, `OnChangedResource`.
 - `world.system(name, def, fn)` — register `tick`, `fixed`, `event`, `once`, or
   `reactive` systems.
 - `defineEvent<T>(name)`, `world.emit(...)`, `world.on(...)` — buffered events.

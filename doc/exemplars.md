@@ -134,7 +134,7 @@ Abstract strategy on a hex grid. 2–4 local or networked players. Perfect infor
 - **Headless mode** — `world.stepN(moves)` with no renderer, no RAF, no DOM.
 - **Hermetic snapshots** — `snapshot()` / `restore(s)` produce identical worlds across machines. PRNG state is part of the snapshot.
 - **Rollback-safe event bus** — rewinding a turn rewinds the event buffer too.
-- Per-component **change detection** (`Changed()` filter) for efficient AI evaluation without running the renderer.
+- Per-component **change detection** (`OnChanged()` filter) for efficient AI evaluation without running the renderer.
 
 ### Anti-features
 

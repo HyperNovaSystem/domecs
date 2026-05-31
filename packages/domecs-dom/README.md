@@ -6,7 +6,7 @@ Retained-mode DOM renderer for DOMECS worlds.
 each matching entity, updates it after render ticks, and destroys it when the
 entity stops matching.
 
-> Status: early alpha.
+> Status: v1.0 — stable.
 
 ## Install
 
@@ -56,17 +56,25 @@ const actorView = defineView({
   },
 })
 
-const mount = mountDOM(world, {
+// `mountDOM` returns a `Result<MountHandle, MountError>` — unwrap it before use.
+const mounted = mountDOM(world, {
   slots: {
     actors: document.querySelector<HTMLElement>('#actors')!,
   },
   views: [actorView],
 })
 
-world.step()
+if (!mounted.ok) {
+  // e.g. { kind: 'slot_already_mounted' | 'unregistered_slot' | 'plugin_install_failed' }
+  console.error('mountDOM failed:', mounted.error)
+} else {
+  const mount = mounted.value
 
-// Later:
-mount.teardown()
+  world.step()
+
+  // Later:
+  mount.teardown()
+}
 ```
 
 ## How it works
@@ -76,7 +84,7 @@ mount.teardown()
 - Each view has a `query`; matching entities get mounted into the view's slot.
 - `create(entity)` returns the element for a matching entity.
 - `update(el, entity)` runs during render commits. By default it is gated
-  on `Changed(T)` for every `Has(T)` leaf in the view's `query`. Pass an
+  on `OnChanged(T)` for every `Has(T)` leaf in the view's `query`. Pass an
   explicit `changedOn` array to narrow the gate, or `changedOn: []` to
   redraw every tick (e.g. for time-driven animations).
 - `destroy(el, entity)` is called before an element is removed.
