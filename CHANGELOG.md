@@ -113,5 +113,5 @@ Additive self-describing root and surrounding surface (Phase 3 + earlier):
   dual-overload trade-off); `defineEvent` payload tick-delay (emit on tick N →
   visible to `event` systems on N+1) documented and doctested.
 
-[Unreleased]: https://github.com/HyperNovaSystem/domecs/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/HyperNovaSystem/domecs/releases/tag/v1.0.0
+[Unreleased]: https://github.com/hypernovasystem/domecs/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/hypernovasystem/domecs/releases/tag/v1.0.0
