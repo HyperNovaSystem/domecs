@@ -140,8 +140,8 @@ Queries are **archetype-cached**. A query computes an index the first time it is
 `dispose()`; reading `.entities.length` for a one-off count and dropping the
 result leaks a registered query. For ad-hoc reads the engine MUST provide
 leak-free one-shot selectors that evaluate the current world without
-registering anything: `count(def) → number`, `entitiesMatching(def) →
-Entity[]`, and `select(def) → EntityView[]` (the latter carrying typed fields
+registering anything: `countEntities(def) → number`, `listEntities(def) →
+Entity[]`, and `selectViews(def) → EntityView[]` (the latter carrying typed fields
 for the tuple shorthand, as `query()` does). One-shot selectors accept the
 structural node set (`Has`/`Not`/`And`/`Or`/`Where`) and MUST reject reactive
 nodes (`OnAdded`/`OnChanged`/`OnRemoved`/`OnChangedResource`), whose per-tick deltas are
