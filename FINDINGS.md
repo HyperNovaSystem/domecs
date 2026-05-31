@@ -128,14 +128,6 @@ blessed recipe or example, not new API:
   config (`noUnusedParameters`, `noUncheckedIndexedAccess`). Keep engine tsconfig
   aligned with the strictest advertised consumer config, or run that exact
   `tsc --noEmit` against engine sources in CI. (Prism)
-- **`system_threw` is declared but never constructed** — the closed `DomecsError`
-  union reserves `system_threw` (with a documented `retryable: true` rationale),
-  but no code builds it: a system that *throws* (rather than returning a
-  `SystemResult`) is caught nowhere in `world.ts` and escapes `step()`. This is
-  the system-side twin of the now-fixed `event_handler_threw` gap (§4). Decide:
-  wire a system-execution isolation point (symmetric with the event-handler
-  quarantine), or drop the variant. A closed-union member with zero producers is
-  itself a legibility cost. (verified 2026-05-31)
 - **`api-surface` gate is barrel-only** — the no-drift snapshot captures
   `dist/index.d.ts` (the re-export barrel), not interface *bodies*, so adding a
   method to an exported interface (e.g. `World.getSystem`) produces no snapshot
@@ -169,23 +161,3 @@ Park these in `ROADMAP.md`:
   stale `dist/` isn't seeded), and strip `.git/`/`node_modules/`. (Prism, Vite
   template)
 
----
-
-## 4. Resolved this pass (was: unverified / needs triage)
-
-Both items were triaged from source and fixed on `v1-phase4-freeze` (red/green
-TDD, full suite green):
-
-- **Consolidator disable-by-handle** — RESOLVED (commit 5933b22). Source confirmed
-  `SystemHandle` already exposes `enabled`/`disable()`, but the auto-registered
-  consolidator's handle was unreachable (no by-name lookup; `describe().systems[]
-  .enabled` is a read-only DTO). Added `world.getSystem(name): SystemHandle |
-  undefined`, backed by the scheduler's live handle registry — the documented
-  escape hatch is now real and tested.
-- **Event-handler throw quarantine** — RESOLVED (commit d16ee4d). The earlier note
-  was wrong: `event_handler_threw` was *declared but never constructed*, and
-  `events.ts flush()` had no try/catch, so a throwing `on()` subscriber escaped
-  `step()`. `flush()` now wraps each direct-subscriber dispatch and routes the
-  throw to `signals.faultRaised` as an `event_handler_threw` fault (`retryable:
-  true`) while the remaining subscribers/events still deliver. Its system-side
-  twin (`system_threw`, also unconstructed) is logged as an open item in §2.
