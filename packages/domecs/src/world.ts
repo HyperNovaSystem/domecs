@@ -39,7 +39,9 @@ import {
   type SystemContext,
   type SystemDef,
   type SystemHandle,
+  type SystemSchedule,
 } from './scheduler.js'
+import type { WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, type TimeState } from './time.js'
 import type {
@@ -219,6 +221,13 @@ export interface World {
    * the same as any resource access.
    */
   describeResource<T>(type: ResourceType<T>): ResourceDescriptor
+  /**
+   * One machine-readable manifest of the whole live world: the schema surface
+   * (components/resources/events/systems/plugins/capabilities/snapshotVersion)
+   * plus live debug counts (entityCount/componentCounts/archetypes). All
+   * counts are O(1)/O(archetype) reads — cheap enough to poll.
+   */
+  describe(): WorldManifest
   /**
    * Typed overload (D-2): an array of `ComponentType<T, Name>` produces a
    * `QueryResult` whose `EntityView` exposes `view.Name: T` typed fields.
@@ -1277,6 +1286,52 @@ export function createWorld(options: WorldOptions = {}): World {
         name: type.name,
         hasValue: resources.has(type.name),
         hasDefault: meta.__default !== undefined,
+      }
+    },
+
+    describe(): WorldManifest {
+      const componentDescs = world.componentTypes().map((t) => world.describeComponent(t))
+      const resourceDescs = world.resourceTypes().map((t) => world.describeResource(t))
+      const events = bus.knownTypes().map((t) => ({ name: t.name }))
+
+      const modes: SystemSchedule[] = ['tick', 'fixed', 'event', 'once', 'reactive']
+      const systems = modes.flatMap((mode) =>
+        scheduler.systemsByMode(mode).map((s) => ({
+          name: s.name,
+          schedule: s.schedule,
+          enabled: s.enabled,
+        })),
+      )
+
+      const installed = plugins.list()
+      const pluginEntries: PluginManifestEntry[] = installed.map((e) => ({
+        name: e.plugin.name,
+        ...(e.plugin.version !== undefined ? { version: e.plugin.version } : {}),
+        provides: e.plugin.provides ?? [],
+      }))
+      const capabilities = Array.from(
+        new Set(installed.flatMap((e) => e.plugin.provides ?? [])),
+      ).sort()
+
+      const componentCounts: Record<string, number> = {}
+      for (const [name, store] of stores) componentCounts[name] = store.size
+
+      const archetypeList = Array.from(archetypes.values()).map((b) => ({
+        components: Array.from(b.types).sort(),
+        entityCount: b.entities.size,
+      }))
+
+      return {
+        components: componentDescs,
+        resources: resourceDescs,
+        events,
+        systems,
+        plugins: pluginEntries,
+        capabilities,
+        snapshotVersion: SNAPSHOT_VERSION,
+        entityCount: alive.size,
+        componentCounts,
+        archetypes: archetypeList,
       }
     },
 
