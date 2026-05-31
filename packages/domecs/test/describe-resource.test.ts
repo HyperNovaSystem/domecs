@@ -26,6 +26,13 @@ describe('world.describeResource — resource reflection (§6)', () => {
     expect(w.describeResource(Score).hasValue).toBe(true)
   })
 
+  it('hasValue flips to true after setResource materializes it', () => {
+    const w = createWorld()
+    expect(w.describeResource(Config).hasValue).toBe(false)
+    w.setResource(Config, { hard: true })
+    expect(w.describeResource(Config).hasValue).toBe(true)
+  })
+
   it('resourceTypes() enumerates every touched resource type', () => {
     const w = createWorld()
     w.describeResource(Score)
