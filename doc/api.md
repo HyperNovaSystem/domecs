@@ -659,10 +659,10 @@ interface PluginHandle {
 // explicit Result through. Writing plugins this way keeps a bare-handle
 // return valid without hand-rolling ok()/err().
 interface PluginSpec<O = void> {
-  name:      string
-  version?:  string
-  depends?:  readonly string[]
-  provides?: readonly string[]
+  readonly name:      string
+  readonly version?:  string
+  readonly depends?:  readonly string[]
+  readonly provides?: readonly string[]
   install(world: World, options: O):
     PluginHandle | void | Result<PluginHandle | void, DomecsError>
 }
@@ -1028,12 +1028,18 @@ interface SnapshotDiff {
 ## `@domecs/inspector`
 
 ```ts
-function createInspector(options?: InspectorOptions): Plugin
+function createInspector(opts?: InspectorOptions): InspectorBundle
 
 interface InspectorOptions {
   bufferSize?: number          // ring-buffer capacity for fault/state entries; default 1024
   recordStateChanges?: boolean // interleave component-change events into the timeline; default false
   timelineBufferSize?: number  // max timeline entries; defaults to bufferSize, only used when recordStateChanges is true
+}
+
+interface InspectorBundle {
+  readonly plugin: Plugin<void>  // pass to world.use(...)
+  readonly view:   InspectorView // live view; filter calls return immutable snapshot views
+  clear(): void                  // drop all recorded entries (both buckets and the timeline)
 }
 ```
 
