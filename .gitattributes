@@ -1,0 +1,2 @@
+# Generated API-surface contract — keep LF so the no-drift gate is OS-independent
+doc/api-surface/*.d.ts text eol=lf

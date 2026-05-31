@@ -11,6 +11,8 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "test:release": "node --test test/release-validation.test.mjs",
     "release:validate": "node scripts/validate-release.mjs",
+    "api:surface": "node scripts/api-surface.mjs",
+    "api:check": "node --test test/api-surface.test.mjs",
     "publish:npm": "pnpm -r --filter './packages/*' build && pnpm -r --filter './packages/*' publish --access public"
   },
   "devDependencies": {
