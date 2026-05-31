@@ -155,6 +155,7 @@ export function createPluginRegistry(world: World): PluginRegistry {
         kind: 'plugin_install_failed',
         plugin: plugin.name,
         cause: normalizeCause(e),
+        retryable: false,
       })
     }
 

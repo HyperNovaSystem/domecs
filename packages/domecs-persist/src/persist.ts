@@ -61,7 +61,7 @@ export function save(
   try {
     serialized = JSON.stringify(snap)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'save', cause: normalizeCause(cause) })
+    return err({ kind: 'persist_io', op: 'save', cause: normalizeCause(cause), retryable: true })
   }
   if (serialized === undefined) {
     return err({
@@ -70,6 +70,7 @@ export function save(
       cause: normalizeCause(
         new Error('JSON.stringify returned undefined (snapshot root was a function or symbol)'),
       ),
+      retryable: true,
     })
   }
   return storage.write(slot, serialized)
@@ -100,19 +101,21 @@ export function load(
       kind: 'persist_io',
       op: 'load',
       cause: normalizeCause(new Error(`slot "${slot}" is empty`)),
+      retryable: true,
     })
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(read.value)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
   }
   if (!isWorldSnapshot(parsed)) {
     return err({
       kind: 'persist_io',
       op: 'load',
       cause: normalizeCause(new Error(`slot "${slot}" does not contain a WorldSnapshot`)),
+      retryable: true,
     })
   }
   const target = opts.targetVersion ?? SNAPSHOT_VERSION
@@ -124,7 +127,7 @@ export function load(
   try {
     world.restore(migrated.value)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
   }
   return ok(undefined)
 }

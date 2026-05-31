@@ -57,7 +57,7 @@ describe('@domecs/persist — migrate', () => {
 
   it('propagates an err returned by a migration step', () => {
     const fail: Migration = () =>
-      err({ kind: 'migration_failed', from: 1, to: 2, reason: 'schema drift', recoverable: true })
+      err({ kind: 'migration_failed', from: 1, to: 2, reason: 'schema drift', recoverable: true, retryable: false })
     const r = migrate(snap(1), 2, new Map([[1, fail]]))
     expect(r.ok).toBe(false)
     if (!r.ok) {

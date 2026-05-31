@@ -33,7 +33,7 @@ describe('@domecs/inspector — fault surface', () => {
         {
           entity: e,
           component: Health.name,
-          error: { kind: 'schema_mismatch', component: Health.name, expected: 'hp>=0', got: 'hp=-1' },
+          error: { kind: 'schema_mismatch', component: Health.name, expected: 'hp>=0', got: 'hp=-1', retryable: false },
           recoverable: true,
         } satisfies SystemFault,
       ],
@@ -55,7 +55,7 @@ describe('@domecs/inspector — fault surface', () => {
     w.system('io', { schedule: 'tick' }, () => ({
       errors: [
         {
-          error: { kind: 'persist_io', op: 'save', cause: { name: 'Error', message: 'disk full' } },
+          error: { kind: 'persist_io', op: 'save', cause: { name: 'Error', message: 'disk full' }, retryable: true },
           recoverable: true,
         },
       ],
@@ -82,8 +82,8 @@ describe('@domecs/inspector — fault surface', () => {
     // single surviving entry to be present.
     w.system('dup', { schedule: 'tick' }, () => ({
       errors: [
-        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'a', got: 'x' }, recoverable: true },
-        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'b', got: 'y' }, recoverable: true },
+        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'a', got: 'x', retryable: false }, recoverable: true },
+        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'b', got: 'y', retryable: false }, recoverable: true },
       ],
     }))
     w.step(0.016)
@@ -103,8 +103,8 @@ describe('@domecs/inspector — fault surface', () => {
     const e = w.spawn([entry(Health, { hp: 0 })])
     w.system('mix', { schedule: 'tick' }, () => ({
       errors: [
-        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'a', got: 'x' }, recoverable: true },
-        { entity: e, error: { kind: 'query_invalid', reason: 'nope' }, recoverable: false },
+        { entity: e, component: Health.name, error: { kind: 'schema_mismatch', component: Health.name, expected: 'a', got: 'x', retryable: false }, recoverable: true },
+        { entity: e, error: { kind: 'query_invalid', reason: 'nope', retryable: false }, recoverable: false },
       ],
     }))
     w.step(0.016)
@@ -120,12 +120,12 @@ describe('@domecs/inspector — fault surface', () => {
     const e = w.spawn([entry(Tag, { name: 'a' })])
     w.system('A', { schedule: 'tick' }, () => ({
       errors: [
-        { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '' }, recoverable: true },
+        { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '', retryable: false }, recoverable: true },
       ],
     }))
     w.system('B', { schedule: 'tick' }, () => ({
       errors: [
-        { error: { kind: 'persist_io', op: 'save', cause: { name: 'E', message: 'boom' } }, recoverable: false },
+        { error: { kind: 'persist_io', op: 'save', cause: { name: 'E', message: 'boom' }, retryable: true }, recoverable: false },
       ],
     }))
     w.step(0.016)
@@ -149,7 +149,7 @@ describe('@domecs/inspector — fault surface', () => {
       if (ctx.time.tick > 3) return
       return {
         errors: [
-          { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '' }, recoverable: true },
+          { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '', retryable: false }, recoverable: true },
         ],
       }
     })
@@ -172,13 +172,13 @@ describe('@domecs/inspector — fault surface', () => {
     const e = w.spawn([entry(Tag, { name: 'c' })])
     w.system('A', { schedule: 'tick' }, () => ({
       errors: [
-        { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '' }, recoverable: true },
-        { entity: e, error: { kind: 'query_invalid', reason: 'nope' }, recoverable: false },
+        { entity: e, error: { kind: 'schema_mismatch', component: 'X', expected: '', got: '', retryable: false }, recoverable: true },
+        { entity: e, error: { kind: 'query_invalid', reason: 'nope', retryable: false }, recoverable: false },
       ],
     }))
     w.system('B', { schedule: 'tick' }, () => ({
       errors: [
-        { error: { kind: 'persist_io', op: 'load', cause: { name: 'E', message: 'x' } }, recoverable: true },
+        { error: { kind: 'persist_io', op: 'load', cause: { name: 'E', message: 'x' }, retryable: true }, recoverable: true },
       ],
     }))
     w.step(0.016)
@@ -197,7 +197,7 @@ describe('@domecs/inspector — fault surface', () => {
       counter++
       return {
         errors: [
-          { error: { kind: 'query_invalid', reason: `n${counter}` }, recoverable: false },
+          { error: { kind: 'query_invalid', reason: `n${counter}`, retryable: false }, recoverable: false },
         ],
       }
     })
@@ -215,7 +215,7 @@ describe('@domecs/inspector — fault surface', () => {
     const e = w.spawn([entry(Health, { hp: 5 })])
     w.system('faulter', { schedule: 'tick' }, () => ({
       errors: [
-        { entity: e, error: { kind: 'schema_mismatch', component: 'Health', expected: '', got: '' }, recoverable: true },
+        { entity: e, error: { kind: 'schema_mismatch', component: 'Health', expected: '', got: '', retryable: false }, recoverable: true },
       ],
     }))
     w.step(0.016)
@@ -247,7 +247,7 @@ describe('@domecs/inspector — fault surface', () => {
     install(w, ins)
     const e = w.spawn([entry(Tag, { name: 'k' })])
     w.system('A', { schedule: 'tick' }, () => ({
-      errors: [{ entity: e, error: { kind: 'query_invalid', reason: 'x' }, recoverable: false }],
+      errors: [{ entity: e, error: { kind: 'query_invalid', reason: 'x', retryable: false }, recoverable: false }],
     }))
     w.step(0.016)
     expect(ins.view.entries.length).toBeGreaterThan(0)
@@ -266,7 +266,7 @@ describe('@domecs/inspector — fault surface', () => {
     w.system('drip', { schedule: 'tick' }, () => {
       if (!trigger) return
       return {
-        errors: [{ entity: e, error: { kind: 'query_invalid', reason: 'r' }, recoverable: false }],
+        errors: [{ entity: e, error: { kind: 'query_invalid', reason: 'r', retryable: false }, recoverable: false }],
       }
     })
     w.step(0.016)

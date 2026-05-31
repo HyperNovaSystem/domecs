@@ -100,9 +100,10 @@ export {
   MAX_CAUSE_DEPTH,
 } from './result.js'
 export type { Result, JsonValue, SerializedError } from './result.js'
-export { describeError } from './errors.js'
+export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint } from './errors.js'
 export type {
   DomecsError,
+  ErrorKind,
   PluginError,
   PluginResult,
   SystemFault,

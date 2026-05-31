@@ -64,6 +64,7 @@ export function migrate(
       to: targetVersion,
       reason: `snapshot version ${snap.version} is newer than supported target ${targetVersion}`,
       recoverable: false,
+      retryable: false,
     })
   }
   let cur = snap
@@ -76,6 +77,7 @@ export function migrate(
         to: cur.version + 1,
         reason: `no migration registered for version ${cur.version} → ${cur.version + 1}`,
         recoverable: false,
+        retryable: false,
       })
     }
     let r: Result<WorldSnapshot, MigrationFailedError>
@@ -89,6 +91,7 @@ export function migrate(
         to: cur.version + 1,
         reason: norm.message,
         recoverable: false,
+        retryable: false,
       })
     }
     if (!r.ok) return r
@@ -100,6 +103,7 @@ export function migrate(
         to: cur.version + 1,
         reason: `migration did not advance snapshot version (still ${next.version})`,
         recoverable: false,
+        retryable: false,
       })
     }
     cur = next

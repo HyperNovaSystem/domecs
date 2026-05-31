@@ -19,15 +19,83 @@ export type EventId = string
  * to retry / partial-load. `system_threw` and `event_handler_threw` are
  * for explicit framework-owned isolation points; they are NOT a blanket
  * promise that every user `throw` becomes recoverable data.
+ *
+ * `retryable` signals whether the failure is transient (true — the same
+ * operation could succeed on a subsequent attempt) or deterministic (false —
+ * retrying without fixing the root cause will always fail).
+ *
+ * Retryability rationale per variant:
+ * - plugin_install_failed: false — install contracts are deterministic; a bad
+ *   return/throw won't fix itself without code changes.
+ * - system_threw: true — the system could be in a transient state; a retry
+ *   on the next tick may succeed.
+ * - persist_io: true — storage backends can have transient outages (disk full
+ *   briefly, network blip); a retry is worth attempting.
+ * - migration_failed: false — a missing migrator or non-advancing version will
+ *   always fail; code changes are required. (The existing `recoverable` field
+ *   is distinct: it signals whether partial-load is safe, not retry-ability.)
+ * - schema_mismatch: false — a type drift is deterministic until the schema or
+ *   stored values are corrected.
+ * - query_invalid: false — malformed query structure will always be rejected.
+ * - event_handler_threw: true — handler may have hit transient state; a retry
+ *   on re-emit could succeed.
  */
+/** Closed union — adding a variant is a breaking change. */
 export type DomecsError =
-  | { kind: 'plugin_install_failed'; plugin: string; cause: SerializedError }
-  | { kind: 'system_threw'; system: SystemId; cause: SerializedError; tick: number }
-  | { kind: 'persist_io'; op: 'save' | 'load'; cause: SerializedError }
-  | { kind: 'migration_failed'; from: number; to: number; reason: string; recoverable: boolean }
-  | { kind: 'schema_mismatch'; component: ComponentId; expected: string; got: string }
-  | { kind: 'query_invalid'; reason: string }
-  | { kind: 'event_handler_threw'; event: EventId; cause: SerializedError }
+  | { kind: 'plugin_install_failed'; plugin: string; cause: SerializedError; retryable: boolean }
+  | { kind: 'system_threw'; system: SystemId; cause: SerializedError; tick: number; retryable: boolean }
+  | { kind: 'persist_io'; op: 'save' | 'load'; cause: SerializedError; retryable: boolean }
+  | { kind: 'migration_failed'; from: number; to: number; reason: string; recoverable: boolean; retryable: boolean }
+  | { kind: 'schema_mismatch'; component: ComponentId; expected: string; got: string; retryable: boolean }
+  | { kind: 'query_invalid'; reason: string; retryable: boolean }
+  | { kind: 'event_handler_threw'; event: EventId; cause: SerializedError; retryable: boolean }
+
+/** All valid `DomecsError` kind literals, in source order. */
+export const ERROR_KINDS = [
+  'plugin_install_failed',
+  'system_threw',
+  'persist_io',
+  'migration_failed',
+  'schema_mismatch',
+  'query_invalid',
+  'event_handler_threw',
+] as const
+
+export type ErrorKind = (typeof ERROR_KINDS)[number]
+
+/** Returns `true` when `k` is a known `DomecsError` kind literal. */
+export function isKnownDomecsErrorKind(k: string): k is ErrorKind {
+  return (ERROR_KINDS as readonly string[]).includes(k)
+}
+
+/**
+ * Returns a non-empty, actionable repair hint for a given {@link DomecsError}.
+ * Intended for developer consoles, inspector UIs, and error reporting tools.
+ * Built on {@link match} for compile-time exhaustiveness — adding a variant
+ * to the union breaks this until a case is supplied.
+ */
+export function getErrorRepairHint(e: DomecsError): string {
+  return match(e, {
+    plugin_install_failed: (x) =>
+      `Plugin "${x.plugin}" failed to install. Check its install() return and dependency order.`,
+    system_threw: (x) =>
+      `System "${x.system}" threw on tick ${x.tick}. Wrap its body in a Result or guard the faulting input.`,
+    persist_io: (x) =>
+      `Persistence ${x.op} failed. Verify the Storage backend is reachable and writable.`,
+    migration_failed: (x) =>
+      `Snapshot migration ${x.from}->${x.to} failed: ${x.reason}. ${
+        x.recoverable
+          ? 'Recoverable — retry with a fallback migrator.'
+          : 'Not recoverable — discard or hand-migrate.'
+      }`,
+    schema_mismatch: (x) =>
+      `Component "${x.component}" expected ${x.expected} but got ${x.got}. Align the schema or migrate stored values.`,
+    query_invalid: (x) =>
+      `Invalid query: ${x.reason}. Use a structural node (Has/Where/Not/And/Or) or a component tuple.`,
+    event_handler_threw: (x) =>
+      `Handler for event "${x.event}" threw. Guard the handler body and emit via Result.`,
+  })
+}
 
 /**
  * Render a {@link DomecsError} as a single human-readable line for logs,
@@ -86,6 +154,8 @@ export interface SystemFault<E extends { kind: string } = DomecsError> {
   component?: ComponentId
   error: E
   recoverable: boolean
+  /** When `true`, re-running the fault-raising operation is safe to attempt multiple times. */
+  idempotent?: boolean
 }
 
 /**

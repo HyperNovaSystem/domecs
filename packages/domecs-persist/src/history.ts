@@ -124,13 +124,14 @@ export function createSnapshotHistory(
       try {
         parsed = JSON.parse(json)
       } catch (cause) {
-        return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+        return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
       }
       if (!isHistoryEnvelope(parsed)) {
         return err({
           kind: 'persist_io',
           op: 'load',
           cause: normalizeCause(new Error('payload is not a snapshot-history envelope')),
+          retryable: true,
         })
       }
       const nextStack = parsed.snapshots.slice()
@@ -140,13 +141,14 @@ export function createSnapshotHistory(
           kind: 'persist_io',
           op: 'load',
           cause: normalizeCause(new Error(`history cursor ${nextCursor} out of range`)),
+          retryable: true,
         })
       }
       if (nextCursor >= 0) {
         try {
           world.restore(nextStack[nextCursor]!)
         } catch (cause) {
-          return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause) })
+          return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
         }
       }
       stack = nextStack

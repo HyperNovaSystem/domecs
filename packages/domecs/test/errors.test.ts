@@ -17,11 +17,37 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import type { DomecsError, FaultEntry, PluginError, SystemFault, SystemicFault } from '../src/errors.js'
+import {
+  ERROR_KINDS,
+  getErrorRepairHint,
+  isKnownDomecsErrorKind,
+} from '../src/errors.js'
 import { CONSOLIDATE_FAULTS_NAME, Faulted } from '../src/faulted.js'
 import { Has } from '../src/query.js'
 import { assertNever, err, match, ok } from '../src/result.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
+
+/** Constructs one valid sample instance for each DomecsError variant. */
+function makeSampleError(kind: (typeof ERROR_KINDS)[number]): DomecsError {
+  const cause = { message: 'test error' }
+  switch (kind) {
+    case 'plugin_install_failed':
+      return { kind, plugin: 'test-plugin', cause, retryable: false }
+    case 'system_threw':
+      return { kind, system: 'test-system', cause, tick: 1, retryable: true }
+    case 'persist_io':
+      return { kind, op: 'save', cause, retryable: true }
+    case 'migration_failed':
+      return { kind, from: 1, to: 2, reason: 'test', recoverable: false, retryable: false }
+    case 'schema_mismatch':
+      return { kind, component: 'TestComp', expected: 'string', got: 'number', retryable: false }
+    case 'query_invalid':
+      return { kind, reason: 'bad query', retryable: false }
+    case 'event_handler_threw':
+      return { kind, event: 'TestEvent', cause, retryable: true }
+  }
+}
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 
@@ -43,7 +69,7 @@ describe('BETTER_ERRORS Phase 1 — errors as data', () => {
       errors: [{
         entity: e,
         component: Health.name,
-        error: { kind: 'schema_mismatch', component: Health.name, expected: 'hp>=0', got: 'hp=-1' },
+        error: { kind: 'schema_mismatch', component: Health.name, expected: 'hp>=0', got: 'hp=-1', retryable: false },
         recoverable: true,
       } satisfies SystemFault],
     }))
@@ -189,7 +215,7 @@ describe('BETTER_ERRORS Phase 1 — errors as data', () => {
     const r = w.use({
       name: 'returnsErr',
       provides: ['cap-y'],
-      install: () => err<DomecsError>({ kind: 'query_invalid', reason: 'no thanks' }),
+      install: () => err<DomecsError>({ kind: 'query_invalid', reason: 'no thanks', retryable: false }),
     })
     expect(r.ok).toBe(false)
     const r2 = w.use({ name: 'good2', provides: ['cap-y'], install: () => ok(undefined) })
@@ -209,7 +235,7 @@ describe('BETTER_ERRORS Phase 1 — compile-time guarantees', () => {
   // variant were added to DomecsError without updating the cases map. We
   // exercise the runtime path with one representative kind.
   it('8. match() is exhaustive over the closed DomecsError union', () => {
-    const err: DomecsError = { kind: 'query_invalid', reason: 'bad shape' }
+    const err: DomecsError = { kind: 'query_invalid', reason: 'bad shape', retryable: false }
     const label = match<DomecsError, string>(err, {
       plugin_install_failed: () => 'plugin',
       system_threw: () => 'system',
@@ -235,7 +261,7 @@ describe('BETTER_ERRORS Phase 1 — compile-time guarantees', () => {
         default: return assertNever(e)
       }
     }
-    expect(summarise({ kind: 'query_invalid', reason: 'x' })).toBe('q')
+    expect(summarise({ kind: 'query_invalid', reason: 'x', retryable: false })).toBe('q')
   })
 
   it('9. PluginError kinds must satisfy `${string}/${string}` (compile-time)', () => {
@@ -290,5 +316,32 @@ describe('BETTER_ERRORS Phase 4 — strictReturns dev-mode guardrail', () => {
     w.system('void', { schedule: 'tick' }, () => {})
     w.step(0.016)
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('BETTER_ERRORS Phase 5 — retryable, repair hints, ERROR_KINDS', () => {
+  it('every DomecsError variant carries a boolean retryable', () => {
+    for (const kind of ERROR_KINDS) {
+      expect(typeof makeSampleError(kind).retryable).toBe('boolean')
+    }
+  })
+
+  it('getErrorRepairHint returns a non-empty fix string for every kind', () => {
+    for (const kind of ERROR_KINDS) {
+      expect(getErrorRepairHint(makeSampleError(kind)).length).toBeGreaterThan(0)
+    }
+  })
+
+  it('isKnownDomecsErrorKind discriminates', () => {
+    expect(isKnownDomecsErrorKind('system_threw')).toBe(true)
+    expect(isKnownDomecsErrorKind('nope')).toBe(false)
+    expect(isKnownDomecsErrorKind('')).toBe(false)
+    for (const kind of ERROR_KINDS) {
+      expect(isKnownDomecsErrorKind(kind)).toBe(true)
+    }
+  })
+
+  it('ERROR_KINDS covers all 7 DomecsError variants', () => {
+    expect(ERROR_KINDS.length).toBe(7)
   })
 })

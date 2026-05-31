@@ -218,6 +218,7 @@ describe('@domecs/persist — save/load round-trip', () => {
         to: 1,
         reason: 'incompatible schema',
         recoverable: false,
+        retryable: false,
       })
     const w = createWorld()
     const r = load(w, storage, 'legacy', {

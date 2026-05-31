@@ -56,7 +56,7 @@ describe('definePlugin — authoring helper (review #6)', () => {
       name: 'fails',
       provides: ['cap'],
       install: () =>
-        err({ kind: 'plugin_install_failed', plugin: 'fails', cause: { message: 'nope' } }),
+        err({ kind: 'plugin_install_failed', plugin: 'fails', cause: { message: 'nope' }, retryable: false }),
     })
     const r = w.use(p)
     expect(r.ok).toBe(false)

@@ -21,6 +21,6 @@ export type { ComponentType, ComponentValue, ComponentOptions, ComponentBag, Com
 export type { QueryDef, QueryHooks, QueryNode, QueryResult, QueryShorthand, NodeOrComponent, OneShotQueryDef, TemporalQueryNode, EntityView, FieldsFromComponents, } from './query.js';
 export { ok, err, isOk, isErr, mapR, mapErr, andThen, unwrapOr, tap, tapErr, all, attempt, attemptAsync, match, assertNever, normalizeCause, toJsonValue, MAX_CAUSE_DEPTH, } from './result.js';
 export type { Result, JsonValue, SerializedError } from './result.js';
-export { describeError } from './errors.js';
-export type { DomecsError, PluginError, PluginResult, SystemFault, SystemResult, SystemicFault, SystemId, ComponentId, EventId, FaultEntry, } from './errors.js';
+export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint } from './errors.js';
+export type { DomecsError, ErrorKind, PluginError, PluginResult, SystemFault, SystemResult, SystemicFault, SystemId, ComponentId, EventId, FaultEntry, } from './errors.js';
 export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from './faulted.js';

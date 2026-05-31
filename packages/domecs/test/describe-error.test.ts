@@ -8,14 +8,14 @@ describe('describeError — human-readable DomecsError formatter (review #4)', (
   it('formats every DomecsError variant with its salient fields', () => {
     const cases: Array<[DomecsError, RegExp]> = [
       [
-        { kind: 'plugin_install_failed', plugin: 'inspector', cause },
+        { kind: 'plugin_install_failed', plugin: 'inspector', cause, retryable: false },
         /inspector.*boom/,
       ],
       [
-        { kind: 'system_threw', system: 'physics', cause, tick: 7 },
+        { kind: 'system_threw', system: 'physics', cause, tick: 7, retryable: true },
         /physics.*7.*boom/,
       ],
-      [{ kind: 'persist_io', op: 'save', cause }, /save.*boom/],
+      [{ kind: 'persist_io', op: 'save', cause, retryable: true }, /save.*boom/],
       [
         {
           kind: 'migration_failed',
@@ -23,15 +23,16 @@ describe('describeError — human-readable DomecsError formatter (review #4)', (
           to: 2,
           reason: 'no migrator',
           recoverable: false,
+          retryable: false,
         },
         /1.*2.*no migrator/,
       ],
       [
-        { kind: 'schema_mismatch', component: 'Position', expected: 'v2', got: 'v1' },
+        { kind: 'schema_mismatch', component: 'Position', expected: 'v2', got: 'v1', retryable: false },
         /Position.*v2.*v1/,
       ],
-      [{ kind: 'query_invalid', reason: 'empty tree' }, /empty tree/],
-      [{ kind: 'event_handler_threw', event: 'Move', cause }, /Move.*boom/],
+      [{ kind: 'query_invalid', reason: 'empty tree', retryable: false }, /empty tree/],
+      [{ kind: 'event_handler_threw', event: 'Move', cause, retryable: true }, /Move.*boom/],
     ]
     for (const [e, re] of cases) {
       const msg = describeError(e)
@@ -48,6 +49,7 @@ describe('describeError — human-readable DomecsError formatter (review #4)', (
       to: 2,
       reason: 'x',
       recoverable: true,
+      retryable: false,
     })
     const fatal = describeError({
       kind: 'migration_failed',
@@ -55,6 +57,7 @@ describe('describeError — human-readable DomecsError formatter (review #4)', (
       to: 2,
       reason: 'x',
       recoverable: false,
+      retryable: false,
     })
     expect(recoverable).toMatch(/recoverable/i)
     expect(fatal).not.toBe(recoverable)
