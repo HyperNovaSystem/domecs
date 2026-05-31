@@ -550,6 +550,33 @@ world.signals.entityDespawned.subscribe((dead) => {
 The signal fires *after* the entity is reclaimed, so subscribers see a
 consistent world; one global listener replaces per-system null-guards.
 
+An event emitted *during* a tick is buffered and becomes readable at the
+**next** tick's step-1 flush — a consumer event-system sees a producer's
+event on the following `stepOnce`, never the same one:
+
+```ts doctest name=event-tick-delay
+import { strict as assert } from 'node:assert'
+import { createWorld, defineEvent } from '@domecs/core'
+
+const w = createWorld()
+const Hit = defineEvent<{ dmg: number }>('Hit')
+
+const seen: number[] = []
+// Producer emits Hit during its tick; events are buffered for the next tick.
+w.system('emit-hit', { schedule: 'once' }, (ctx) => {
+  ctx.events.emit(Hit, { dmg: 7 })
+})
+// Consumer runs when Hit fired and reads the payload.
+w.system('read-hits', { schedule: 'event', triggers: [Hit] }, (ctx) => {
+  for (const e of ctx.events.of(Hit)) seen.push(e.dmg)
+})
+
+w.stepOnce() // tick 1: producer emits (buffered); consumer has not seen it yet
+assert.deepEqual(seen, [])
+w.stepOnce() // tick 2: step-1 flush delivers Hit to the consumer
+assert.deepEqual(seen, [7])
+```
+
 ### Time
 
 ```ts
@@ -678,6 +705,39 @@ const hits = world.capability('spatial-index').query({ x: 0, y: 0, w: 64, h: 64 
 
 Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
 
+**Result-based error handling.** `world.use` returns a `Result`: a plugin that
+installs cleanly yields `Ok`, while a plugin whose `install` throws is
+quarantined and surfaced as an `Err` carrying a `DomecsError` you can hand to
+`describeError` for a human-readable, fix-oriented message. (A duplicate plugin
+*name* is a programmer error and throws — it is not an `Err`.)
+
+```ts doctest name=result-error-handling
+import { strict as assert } from 'node:assert'
+import { createWorld, definePlugin, describeError, isErr, isOk } from '@domecs/core'
+
+const w = createWorld()
+
+// Happy path: a plugin that installs cleanly → Ok.
+const good = definePlugin({ name: 'good', install: () => {} })
+assert.ok(isOk(w.use(good)))
+
+// Error path: a plugin whose install throws → use() returns an Err carrying a
+// DomecsError you can describe for a human-readable, fix-oriented message.
+const bad = definePlugin({
+  name: 'bad',
+  install: () => {
+    throw new Error('boom')
+  },
+})
+const result = w.use(bad)
+assert.ok(isErr(result))
+if (isErr(result)) {
+  const described = describeError(result.error)
+  assert.equal(typeof described, 'string')
+  assert.ok(described.length > 0)
+}
+```
+
 ---
 
 ## `@domecs/input`
@@ -722,6 +782,23 @@ interface GamepadSnapshot {
 Importing `@domecs/input` is safe without browser globals. Installing
 `createInputPlugin()` in Node registers no DOM listeners, skips gamepad polling,
 and publishes empty snapshots on tick.
+
+The defaults are exported as the frozen `DEFAULT_INPUT_OPTIONS` record;
+caller options merge over them exactly as the plugin applies them:
+
+```ts doctest name=input-defaults
+import { strict as assert } from 'node:assert'
+import { DEFAULT_INPUT_OPTIONS } from '@domecs/input'
+
+// The static defaults are machine-readable.
+assert.equal(DEFAULT_INPUT_OPTIONS.clearOnBlur, true)
+assert.equal(DEFAULT_INPUT_OPTIONS.preventDefaultKeys, false)
+
+// Overrides merge over the defaults the same way the plugin applies them.
+const opts = { ...DEFAULT_INPUT_OPTIONS, preventDefaultKeys: true }
+assert.equal(opts.preventDefaultKeys, true) // override wins
+assert.equal(opts.clearOnBlur, true)        // untouched default survives
+```
 
 ---
 
@@ -773,6 +850,31 @@ function defineView(def: ViewDef): ViewDef
 Importing `@domecs/dom` is safe without browser globals. `mountDOM` requires
 caller-provided slot elements for views; it never discovers `document` on
 module load.
+
+`ChangedOn` is a discriminated union with four authoring forms (omitting
+`changedOn` is equivalent to `{ mode: 'auto' }`):
+
+```ts doctest name=changedon-modes
+import { strict as assert } from 'node:assert'
+import type { ChangedOn } from '@domecs/dom'
+
+// 1. Omitted — equivalent to { mode: 'auto' }.
+const omitted: ChangedOn | undefined = undefined
+assert.equal(omitted, undefined)
+
+// 2. auto — derive OnChanged(T) from every Has(T) leaf in the view query.
+const auto: ChangedOn = { mode: 'auto' }
+assert.equal(auto.mode, 'auto')
+
+// 3. legacy — redraw every mounted entity every tick.
+const legacy: ChangedOn = { mode: 'legacy' }
+assert.equal(legacy.mode, 'legacy')
+
+// 4. explicit — gate redraws on exactly the listed component types.
+const explicit: ChangedOn = { mode: 'explicit', types: [] }
+assert.equal(explicit.mode, 'explicit')
+assert.deepEqual(explicit.mode === 'explicit' ? explicit.types : null, [])
+```
 
 ---
 
