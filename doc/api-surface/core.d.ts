@@ -8,7 +8,7 @@ export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResou
 export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, } from './world.js';
 export type { EventType, EventView, EmittedEvent } from './events.js';
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js';
-export type { System, SystemContext, SystemDef, SystemHandle, SystemSchedule, } from './scheduler.js';
+export type { System, SystemContext, SystemDef, TickSystemDef, FixedSystemDef, EventSystemDef, OnceSystemDef, ReactiveSystemDef, SystemHandle, SystemSchedule, } from './scheduler.js';
 export type { Signal } from './signals.js';
 export { definePlugin } from './plugin.js';
 export type { Plugin, PluginSpec, PluginHandle, Capability } from './plugin.js';

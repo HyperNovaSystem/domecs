@@ -33,6 +33,11 @@ export type {
   System,
   SystemContext,
   SystemDef,
+  TickSystemDef,
+  FixedSystemDef,
+  EventSystemDef,
+  OnceSystemDef,
+  ReactiveSystemDef,
   SystemHandle,
   SystemSchedule,
 } from './scheduler.js'

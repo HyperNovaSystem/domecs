@@ -719,7 +719,7 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   function eventMatches(s: CompiledSystem, view: EventView): boolean {
-    const triggers = s.def.triggers
+    const triggers = s.def.schedule === 'event' ? s.def.triggers : undefined
     if (!triggers || triggers.length === 0) return true
     for (const t of triggers) {
       if (view.of(t).length > 0) return true
@@ -735,7 +735,7 @@ export function createWorld(options: WorldOptions = {}): World {
   // this tick. Fires iff the reactsTo is purely resource-gated (no structural
   // Has dependency) and one of its ChangedResource targets changed this tick.
   function reactiveResourceFallback(s: CompiledSystem): boolean {
-    if (!s.def.reactsTo) return false
+    if (s.def.schedule !== 'reactive' || !s.def.reactsTo) return false
     const node = normalize(s.def.reactsTo)
     if (!treeHas(node, changedResourceKind)) return false
     if (collectHasComponents(node).size > 0) return false
@@ -1428,8 +1428,11 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
 
-    system(name: string, def: SystemDef, fn: System): SystemHandle {
-      const handle = scheduler.register(name, def, fn)
+    // Implementation overload — parameter type must accept both declared overloads.
+    // The first overload passes Omit<SystemDef,…> & {query:T[]}; casting to
+    // SystemDef is safe because the overload constraints enforce valid variants.
+    system(name: string, def: SystemDef | (Omit<SystemDef, 'query'> & { query: QueryDef }), fn: System): SystemHandle {
+      const handle = scheduler.register(name, def as SystemDef, fn)
       wakeDriver()
       return handle
     },

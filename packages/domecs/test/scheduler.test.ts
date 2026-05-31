@@ -14,6 +14,7 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity', {
 
 const Move = defineEvent<{ entity: number; dx: number; dy: number }>('Move')
 const Ignored = defineEvent<number>('Ignored')
+const SomeComp = defineComponent<{ v: number }>('SomeComp', { defaults: { v: 0 } })
 
 describe('system scheduler — tick order (SPEC §4)', () => {
   it('runs tick systems every step', () => {
@@ -228,7 +229,8 @@ describe('system scheduler — `reactive` mode', () => {
         () => {},
       ),
     ).toThrow(/change-detection/)
-    // Missing reactsTo also rejected.
+    // Missing reactsTo also rejected (untyped/JS path; @ts-expect-error because ReactiveSystemDef requires reactsTo).
+    // @ts-expect-error — intentionally passing invalid def to test runtime guard for untyped JS callers
     expect(() => w.system('bad3', { schedule: 'reactive' }, () => {})).toThrow(
       /reactsTo/,
     )
@@ -337,5 +339,27 @@ describe('step(0) — F-6 heartbeat semantics', () => {
     // dt = 0.3 ms — below 1 ms ms-quantization threshold. Pre-F-6 this rounded to 0.
     w.step(0.0003)
     expect(seen[0]).toBeGreaterThanOrEqual(1 / 1000)
+  })
+})
+
+describe('SystemDef discriminated union — type-level safety (design §5)', () => {
+  it('rejects invalid schedule+field combinations at compile time', () => {
+    const w = createWorld()
+    // @ts-expect-error rateHz only valid on 'fixed'
+    w.system('a', { schedule: 'tick', rateHz: 30 }, () => {})
+    // @ts-expect-error triggers only valid on 'event'
+    w.system('b', { schedule: 'once', triggers: [] }, () => {})
+    // @ts-expect-error reactive requires reactsTo — wrapped to suppress defensive runtime guard
+    expect(() => w.system('c', { schedule: 'reactive' }, () => {})).toThrow()
+  })
+
+  it('accepts each valid variant', () => {
+    const w = createWorld()
+    w.system('tick', { schedule: 'tick' }, () => {})
+    w.system('default', {}, () => {})
+    w.system('fixed', { schedule: 'fixed', rateHz: 30 }, () => {})
+    w.system('event', { schedule: 'event', triggers: [] }, () => {})
+    w.system('once', { schedule: 'once' }, () => {})
+    w.system('reactive', { schedule: 'reactive', reactsTo: OnChanged(SomeComp) }, () => {})
   })
 })

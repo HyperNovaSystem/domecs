@@ -8,16 +8,13 @@ import type { World } from './world.js'
 
 export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
 
-export interface SystemDef<
-  Fields = Record<string, unknown>,
-  State = unknown,
-> {
+/**
+ * Fields shared across all SystemDef variants: query, priority, enabled gate,
+ * initial state, and the erased Fields phantom.
+ */
+interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
   query?: QueryDef
-  schedule?: SystemSchedule
   priority?: number
-  rateHz?: number
-  triggers?: EventType<unknown>[]
-  reactsTo?: QueryDef
   enabled?: () => boolean
   state?: State
   /**
@@ -28,6 +25,61 @@ export interface SystemDef<
    */
   readonly __fields?: Fields
 }
+
+/** Per-tick system (the default when `schedule` is omitted). */
+export interface TickSystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> extends SystemDefBase<Fields, State> {
+  schedule?: 'tick'
+}
+
+/** Fixed-rate system; `rateHz` must be a whole-number divisor of the world's base rate. */
+export interface FixedSystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> extends SystemDefBase<Fields, State> {
+  schedule: 'fixed'
+  rateHz?: number
+}
+
+/** Event-driven system; runs when any of `triggers` fired this tick. */
+export interface EventSystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> extends SystemDefBase<Fields, State> {
+  schedule: 'event'
+  triggers?: EventType<unknown>[]
+}
+
+/** Runs exactly once, on the first tick after registration. */
+export interface OnceSystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> extends SystemDefBase<Fields, State> {
+  schedule: 'once'
+}
+
+/** Reactive system; `ctx.entities` is the change-delta from `reactsTo`. */
+export interface ReactiveSystemDef<
+  Fields = Record<string, unknown>,
+  State = unknown,
+> extends SystemDefBase<Fields, State> {
+  schedule: 'reactive'
+  reactsTo: QueryDef
+}
+
+/**
+ * Discriminated union of all system definition variants. The `schedule` field
+ * acts as the discriminant; invalid field combinations (e.g. `rateHz` on a
+ * `'tick'` system) are unrepresentable at compile time.
+ */
+export type SystemDef<Fields = Record<string, unknown>, State = unknown> =
+  | TickSystemDef<Fields, State>
+  | FixedSystemDef<Fields, State>
+  | EventSystemDef<Fields, State>
+  | OnceSystemDef<Fields, State>
+  | ReactiveSystemDef<Fields, State>
 
 export interface SystemContext<
   Fields = Record<string, unknown>,
@@ -121,7 +173,8 @@ export function createScheduler(
       const schedule = def.schedule ?? 'tick'
       const priority = def.priority ?? 0
 
-      if (schedule === 'reactive') {
+      if (def.schedule === 'reactive') {
+        // defensive — unrepresentable in TS, retained for untyped JS callers
         if (!def.reactsTo) {
           throw new Error(
             `domecs: reactive system "${name}" requires a reactsTo query (SPEC §4 step 6).`,
@@ -143,7 +196,7 @@ export function createScheduler(
       }
 
       let fixedDivisor = 1
-      if (schedule === 'fixed') {
+      if (def.schedule === 'fixed') {
         const baseHz = 1 / fixedStep
         const rateHz = def.rateHz ?? baseHz
         // baseHz and rateHz may be non-integer due to float math (e.g., 1/60).
@@ -172,7 +225,7 @@ export function createScheduler(
         registrationIndex: systems.length,
       }
       if (def.query) compiled.query = makeQuery(def.query)
-      if (def.reactsTo) compiled.reactsTo = makeQuery(def.reactsTo)
+      if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo)
 
       systems.push(compiled)
       byMode.get(schedule)!.push(compiled)
