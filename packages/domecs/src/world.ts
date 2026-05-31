@@ -47,6 +47,7 @@ import type {
   Entity,
   FieldKind,
   FieldSchema,
+  ResourceDescriptor,
   ResourceType,
 } from './types.js'
 import {
@@ -187,6 +188,8 @@ export interface World {
   pause(): void
   resume(): void
   componentTypes(): ComponentType<unknown>[]
+  /** Every resource type registered or touched in this world. */
+  resourceTypes(): ResourceType<unknown>[]
   /**
    * Iterate every live entity that currently holds component `type`, paired
    * with its value. Convenience over `world.query(Has(type))` + per-entity
@@ -203,6 +206,12 @@ export interface World {
    * registration; enumerate with `componentTypes()`.
    */
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
+  /**
+   * Reflect a resource's name, whether a default was declared, and whether it
+   * has been materialized in this world. Registers the type on first call,
+   * the same as any resource access.
+   */
+  describeResource<T>(type: ResourceType<T>): ResourceDescriptor
   /**
    * Typed overload (D-2): an array of `ComponentType<T, Name>` produces a
    * `QueryResult` whose `EntityView` exposes `view.Name: T` typed fields.
@@ -1201,6 +1210,10 @@ export function createWorld(options: WorldOptions = {}): World {
       return Array.from(typeRegistry.values())
     },
 
+    resourceTypes(): ResourceType<unknown>[] {
+      return Array.from(resourceRegistry.values())
+    },
+
     *iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
       requireRegisteredType(type)
       const store = stores.get(type.name) as Map<Entity, T> | undefined
@@ -1241,6 +1254,15 @@ export function createWorld(options: WorldOptions = {}): World {
         fieldsSource = 'none'
       }
       return { name: type.name, transient: meta.__transient, defaults, fields, fieldsSource }
+    },
+
+    describeResource<T>(type: ResourceType<T>): ResourceDescriptor {
+      const meta = requireRegisteredResource(type as ResourceType<unknown>)
+      return {
+        name: type.name,
+        hasValue: resources.has(type.name),
+        hasDefault: meta.__default !== undefined,
+      }
     },
 
     query(def: QueryDef): QueryResult {

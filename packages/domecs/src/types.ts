@@ -76,6 +76,19 @@ export interface ComponentDescriptor {
 }
 
 /**
+ * Result of `world.describeResource(type)` — parity with
+ * {@link ComponentDescriptor} for world-singleton values. `hasDefault` is
+ * true when a `default` factory/value was declared at `defineResource`;
+ * `hasValue` is true once the resource has been materialized in this world
+ * (read at least once, or set explicitly).
+ */
+export interface ResourceDescriptor {
+  readonly name: string
+  readonly hasValue: boolean
+  readonly hasDefault: boolean
+}
+
+/**
  * A world-singleton value, addressed by identity rather than per-entity
  * (review #16). Defined with {@link defineResource}; read/written via
  * `world.getResource(type)` / `world.setResource(type, value)`. The distinct

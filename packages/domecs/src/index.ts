@@ -63,6 +63,7 @@ export type {
   ResourceType,
   ResourceValue,
   ResourceOptions,
+  ResourceDescriptor,
   Entity,
 } from './types.js'
 export type {
