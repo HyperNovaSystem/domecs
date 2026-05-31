@@ -9,8 +9,10 @@ import type {
 } from './errors.js'
 import {
   createEventBus,
+  internalEvent,
   type EmittedEvent,
   type EventBus,
+  type EventDescriptor,
   type EventType,
   type EventView,
 } from './events.js'
@@ -206,6 +208,11 @@ export interface World {
    * registration; enumerate with `componentTypes()`.
    */
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
+  /**
+   * Reflect an event's name and optional payload schema. `name` is an opaque
+   * diagnostic label; event identity is the internal symbol.
+   */
+  describeEvent(type: EventType<unknown>): EventDescriptor
   /**
    * Reflect a resource's name, whether a default was declared, and whether it
    * has been materialized in this world. Registers the type on first call,
@@ -1254,6 +1261,14 @@ export function createWorld(options: WorldOptions = {}): World {
         fieldsSource = 'none'
       }
       return { name: type.name, transient: meta.__transient, defaults, fields, fieldsSource }
+    },
+
+    describeEvent(type: EventType<unknown>): EventDescriptor {
+      const meta = internalEvent(type)
+      if (meta.__schema) {
+        return { name: type.name, fields: { ...meta.__schema.fields }, fieldsSource: 'schema' }
+      }
+      return { name: type.name, fields: {}, fieldsSource: 'none' }
     },
 
     describeResource<T>(type: ResourceType<T>): ResourceDescriptor {

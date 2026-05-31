@@ -1,3 +1,5 @@
+import type { ComponentSchema, FieldSchema } from './types.js'
+
 /**
  * Per-event nominal-identity tag. Stored on every `EventType` returned by
  * `defineEvent`; the bus keys all internal maps on this symbol so distinct
@@ -11,8 +13,43 @@ export interface EventType<T> {
   readonly __t?: T
 }
 
-export function defineEvent<T>(name: string): EventType<T> {
-  return { name, [eventTag]: Symbol(name) }
+/** Options for {@link defineEvent}. */
+export interface EventDefOptions {
+  /**
+   * Optional payload field-schema for reflection, reusing the component
+   * {@link ComponentSchema} vocabulary so tooling renders an event payload the
+   * same way it renders a component.
+   */
+  readonly schema?: ComponentSchema
+}
+
+/** Internal view of an {@link EventType} carrying its optional payload schema. */
+export interface InternalEventType<T> extends EventType<T> {
+  readonly __schema?: ComponentSchema
+}
+
+export function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T> {
+  return {
+    name,
+    [eventTag]: Symbol(name),
+    ...(options?.schema ? { __schema: options.schema } : {}),
+  } as InternalEventType<T>
+}
+
+export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
+  return type as InternalEventType<T>
+}
+
+/**
+ * Result of `world.describeEvent(type)`. `fields` is the declared
+ * `schema.fields` when present (`fieldsSource: 'schema'`), otherwise empty
+ * (`fieldsSource: 'none'`). Events have no defaults to infer from, so unlike
+ * {@link ComponentDescriptor} there is no `'defaults'` source.
+ */
+export interface EventDescriptor {
+  readonly name: string
+  readonly fields: Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'none'
 }
 
 export interface EventView {

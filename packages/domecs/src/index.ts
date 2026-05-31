@@ -28,7 +28,7 @@ export type {
   ActionOptions,
   ActionResult,
 } from './world.js'
-export type { EventType, EventView, EmittedEvent } from './events.js'
+export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js'
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js'
 export type {
   System,
