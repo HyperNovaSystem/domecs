@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
-import { Added, And, Has, Not, Or, Where } from '../src/query.js'
+import { OnAdded, And, Has, Not, Or, Where } from '../src/query.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
@@ -107,16 +107,16 @@ describe('world.select — leak-free view list (review #13)', () => {
 describe('one-shot selectors reject reactive nodes (review #13)', () => {
   it('count throws on Added (per-tick delta needs a live query)', () => {
     const w = createWorld()
-    expect(() => w.count(Added(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    expect(() => w.count(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
   })
 
   it('select throws on Added', () => {
     const w = createWorld()
-    expect(() => w.select(Added(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    expect(() => w.select(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
   })
 
   it('entitiesMatching throws on Added', () => {
     const w = createWorld()
-    expect(() => w.entitiesMatching(Added(Enemy))).toThrow(/reactive|Added|one-shot/i)
+    expect(() => w.entitiesMatching(OnAdded(Enemy))).toThrow(/reactive|Added|one-shot/i)
   })
 })

@@ -1,5 +1,5 @@
 import type { ComponentType, Entity, EntityView, QueryResult, World } from '@domecs/core'
-import { Changed, collectHasComponents, normalizeQuery, ok } from '@domecs/core'
+import { OnChanged, collectHasComponents, normalizeQuery, ok } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -57,7 +57,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
       slotEl,
       query: q,
       changedQueries: changedTypes.length > 0
-        ? changedTypes.map((c) => world.query(Changed(c)))
+        ? changedTypes.map((c) => world.query(OnChanged(c)))
         : null,
       mounted: new Map(),
       pendingCreate: new Map(),

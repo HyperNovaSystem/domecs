@@ -12,7 +12,7 @@ import type {
   SystemId,
   World,
 } from '@domecs/core'
-import { Changed, Faulted, Has, ok } from '@domecs/core'
+import { OnChanged, Faulted, Has, ok } from '@domecs/core'
 
 /**
  * One normalized record. Both buckets share the same shape so filter
@@ -187,10 +187,10 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
       })
       unsubs.push(offHas)
 
-      // Changed(Faulted) fires when the consolidator (or a subsequent
+      // OnChanged(Faulted) fires when the consolidator (or a subsequent
       // appendFault) mutates the buffer. WeakSet dedupe means we only
       // record entries we haven't seen before.
-      const offChanged = world.observe(Changed(Faulted), {
+      const offChanged = world.observe(OnChanged(Faulted), {
         onChange: (view) => {
           const f = world.getComponent(view.id, Faulted)
           if (!f) return

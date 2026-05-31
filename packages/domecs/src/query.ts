@@ -102,13 +102,13 @@ export function Or(...args: NodeOrComponent[]): QueryNode {
 export function And(...args: NodeOrComponent[]): QueryNode {
   return { kind: 'and', children: args.map(asNode) }
 }
-export function Changed<T>(type: ComponentType<T>): QueryNode {
+export function OnChanged<T>(type: ComponentType<T>): QueryNode {
   return { kind: 'changed', type: type as ComponentType<unknown> }
 }
-export function Added<T>(type: ComponentType<T>): QueryNode {
+export function OnAdded<T>(type: ComponentType<T>): QueryNode {
   return { kind: 'added', type: type as ComponentType<unknown> }
 }
-export function Removed<T>(type: ComponentType<T>): QueryNode {
+export function OnRemoved<T>(type: ComponentType<T>): QueryNode {
   return { kind: 'removed', type: type as ComponentType<unknown> }
 }
 export function Where<T>(
@@ -128,7 +128,7 @@ export function Where<T>(
  * change ticks; compose with `And(Has(X), ChangedResource(R))` to scope the
  * reaction to `X` entities. Reactive only: rejected by the one-shot selectors.
  */
-export function ChangedResource<T>(resource: ResourceType<T>): QueryNode {
+export function OnChangedResource<T>(resource: ResourceType<T>): QueryNode {
   return { kind: 'changedResource', resource: resource as ResourceType<unknown> }
 }
 

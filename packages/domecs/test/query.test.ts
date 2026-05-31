@@ -6,9 +6,9 @@ import {
   Not,
   Or,
   And,
-  Added,
-  Removed,
-  Changed,
+  OnAdded,
+  OnRemoved,
+  OnChanged,
   Where,
 } from '../src/index.js'
 
@@ -190,7 +190,7 @@ describe('query — structural predicates (archetype-cached)', () => {
     world.step()
     world.step()
 
-    const stop = world.observe(And(Has(Position), Changed(Position)), {
+    const stop = world.observe(And(Has(Position), OnChanged(Position)), {
       onChange: (e) => changed.push(e.id),
     })
     const pos = world.getComponent(a, Position)!
@@ -205,32 +205,32 @@ describe('query — structural predicates (archetype-cached)', () => {
 describe('query — change-detection filters (tick-scoped)', () => {
   // SPEC §2.5 / F-2: between-tick mutations land in a pending set and are
   // promoted into the live tick set at step 0 — symmetric with §2.6 events.
-  it('Added(T) reports adds since last tick; clears after one step', () => {
+  it('OnAdded(T) reports adds since last tick; clears after one step', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
-    const q = world.query(Added(Position))
+    const q = world.query(OnAdded(Position))
     world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()
     expect(q.size).toBe(0)
   })
 
-  it('Removed(T) reports removes since last tick', () => {
+  it('OnRemoved(T) reports removes since last tick', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
     world.step()
     world.step()
     world.removeComponent(a, Position)
-    const q = world.query(Removed(Position))
+    const q = world.query(OnRemoved(Position))
     world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()
     expect(q.size).toBe(0)
   })
 
-  it('Changed(T) reports markChanged calls; visible after promotion', () => {
+  it('OnChanged(T) reports markChanged calls; visible after promotion', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
@@ -239,7 +239,7 @@ describe('query — change-detection filters (tick-scoped)', () => {
     const pos = world.getComponent(a, Position)!
     pos.x = 5
     world.markChanged(a, Position)
-    const q = world.query(Changed(Position))
+    const q = world.query(OnChanged(Position))
     world.step()
     expect(q.entities.map((e) => e.id)).toEqual([a])
     world.step()

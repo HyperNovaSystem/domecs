@@ -4,7 +4,7 @@ export { createWorld } from './world.js';
 export { defineEvent } from './events.js';
 export { createRng, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';
-export { Has, Not, Or, And, Added, Removed, Changed, Where, ChangedResource, normalize as normalizeQuery, collectHasComponents, } from './query.js';
+export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResource, normalize as normalizeQuery, collectHasComponents, } from './query.js';
 export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, } from './world.js';
 export type { EventType, EventView, EmittedEvent } from './events.js';
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js';

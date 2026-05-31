@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { defineEvent } from '../src/events.js'
-import { And, Changed, Has, Not, Or } from '../src/query.js'
+import { And, OnChanged, Has, Not, Or } from '../src/query.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
@@ -180,7 +180,7 @@ describe('system scheduler — `reactive` mode', () => {
     const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     w.system(
       'react',
-      { schedule: 'reactive', reactsTo: Changed(Position) },
+      { schedule: 'reactive', reactsTo: OnChanged(Position) },
       () => {
         calls++
       },
@@ -204,7 +204,7 @@ describe('system scheduler — `reactive` mode', () => {
     w.spawn([entry(Position, { x: 1, y: 1 })])
     w.system(
       'react',
-      { schedule: 'reactive', reactsTo: Changed(Position) },
+      { schedule: 'reactive', reactsTo: OnChanged(Position) },
       (ctx) => {
         seen.push(ctx.entities.map((v) => v.id))
       },
@@ -236,14 +236,14 @@ describe('system scheduler — `reactive` mode', () => {
     expect(() =>
       w.system(
         'good',
-        { schedule: 'reactive', reactsTo: And(Has(Position), Changed(Velocity)) },
+        { schedule: 'reactive', reactsTo: And(Has(Position), OnChanged(Velocity)) },
         () => {},
       ),
     ).not.toThrow()
     expect(() =>
       w.system(
         'good2',
-        { schedule: 'reactive', reactsTo: Or(Changed(Position), Changed(Velocity)) },
+        { schedule: 'reactive', reactsTo: Or(OnChanged(Position), OnChanged(Velocity)) },
         () => {},
       ),
     ).not.toThrow()
@@ -263,7 +263,7 @@ describe('system scheduler — `reactive` mode', () => {
     })
     w.system(
       'react',
-      { schedule: 'reactive', reactsTo: Changed(Position) },
+      { schedule: 'reactive', reactsTo: OnChanged(Position) },
       () => {
         calls++
       },
@@ -286,7 +286,7 @@ describe('step(0) — F-6 heartbeat semantics', () => {
     const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     w.system('f', { schedule: 'fixed' }, () => { fixedN++ })
     w.system('t', { schedule: 'tick' }, () => { tickN++ })
-    w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
+    w.system('r', { schedule: 'reactive', reactsTo: OnChanged(Position) }, () => { reactiveN++ })
     w.system('ev', { schedule: 'event', triggers: [Move] }, () => { eventN++ })
     w.markChanged(e, Position)
     w.emit(Move, { entity: e, dx: 1, dy: 0 })
@@ -311,7 +311,7 @@ describe('step(0) — F-6 heartbeat semantics', () => {
     const w = createWorld()
     const e = w.spawn([entry(Position, { x: 0, y: 0 })])
     let reactiveN = 0
-    w.system('r', { schedule: 'reactive', reactsTo: Changed(Position) }, () => { reactiveN++ })
+    w.system('r', { schedule: 'reactive', reactsTo: OnChanged(Position) }, () => { reactiveN++ })
     w.markChanged(e, Position)
     w.step(0)
     w.step(0)

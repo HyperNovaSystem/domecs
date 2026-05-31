@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { defineResource } from '../src/resource.js'
-import { And, ChangedResource, Has } from '../src/query.js'
+import { And, OnChangedResource, Has } from '../src/query.js'
 import { SNAPSHOT_VERSION } from '../src/snapshot.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
@@ -66,7 +66,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
     let fired = 0
-    w.system('react', { schedule: 'reactive', reactsTo: ChangedResource(Score) }, () => {
+    w.system('react', { schedule: 'reactive', reactsTo: OnChangedResource(Score) }, () => {
       fired++
     })
     w.step() // quiet tick
@@ -82,7 +82,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld() // no entities at all
     let fired = 0
-    w.system('react', { schedule: 'reactive', reactsTo: ChangedResource(Score) }, (ctx) => {
+    w.system('react', { schedule: 'reactive', reactsTo: OnChangedResource(Score) }, (ctx) => {
       fired++
       expect(ctx.entities).toEqual([])
     })
@@ -98,7 +98,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     w.system('setter', { schedule: 'tick' }, (ctx) => {
       if (ctx.time.tick === 1) ctx.world.setResource(Score, 9)
     })
-    w.system('reactor', { schedule: 'reactive', reactsTo: ChangedResource(Score) }, () => {
+    w.system('reactor', { schedule: 'reactive', reactsTo: OnChangedResource(Score) }, () => {
       reactFired++
     })
     w.step() // tick 1: setter runs (step 4) -> reactor (step 6) sees the change
@@ -116,7 +116,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     let fired = 0
     w.system(
       'hudReact',
-      { schedule: 'reactive', reactsTo: And(Has(Hud), ChangedResource(Score)) },
+      { schedule: 'reactive', reactsTo: And(Has(Hud), OnChangedResource(Score)) },
       (ctx) => {
         fired++
         seen = ctx.entities.map((e) => e.id)
@@ -134,7 +134,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     const Cfg = defineResource<{ v: number }>('Cfg', { default: { v: 1 } })
     const w = createWorld()
     let fired = 0
-    w.system('react', { schedule: 'reactive', reactsTo: ChangedResource(Cfg) }, () => {
+    w.system('react', { schedule: 'reactive', reactsTo: OnChangedResource(Cfg) }, () => {
       fired++
     })
     w.resource(Cfg)!.v = 2 // mutate in place
@@ -150,7 +150,7 @@ describe('ChangedResource — live query (review #16)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
     w.spawn([entry(Hud, { on: true })])
-    const q = w.query(And(Has(Hud), ChangedResource(Score)))
+    const q = w.query(And(Has(Hud), OnChangedResource(Score)))
     w.setResource(Score, 1)
     w.step() // change drained into this tick's delta
     expect(q.size).toBe(1)
@@ -162,9 +162,9 @@ describe('ChangedResource — live query (review #16)', () => {
   it('one-shot selectors reject ChangedResource (it is per-tick reactive)', () => {
     const Score = defineResource<number>('Score', { default: 0 })
     const w = createWorld()
-    expect(() => w.count(ChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.entitiesMatching(ChangedResource(Score))).toThrow(/one-shot|reactive/i)
-    expect(() => w.select(ChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.count(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.entitiesMatching(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
+    expect(() => w.select(OnChangedResource(Score))).toThrow(/one-shot|reactive/i)
   })
 })
 
