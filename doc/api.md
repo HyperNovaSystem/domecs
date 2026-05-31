@@ -233,14 +233,15 @@ interface World {
   query(def: QueryDef): QueryResult
   // Leak-free one-shot selectors: evaluate the current world without
   // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
-  // reactive nodes (Added/Changed/Removed/ChangedResource) throw — use
-  // query()/observe() for per-tick deltas. count → number, entitiesMatching → Entity[], select →
-  // EntityView[] (typed fields for the array shorthand, like query()).
-  count(def: QueryDef): number
-  entitiesMatching(def: QueryDef): Entity[]
-  select(def: QueryDef): EntityView[]
+  // reactive nodes (OnAdded/OnChanged/OnRemoved/OnChangedResource) reject at
+  // compile time (and throw at runtime for untyped JS callers) — use
+  // query()/observe() for per-tick deltas. countEntities → number, listEntities →
+  // Entity[], selectViews → EntityView[] (typed fields for the array shorthand, like query()).
+  countEntities(def: OneShotQueryDef): number
+  listEntities(def: OneShotQueryDef): Entity[]
+  selectViews(def: OneShotQueryDef): EntityView[]
   // Convenience over query(...).onAdd/onRemove. If hooks.onChange is present,
-  // def must contain at least one Added/Removed/Changed node; callbacks fire
+  // def must contain at least one OnAdded/OnRemoved/OnChanged node; callbacks fire
   // at step 6 reactive time, once per matching entity for that tick.
   observe(def: QueryDef, hooks: QueryHooks): () => void
 
@@ -1040,6 +1041,60 @@ interface InspectorBundle {
   readonly plugin: Plugin<void>  // pass to world.use(...)
   readonly view:   InspectorView // live view; filter calls return immutable snapshot views
   clear(): void                  // drop all recorded entries (both buckets and the timeline)
+}
+
+// Immutable, filter-composable view. Each filter returns a fresh view backed by
+// the captured snapshot — the live buffer keeps growing, a captured view stays put.
+interface InspectorView {
+  readonly entries:      readonly InspectorEntry[]
+  readonly systemic:     readonly InspectorEntry[]  // entries with no entity (systemic faults)
+  readonly entityScoped: readonly InspectorEntry[]  // entries carrying an entity
+  readonly timeline:     readonly TimelineEvent[]   // empty unless recordStateChanges
+  bySource(systemId: SystemId): InspectorView
+  byKind(kind: string): InspectorView
+  byTick(tick: number): InspectorView
+  byTickRange(from: number, to: number): InspectorView
+  recoverableOnly(): InspectorView
+  onlyFaulted(): InspectorView                       // keep only entity-scoped entries
+  hideFaulted(): InspectorView                       // keep only systemic entries
+  entriesFor(entity: Entity): readonly InspectorEntry[]
+  export(): InspectorSnapshot                        // point-in-time serializable copy
+}
+
+// One normalized record. Systemic and entity-scoped faults share this shape;
+// `entity` discriminates (absent ⇒ systemic).
+interface InspectorEntry {
+  readonly kind:        string      // fault kind (e.g. 'system_threw')
+  readonly systemId:    SystemId
+  readonly tick:        number
+  readonly wallclock:   number      // Date.now() at capture
+  readonly recoverable: boolean
+  readonly entity?:     Entity       // absent ⇒ systemic fault
+  readonly component?:  ComponentId
+  readonly detail?:     JsonValue
+}
+
+type TimelineEventKind =
+  | 'fault' | 'spawn' | 'despawn' | 'componentAdded' | 'componentRemoved'
+
+// Replay-timeline event. Only recorded when recordStateChanges is true (faults
+// are always recorded; structural events are interleaved when enabled).
+interface TimelineEvent {
+  readonly eventKind:  TimelineEventKind
+  readonly tick:       number
+  readonly wallclock:  number
+  readonly entity:     Entity         // always present — renderable per-entity without a join
+  readonly component?: ComponentId
+  readonly fault?:     InspectorEntry  // set only when eventKind === 'fault'
+}
+
+// Point-in-time, structurally-cloneable copy of an InspectorView — safe to hand
+// to an agent or persist. Plain arrays, unlike the live view's growing buffers.
+interface InspectorSnapshot {
+  readonly entries:      InspectorEntry[]
+  readonly systemic:     InspectorEntry[]
+  readonly entityScoped: InspectorEntry[]
+  readonly timeline:     TimelineEvent[]
 }
 ```
 

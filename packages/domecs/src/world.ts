@@ -591,15 +591,15 @@ export function createWorld(options: WorldOptions = {}): World {
     return s ? s.has(entity) : false
   }
 
-  // Normalize + validate a def for the one-shot selectors (count/select/
-  // entitiesMatching). Reactive nodes track per-tick deltas that only a
+  // Normalize + validate a def for the one-shot selectors (countEntities/
+  // listEntities/selectViews). Reactive nodes track per-tick deltas that only a
   // registered query maintains, so they are a misuse here; reject loudly.
   function oneshotNode(def: QueryDef): { node: QueryNode; needsEntityFilter: boolean } {
     const node = normalize(def)
     if (treeHas(node, oneshotReactiveKinds)) {
       throw new Error(
-        'domecs: count/select/entitiesMatching are one-shot selectors and ' +
-          'cannot evaluate reactive nodes (Added/Changed/Removed) — those need ' +
+        'domecs: countEntities/listEntities/selectViews are one-shot selectors and ' +
+          'cannot evaluate reactive nodes (OnAdded/OnChanged/OnRemoved) — those need ' +
           'per-tick delta tracking; use a live query() or a reactive system instead',
       )
     }
