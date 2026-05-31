@@ -28,7 +28,17 @@ interface MutablePointer {
   entered: number[]
 }
 
-const DEFAULT_TEXT_SELECTOR = 'input,textarea,[contenteditable="true"]'
+/**
+ * The environment-independent default {@link InputPluginOptions}. The target
+ * options (`keyTarget`/`pointerTarget`/`wheelTarget`) and `pollGamepads`
+ * are derived from `document`/`navigator` at install time and so are not
+ * representable as static constants; they are omitted here.
+ */
+export const DEFAULT_INPUT_OPTIONS = Object.freeze({
+  clearOnBlur: true,
+  textInputSelector: 'input,textarea,[contenteditable="true"]',
+  preventDefaultKeys: false,
+} as const satisfies Partial<InputPluginOptions>)
 
 export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
   return {
@@ -43,11 +53,11 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       const keyTarget = (options.keyTarget ?? doc) as EventTarget | undefined
       const pointerTarget = (options.pointerTarget ?? doc) as EventTarget | undefined
       const wheelTarget = (options.wheelTarget ?? pointerTarget) as EventTarget | undefined
-      const clearOnBlur = options.clearOnBlur ?? true
-      const textSelector = options.textInputSelector ?? DEFAULT_TEXT_SELECTOR
+      const clearOnBlur = options.clearOnBlur ?? DEFAULT_INPUT_OPTIONS.clearOnBlur
+      const textSelector = options.textInputSelector ?? DEFAULT_INPUT_OPTIONS.textInputSelector
       const pollGamepads =
         options.pollGamepads ?? (typeof navigator !== 'undefined' && !!(navigator as Navigator).getGamepads)
-      const preventDefaultKeys = options.preventDefaultKeys ?? false
+      const preventDefaultKeys = options.preventDefaultKeys ?? DEFAULT_INPUT_OPTIONS.preventDefaultKeys
 
       const held = new Set<string>()
       const pressedNext = new Set<string>()
