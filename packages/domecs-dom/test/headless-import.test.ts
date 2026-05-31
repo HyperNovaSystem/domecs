@@ -23,13 +23,16 @@ describe('@domecs/dom headless import contract', () => {
     hideBrowserGlobals()
     vi.resetModules()
 
-    const [{ createWorld }, { mountDOM }] = await Promise.all([
+    const [{ createWorld, isOk }, { mountDOM }] = await Promise.all([
       import('@domecs/core'),
       import('../src/index.js'),
     ])
 
     const world = createWorld({ headless: true })
-    const mount = mountDOM(world, { slots: {}, views: [] })
+    const r = mountDOM(world, { slots: {}, views: [] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const mount = r.value
 
     expect(() => world.step(0)).not.toThrow()
     expect(() => mount.teardown()).not.toThrow()

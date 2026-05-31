@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent, type QueryDef, type QueryResult } from '@domecs/core'
+import { Has, createWorld, defineComponent, isOk, type QueryDef, type QueryResult } from '@domecs/core'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Sprite = defineComponent<{ glyph: string }>('Sprite')
@@ -29,7 +29,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
         el.textContent = (e as unknown as { Sprite: { glyph: string } }).Sprite.glyph
       },
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
@@ -67,7 +70,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
       },
       update() {},
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
     // 1 structural query + 1 auto-derived Changed(Sprite) query at install.
     // After install, render commits MUST NOT allocate further queries.
     expect(queryCalls).toBe(2)
@@ -96,7 +102,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
         updateCalls++
       },
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
     world.stepOnce()
@@ -127,7 +136,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
       },
       update() {},
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
     expect(queryCalls).toBe(2) // structural query + one cached Changed(Sprite) query
 
     const a = world.spawn()
@@ -157,7 +169,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
         updateCalls++
       },
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
@@ -191,7 +206,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
         updateCalls++
       },
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
@@ -223,7 +241,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
         seen.push((e as any).Sprite?.glyph ?? '')
       },
     })
-    const handle = mountDOM(world, { slots: { stage }, views: [view] })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+    const handle = r.value
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
     world.stepOnce()

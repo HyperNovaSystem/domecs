@@ -1,5 +1,5 @@
 import type { ComponentType, Entity, EntityView, QueryResult, World } from '@domecs/core'
-import { OnChanged, collectHasComponents, normalizeQuery, ok } from '@domecs/core'
+import { OnChanged, collectHasComponents, normalizeQuery, ok, err, type Result } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -10,6 +10,22 @@ export interface MountOptions {
 export interface MountHandle {
   teardown(): void
 }
+
+/**
+ * Discriminated union of all expected failure modes for {@link mountDOM}.
+ *
+ * - `slot_already_mounted`: the named slot is already claimed by a prior
+ *   `mountDOM` call on the same world (SPEC §5.6 — slot mounting is exclusive).
+ * - `unregistered_slot`: a view targets a slot name that was not supplied in
+ *   `opts.slots`.
+ * - `plugin_install_failed`: the internal renderer plugin could not be
+ *   installed (e.g. `mountDOM` called twice on the same world after teardown
+ *   has not fully cleaned up, or a programmer-error duplicate plugin name).
+ */
+export type MountError =
+  | { readonly kind: 'slot_already_mounted'; readonly slot: string }
+  | { readonly kind: 'unregistered_slot'; readonly slot: string }
+  | { readonly kind: 'plugin_install_failed'; readonly reason: string }
 
 const mountedSlots = new WeakMap<World, Set<string>>()
 
@@ -30,13 +46,24 @@ interface ViewState {
   unsubRemove: () => void
 }
 
-export function mountDOM(world: World, opts: MountOptions): MountHandle {
+/**
+ * Mount a DOM renderer onto `world`.
+ *
+ * Returns a `Result`:
+ * - `ok(handle)` — renderer installed; call `handle.teardown()` to unmount.
+ * - `err({ kind: 'slot_already_mounted', slot })` — the named slot is already
+ *   claimed on this world (SPEC §5.6).
+ * - `err({ kind: 'unregistered_slot', slot })` — a view targets a slot that
+ *   was not supplied in `opts.slots`.
+ * - `err({ kind: 'plugin_install_failed', reason })` — the internal renderer
+ *   plugin failed to install (e.g. duplicate call on same world without prior
+ *   teardown).
+ */
+export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, MountError> {
   const claimed = mountedSlots.get(world) ?? new Set<string>()
   for (const slotName of Object.keys(opts.slots)) {
     if (claimed.has(slotName)) {
-      throw new Error(
-        `@domecs/dom: slot "${slotName}" already mounted on this world (SPEC §5.6 — slot mounting is exclusive)`,
-      )
+      return err({ kind: 'slot_already_mounted', slot: slotName })
     }
   }
   for (const slotName of Object.keys(opts.slots)) claimed.add(slotName)
@@ -46,9 +73,9 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
   for (const def of opts.views) {
     const slotEl = opts.slots[def.slot]
     if (!slotEl) {
-      throw new Error(
-        `@domecs/dom: view targets slot "${def.slot}" which was not registered in mountDOM({ slots })`,
-      )
+      // Undo the slot claims we just made before returning the error
+      for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+      return err({ kind: 'unregistered_slot', slot: def.slot })
     }
     const q = world.query(def.query)
     const changedTypes = resolveChangedTypes(def)
@@ -87,18 +114,30 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
       })
     },
   }
-  const useResult = world.use(rendererPlugin)
+
+  let useResult: Result<() => void, { kind: string; [k: string]: unknown }>
+  try {
+    useResult = world.use(rendererPlugin)
+  } catch (e) {
+    // world.use throws synchronously for programmer-error conditions
+    // (e.g. duplicate plugin name). Map to an enumerable MountError.
+    const reason = e instanceof Error ? e.message : String(e)
+    // Undo slot claims
+    for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+    return err({ kind: 'plugin_install_failed', reason })
+  }
+
   if (!useResult.ok) {
-    // Installing the in-process renderer is part of mountDOM's contract; a
-    // failure here is a programmer error (e.g. duplicate plugin name on the
-    // same world), not a recoverable seam — surface it loudly.
-    throw new Error(
-      `@domecs/dom: failed to install renderer plugin: ${useResult.error.kind}`,
-    )
+    // The install function returned an err Result (e.g. plugin_install_failed
+    // from a caught throw inside install). Map the error kind to a reason string.
+    const reason = `${useResult.error.kind}`
+    // Undo slot claims
+    for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+    return err({ kind: 'plugin_install_failed', reason })
   }
   const unuse = useResult.value
 
-  return {
+  return ok({
     teardown() {
       unuse()
       for (const state of states) {
@@ -117,7 +156,7 @@ export function mountDOM(world: World, opts: MountOptions): MountHandle {
       const set = mountedSlots.get(world)
       if (set) for (const k of Object.keys(opts.slots)) set.delete(k)
     },
-  }
+  })
 }
 
 function commit(state: ViewState): void {
