@@ -700,12 +700,19 @@ Replace each `uses:` with its pinned SHA + version comment, e.g.:
       - uses: actions/setup-node@<sha>  # v4.x
 ```
 
-Add a doctest step immediately after the `Unit tests` step:
+Add a harness-unit-test step after the `API-surface gate test` step, and a doctest run step after `Build` (it needs `dist/`):
+
+```yaml
+      - name: Doctest harness unit tests
+        run: pnpm doctest:check
+```
 
 ```yaml
       - name: Doctests (L6 — examples are tested documentation)
         run: pnpm doctest
 ```
+
+> Placement: `pnpm doctest` MUST run after the `Build` step (the harness links each package's built `dist/`). `pnpm doctest:check` (pure `node:test` unit tests for the extractor) can run anywhere after `install`. The doctest run also requires the api.md fences from Task 3 to exist — by the time CI runs on this branch they do.
 
 - [ ] **Step 3: Validate the workflow locally (lint/parse)**
 
