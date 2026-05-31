@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync, cpSync } from 'node:fs'
 import { basename, join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -71,12 +71,13 @@ export function tempFileName(block) {
 
 /**
  * Build a shim `@domecs/<key>` package in the temp `node_modules` whose
- * `exports` point at the workspace package's built `dist/` via a single
- * directory link named `dist`. A directory junction (Windows) / dir symlink
- * (POSIX) needs no elevated privilege, unlike per-file file symlinks which
- * throw `EPERM` on Windows without Developer Mode/admin. The link target's
- * realpath is the real `dist`, so relative imports inside it (e.g.
- * `./component.js`) still resolve.
+ * `exports` point at a *copy* of the workspace package's built `dist/`.
+ * Copying (rather than junction/symlinking) keeps each running module's
+ * realpath inside `doc/.doctest`, so a transitive bare `@domecs/*` import
+ * from one package's dist resolves to a SIBLING shim under
+ * `doc/.doctest/node_modules/@domecs/` — never to the pnpm workspace
+ * symlink that points at `src/*.ts` (which node cannot execute). The
+ * recursive copy preserves the internal relative `./foo.js` imports.
  */
 function linkPackages() {
   const scope = join(TMP_DIR, 'node_modules', '@domecs')
@@ -90,16 +91,7 @@ function linkPackages() {
     }
     const pkgDir = join(scope, key)
     mkdirSync(pkgDir, { recursive: true })
-    // 'junction' is honored on Windows (no privilege needed) and ignored on
-    // POSIX, where Node creates a plain directory symlink instead.
-    try {
-      symlinkSync(absDistDir, join(pkgDir, 'dist'), 'junction')
-    } catch (err) {
-      console.error(
-        `doctest: failed to link @domecs/${key} dist (${err.code}) — on Windows enable Developer Mode or run as admin`,
-      )
-      process.exit(1)
-    }
+    cpSync(absDistDir, join(pkgDir, 'dist'), { recursive: true })
     writeFileSync(
       join(pkgDir, 'package.json'),
       JSON.stringify(
