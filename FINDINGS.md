@@ -16,7 +16,7 @@ Cross-references:
 - `doc/LEGIBILITY.md` — the six legibility laws (all enforced as of v1.0).
 - `doc/api.md` + `doc/api-surface/` — the authoritative type contract.
 - `doc/SPEC.md` — runtime semantics.
-- `ROADMAP.md` (to be created) — the home for the v0.2+/deferred items below.
+- `ROADMAP.md` — the home for the v0.2+/deferred items below.
 
 ---
 
@@ -128,6 +128,19 @@ blessed recipe or example, not new API:
   config (`noUnusedParameters`, `noUncheckedIndexedAccess`). Keep engine tsconfig
   aligned with the strictest advertised consumer config, or run that exact
   `tsc --noEmit` against engine sources in CI. (Prism)
+- **`system_threw` is declared but never constructed** — the closed `DomecsError`
+  union reserves `system_threw` (with a documented `retryable: true` rationale),
+  but no code builds it: a system that *throws* (rather than returning a
+  `SystemResult`) is caught nowhere in `world.ts` and escapes `step()`. This is
+  the system-side twin of the now-fixed `event_handler_threw` gap (§4). Decide:
+  wire a system-execution isolation point (symmetric with the event-handler
+  quarantine), or drop the variant. A closed-union member with zero producers is
+  itself a legibility cost. (verified 2026-05-31)
+- **`api-surface` gate is barrel-only** — the no-drift snapshot captures
+  `dist/index.d.ts` (the re-export barrel), not interface *bodies*, so adding a
+  method to an exported interface (e.g. `World.getSystem`) produces no snapshot
+  diff and the gate stays green. Adequate for catching added/removed exports;
+  does not catch interface-shape changes. Note when relying on it. (observed 2026-05-31)
 
 ---
 
@@ -158,17 +171,21 @@ Park these in `ROADMAP.md`:
 
 ---
 
-## 4. Unverified / needs triage
+## 4. Resolved this pass (was: unverified / needs triage)
 
-Could not confirm shipped-vs-open from source in this pass; triage before acting:
+Both items were triaged from source and fixed on `v1-phase4-freeze` (red/green
+TDD, full suite green):
 
-- **Consolidator disable-by-handle** — `CONSOLIDATE_FAULTS_NAME` is exported and
-  documented as disable-able, but no public by-name `SystemHandle` lookup or
-  `setEnabled` was found on `World`. The `world.describe().systems[].enabled`
-  flag is *readable*; whether there is a public path to *flip* it (so the
-  documented escape hatch is reachable) is unconfirmed. Needs an API decision.
-- **Event-handler throw quarantine** — the `event_handler_threw` `DomecsError`
-  variant is now defined *and constructed* (it appears in `errors.ts` matchers),
-  which suggests the bus `flush()` now wraps handler throws rather than letting
-  them escape `step()`. Confirm the actual try/catch in `events.ts flush()`
-  before closing the old "throwing `on()` handler escapes `step()`" finding.
+- **Consolidator disable-by-handle** — RESOLVED (commit 5933b22). Source confirmed
+  `SystemHandle` already exposes `enabled`/`disable()`, but the auto-registered
+  consolidator's handle was unreachable (no by-name lookup; `describe().systems[]
+  .enabled` is a read-only DTO). Added `world.getSystem(name): SystemHandle |
+  undefined`, backed by the scheduler's live handle registry — the documented
+  escape hatch is now real and tested.
+- **Event-handler throw quarantine** — RESOLVED (commit d16ee4d). The earlier note
+  was wrong: `event_handler_threw` was *declared but never constructed*, and
+  `events.ts flush()` had no try/catch, so a throwing `on()` subscriber escaped
+  `step()`. `flush()` now wraps each direct-subscriber dispatch and routes the
+  throw to `signals.faultRaised` as an `event_handler_threw` fault (`retryable:
+  true`) while the remaining subscribers/events still deliver. Its system-side
+  twin (`system_threw`, also unconstructed) is logged as an open item in §2.
