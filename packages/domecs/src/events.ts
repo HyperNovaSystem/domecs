@@ -81,6 +81,12 @@ export interface EventBus {
    * during its tick (which are buffered for next tick at the time of reading).
    */
   pendingEvents(): EmittedEvent[]
+  /**
+   * Every event type this bus has observed — emitted or subscribed to — in
+   * first-seen order. Powers `world.describe().events`. Note: an event type
+   * defined but never used in this world is unknowable and will not appear.
+   */
+  knownTypes(): EventType<unknown>[]
 }
 
 export function createEventBus(): EventBus {
@@ -123,6 +129,7 @@ export function createEventBus(): EventBus {
     },
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
       const key = type[eventTag]
+      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
       let s = subs.get(key)
       if (!s) {
         s = new Set()
@@ -159,6 +166,9 @@ export function createEventBus(): EventBus {
         for (const payload of arr) out.push({ type, payload })
       }
       return out
+    },
+    knownTypes(): EventType<unknown>[] {
+      return Array.from(typeByTag.values())
     },
   }
 }
