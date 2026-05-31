@@ -228,6 +228,11 @@ interface World {
 
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
+  // The live SystemHandle for a registered system by name (built-in or
+  // user-registered), or undefined. Flipping its enabled/disable() affects
+  // scheduling on the next step — the escape hatch for disabling built-ins
+  // like the fault consolidator (CONSOLIDATE_FAULTS_NAME).
+  getSystem(name: string): SystemHandle | undefined
 
   // queries
   query(def: QueryDef): QueryResult

@@ -140,6 +140,8 @@ export interface CompiledSystem {
 export interface Scheduler {
   register(name: string, def: SystemDef, fn: System): SystemHandle
   systemsByMode(mode: SystemSchedule): CompiledSystem[]
+  /** The live SystemHandle for a registered system by name, or undefined. */
+  getHandle(name: string): SystemHandle | undefined
   /** Remove a system by handle (no-op if already removed). */
   remove(s: CompiledSystem): void
   applyPendingReplacements(): void
@@ -154,6 +156,9 @@ export function createScheduler(
   fixedStep: number,
 ): Scheduler {
   const systems: CompiledSystem[] = []
+  // name -> live handle, so getHandle(name) hands back the SAME object whose
+  // enabled/disable() drive scheduling. Last registration wins on a name clash.
+  const handlesByName = new Map<string, SystemHandle>()
   const byMode = new Map<SystemSchedule, CompiledSystem[]>([
     ['tick', []],
     ['fixed', []],
@@ -252,6 +257,9 @@ export function createScheduler(
           const arr = byMode.get(schedule)!
           const j = arr.indexOf(compiled)
           if (j >= 0) arr.splice(j, 1)
+          // Only drop the name mapping if it still points at THIS handle — a
+          // later registration under the same name must not be evicted.
+          if (handlesByName.get(name) === handle) handlesByName.delete(name)
           compiled.query?.dispose()
           compiled.reactsTo?.dispose()
         },
@@ -259,11 +267,16 @@ export function createScheduler(
           compiled.pendingFn = fn
         },
       }
+      handlesByName.set(name, handle)
       return handle
     },
 
     systemsByMode(mode): CompiledSystem[] {
       return byMode.get(mode) ?? []
+    },
+
+    getHandle(name): SystemHandle | undefined {
+      return handlesByName.get(name)
     },
 
     remove(s): void {

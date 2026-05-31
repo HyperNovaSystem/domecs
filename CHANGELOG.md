@@ -6,8 +6,14 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-_Nothing yet. Forward-looking work is tracked in [`doc/ROADMAP.md`](doc/ROADMAP.md)
-and [`FINDINGS.md`](FINDINGS.md) §3._
+### Added
+
+- `world.getSystem(name)` returns the live `SystemHandle` for a registered
+  system (built-in or user-registered) by name, or `undefined`. This makes
+  `SystemHandle.disable()` / `.enabled` reachable for built-in systems such as
+  the fault consolidator (`CONSOLIDATE_FAULTS_NAME`), whose handle was
+  previously auto-registered with no public way to retrieve it — leaving the
+  documented disable escape hatch unreachable.
 
 ## [1.0.0] — 2026-05-31
 

@@ -183,6 +183,16 @@ export interface World {
   ): SystemHandle
   system(name: string, def: SystemDef, fn: System): SystemHandle
   /**
+   * Retrieve the live {@link SystemHandle} for a registered system by `name`
+   * (built-in or user-registered), or `undefined` if none is registered under
+   * that name. The returned handle is the SAME one `system()` produced, so
+   * flipping its `enabled` / calling `disable()` really affects scheduling on
+   * the next step. This is the public escape hatch for disabling built-ins such
+   * as the fault consolidator (`CONSOLIDATE_FAULTS_NAME`), whose handle is
+   * otherwise unreachable.
+   */
+  getSystem(name: string): SystemHandle | undefined
+  /**
    * Set the time-scale multiplier. `0` is equivalent to {@link pause}; any
    * positive value updates the stored pre-pause scale, so a subsequent
    * {@link resume} restores the most recent positive scale (D-3). Negative
@@ -1530,6 +1540,10 @@ export function createWorld(options: WorldOptions = {}): World {
       const handle = scheduler.register(name, def as SystemDef, fn)
       wakeDriver()
       return handle
+    },
+
+    getSystem(name: string): SystemHandle | undefined {
+      return scheduler.getHandle(name)
     },
 
     step(dt: number): void {
