@@ -69,12 +69,12 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     w.system('react', { schedule: 'reactive', reactsTo: OnChangedResource(Score) }, () => {
       fired++
     })
-    w.step() // quiet tick
+    w.stepOnce() // quiet tick
     expect(fired).toBe(0)
     w.setResource(Score, 10) // between ticks -> pending
-    w.step() // promoted at step 0 -> reactive fires
+    w.stepOnce() // promoted at step 0 -> reactive fires
     expect(fired).toBe(1)
-    w.step() // quiet again
+    w.stepOnce() // quiet again
     expect(fired).toBe(1)
   })
 
@@ -87,7 +87,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
       expect(ctx.entities).toEqual([])
     })
     w.setResource(Score, 1)
-    w.step()
+    w.stepOnce()
     expect(fired).toBe(1)
   })
 
@@ -101,9 +101,9 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     w.system('reactor', { schedule: 'reactive', reactsTo: OnChangedResource(Score) }, () => {
       reactFired++
     })
-    w.step() // tick 1: setter runs (step 4) -> reactor (step 6) sees the change
+    w.stepOnce() // tick 1: setter runs (step 4) -> reactor (step 6) sees the change
     expect(reactFired).toBe(1)
-    w.step() // tick 2: quiet
+    w.stepOnce() // tick 2: quiet
     expect(reactFired).toBe(1)
   })
 
@@ -122,10 +122,10 @@ describe('ChangedResource — reactive gating (review #16)', () => {
         seen = ctx.entities.map((e) => e.id)
       },
     )
-    w.step() // quiet
+    w.stepOnce() // quiet
     expect(fired).toBe(0)
     w.setResource(Score, 5)
-    w.step() // fires over Hud entities
+    w.stepOnce() // fires over Hud entities
     expect(fired).toBe(1)
     expect(seen).toEqual([hud])
   })
@@ -139,7 +139,7 @@ describe('ChangedResource — reactive gating (review #16)', () => {
     })
     w.getResource(Cfg)!.v = 2 // mutate in place
     w.markResourceChanged(Cfg) // between ticks -> pending
-    w.step()
+    w.stepOnce()
     expect(fired).toBe(1)
   })
 })
@@ -152,9 +152,9 @@ describe('ChangedResource — live query (review #16)', () => {
     w.spawn([entry(Hud, { on: true })])
     const q = w.query(And(Has(Hud), OnChangedResource(Score)))
     w.setResource(Score, 1)
-    w.step() // change drained into this tick's delta
+    w.stepOnce() // change drained into this tick's delta
     expect(q.size).toBe(1)
-    w.step() // delta cleared at step 0
+    w.stepOnce() // delta cleared at step 0
     expect(q.size).toBe(0)
     q.dispose()
   })

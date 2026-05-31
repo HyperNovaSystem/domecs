@@ -41,6 +41,6 @@ describe('@domecs/core headless import contract', () => {
 
     expect(seen).toBe(1)
     expect(world.getComponent(entity, Position)).toEqual({ x: 2, y: 2 })
-    expect(() => world.start()).toThrow(/headless/i)
+    expect(() => world.startLoop()).toThrow(/headless/i)
   })
 })

@@ -33,18 +33,18 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     expect(stage.children.length).toBe(1)
     expect(stage.firstElementChild?.textContent).toBe('@')
 
     const sprite = world.getComponent(a, Sprite)!
     sprite.glyph = '#'
     world.markChanged(a, Sprite)
-    world.step()
+    world.stepOnce()
     expect(stage.firstElementChild?.textContent).toBe('#')
 
     world.despawn(a)
-    world.step()
+    world.stepOnce()
     expect(stage.children.length).toBe(0)
 
     handle.teardown()
@@ -74,9 +74,9 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
-    world.step()
-    world.step()
+    world.stepOnce()
+    world.stepOnce()
+    world.stepOnce()
     expect(queryCalls).toBe(2)
 
     handle.teardown()
@@ -99,12 +99,12 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const handle = mountDOM(world, { slots: { stage }, views: [view] })
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(1)
     // No markChanged, but legacy mode still drives update every tick.
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(2)
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(3)
     handle.teardown()
   })
@@ -132,10 +132,10 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     world.markChanged(a, Sprite)
-    world.step()
-    world.step()
+    world.stepOnce()
+    world.stepOnce()
     expect(queryCalls).toBe(2)
 
     handle.teardown()
@@ -161,13 +161,13 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(0)
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(0)
 
     world.markChanged(a, Sprite)
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(1)
 
     handle.teardown()
@@ -195,14 +195,14 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
 
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(0)
-    world.step()
+    world.stepOnce()
     // No markChanged yet → auto-derived gate keeps update silent.
     expect(updateCalls).toBe(0)
 
     world.markChanged(a, Sprite)
-    world.step()
+    world.stepOnce()
     expect(updateCalls).toBe(1)
 
     handle.teardown()
@@ -226,9 +226,9 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const handle = mountDOM(world, { slots: { stage }, views: [view] })
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
-    world.step()
+    world.stepOnce()
     world.removeComponent(a, Sprite)
-    world.step()
+    world.stepOnce()
     expect(seen).toEqual(['@'])
     handle.teardown()
   })

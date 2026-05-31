@@ -231,7 +231,7 @@ describe('world.requestTick (D-4)', () => {
     }
     try {
       const world = createWorld({ idle: true })
-      world.start()
+      world.startLoop()
       harness.advance(16) // prime
       harness.advance(16) // first tick, then sleep
       expect(harness.queue.size).toBe(0)

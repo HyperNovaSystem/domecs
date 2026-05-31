@@ -238,7 +238,22 @@ export interface World {
    *   change-detection portion of the query is non-empty.
    */
   observe(def: QueryDef, hooks: QueryHooks): () => void
-  step(dt?: number): void
+  /**
+   * Advance the world by `dt` seconds (real-time tick).
+   * - `dt > 0` → normal real-time tick; time advances by `dt`.
+   * - `dt <= 0` → **heartbeat**: plugin hooks + render fire, but system
+   *   execution and change-detection buffer swap are skipped. Use for
+   *   lightweight UI repaints between turns (SPEC F-6).
+   *
+   * For the turn-based no-arg single advance, use {@link stepOnce}.
+   */
+  step(dt: number): void
+  /**
+   * Advance exactly one tick with `delta = 0` — the turn-based single step.
+   * Systems run normally; time does not advance. This is the former no-arg
+   * `step()` behaviour.
+   */
+  stepOnce(): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
@@ -251,7 +266,7 @@ export interface World {
    * `turn()` remains the void fire-and-forget form.
    */
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
-  start(options?: StartOptions): () => void
+  startLoop(options?: StartOptions): () => void
   stop(): void
   /**
    * Install a plugin. Returns `Result<dispose, DomecsError>` — failed
@@ -281,9 +296,9 @@ export interface WorldOptions {
 }
 
 /**
- * Options for {@link World.start}. The rAF driver is intentionally thin:
+ * Options for {@link World.startLoop}. The rAF driver is intentionally thin:
  * compute wall-clock dt, clamp it, pipe it to `step(dt)`. Consumers that
- * need custom scheduling keep using `step()` directly.
+ * need custom scheduling keep using `step(dt)` directly.
  */
 export interface StartOptions {
   /** Per-frame dt ceiling in ms (default 100). Prevents tab-return spikes
@@ -878,6 +893,151 @@ export function createWorld(options: WorldOptions = {}): World {
     scheduleDriverFrame()
   }
 
+  /**
+   * Core tick implementation shared by `step(dt)` and `stepOnce()`.
+   *
+   * - `dt === undefined` → turn-based full tick at d=0 (stepOnce path).
+   *   Systems run, change-detection fires, tick count increments, but time
+   *   does not advance.
+   * - `dt <= 0` → heartbeat (F-6): plugin hooks + render only. No system
+   *   execution, no change-detection buffer swap.
+   * - `dt > 0` → real-time tick; time advances by dt seconds.
+   */
+  function runTick(dt: number | undefined): void {
+    // F-6: an explicit dt<=0 is a "heartbeat" — no time advancement,
+    // no system execution, no change-detection buffer swap. Plugin hooks,
+    // signals, and onRender still fire so UIs can paint initial state
+    // and input plugins can republish snapshots between turns.
+    if (dt !== undefined && dt <= 0) {
+      time.delta = 0
+      time.scaledDelta = 0
+      inTick = true
+      try {
+        plugins.callTickStart(world)
+        if (sigTickStart.size > 0) sigTickStart.emit(time)
+        plugins.callRender(world)
+        plugins.callTickEnd(world)
+        if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+      } finally {
+        inTick = false
+      }
+      return
+    }
+    const d = dt ?? 0
+
+    scheduler.applyPendingReplacements()
+
+    // SPEC §4 step 0 — reset per-tick change-detection, then promote
+    // any between-tick (pending) marks into the live sets (F-2).
+    tickAdded.clear()
+    tickRemoved.clear()
+    tickChanged.clear()
+    drainInto(pendingAdded, tickAdded)
+    drainInto(pendingRemoved, tickRemoved)
+    drainInto(pendingChanged, tickChanged)
+    // #16: same buffer-and-swap for resource-change marks.
+    tickResourcesChanged.clear()
+    for (const name of pendingResourcesChanged) tickResourcesChanged.add(name)
+    pendingResourcesChanged.clear()
+
+    const scaledDt = d * time.scale
+    // F-3: accumulate unquantized scaled time, then derive ms-quantized
+    // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
+    // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
+    totalScaledSeconds += scaledDt
+    const newQuantizedMs = Math.round(totalScaledSeconds * 1000)
+    // F-6: when the caller passed a positive dt, floor per-tick
+    // quantized dt at 1 ms so sub-ms wall-clock frames never expose
+    // scaledDelta = 0 to consumers that divide by it (PIDs, smoothing
+    // filters, rate estimators). stepOnce() keeps its d=0 behaviour.
+    // Guard on `d`, not `rawDtMs`: `rawDtMs` can be 0 from quantization
+    // carry even with positive caller dt, and that is exactly the case
+    // we need to raise to 1 ms.
+    const rawDtMs = newQuantizedMs - lastQuantizedElapsedMs
+    const dtMs = time.scale !== 0 && d > 0 && rawDtMs < 1 ? 1 : rawDtMs
+    lastQuantizedElapsedMs = newQuantizedMs
+    time.delta = d
+    time.scaledDelta = dtMs / 1000
+    time.elapsed = newQuantizedMs / 1000
+    time.tick += 1
+
+    inTick = true
+    try {
+      // SPEC §9.4 — plugin onTickStart fires at step 0.
+      plugins.callTickStart(world)
+
+      // SPEC §4 step 1 — flush event buffer from last tick into readable view.
+      const eventView = bus.flush()
+      if (sigTickStart.size > 0) sigTickStart.emit(time)
+
+      // SPEC §4 step 2 — input collection (stub in headless).
+
+      // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
+      // F-3: drive from cumulative unquantized seconds; ms-rounding drift
+      // in per-tick scaledDelta does not entangle the scheduler.
+      if (time.scale !== 0) {
+        const expected = Math.floor(totalScaledSeconds / time.fixedStep + 1e-9)
+        while (fixedStepsFired < expected) {
+          fixedStepsFired += 1
+          fixedStepCounter += 1
+          for (const s of scheduler.systemsByMode('fixed')) {
+            if (!isEnabled(s)) continue
+            if (fixedStepCounter % s.fixedDivisor !== 0) continue
+            runSystem(s, eventView)
+          }
+        }
+        time.fixedAccumulator =
+          totalScaledSeconds - fixedStepsFired * time.fixedStep
+      }
+
+      // SPEC §3 — `once` systems fire on first tick of world.
+      for (const s of scheduler.systemsByMode('once')) {
+        if (s.ranOnce || !isEnabled(s)) continue
+        runSystem(s, eventView)
+        s.ranOnce = true
+      }
+
+      // SPEC §4 step 4 — tick systems.
+      if (time.scale !== 0) {
+        for (const s of scheduler.systemsByMode('tick')) {
+          if (!isEnabled(s)) continue
+          runSystem(s, eventView)
+        }
+      }
+
+      // SPEC §4 step 5 — event systems for events in this tick's view.
+      for (const s of scheduler.systemsByMode('event')) {
+        if (!isEnabled(s)) continue
+        if (!eventMatches(s, eventView)) continue
+        runSystem(s, eventView)
+      }
+
+      // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
+      for (const s of scheduler.systemsByMode('reactive')) {
+        if (!isEnabled(s) || !s.reactsTo) continue
+        if (s.reactsTo.size > 0) {
+          runSystem(s, eventView)
+          continue
+        }
+        // #16: a reactsTo with no structural entity dependency (no Has leaf)
+        // still fires when one of its ChangedResource targets changed this
+        // tick — supports world-level resource reactions in entity-empty
+        // worlds where the structural member count is zero. Entity-scoped
+        // reactsTo (any Has leaf) is governed by `size` above only.
+        if (reactiveResourceFallback(s)) runSystem(s, eventView)
+      }
+
+      // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
+      plugins.callRender(world)
+
+      // SPEC §9.4 — plugin onTickEnd fires at step 8.
+      plugins.callTickEnd(world)
+      if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+    } finally {
+      inTick = false
+    }
+  }
+
   const world: World = {
     get rand() {
       return rand
@@ -1274,152 +1434,33 @@ export function createWorld(options: WorldOptions = {}): World {
       return handle
     },
 
-    step(dt?: number): void {
-      // F-6: an *explicit* dt<=0 is a "heartbeat" — no time advancement,
+    step(dt: number): void {
+      // F-6: an explicit dt<=0 is a "heartbeat" — no time advancement,
       // no system execution, no change-detection buffer swap. Plugin hooks,
       // signals, and onRender still fire so UIs can paint initial state
-      // and input plugins can republish snapshots between turns. A no-arg
-      // step() keeps its legacy meaning ("advance a tick with d=0"), which
-      // turn-based exemplars and turn() rely on.
-      if (dt !== undefined && dt <= 0) {
-        time.delta = 0
-        time.scaledDelta = 0
-        inTick = true
-        try {
-          plugins.callTickStart(world)
-          if (sigTickStart.size > 0) sigTickStart.emit(time)
-          plugins.callRender(world)
-          plugins.callTickEnd(world)
-          if (sigTickEnd.size > 0) sigTickEnd.emit(time)
-        } finally {
-          inTick = false
-        }
-        return
-      }
-      const d = dt ?? 0
+      // and input plugins can republish snapshots between turns.
+      //
+      // For the turn-based no-arg single advance (delta=0, full tick), use
+      // stepOnce() instead.
+      runTick(dt)
+    },
 
-      scheduler.applyPendingReplacements()
-
-      // SPEC §4 step 0 — reset per-tick change-detection, then promote
-      // any between-tick (pending) marks into the live sets (F-2).
-      tickAdded.clear()
-      tickRemoved.clear()
-      tickChanged.clear()
-      drainInto(pendingAdded, tickAdded)
-      drainInto(pendingRemoved, tickRemoved)
-      drainInto(pendingChanged, tickChanged)
-      // #16: same buffer-and-swap for resource-change marks.
-      tickResourcesChanged.clear()
-      for (const name of pendingResourcesChanged) tickResourcesChanged.add(name)
-      pendingResourcesChanged.clear()
-
-      const scaledDt = d * time.scale
-      // F-3: accumulate unquantized scaled time, then derive ms-quantized
-      // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
-      // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
-      totalScaledSeconds += scaledDt
-      const newQuantizedMs = Math.round(totalScaledSeconds * 1000)
-      // F-6: when the caller passed a positive dt, floor per-tick
-      // quantized dt at 1 ms so sub-ms wall-clock frames never expose
-      // scaledDelta = 0 to consumers that divide by it (PIDs, smoothing
-      // filters, rate estimators). No-arg step() keeps its d=0 behaviour.
-      // Guard on `d`, not `rawDtMs`: `rawDtMs` can be 0 from quantization
-      // carry even with positive caller dt, and that is exactly the case
-      // we need to raise to 1 ms.
-      const rawDtMs = newQuantizedMs - lastQuantizedElapsedMs
-      const dtMs = time.scale !== 0 && d > 0 && rawDtMs < 1 ? 1 : rawDtMs
-      lastQuantizedElapsedMs = newQuantizedMs
-      time.delta = d
-      time.scaledDelta = dtMs / 1000
-      time.elapsed = newQuantizedMs / 1000
-      time.tick += 1
-
-      inTick = true
-      try {
-        // SPEC §9.4 — plugin onTickStart fires at step 0.
-        plugins.callTickStart(world)
-
-        // SPEC §4 step 1 — flush event buffer from last tick into readable view.
-        const eventView = bus.flush()
-        if (sigTickStart.size > 0) sigTickStart.emit(time)
-
-        // SPEC §4 step 2 — input collection (stub in headless).
-
-        // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
-        // in per-tick scaledDelta does not entangle the scheduler.
-        if (time.scale !== 0) {
-          const expected = Math.floor(totalScaledSeconds / time.fixedStep + 1e-9)
-          while (fixedStepsFired < expected) {
-            fixedStepsFired += 1
-            fixedStepCounter += 1
-            for (const s of scheduler.systemsByMode('fixed')) {
-              if (!isEnabled(s)) continue
-              if (fixedStepCounter % s.fixedDivisor !== 0) continue
-              runSystem(s, eventView)
-            }
-          }
-          time.fixedAccumulator =
-            totalScaledSeconds - fixedStepsFired * time.fixedStep
-        }
-
-        // SPEC §3 — `once` systems fire on first tick of world.
-        for (const s of scheduler.systemsByMode('once')) {
-          if (s.ranOnce || !isEnabled(s)) continue
-          runSystem(s, eventView)
-          s.ranOnce = true
-        }
-
-        // SPEC §4 step 4 — tick systems.
-        if (time.scale !== 0) {
-          for (const s of scheduler.systemsByMode('tick')) {
-            if (!isEnabled(s)) continue
-            runSystem(s, eventView)
-          }
-        }
-
-        // SPEC §4 step 5 — event systems for events in this tick's view.
-        for (const s of scheduler.systemsByMode('event')) {
-          if (!isEnabled(s)) continue
-          if (!eventMatches(s, eventView)) continue
-          runSystem(s, eventView)
-        }
-
-        // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
-        for (const s of scheduler.systemsByMode('reactive')) {
-          if (!isEnabled(s) || !s.reactsTo) continue
-          if (s.reactsTo.size > 0) {
-            runSystem(s, eventView)
-            continue
-          }
-          // #16: a reactsTo with no structural entity dependency (no Has leaf)
-          // still fires when one of its ChangedResource targets changed this
-          // tick — supports world-level resource reactions in entity-empty
-          // worlds where the structural member count is zero. Entity-scoped
-          // reactsTo (any Has leaf) is governed by `size` above only.
-          if (reactiveResourceFallback(s)) runSystem(s, eventView)
-        }
-
-        // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
-        plugins.callRender(world)
-
-        // SPEC §9.4 — plugin onTickEnd fires at step 8.
-        plugins.callTickEnd(world)
-        if (sigTickEnd.size > 0) sigTickEnd.emit(time)
-      } finally {
-        inTick = false
-      }
+    stepOnce(): void {
+      // Turn-based single advance: full tick with d=0. This is the former
+      // no-arg step() behaviour — systems run, change-detection fires, but
+      // time does not advance.
+      runTick(undefined)
     },
 
     stepN(n: number, dt?: number): void {
-      for (let i = 0; i < n; i++) world.step(dt)
+      for (let i = 0; i < n; i++) dt === undefined ? world.stepOnce() : world.step(dt)
     },
 
     turn<T>(type: EventType<T>, payload: T, dt?: number): void {
       // SPEC §3 turn-based mode: emit action, advance one tick.
       // Because events flush at next step's step 1, we emit first then step.
       bus.emit(type, payload)
-      world.step(dt)
+      dt === undefined ? world.stepOnce() : world.step(dt)
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
@@ -1430,7 +1471,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
       bus.emit(type, payload)
-      world.step(opts.dt)
+      opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
       const events = bus.pendingEvents()
       const verdict = opts.resolve
         ? opts.resolve({ events, world })
@@ -1449,13 +1490,13 @@ export function createWorld(options: WorldOptions = {}): World {
       return result
     },
 
-    start(options?: StartOptions): () => void {
+    startLoop(options?: StartOptions): () => void {
       // F-5: thin rAF driver. Every browser exemplar was hand-rolling this
       // with bespoke dt-clamp / first-frame priming / visibility-pause
       // logic. Owning it here gives one place to fix that mis-tune.
       if (headless) {
         throw new Error(
-          'domecs: World.start() is disabled for worlds created with headless=true; use step(dt) instead',
+          'domecs: World.startLoop() is disabled for worlds created with headless=true; use step(dt) instead',
         )
       }
       const g = globalThis as unknown as {
@@ -1465,7 +1506,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       if (typeof g.requestAnimationFrame !== 'function' || typeof g.cancelAnimationFrame !== 'function') {
         throw new Error(
-          'domecs: World.start() requires requestAnimationFrame; use step(dt) in headless environments',
+          'domecs: World.startLoop() requires requestAnimationFrame; use step(dt) in headless environments',
         )
       }
       if (rafStarted) {
@@ -1485,7 +1526,7 @@ export function createWorld(options: WorldOptions = {}): World {
         rafVisHandler = (): void => {
           // Defensive: browsers may deliver a queued visibilitychange event
           // after stop()+removeEventListener fires on the same microtask.
-          // Ignore it; the next start() installs a fresh handler.
+          // Ignore it; the next startLoop() installs a fresh handler.
           if (!rafStarted) return
           if (doc.hidden) {
             world.pause()

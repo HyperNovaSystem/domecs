@@ -187,8 +187,8 @@ describe('query — structural predicates (archetype-cached)', () => {
     const changed: number[] = []
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
-    world.step()
-    world.step()
+    world.stepOnce()
+    world.stepOnce()
 
     const stop = world.observe(And(Has(Position), OnChanged(Position)), {
       onChange: (e) => changed.push(e.id),
@@ -196,7 +196,7 @@ describe('query — structural predicates (archetype-cached)', () => {
     const pos = world.getComponent(a, Position)!
     pos.x = 1
     world.markChanged(a, Position)
-    world.step()
+    world.stepOnce()
     expect(changed).toEqual([a])
     stop()
   })
@@ -210,9 +210,9 @@ describe('query — change-detection filters (tick-scoped)', () => {
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
     const q = world.query(OnAdded(Position))
-    world.step()
+    world.stepOnce()
     expect(q.entities.map((e) => e.id)).toEqual([a])
-    world.step()
+    world.stepOnce()
     expect(q.size).toBe(0)
   })
 
@@ -220,13 +220,13 @@ describe('query — change-detection filters (tick-scoped)', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
-    world.step()
-    world.step()
+    world.stepOnce()
+    world.stepOnce()
     world.removeComponent(a, Position)
     const q = world.query(OnRemoved(Position))
-    world.step()
+    world.stepOnce()
     expect(q.entities.map((e) => e.id)).toEqual([a])
-    world.step()
+    world.stepOnce()
     expect(q.size).toBe(0)
   })
 
@@ -234,15 +234,15 @@ describe('query — change-detection filters (tick-scoped)', () => {
     const world = createWorld({ headless: true })
     const a = world.spawn()
     world.addComponent(a, Position, { x: 0, y: 0 })
-    world.step()
-    world.step()
+    world.stepOnce()
+    world.stepOnce()
     const pos = world.getComponent(a, Position)!
     pos.x = 5
     world.markChanged(a, Position)
     const q = world.query(OnChanged(Position))
-    world.step()
+    world.stepOnce()
     expect(q.entities.map((e) => e.id)).toEqual([a])
-    world.step()
+    world.stepOnce()
     expect(q.size).toBe(0)
   })
 })

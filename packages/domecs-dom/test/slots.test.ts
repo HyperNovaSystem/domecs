@@ -51,7 +51,7 @@ describe('mountDOM — slot policy (SPEC §5.6)', () => {
     const handle = mountDOM(world, { slots: { stage }, views: [v1, v2] })
     const a = world.spawn()
     world.addComponent(a, Tag, {})
-    world.step()
+    world.stepOnce()
     const kids = Array.from(stage.children) as HTMLElement[]
     expect(kids.length).toBe(2)
     expect(kids[0]!.dataset.from).toBe('v1')
@@ -86,7 +86,7 @@ describe('mountDOM — slot policy (SPEC §5.6)', () => {
       },
     })
     const handle = mountDOM(world, { slots: { stage }, views: [v] })
-    world.step()
+    world.stepOnce()
     expect(stage.children.length).toBe(1)
     handle.teardown()
   })

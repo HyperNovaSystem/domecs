@@ -58,7 +58,34 @@ function installRaf(): RafHarness {
   return harness
 }
 
-describe('World.start()/stop() — F-5 realtime driver', () => {
+describe('World.stepOnce() and step(dt) — turn-based vs real-time', () => {
+  it('stepOnce() advances exactly one tick with zero delta and runs tick systems', () => {
+    const w = createWorld()
+    const deltas: number[] = []
+    let ran = false
+    w.system('tap', { schedule: 'tick' }, () => {
+      ran = true
+      deltas.push(w.time.delta)
+    })
+    w.stepOnce()
+    expect(ran).toBe(true)
+    expect(w.time.tick).toBe(1)
+    expect(deltas[0]).toBe(0)
+  })
+
+  it('step(0.5) runs a tick system with ctx.time.delta ≈ 0.5', () => {
+    const w = createWorld()
+    const deltas: number[] = []
+    w.system('tap', { schedule: 'tick' }, () => {
+      deltas.push(w.time.delta)
+    })
+    w.step(0.5)
+    expect(deltas.length).toBe(1)
+    expect(deltas[0]).toBeCloseTo(0.5, 5)
+  })
+})
+
+describe('World.startLoop()/stop() — F-5 realtime driver', () => {
   let raf: RafHarness & { restore: () => void }
   beforeEach(() => {
     raf = installRaf() as RafHarness & { restore: () => void }
@@ -70,7 +97,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
   it('schedules rAF on start and stops on stop()', () => {
     const w = createWorld()
     expect(raf.pending()).toBe(false)
-    w.start()
+    w.startLoop()
     expect(raf.pending()).toBe(true)
     w.stop()
     expect(raf.pending()).toBe(false)
@@ -80,7 +107,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     const w = createWorld()
     const seen: number[] = []
     w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.scaledDelta) })
-    w.start()
+    w.startLoop()
     // First frame primes the clock (no step — lastWallTime captured).
     raf.advance(16)
     // Second frame produces dt = 16ms.
@@ -95,7 +122,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     const w = createWorld({ fixedStep: 1 / 60 })
     let fixedN = 0
     w.system('phys', { schedule: 'fixed' }, () => { fixedN++ })
-    w.start({ dtClampMs: 100 })
+    w.startLoop({ dtClampMs: 100 })
     raf.advance(16)      // prime
     raf.advance(10_000)  // 10s gap (tab was backgrounded)
     w.stop()
@@ -106,9 +133,9 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
 
   it('idempotent: calling start() twice does not stack drivers', () => {
     const w = createWorld()
-    w.start()
+    w.startLoop()
     const firstCalls = raf.calls
-    w.start()
+    w.startLoop()
     // Second start must not enqueue a second rAF.
     expect(raf.calls).toBe(firstCalls)
     w.stop()
@@ -123,12 +150,12 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     const w = createWorld()
     const seen: number[] = []
     w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.delta) })
-    w.start()
+    w.startLoop()
     raf.advance(16)       // prime
     raf.advance(16)       // step(0.016)
     w.stop()
     raf.advance(5_000)    // long pause outside the loop; must not leak
-    w.start()
+    w.startLoop()
     raf.advance(16)       // prime again (no step)
     raf.advance(16)       // step(0.016), NOT step(5.016)
     w.stop()
@@ -145,7 +172,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     delete g.requestAnimationFrame
     try {
       const w = createWorld()
-      expect(() => w.start()).toThrowError(/requestAnimationFrame/)
+      expect(() => w.startLoop()).toThrowError(/requestAnimationFrame/)
     } finally {
       // Reinstall the harness so afterEach's restore() has something to
       // clean up and so any later tests in this block still get stubs.
@@ -155,12 +182,12 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
 
   it('throws on start() for worlds created with headless=true even when rAF exists', () => {
     const w = createWorld({ headless: true })
-    expect(() => w.start()).toThrowError(/headless/i)
+    expect(() => w.startLoop()).toThrowError(/headless/i)
   })
 
   it('start() returns a disposer that stops the loop', () => {
     const w = createWorld()
-    const dispose = w.start()
+    const dispose = w.startLoop()
     expect(raf.pending()).toBe(true)
     dispose()
     expect(raf.pending()).toBe(false)
@@ -168,7 +195,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
 
   it('stops scheduling new frames when idle=true and no frame work remains', () => {
     const w = createWorld({ idle: true })
-    w.start()
+    w.startLoop()
     raf.advance(16) // prime
     expect(raf.pending()).toBe(true)
     raf.advance(16) // first real tick; loop should go idle afterwards
@@ -181,7 +208,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     w.system('event', { schedule: 'event', triggers: [Ping] }, (ctx) => {
       seen += ctx.events.of(Ping).length
     })
-    w.start()
+    w.startLoop()
     raf.advance(16) // prime
     raf.advance(16) // eventless tick, then sleep
     expect(raf.pending()).toBe(false)
@@ -195,7 +222,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
 
   it('stop() is idempotent — calling it twice does not double-cancel', () => {
     const w = createWorld()
-    w.start()
+    w.startLoop()
     w.stop()
     expect(raf.cancels).toBe(1)
     w.stop()
@@ -207,7 +234,7 @@ describe('World.start()/stop() — F-5 realtime driver', () => {
     const seen: number[] = []
     w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.delta) })
     for (let i = 0; i < 3; i++) {
-      w.start()
+      w.startLoop()
       raf.advance(16)      // prime
       raf.advance(16)      // step(0.016)
       w.stop()
@@ -264,7 +291,7 @@ describe('World.start() — visibilitychange handling (F-5)', () => {
     const w = createWorld()
     const seen: number[] = []
     w.system('tap', { schedule: 'tick' }, () => { seen.push(w.time.delta) })
-    w.start({ dtClampMs: 100 })
+    w.startLoop({ dtClampMs: 100 })
     raf.advance(16)             // prime
     raf.advance(16)             // step(0.016)
     expect(seen[0]).toBeCloseTo(0.016, 3)
@@ -289,7 +316,7 @@ describe('World.start() — visibilitychange handling (F-5)', () => {
 
   it('removeEventListener on stop(): late visibilitychange events are ignored', () => {
     const w = createWorld()
-    w.start()
+    w.startLoop()
     w.stop()
     // The handler was removed; dispatching post-stop must NOT throw and must
     // NOT flip world scale (no lingering pause/resume).
@@ -300,7 +327,7 @@ describe('World.start() — visibilitychange handling (F-5)', () => {
 
   it('pauseOnHidden:false opts out entirely', () => {
     const w = createWorld()
-    w.start({ pauseOnHidden: false })
+    w.startLoop({ pauseOnHidden: false })
     doc.hidden = true
     doc._dispatch()
     // No handler attached → no pause.
