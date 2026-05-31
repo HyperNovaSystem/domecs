@@ -32,4 +32,11 @@ test('snapshot covers every workspace package (no package escapes the contract)'
       `workspace package "${dir}" is not in PACKAGES — add it to scripts/api-surface.mjs`,
     )
   }
+
+  for (const [dir] of PACKAGES) {
+    assert.ok(
+      existsSync(join(ROOT, dir, 'package.json')),
+      `PACKAGES references "${dir}" which no longer exists — update scripts/api-surface.mjs`,
+    )
+  }
 })
