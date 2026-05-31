@@ -1,6 +1,6 @@
 {
   "name": "@domecs/persist",
-  "version": "0.1.0-alpha.0",
+  "version": "1.0.0",
   "description": "DOMECS persistence: save / load / migrate over WorldSnapshot, Result-typed throughout (BETTER_ERRORS Phase 2).",
   "private": false,
   "license": "MIT",
