@@ -15,6 +15,13 @@ All notable changes to DOMECS are documented here. The format is based on
   previously auto-registered with no public way to retrieve it — leaving the
   documented disable escape hatch unreachable.
 
+### Removed
+
+- Dropped the never-constructed `system_threw` variant from the closed
+  `DomecsError` union (dead surface: thrown systems were never caught — systems
+  report faults by returning `SystemResult`, not by throwing). Thrown-system
+  isolation is deferred; re-add the variant if/when that mode is built.
+
 ### Fixed
 
 - A throwing direct `on()` event handler no longer escapes `step()`. Such a

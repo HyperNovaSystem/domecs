@@ -34,8 +34,6 @@ function makeSampleError(kind: (typeof ERROR_KINDS)[number]): DomecsError {
   switch (kind) {
     case 'plugin_install_failed':
       return { kind, plugin: 'test-plugin', cause, retryable: false }
-    case 'system_threw':
-      return { kind, system: 'test-system', cause, tick: 1, retryable: true }
     case 'persist_io':
       return { kind, op: 'save', cause, retryable: true }
     case 'migration_failed':
@@ -196,7 +194,6 @@ describe('BETTER_ERRORS Phase 1 — errors as data', () => {
       // exhaustive `match` validates the discriminant compile-time.
       const handled = match<DomecsError, string>(r.error, {
         plugin_install_failed: (e) => `${e.plugin}:${e.cause.message}`,
-        system_threw: () => 'st',
         persist_io: () => 'io',
         migration_failed: () => 'mf',
         schema_mismatch: () => 'sm',
@@ -238,7 +235,6 @@ describe('BETTER_ERRORS Phase 1 — compile-time guarantees', () => {
     const err: DomecsError = { kind: 'query_invalid', reason: 'bad shape', retryable: false }
     const label = match<DomecsError, string>(err, {
       plugin_install_failed: () => 'plugin',
-      system_threw: () => 'system',
       persist_io: () => 'persist',
       migration_failed: () => 'migrate',
       schema_mismatch: () => 'schema',
@@ -252,7 +248,6 @@ describe('BETTER_ERRORS Phase 1 — compile-time guarantees', () => {
     function summarise(e: DomecsError): string {
       switch (e.kind) {
         case 'plugin_install_failed': return 'p'
-        case 'system_threw': return 's'
         case 'persist_io': return 'i'
         case 'migration_failed': return 'm'
         case 'schema_mismatch': return 'h'
@@ -333,7 +328,8 @@ describe('BETTER_ERRORS Phase 5 — retryable, repair hints, ERROR_KINDS', () =>
   })
 
   it('isKnownDomecsErrorKind discriminates', () => {
-    expect(isKnownDomecsErrorKind('system_threw')).toBe(true)
+    // Regression guard: system_threw was dropped from the union (issue #2733).
+    expect(isKnownDomecsErrorKind('system_threw')).toBe(false)
     expect(isKnownDomecsErrorKind('nope')).toBe(false)
     expect(isKnownDomecsErrorKind('')).toBe(false)
     for (const kind of ERROR_KINDS) {
@@ -341,7 +337,12 @@ describe('BETTER_ERRORS Phase 5 — retryable, repair hints, ERROR_KINDS', () =>
     }
   })
 
-  it('ERROR_KINDS covers all 7 DomecsError variants', () => {
-    expect(ERROR_KINDS.length).toBe(7)
+  it('ERROR_KINDS covers all 6 DomecsError variants', () => {
+    expect(ERROR_KINDS.length).toBe(6)
+  })
+
+  it('does not contain the dropped system_threw kind (issue #2733)', () => {
+    expect(ERROR_KINDS).not.toContain('system_threw')
+    expect(ERROR_KINDS).toHaveLength(6)
   })
 })

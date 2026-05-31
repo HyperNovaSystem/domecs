@@ -11,10 +11,6 @@ describe('describeError — human-readable DomecsError formatter (review #4)', (
         { kind: 'plugin_install_failed', plugin: 'inspector', cause, retryable: false },
         /inspector.*boom/,
       ],
-      [
-        { kind: 'system_threw', system: 'physics', cause, tick: 7, retryable: true },
-        /physics.*7.*boom/,
-      ],
       [{ kind: 'persist_io', op: 'save', cause, retryable: true }, /save.*boom/],
       [
         {
