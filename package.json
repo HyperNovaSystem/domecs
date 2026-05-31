@@ -13,11 +13,14 @@
     "release:validate": "node scripts/validate-release.mjs",
     "api:surface": "node scripts/api-surface.mjs",
     "api:check": "node --test test/api-surface.test.mjs",
-    "publish:npm": "pnpm -r --filter './packages/*' build && pnpm -r --filter './packages/*' publish --access public"
+    "publish:npm": "pnpm -r --filter './packages/*' build && pnpm -r --filter './packages/*' publish --access public",
+    "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
   },
   "devDependencies": {
+    "@types/jscodeshift": "^17.3.0",
+    "@types/node": "^22.10.1",
+    "jscodeshift": "^17.3.0",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.9",
-    "@types/node": "^22.10.1"
+    "vitest": "^2.1.9"
   }
 }
