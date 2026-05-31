@@ -23,7 +23,7 @@ import {
 } from './faulted.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
-import { toJsonValue, type Result } from './result.js'
+import { normalizeCause, toJsonValue, type Result } from './result.js'
 import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
@@ -423,7 +423,6 @@ export function createWorld(options: WorldOptions = {}): World {
   let rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
-  const bus: EventBus = createEventBus()
   let preResumeScale = 1
   let input: InputSnapshot = emptyInput()
 
@@ -436,6 +435,25 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
+
+  // The event bus is decoupled from fault plumbing; it reports a throwing
+  // direct on() subscriber back through this sink. Core owns the DomecsError
+  // construction and the signal. There is no originating system, so the
+  // SystemicFault `source` is the offending event's name (it identifies what
+  // was being delivered when the handler threw).
+  const bus: EventBus = createEventBus((eventName, cause) => {
+    const error: DomecsError = {
+      kind: 'event_handler_threw',
+      event: eventName,
+      cause: normalizeCause(cause),
+      retryable: true,
+    }
+    const entry = buildFaultEntry(eventName, {
+      error,
+      recoverable: true,
+    })
+    sigFaultRaised.emit({ source: eventName, tick: time.tick, entry })
+  })
 
   const signals: WorldSignals = {
     entitySpawned: sigEntitySpawned,

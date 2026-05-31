@@ -15,6 +15,14 @@ All notable changes to DOMECS are documented here. The format is based on
   previously auto-registered with no public way to retrieve it — leaving the
   documented disable escape hatch unreachable.
 
+### Fixed
+
+- A throwing direct `on()` event handler no longer escapes `step()`. Such a
+  handler is now quarantined as an `event_handler_threw` fault (`retryable:
+  true`) routed to `world.signals.faultRaised`, and the remaining subscribers
+  for that event plus the remaining events in the same flush still deliver —
+  one bad handler can no longer crash the tick loop or starve the others.
+
 ## [1.0.0] — 2026-05-31
 
 First stable release. Completes the agent-legibility pass (Phases 0–4): the
