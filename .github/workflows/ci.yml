@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the "packageManager": "pnpm@10.30.2" field from package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r --parallel typecheck
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Regenerate API surface
+        run: pnpm api:surface
+
+      - name: No-drift gate — committed API surface must match build
+        run: |
+          git diff --exit-code -- doc/api-surface \
+            || { echo "::error::API-surface drift. Run 'pnpm api:surface' and commit doc/api-surface/."; exit 1; }
+
+      - name: Unit tests
+        run: pnpm -r --parallel test
+
+      - name: API-surface gate test
+        run: pnpm api:check
+
+      - name: Release validation
+        run: pnpm test:release
