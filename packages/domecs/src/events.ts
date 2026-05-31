@@ -89,7 +89,16 @@ export interface EventBus {
   knownTypes(): EventType<unknown>[]
 }
 
-export function createEventBus(): EventBus {
+/**
+ * Optional sink invoked when a direct `on()` subscriber throws during
+ * `flush()`. The bus catches the throw, reports `(eventName, cause)` here,
+ * and continues delivering the remaining subscribers/events. The world wires
+ * this to build an `event_handler_threw` fault and route it to
+ * `signals.faultRaised`; the bus itself stays decoupled from fault plumbing.
+ */
+export type HandlerFaultSink = (eventName: string, cause: unknown) => void
+
+export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
   // Keyed by the per-type `eventTag` symbol — identity-based, not name-based.
   let pending = new Map<symbol, unknown[]>()
   let current = new Map<symbol, unknown[]>()
@@ -147,7 +156,19 @@ export function createEventBus(): EventBus {
         const s = subs.get(key)
         if (!s || s.size === 0) continue
         for (const payload of arr) {
-          for (const fn of s) fn(payload)
+          for (const fn of s) {
+            // Quarantine a throwing subscriber as a fault (via the sink) so one
+            // bad handler cannot starve the remaining subscribers/events. The
+            // throw must not escape flush() -> step(). The event name is
+            // recovered from typeByTag for the fault's `event` field.
+            try {
+              fn(payload)
+            } catch (cause) {
+              if (onHandlerFault) {
+                onHandlerFault(typeByTag.get(key)?.name ?? '<unknown>', cause)
+              }
+            }
+          }
         }
       }
       return makeView(current)

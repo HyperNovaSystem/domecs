@@ -165,7 +165,6 @@ This keeps Phase 1 simple and avoids TypeScript module-augmentation machinery un
 ```ts
 export type DomecsError =
   | { kind: 'plugin_install_failed'; plugin: string; cause: SerializedError }
-  | { kind: 'system_threw';          system: SystemId; cause: SerializedError; tick: number }
   | { kind: 'persist_io';            op: 'save' | 'load'; cause: SerializedError }
   | { kind: 'migration_failed';      from: number; to: number; reason: string; recoverable: boolean }
   | { kind: 'schema_mismatch';       component: ComponentId; expected: string; got: string }
@@ -173,8 +172,8 @@ export type DomecsError =
   | { kind: 'event_handler_threw';   event: EventId; cause: SerializedError }
 ```
 
-`system_threw` and `event_handler_threw` are for explicit framework-owned isolation points.
-They are not a blanket promise that every user `throw` becomes recoverable data.
+`event_handler_threw` is for an explicit framework-owned isolation point.
+It is not a blanket promise that every user `throw` becomes recoverable data.
 
 #### Plugin error namespacing
 
@@ -345,7 +344,6 @@ export function assertNever(x: never): never {
 ```ts
 const message = match(err, {
   plugin_install_failed: (e) => `plugin ${e.plugin} failed: ${e.cause.message}`,
-  system_threw:          (e) => `system ${e.system} threw at tick ${e.tick}`,
   persist_io:            (e) => `persist ${e.op} failed: ${e.cause.message}`,
   migration_failed:      (e) => `migration ${e.from}→${e.to} failed: ${e.reason}`,
   schema_mismatch:       (e) => `${e.component}: expected ${e.expected}, got ${e.got}`,
@@ -618,7 +616,7 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
 
 - Event-handler Result-ification (define the contract now; defer implementation).
 - Query-construction Results (current API is loose; tighten later).
-- Optional thrown-system isolation mode, if the framework later wants `system_threw` to be recoverable data.
+- Optional thrown-system isolation mode. `system_threw` was **dropped from v1.0's closed union** (never constructed — systems report faults by returning `SystemResult`, not by throwing). If this mode is ever built, re-add the variant then.
 - Module-augmentation error registries, only if generic plugin error composition proves insufficient.
 - Adapter packages (Svelte 5, React) — they consume Results, they don't define new ones.
 - Dev-mode `faultMode: 'strict' | 'permissive'` toggle that re-throws on attach in strict mode for test discipline.

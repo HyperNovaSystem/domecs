@@ -1,6 +1,6 @@
 {
   "name": "@domecs/input",
-  "version": "0.1.0-alpha.0",
+  "version": "1.0.0",
   "description": "DOMECS input collector: keyboard, pointer, focus, gamepad \u2192 per-tick InputSnapshot (SPEC \u00a76).",
   "private": false,
   "license": "MIT",

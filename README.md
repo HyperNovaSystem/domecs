@@ -54,8 +54,7 @@ It is trying to be the best engine in the world for games where the **model is t
 
 ## Status
 
-Early.
-The architecture below is the design target.
+v1.0.0 — stable. All five `@domecs/*` packages are published at 1.0.0.
 
 ---
 
@@ -87,7 +86,6 @@ Optional packages:
 
 ```bash
 npm install @domecs/persist     # IndexedDB save/load
-npm install @domecs/sprites     # sprite sheet + animation components
 npm install @domecs/inspector   # in-browser entity/component debugger
 ```
 
@@ -238,7 +236,6 @@ Saves are entity snapshots — components only, no DOM, no closures. Load rebuil
 │                   Systems · Events · Time   │
 ├─────────────────────────────────────────────┤
 │  @domecs/dom      Retained DOM renderer     │
-│  @domecs/sprites  Sprite sheets, animation  │
 │  @domecs/persist  IndexedDB snapshots       │
 │  @domecs/inspector  Devtools panel          │
 ├─────────────────────────────────────────────┤

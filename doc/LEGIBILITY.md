@@ -9,10 +9,8 @@
 > The full reasoning is in the source rubric, [`agent-legible-api-design.md`](./agent-legible-api-design.md);
 > the v1.0 plan that applies it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
 
-**Enforcement legend:** ✅ = enforced in the shipped types/CI now (L1 in Phase 0; L3/L4/L5 in the
-v1.0 break, Phase 2; L2 completed in Phase 3) · ⏳ = the rule is binding on new code today, but its
-remaining automated enforcement lands later in the pass (L6 in Phase 4). Write to the rule regardless
-of which marker it carries — ⏳ means "no CI net yet," not "optional."
+**Enforcement legend:** ✅ = enforced in the shipped types/CI now. All six laws are now enforced
+(L1 in Phase 0; L3/L4/L5 in the v1.0 break, Phase 2; L2 completed in Phase 3; L6 in Phase 4).
 
 ---
 
@@ -115,7 +113,7 @@ export its `kind` set as a const?
 
 ---
 
-## L6 — Examples are tested documentation ⏳
+## L6 — Examples are tested documentation ✅
 
 Agents copy examples far more than they parse prose.
 A drifted example teaches the wrong thing confidently, so examples are tested.
@@ -123,11 +121,10 @@ A drifted example teaches the wrong thing confidently, so examples are tested.
 - Every public entry point gets at least one runnable example: a happy path and the error path.
 - Examples explicitly cover each behavioral branch (tick-delay events, the `changedOn` modes, reactive entities-as-delta) so they cannot drift from the shipped types.
 
-**Enforcement status:** snippet-CI'd doctests land in Phase 4. Until then, new public entry points
-should carry a runnable example in their docs or tests.
+**Enforcement status:** shipped — `pnpm doctest` extracts and runs the inline `ts doctest` fences from `api.md` in CI (`.github/workflows/ci.yml`); see [`scripts/doctest.mjs`](../scripts/doctest.mjs).
 
 **Checklist:** Does each new public entry point have a runnable, branch-covering example? Is it under
-test (or queued for the Phase 4 snippet-CI) so it cannot rot?
+test so it cannot rot?
 
 ---
 

@@ -1,4 +1,8 @@
-# DOMECS — API Reference (Draft v0.1)
+# DOMECS — API Reference (v1.0)
+
+> **Authoritative source:** the committed type surface in
+> [`doc/api-surface/`](./api-surface/) is the contract; this file is a
+> derived, human-readable view. Where they disagree, the types win.
 
 Concrete type and function signatures for the public API described in `SPEC.md`. Anything not listed here is internal and may change without notice.
 
@@ -209,7 +213,7 @@ interface World {
   // May be called inside or outside a running system. Between-tick calls are
   // buffered and promoted into the live change-detection set at the next
   // step()'s step 0 — symmetric with event buffering. See SPEC §2.9.
-  // v0.1 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
+  // v1.0 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
@@ -224,19 +228,25 @@ interface World {
 
   // systems
   system(name: string, def: SystemDef, fn: System): SystemHandle
+  // The live SystemHandle for a registered system by name (built-in or
+  // user-registered), or undefined. Flipping its enabled/disable() affects
+  // scheduling on the next step — the escape hatch for disabling built-ins
+  // like the fault consolidator (CONSOLIDATE_FAULTS_NAME).
+  getSystem(name: string): SystemHandle | undefined
 
   // queries
   query(def: QueryDef): QueryResult
   // Leak-free one-shot selectors: evaluate the current world without
   // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
-  // reactive nodes (Added/Changed/Removed/ChangedResource) throw — use
-  // query()/observe() for per-tick deltas. count → number, entitiesMatching → Entity[], select →
-  // EntityView[] (typed fields for the array shorthand, like query()).
-  count(def: QueryDef): number
-  entitiesMatching(def: QueryDef): Entity[]
-  select(def: QueryDef): EntityView[]
+  // reactive nodes (OnAdded/OnChanged/OnRemoved/OnChangedResource) reject at
+  // compile time (and throw at runtime for untyped JS callers) — use
+  // query()/observe() for per-tick deltas. countEntities → number, listEntities →
+  // Entity[], selectViews → EntityView[] (typed fields for the array shorthand, like query()).
+  countEntities(def: OneShotQueryDef): number
+  listEntities(def: OneShotQueryDef): Entity[]
+  selectViews(def: OneShotQueryDef): EntityView[]
   // Convenience over query(...).onAdd/onRemove. If hooks.onChange is present,
-  // def must contain at least one Added/Removed/Changed node; callbacks fire
+  // def must contain at least one OnAdded/OnRemoved/OnChanged node; callbacks fire
   // at step 6 reactive time, once per matching entity for that tick.
   observe(def: QueryDef, hooks: QueryHooks): () => void
 
@@ -550,6 +560,33 @@ world.signals.entityDespawned.subscribe((dead) => {
 The signal fires *after* the entity is reclaimed, so subscribers see a
 consistent world; one global listener replaces per-system null-guards.
 
+An event emitted *during* a tick is buffered and becomes readable at the
+**next** tick's step-1 flush — a consumer event-system sees a producer's
+event on the following `stepOnce`, never the same one:
+
+```ts doctest name=event-tick-delay
+import { strict as assert } from 'node:assert'
+import { createWorld, defineEvent } from '@domecs/core'
+
+const w = createWorld()
+const Hit = defineEvent<{ dmg: number }>('Hit')
+
+const seen: number[] = []
+// Producer emits Hit during its tick; events are buffered for the next tick.
+w.system('emit-hit', { schedule: 'once' }, (ctx) => {
+  ctx.events.emit(Hit, { dmg: 7 })
+})
+// Consumer runs when Hit fired and reads the payload.
+w.system('read-hits', { schedule: 'event', triggers: [Hit] }, (ctx) => {
+  for (const e of ctx.events.of(Hit)) seen.push(e.dmg)
+})
+
+w.stepOnce() // tick 1: producer emits (buffered); consumer has not seen it yet
+assert.deepEqual(seen, [])
+w.stepOnce() // tick 2: step-1 flush delivers Hit to the consumer
+assert.deepEqual(seen, [7])
+```
+
 ### Time
 
 ```ts
@@ -603,10 +640,10 @@ interface SnapshotOptions {
 
 ```ts
 interface Plugin<O = void> {
-  name:      string
-  version?:  string                        // informational; surfaced in diagnostics
-  depends?:  readonly string[]
-  provides?: readonly string[]
+  readonly name:      string
+  readonly version?:  string               // informational; surfaced in diagnostics
+  readonly depends?:  readonly string[]
+  readonly provides?: readonly string[]
   // `install` participates in the Result contract (BETTER_ERRORS Phase 1):
   // success carries an optional PluginHandle, failure a DomecsError that the
   // registry quarantines (provided capabilities are unwound, world keeps
@@ -628,10 +665,10 @@ interface PluginHandle {
 // explicit Result through. Writing plugins this way keeps a bare-handle
 // return valid without hand-rolling ok()/err().
 interface PluginSpec<O = void> {
-  name:      string
-  version?:  string
-  depends?:  readonly string[]
-  provides?: readonly string[]
+  readonly name:      string
+  readonly version?:  string
+  readonly depends?:  readonly string[]
+  readonly provides?: readonly string[]
   install(world: World, options: O):
     PluginHandle | void | Result<PluginHandle | void, DomecsError>
 }
@@ -678,6 +715,39 @@ const hits = world.capability('spatial-index').query({ x: 0, y: 0, w: 64, h: 64 
 
 Rules: (1) one provider per capability name — `provides: ['spatial-index']` from two plugins is a registration error (§9.3). (2) Consumers list the key in `depends` and should not call `capability(name)` at `install` time before the provider has run; the plugin DAG (§9.2) guarantees provider order when `depends` is declared. (3) The augmentation lives in the provider package, not in application code — third-party capabilities stay self-contained.
 
+**Result-based error handling.** `world.use` returns a `Result`: a plugin that
+installs cleanly yields `Ok`, while a plugin whose `install` throws is
+quarantined and surfaced as an `Err` carrying a `DomecsError` you can hand to
+`describeError` for a human-readable, fix-oriented message. (A duplicate plugin
+*name* is a programmer error and throws — it is not an `Err`.)
+
+```ts doctest name=result-error-handling
+import { strict as assert } from 'node:assert'
+import { createWorld, definePlugin, describeError, isErr, isOk } from '@domecs/core'
+
+const w = createWorld()
+
+// Happy path: a plugin that installs cleanly → Ok.
+const good = definePlugin({ name: 'good', install: () => {} })
+assert.ok(isOk(w.use(good)))
+
+// Error path: a plugin whose install throws → use() returns an Err carrying a
+// DomecsError you can describe for a human-readable, fix-oriented message.
+const bad = definePlugin({
+  name: 'bad',
+  install: () => {
+    throw new Error('boom')
+  },
+})
+const result = w.use(bad)
+assert.ok(isErr(result))
+if (isErr(result)) {
+  const described = describeError(result.error)
+  assert.equal(typeof described, 'string')
+  assert.ok(described.length > 0)
+}
+```
+
 ---
 
 ## `@domecs/input`
@@ -705,11 +775,11 @@ interface InputSnapshot {
 }
 
 interface PointerSnapshot {
-  x: number; y: number        // raw DOM client coordinates in v0.1
+  x: number; y: number        // raw DOM client coordinates in v1.0
   buttons: number
   delta: { x: number; y: number }
   wheel: number
-  entered: readonly Entity[]   // reserved for future hit-tested enter tracking; empty in v0.1
+  entered: readonly Entity[]   // reserved for future hit-tested enter tracking; empty in v1.0
 }
 
 interface GamepadSnapshot {
@@ -723,6 +793,23 @@ Importing `@domecs/input` is safe without browser globals. Installing
 `createInputPlugin()` in Node registers no DOM listeners, skips gamepad polling,
 and publishes empty snapshots on tick.
 
+The defaults are exported as the frozen `DEFAULT_INPUT_OPTIONS` record;
+caller options merge over them exactly as the plugin applies them:
+
+```ts doctest name=input-defaults
+import { strict as assert } from 'node:assert'
+import { DEFAULT_INPUT_OPTIONS } from '@domecs/input'
+
+// The static defaults are machine-readable.
+assert.equal(DEFAULT_INPUT_OPTIONS.clearOnBlur, true)
+assert.equal(DEFAULT_INPUT_OPTIONS.preventDefaultKeys, false)
+
+// Overrides merge over the defaults the same way the plugin applies them.
+const opts = { ...DEFAULT_INPUT_OPTIONS, preventDefaultKeys: true }
+assert.equal(opts.preventDefaultKeys, true) // override wins
+assert.equal(opts.clearOnBlur, true)        // untouched default survives
+```
+
 ---
 
 ## `@domecs/dom`
@@ -731,8 +818,8 @@ and publishes empty snapshots on tick.
 function mountDOM(world: World, options: MountOptions): MountHandle
 
 interface MountOptions {
-  slots: Record<string, HTMLElement>     // e.g. { stage: el, hud: el, portal: document.body }
-  views: readonly ViewDef[]
+  readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
+  readonly views: ReadonlyArray<ViewDef>
 }
 
 interface MountHandle {
@@ -774,101 +861,67 @@ Importing `@domecs/dom` is safe without browser globals. `mountDOM` requires
 caller-provided slot elements for views; it never discovers `document` on
 module load.
 
----
+`ChangedOn` is a discriminated union with four authoring forms (omitting
+`changedOn` is equivalent to `{ mode: 'auto' }`):
 
-## `@domecs/sprites`
+```ts doctest name=changedon-modes
+import { strict as assert } from 'node:assert'
+import type { ChangedOn } from '@domecs/dom'
 
-```ts
-const Sprite = defineComponent<{
-  sheet:     string
-  frame:     number
-  flipX?:    boolean
-  flipY?:    boolean
-  tintRgb?:  [number, number, number]
-}>('Sprite')
+// 1. Omitted — equivalent to { mode: 'auto' }.
+const omitted: ChangedOn | undefined = undefined
+assert.equal(omitted, undefined)
 
-const Animation = defineComponent<{
-  clip:      string
-  time:      number            // seconds into clip
-  speed?:    number            // default 1
-  loop?:     boolean           // default true
-  paused?:   boolean
-}>('Animation')
+// 2. auto — derive OnChanged(T) from every Has(T) leaf in the view query.
+const auto: ChangedOn = { mode: 'auto' }
+assert.equal(auto.mode, 'auto')
 
-function createSpritesPlugin(options: {
-  sheets: Record<string, SpriteSheetDef>
-  clips?: Record<string, AnimationClip>
-}): Plugin
+// 3. legacy — redraw every mounted entity every tick.
+const legacy: ChangedOn = { mode: 'legacy' }
+assert.equal(legacy.mode, 'legacy')
 
-interface SpriteSheetDef {
-  url:      string
-  frameW:   number
-  frameH:   number
-  cols:     number
-  rows:     number
-}
-
-interface AnimationClip {
-  sheet:    string
-  frames:   number[]
-  frameMs:  number
-}
+// 4. explicit — gate redraws on exactly the listed component types.
+const explicit: ChangedOn = { mode: 'explicit', types: [] }
+assert.equal(explicit.mode, 'explicit')
+assert.deepEqual(explicit.mode === 'explicit' ? explicit.types : null, [])
 ```
 
 ---
 
 ## `@domecs/persist`
 
+There is no `createPersistence` facade — persistence is a set of
+`Result`-typed free functions over a `Storage`. The free functions are the
+one canonical path. Every operation returns a `Result<..., DomecsError>`;
+`save`/`load` never throw on expected I/O or migration failures.
+
+`Storage` is a slot-keyed text store; a missing slot reads as `ok(null)`,
+not an error. `createMemoryStorage` ships an in-memory adapter.
+
 ```ts
-function createPersistence(world: World, options: PersistOptions): Persistence
-
-interface PersistOptions {
-  database:  string
-  version:   number
-  codecs?:   Record<string, ComponentCodec<unknown>>
-  autosave?: { everyMs?: number; everyTicks?: number; slot?: string }
+interface Storage {
+  read(slot: string):                Result<string | null, DomecsError>
+  write(slot: string, data: string): Result<void, DomecsError>
+  remove(slot: string):              Result<void, DomecsError>
+  list():                            Result<readonly string[], DomecsError>
 }
 
-interface ComponentCodec<T> {
-  read:  (snapVersion: number, value: unknown) => T
-  write: (value: T) => unknown
-}
-
-interface Persistence {
-  save(slot: string): Promise<void>
-  load(slot: string): Promise<void>
-  list():             Promise<SaveSlot[]>
-  remove(slot: string): Promise<void>
-  export(slot: string): Promise<string>   // JSON string
-  import(json: string, slot: string): Promise<void>
-  autosave(options?: AutosaveOptions): () => void
-
-  // time travel
-  ringBuffer(options?: { size?: number; everyTicks?: number }): RingBuffer
-}
-
-interface RingBuffer {
-  snapshots(): readonly WorldSnapshot[]
-  scrubTo(tick: number): void
-  clear(): void
-}
-
-interface SaveSlot {
-  name:      string
-  savedAt:   number
-  tick:      number
-  thumbnail?: string
-}
+function createMemoryStorage(initial?: Readonly<Record<string, string>>): Storage
 ```
 
-**Implemented surface (v0.1).** The shipped package exposes Result-typed
-free functions over a `Storage`, not the `createPersistence` facade above
-(that remains aspirational). `load()` migrates the envelope by `version`
-before `world.restore`:
+**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
+serializes to JSON, and writes to `slot`. `load` reads `slot`, parses it,
+migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 2)
+before calling `world.restore`.
 
 ```ts
 function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
+
+interface SaveOptions {
+  meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)
+  savedAt?: number                    // override stamped ms-epoch timestamp; default Date.now()
+}
 
 interface LoadOptions {
   targetVersion?: number    // default SNAPSHOT_VERSION (2)
@@ -877,17 +930,62 @@ interface LoadOptions {
   migrations?: MigrationMap
 }
 
+// Plugin: strips entities with an empty serializable component bag from every
+// world.snapshot() envelope via onSnapshot — the declarative way to get
+// pruneEmptyEntities on the persisted save() path. Install once per world.
+function pruneTransientOnlyEntities(): Plugin
+```
+
+**Migration.** A `Migration` is a single-step `N → N+1` transform; `migrate`
+walks the chain to `targetVersion`. `BUILTIN_MIGRATIONS` is the framework
+floor (the 1→2 resources bump, SPEC §7.1/§2.11); `withBuiltinMigrations`
+overlays user steps on top (user keys win).
+
+```ts
 // A single-step migration: version N → N+1. Returning err halts the chain.
 type Migration    = (snap: WorldSnapshot) => Result<WorldSnapshot, MigrationFailedError>
-type MigrationMap  = ReadonlyMap<number, Migration>   // keyed by source version
+type MigrationMap = ReadonlyMap<number, Migration>   // keyed by source version
 
 function migrate(snap: WorldSnapshot, targetVersion: number, migrations: MigrationMap): Result<WorldSnapshot, MigrationFailedError>
 
-// Framework-supplied steps applied as the floor beneath any user chain.
-// Ships the 1→2 resources bump (SPEC §7.1/§2.11) as the sole built-in.
 const BUILTIN_MIGRATIONS: MigrationMap
-// Overlay user steps on the built-ins (user keys win); built-ins unchanged when empty.
 function withBuiltinMigrations(user?: MigrationMap): MigrationMap
+```
+
+**Snapshot history (undo/redo).** `createSnapshotHistory` is an in-memory
+undo/redo ring over `WorldSnapshot`s; `diffSnapshots` is an entity-level diff
+between two snapshots.
+
+```ts
+function createSnapshotHistory(world: World, opts?: SnapshotHistoryOptions): SnapshotHistory
+
+interface SnapshotHistoryOptions {
+  limit?:          number    // max checkpoints retained (ring); default 50, must be >= 1
+  captureInitial?: boolean   // snapshot current state as baseline at creation; default true
+}
+
+interface SnapshotHistory {
+  push():   void                              // snapshot world, append as new current checkpoint
+  undo():   boolean                           // restore previous; false at oldest
+  redo():   boolean                           // restore next; false at newest
+  canUndo(): boolean
+  canRedo(): boolean
+  clear():  void
+  readonly length: number                     // checkpoints retained
+  readonly index:  number                     // cursor; -1 when empty
+  snapshots(): readonly WorldSnapshot[]        // oldest-first
+  current():   WorldSnapshot | undefined
+  toJSON():    string
+  load(json: string): Result<void, DomecsError>
+}
+
+function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot): SnapshotDiff
+
+interface SnapshotDiff {
+  readonly addedEntities:   readonly Entity[]
+  readonly removedEntities: readonly Entity[]
+  readonly changedEntities: readonly Entity[]
+}
 ```
 
 ---
@@ -895,15 +993,72 @@ function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 ## `@domecs/inspector`
 
 ```ts
-function createInspector(options?: InspectorOptions): Plugin
+function createInspector(opts?: InspectorOptions): InspectorBundle
 
 interface InspectorOptions {
-  slot?:     string                // default: 'chrome'
-  hotkey?:   string                // default: 'F1'
-  detect?:   {
-    wallClock?: boolean            // default true in dev
-    mathRandom?: boolean           // default true in dev
-  }
+  bufferSize?: number          // ring-buffer capacity for fault/state entries; default 1024
+  recordStateChanges?: boolean // interleave component-change events into the timeline; default false
+  timelineBufferSize?: number  // max timeline entries; defaults to bufferSize, only used when recordStateChanges is true
+}
+
+interface InspectorBundle {
+  readonly plugin: Plugin<void>  // pass to world.use(...)
+  readonly view:   InspectorView // live view; filter calls return immutable snapshot views
+  clear(): void                  // drop all recorded entries (both buckets and the timeline)
+}
+
+// Immutable, filter-composable view. Each filter returns a fresh view backed by
+// the captured snapshot — the live buffer keeps growing, a captured view stays put.
+interface InspectorView {
+  readonly entries:      readonly InspectorEntry[]
+  readonly systemic:     readonly InspectorEntry[]  // entries with no entity (systemic faults)
+  readonly entityScoped: readonly InspectorEntry[]  // entries carrying an entity
+  readonly timeline:     readonly TimelineEvent[]   // empty unless recordStateChanges
+  bySource(systemId: SystemId): InspectorView
+  byKind(kind: string): InspectorView
+  byTick(tick: number): InspectorView
+  byTickRange(from: number, to: number): InspectorView
+  recoverableOnly(): InspectorView
+  onlyFaulted(): InspectorView                       // keep only entity-scoped entries
+  hideFaulted(): InspectorView                       // keep only systemic entries
+  entriesFor(entity: Entity): readonly InspectorEntry[]
+  export(): InspectorSnapshot                        // point-in-time serializable copy
+}
+
+// One normalized record. Systemic and entity-scoped faults share this shape;
+// `entity` discriminates (absent ⇒ systemic).
+interface InspectorEntry {
+  readonly kind:        string      // fault kind (e.g. 'event_handler_threw')
+  readonly systemId:    SystemId
+  readonly tick:        number
+  readonly wallclock:   number      // Date.now() at capture
+  readonly recoverable: boolean
+  readonly entity?:     Entity       // absent ⇒ systemic fault
+  readonly component?:  ComponentId
+  readonly detail?:     JsonValue
+}
+
+type TimelineEventKind =
+  | 'fault' | 'spawn' | 'despawn' | 'componentAdded' | 'componentRemoved'
+
+// Replay-timeline event. Only recorded when recordStateChanges is true (faults
+// are always recorded; structural events are interleaved when enabled).
+interface TimelineEvent {
+  readonly eventKind:  TimelineEventKind
+  readonly tick:       number
+  readonly wallclock:  number
+  readonly entity:     Entity         // always present — renderable per-entity without a join
+  readonly component?: ComponentId
+  readonly fault?:     InspectorEntry  // set only when eventKind === 'fault'
+}
+
+// Point-in-time, structurally-cloneable copy of an InspectorView — safe to hand
+// to an agent or persist. Plain arrays, unlike the live view's growing buffers.
+interface InspectorSnapshot {
+  readonly entries:      InspectorEntry[]
+  readonly systemic:     InspectorEntry[]
+  readonly entityScoped: InspectorEntry[]
+  readonly timeline:     TimelineEvent[]
 }
 ```
 
@@ -911,17 +1066,16 @@ interface InspectorOptions {
 
 ## Framework integration
 
-v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
+v1.0 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
 
 ---
 
 ## Quick-start example (updated)
 
 ```ts
-import { createWorld, defineComponent, entry, Has } from '@domecs/core'
+import { createWorld, defineComponent, entry } from '@domecs/core'
 import { mountDOM, defineView } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
-import { Sprite, createSpritesPlugin } from '@domecs/sprites'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
@@ -929,27 +1083,23 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
 const world = createWorld({ seed: 0xC0FFEE })
 
 world.use(createInputPlugin())
-world.use(createSpritesPlugin({
-  sheets: { hero: { url: '/hero.png', frameW: 16, frameH: 16, cols: 8, rows: 4 } },
-}))
 mountDOM(world, {
   slots: { stage: document.getElementById('stage')! },
   views: [
     defineView({
       slot: 'stage',
-      // Tuple-form query: `view.Position` and `view.Sprite` are typed.
+      // Tuple-form query: `view.Position` is typed.
       // `changedOn` is auto-derived from the query's `Has(T)` leaves,
-      // so the view redraws when either Position or Sprite is marked
-      // changed and stays silent otherwise (SPEC §5.3, P-3).
-      query: [Position, Sprite] as const,
+      // so the view redraws when Position is marked changed and stays
+      // silent otherwise (SPEC §5.3, P-3).
+      query: [Position] as const,
       create: () => {
         const el = document.createElement('div')
-        el.className = 'sprite'
+        el.className = 'dot'
         return el
       },
       update: (el, e) => {
         el.style.transform = `translate(${e.Position.x}px, ${e.Position.y}px)`
-        el.style.backgroundPosition = `-${e.Sprite.frame * 16}px 0`
       },
     }),
   ],
@@ -969,10 +1119,9 @@ world.system('movement', {
 world.spawn([
   entry(Position, { x: 100, y: 100 }),
   entry(Velocity, { dx: 30, dy: 0 }),
-  entry(Sprite,   { sheet: 'hero', frame: 0 }),
 ])
 
 world.start()
 ```
 
-Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v0.1 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.
+Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v1.0 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.

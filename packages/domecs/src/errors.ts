@@ -16,9 +16,9 @@ export type EventId = string
  * this union — see {@link PluginResult}.
  *
  * `migration_failed` carries `recoverable: boolean` so userland can choose
- * to retry / partial-load. `system_threw` and `event_handler_threw` are
- * for explicit framework-owned isolation points; they are NOT a blanket
- * promise that every user `throw` becomes recoverable data.
+ * to retry / partial-load. `event_handler_threw` is for an explicit
+ * framework-owned isolation point; it is NOT a blanket promise that every
+ * user `throw` becomes recoverable data.
  *
  * `retryable` signals whether the failure is transient (true — the same
  * operation could succeed on a subsequent attempt) or deterministic (false —
@@ -27,8 +27,6 @@ export type EventId = string
  * Retryability rationale per variant:
  * - plugin_install_failed: false — install contracts are deterministic; a bad
  *   return/throw won't fix itself without code changes.
- * - system_threw: true — the system could be in a transient state; a retry
- *   on the next tick may succeed.
  * - persist_io: true — storage backends can have transient outages (disk full
  *   briefly, network blip); a retry is worth attempting.
  * - migration_failed: false — a missing migrator or non-advancing version will
@@ -43,7 +41,6 @@ export type EventId = string
 /** Closed union — adding a variant is a breaking change. */
 export type DomecsError =
   | { kind: 'plugin_install_failed'; plugin: string; cause: SerializedError; retryable: boolean }
-  | { kind: 'system_threw'; system: SystemId; cause: SerializedError; tick: number; retryable: boolean }
   | { kind: 'persist_io'; op: 'save' | 'load'; cause: SerializedError; retryable: boolean }
   | { kind: 'migration_failed'; from: number; to: number; reason: string; recoverable: boolean; retryable: boolean }
   | { kind: 'schema_mismatch'; component: ComponentId; expected: string; got: string; retryable: boolean }
@@ -53,7 +50,6 @@ export type DomecsError =
 /** All valid `DomecsError` kind literals, in source order. */
 export const ERROR_KINDS = [
   'plugin_install_failed',
-  'system_threw',
   'persist_io',
   'migration_failed',
   'schema_mismatch',
@@ -78,8 +74,6 @@ export function getErrorRepairHint(e: DomecsError): string {
   return match(e, {
     plugin_install_failed: (x) =>
       `Plugin "${x.plugin}" failed to install. Check its install() return and dependency order.`,
-    system_threw: (x) =>
-      `System "${x.system}" threw on tick ${x.tick}. Wrap its body in a Result or guard the faulting input.`,
     persist_io: (x) =>
       `Persistence ${x.op} failed. Verify the Storage backend is reachable and writable.`,
     migration_failed: (x) =>
@@ -108,8 +102,6 @@ export function describeError(e: DomecsError): string {
   return match(e, {
     plugin_install_failed: (x) =>
       `Plugin "${x.plugin}" failed to install: ${x.cause.message}`,
-    system_threw: (x) =>
-      `System "${x.system}" threw at tick ${x.tick}: ${x.cause.message}`,
     persist_io: (x) => `Persistence ${x.op} failed: ${x.cause.message}`,
     migration_failed: (x) =>
       `Snapshot migration ${x.from}→${x.to} failed ` +
@@ -172,6 +164,11 @@ export interface SystemResult<E extends { kind: string } = DomecsError> {
  */
 export interface FaultEntry {
   kind: string
+  /** JSON-safe projection of the originating `SystemFault.error` payload,
+   * produced by `toJsonValue` (see `result.ts`): a {@link JsonValue} tree with
+   * non-serializable leaves stringified and recursion bounded by
+   * `MAX_CAUSE_DEPTH`. Absent when the fault carried no payload beyond
+   * its `kind`. */
   detail?: JsonValue
   source: SystemId
   tick: number

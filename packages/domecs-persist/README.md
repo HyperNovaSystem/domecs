@@ -7,7 +7,7 @@ Every seam returns a `Result<…, DomecsError>` — I/O failures surface as
 exceptions. A failed save or migration leaves the target slot's prior bytes
 intact. See `doc/BETTER_ERRORS.md` Phase 2 for the discipline this enforces.
 
-> Status: early alpha.
+> Status: v1.0 — stable.
 
 ## Install
 

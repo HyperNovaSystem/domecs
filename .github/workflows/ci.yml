@@ -5,16 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       # Reads the "packageManager": "pnpm@10.30.2" field from package.json.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: 20
           cache: pnpm
@@ -26,6 +33,9 @@ jobs:
 
       - name: Build
         run: pnpm -r build
+
+      - name: Doctests (L6 — examples are tested documentation)
+        run: pnpm doctest
 
       - name: Regenerate API surface
         run: pnpm api:surface
@@ -40,6 +50,9 @@ jobs:
 
       - name: API-surface gate test
         run: pnpm api:check
+
+      - name: Doctest harness unit tests
+        run: pnpm doctest:check
 
       - name: Release validation
         run: pnpm test:release

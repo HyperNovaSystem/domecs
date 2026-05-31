@@ -7,7 +7,7 @@ Surfaces `Faulted` entity components and systemic faults from
 package has **no DOM dependency** — UI panels (Studio, custom devtools) wrap
 this surface. See `doc/BETTER_ERRORS.md` §"Phase 3 — Inspector integration".
 
-> Status: early alpha.
+> Status: v1.0 — stable.
 
 ## Install
 

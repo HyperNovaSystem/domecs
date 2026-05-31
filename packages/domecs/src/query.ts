@@ -16,6 +16,17 @@ export type QueryNode =
   | { kind: 'or'; children: QueryNode[] }
 
 export type QueryShorthand = ReadonlyArray<ComponentType<unknown>> | QueryNode
+/**
+ * A query specification accepted by the world's query/observe APIs: either a
+ * tuple of `ComponentType`s or a combinator `QueryNode`.
+ *
+ * Field inference forks on the form. The tuple form
+ * (`world.query([Position, Velocity])`) infers the matched view's `Fields`, so
+ * `view.Position` / `view.Velocity` are typed. The combinator form
+ * (`Has`/`And`/`Or`/…) does not carry per-field types and falls back to the
+ * unconstrained {@link EntityView} (`Record<string, unknown>`); read those
+ * components via `world.getComponent(view.id, T)`.
+ */
 export type QueryDef = QueryShorthand
 
 /**

@@ -44,7 +44,6 @@ import { match, type DomecsError } from '@domecs/core'
 function summarize(e: DomecsError): string {
   return match<DomecsError, string>(e, {
     plugin_install_failed: (e) => `plugin "${e.plugin}" failed: ${e.cause.message}`,
-    system_threw:          (e) => `system "${e.system}" threw at tick ${e.tick}`,
     persist_io:            (e) => `${e.op} I/O: ${e.cause.message}`,
     migration_failed:      (e) => `migrate ${e.from}→${e.to}: ${e.reason}`,
     schema_mismatch:       (e) => `${e.component} expected ${e.expected}, got ${e.got}`,
@@ -64,7 +63,6 @@ function shouldRetry(e: DomecsError): boolean {
     case 'persist_io':       return true
     case 'migration_failed': return e.recoverable
     case 'plugin_install_failed':
-    case 'system_threw':
     case 'schema_mismatch':
     case 'query_invalid':
     case 'event_handler_threw':

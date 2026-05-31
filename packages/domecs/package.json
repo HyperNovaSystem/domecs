@@ -1,6 +1,6 @@
 {
   "name": "@domecs/core",
-  "version": "0.1.0-alpha.0",
+  "version": "1.0.0",
   "description": "DOMECS core: World, entities, components, queries, systems, events, time.",
   "private": false,
   "license": "MIT",

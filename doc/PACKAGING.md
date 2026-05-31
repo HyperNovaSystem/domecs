@@ -94,9 +94,9 @@ A DOMECS application should be a Vite app with scripts like:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@domecs/core": "^0.1.0",
-    "@domecs/dom": "^0.1.0",
-    "@domecs/input": "^0.1.0"
+    "@domecs/core": "^1.0.0",
+    "@domecs/dom": "^1.0.0",
+    "@domecs/input": "^1.0.0"
   },
   "devDependencies": {
     "vite": "^5.4.0",
@@ -191,7 +191,7 @@ The template should include:
 A Vite plugin should be optional and added only when it provides framework-level value beyond normal Vite usage.
 
 Candidate features:
-- sprite atlas or asset manifest generation for `@domecs/sprites`;
+- sprite atlas or asset manifest generation (roadmap — no sprite package ships in v1.0);
 - automatic dev inspector injection in development builds;
 - hot-reload helpers for views, systems, and data tables;
 - validation of component/view metadata at build time;

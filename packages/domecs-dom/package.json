@@ -1,6 +1,6 @@
 {
   "name": "@domecs/dom",
-  "version": "0.1.0-alpha.0",
+  "version": "1.0.0",
   "description": "DOMECS renderer: views, slots, mount lifecycle, batched DOM commits (SPEC \u00a75).",
   "private": false,
   "license": "MIT",

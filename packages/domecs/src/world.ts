@@ -23,7 +23,7 @@ import {
 } from './faulted.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
-import { toJsonValue, type Result } from './result.js'
+import { normalizeCause, toJsonValue, type Result } from './result.js'
 import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
@@ -182,6 +182,16 @@ export interface World {
     fn: System<FieldsFromComponents<T>, S>,
   ): SystemHandle
   system(name: string, def: SystemDef, fn: System): SystemHandle
+  /**
+   * Retrieve the live {@link SystemHandle} for a registered system by `name`
+   * (built-in or user-registered), or `undefined` if none is registered under
+   * that name. The returned handle is the SAME one `system()` produced, so
+   * flipping its `enabled` / calling `disable()` really affects scheduling on
+   * the next step. This is the public escape hatch for disabling built-ins such
+   * as the fault consolidator (`CONSOLIDATE_FAULTS_NAME`), whose handle is
+   * otherwise unreachable.
+   */
+  getSystem(name: string): SystemHandle | undefined
   /**
    * Set the time-scale multiplier. `0` is equivalent to {@link pause}; any
    * positive value updates the stored pre-pause scale, so a subsequent
@@ -413,7 +423,6 @@ export function createWorld(options: WorldOptions = {}): World {
   let rand = createRng(seed)
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
-  const bus: EventBus = createEventBus()
   let preResumeScale = 1
   let input: InputSnapshot = emptyInput()
 
@@ -426,6 +435,25 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
+
+  // The event bus is decoupled from fault plumbing; it reports a throwing
+  // direct on() subscriber back through this sink. Core owns the DomecsError
+  // construction and the signal. There is no originating system, so the
+  // SystemicFault `source` is the offending event's name (it identifies what
+  // was being delivered when the handler threw).
+  const bus: EventBus = createEventBus((eventName, cause) => {
+    const error: DomecsError = {
+      kind: 'event_handler_threw',
+      event: eventName,
+      cause: normalizeCause(cause),
+      retryable: true,
+    }
+    const entry = buildFaultEntry(eventName, {
+      error,
+      recoverable: true,
+    })
+    sigFaultRaised.emit({ source: eventName, tick: time.tick, entry })
+  })
 
   const signals: WorldSignals = {
     entitySpawned: sigEntitySpawned,
@@ -591,15 +619,15 @@ export function createWorld(options: WorldOptions = {}): World {
     return s ? s.has(entity) : false
   }
 
-  // Normalize + validate a def for the one-shot selectors (count/select/
-  // entitiesMatching). Reactive nodes track per-tick deltas that only a
+  // Normalize + validate a def for the one-shot selectors (countEntities/
+  // listEntities/selectViews). Reactive nodes track per-tick deltas that only a
   // registered query maintains, so they are a misuse here; reject loudly.
   function oneshotNode(def: QueryDef): { node: QueryNode; needsEntityFilter: boolean } {
     const node = normalize(def)
     if (treeHas(node, oneshotReactiveKinds)) {
       throw new Error(
-        'domecs: count/select/entitiesMatching are one-shot selectors and ' +
-          'cannot evaluate reactive nodes (Added/Changed/Removed) — those need ' +
+        'domecs: countEntities/listEntities/selectViews are one-shot selectors and ' +
+          'cannot evaluate reactive nodes (OnAdded/OnChanged/OnRemoved) — those need ' +
           'per-tick delta tracking; use a live query() or a reactive system instead',
       )
     }
@@ -1530,6 +1558,10 @@ export function createWorld(options: WorldOptions = {}): World {
       const handle = scheduler.register(name, def as SystemDef, fn)
       wakeDriver()
       return handle
+    },
+
+    getSystem(name: string): SystemHandle | undefined {
+      return scheduler.getHandle(name)
     },
 
     step(dt: number): void {
