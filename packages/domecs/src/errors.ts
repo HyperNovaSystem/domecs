@@ -172,6 +172,11 @@ export interface SystemResult<E extends { kind: string } = DomecsError> {
  */
 export interface FaultEntry {
   kind: string
+  /** JSON-safe projection of the originating `SystemFault.error` payload,
+   * produced by `toJsonValue` (see `result.ts`): a {@link JsonValue} tree with
+   * non-serializable leaves stringified and recursion bounded by
+   * `MAX_CAUSE_DEPTH`. Absent when the fault carried no payload beyond
+   * its `kind`. */
   detail?: JsonValue
   source: SystemId
   tick: number

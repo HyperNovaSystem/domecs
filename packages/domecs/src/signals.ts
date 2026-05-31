@@ -1,4 +1,7 @@
 export interface Signal<T> {
+  /** Register `fn` to be invoked with each emitted payload. Returns an
+   * unsubscribe function that detaches `fn`. The unsubscribe is **idempotent**:
+   * calling it more than once is a safe no-op (subsequent calls do nothing). */
   subscribe(fn: (e: T) => void): () => void
 }
 
