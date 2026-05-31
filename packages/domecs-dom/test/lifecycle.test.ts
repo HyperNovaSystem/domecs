@@ -18,7 +18,7 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const view = defineView({
       slot: 'stage',
       query: Has(Sprite),
-      changedOn: [Sprite],
+      changedOn: { mode: 'explicit', types: [Sprite] },
       create(e) {
         const el = document.createElement('span')
         el.dataset.eid = String(e.id)
@@ -82,13 +82,13 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     handle.teardown()
   })
 
-  it('opts out of auto-derive when changedOn=[] (legacy "update every tick")', () => {
+  it('opts out of auto-derive when changedOn={mode:"legacy"} (legacy "update every tick")', () => {
     const world = createWorld({ headless: true })
     let updateCalls = 0
     const view = defineView({
       slot: 'stage',
       query: Has(Sprite),
-      changedOn: [], // explicit empty array — restore legacy redraw-every-tick.
+      changedOn: { mode: 'legacy' }, // explicit legacy mode — restore redraw-every-tick.
       create() {
         return document.createElement('span')
       },
@@ -121,7 +121,7 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const view = defineView({
       slot: 'stage',
       query: Has(Sprite),
-      changedOn: [Sprite],
+      changedOn: { mode: 'explicit', types: [Sprite] },
       create() {
         return document.createElement('span')
       },
@@ -147,7 +147,7 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const view = defineView({
       slot: 'stage',
       query: Has(Sprite),
-      changedOn: [Sprite],
+      changedOn: { mode: 'explicit', types: [Sprite] },
       create(e) {
         const el = document.createElement('span')
         el.textContent = (e as unknown as { Sprite: { glyph: string } }).Sprite.glyph

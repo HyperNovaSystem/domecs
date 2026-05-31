@@ -172,17 +172,20 @@ function collectChanged(changedQueries: QueryResult[] | null): Set<Entity> | nul
 /**
  * Resolve the set of components this view should treat as redraw triggers.
  *
- * - `changedOn` omitted (default): derive from the `Has(T)` leaves of the
- *   view's query. This is the principle-of-least-surprise default — a view
- *   over `[Position, Velocity]` redraws when either component changes. P-3.
- * - `changedOn: []` (explicit empty): opt back into the legacy "redraw every
- *   tick" behaviour. Useful for animation-style views that depend on time,
- *   not component identity.
- * - `changedOn: [Type, ...]`: explicit list. Used for finer-grained gating
- *   (e.g. a view over `[Position, Sprite]` that only cares about `Position`).
+ * - `changedOn` omitted / `{ mode: 'auto' }`: derive from the `Has(T)` leaves
+ *   of the view's query. P-3.
+ * - `{ mode: 'legacy' }`: return `[]` — callers map an empty array to
+ *   `changedQueries: null`, which causes `commit` to update every mounted
+ *   entity every tick (legacy "redraw everything" behaviour).
+ * - `{ mode: 'explicit', types }`: return `types` directly.
  */
 function resolveChangedTypes(def: ViewDef): ReadonlyArray<ComponentType<unknown>> {
-  if (def.changedOn !== undefined) return def.changedOn
+  if (def.changedOn !== undefined) {
+    if (def.changedOn.mode === 'explicit') return def.changedOn.types
+    if (def.changedOn.mode === 'legacy') return []
+    // 'auto' — fall through to auto-derive below
+  }
+  // changedOn omitted or { mode: 'auto' }
   if (!def.update) return []
   const collected = collectHasComponents(normalizeQuery(def.query))
   return Array.from(collected.values())

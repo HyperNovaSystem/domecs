@@ -6,6 +6,24 @@ import type {
 } from '@domecs/core'
 
 /**
+ * Discriminated union controlling when a view's `update` callback fires.
+ *
+ * - `{ mode: 'auto' }` — derive `OnChanged(T)` from every `Has(T)` leaf in
+ *   the view's query (P-3). A view over `[Position, Velocity]` auto-redraws
+ *   when either component is marked changed. This is the default when
+ *   `changedOn` is omitted.
+ * - `{ mode: 'legacy' }` — update every mounted entity on every tick, even
+ *   when no component is marked changed. Useful for time-driven animations.
+ * - `{ mode: 'explicit'; types: [T, …] }` — gate redraws on exactly the
+ *   listed component types (e.g. gate a `[Position, Sprite]` view on
+ *   `Position` only).
+ */
+export type ChangedOn =
+  | { readonly mode: 'auto' }
+  | { readonly mode: 'legacy' }
+  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>> }
+
+/**
  * Per-view rendering definition.
  *
  * `Fields` is inferred when the view's `query` is supplied as a tuple of
@@ -15,18 +33,14 @@ import type {
  * the generic `EntityView` shape and require manual narrowing or a
  * `world.getComponent(view.id, T)` call.
  *
- * `changedOn`:
- *   - omitted (default): redraws are gated by `OnChanged(T)` for every `Has(T)`
- *     leaf in the view's query (P-3). A view over `[Position, Velocity]`
- *     auto-redraws when either component is marked changed.
- *   - explicit empty array (`changedOn: []`): redraw every tick (legacy
- *     "update everything" behaviour; useful for time-driven animations).
- *   - explicit non-empty array: gate redraws on this set only.
+ * `changedOn` controls when the `update` callback fires; see {@link ChangedOn}
+ * for the three modes. Omitting `changedOn` is equivalent to
+ * `{ mode: 'auto' }`.
  */
 export interface ViewDef<Fields = Record<string, unknown>> {
   readonly slot: string
   readonly query: QueryShorthand
-  readonly changedOn?: ReadonlyArray<ComponentType<unknown>>
+  readonly changedOn?: ChangedOn
   create(entity: EntityView<Fields>): HTMLElement
   update?(el: HTMLElement, entity: EntityView<Fields>): void
   destroy?(el: HTMLElement, entity: EntityView<Fields>): void
