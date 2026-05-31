@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "doc/.doctest/dist",
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["doc/.doctest/*.ts"],
+  "exclude": ["doc/.doctest/dist/**", "doc/.doctest/node_modules/**"]
+}

@@ -150,3 +150,6 @@ playwright-report/
 
 .pnpm-store/
 .tmp/
+
+# Doctest harness temp dir (extracted snippets + emitted JS)
+doc/.doctest/
