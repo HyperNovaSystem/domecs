@@ -13,6 +13,7 @@ export {
   type InspectorBundle,
   type InspectorEntry,
   type InspectorOptions,
+  type InspectorSnapshot,
   type InspectorView,
   type TimelineEvent,
   type TimelineEventKind,

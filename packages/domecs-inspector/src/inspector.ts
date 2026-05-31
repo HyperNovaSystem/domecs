@@ -55,6 +55,18 @@ export interface TimelineEvent {
 }
 
 /**
+ * A point-in-time, serializable copy of an {@link InspectorView}: the fault
+ * buckets and the timeline as plain arrays. Unlike the live view (whose arrays
+ * mutate as the world runs), a snapshot is safe to hand to an agent or persist.
+ */
+export interface InspectorSnapshot {
+  readonly entries: InspectorEntry[]
+  readonly systemic: InspectorEntry[]
+  readonly entityScoped: InspectorEntry[]
+  readonly timeline: TimelineEvent[]
+}
+
+/**
  * Immutable, filter-composable view of the inspector's recorded entries.
  * Filters return a fresh view sharing the same buffer snapshot — the
  * underlying ring buffer keeps growing in the background but a captured
@@ -75,6 +87,8 @@ export interface InspectorView {
   /** Drops entity-scoped entries (keeps only systemic). */
   hideFaulted(): InspectorView
   entriesFor(entity: Entity): readonly InspectorEntry[]
+  /** Point-in-time serializable copy of this view (fault buckets + timeline). */
+  export(): InspectorSnapshot
 }
 
 export interface InspectorOptions {
@@ -322,6 +336,15 @@ function makeView(
     },
     entriesFor(entity) {
       return getEntries().filter((e) => e.entity === entity)
+    },
+    export(): InspectorSnapshot {
+      const all = getEntries()
+      return {
+        entries: [...all],
+        systemic: all.filter((e) => e.entity === undefined),
+        entityScoped: all.filter((e) => e.entity !== undefined),
+        timeline: [...getTimeline()],
+      }
     },
   }
 }
