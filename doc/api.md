@@ -1,4 +1,4 @@
-# DOMECS — API Reference (Draft v0.1)
+# DOMECS — API Reference (v1.0)
 
 > **Authoritative source:** the committed type surface in
 > [`doc/api-surface/`](./api-surface/) is the contract; this file is a
@@ -213,7 +213,7 @@ interface World {
   // May be called inside or outside a running system. Between-tick calls are
   // buffered and promoted into the live change-detection set at the next
   // step()'s step 0 — symmetric with event buffering. See SPEC §2.9.
-  // v0.1 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
+  // v1.0 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
@@ -775,11 +775,11 @@ interface InputSnapshot {
 }
 
 interface PointerSnapshot {
-  x: number; y: number        // raw DOM client coordinates in v0.1
+  x: number; y: number        // raw DOM client coordinates in v1.0
   buttons: number
   delta: { x: number; y: number }
   wheel: number
-  entered: readonly Entity[]   // reserved for future hit-tested enter tracking; empty in v0.1
+  entered: readonly Entity[]   // reserved for future hit-tested enter tracking; empty in v1.0
 }
 
 interface GamepadSnapshot {
@@ -884,47 +884,6 @@ assert.equal(legacy.mode, 'legacy')
 const explicit: ChangedOn = { mode: 'explicit', types: [] }
 assert.equal(explicit.mode, 'explicit')
 assert.deepEqual(explicit.mode === 'explicit' ? explicit.types : null, [])
-```
-
----
-
-## `@domecs/sprites`
-
-```ts
-const Sprite = defineComponent<{
-  sheet:     string
-  frame:     number
-  flipX?:    boolean
-  flipY?:    boolean
-  tintRgb?:  [number, number, number]
-}>('Sprite')
-
-const Animation = defineComponent<{
-  clip:      string
-  time:      number            // seconds into clip
-  speed?:    number            // default 1
-  loop?:     boolean           // default true
-  paused?:   boolean
-}>('Animation')
-
-function createSpritesPlugin(options: {
-  sheets: Record<string, SpriteSheetDef>
-  clips?: Record<string, AnimationClip>
-}): Plugin
-
-interface SpriteSheetDef {
-  url:      string
-  frameW:   number
-  frameH:   number
-  cols:     number
-  rows:     number
-}
-
-interface AnimationClip {
-  sheet:    string
-  frames:   number[]
-  frameMs:  number
-}
 ```
 
 ---
@@ -1069,7 +1028,7 @@ interface InspectorView {
 // One normalized record. Systemic and entity-scoped faults share this shape;
 // `entity` discriminates (absent ⇒ systemic).
 interface InspectorEntry {
-  readonly kind:        string      // fault kind (e.g. 'system_threw')
+  readonly kind:        string      // fault kind (e.g. 'event_handler_threw')
   readonly systemId:    SystemId
   readonly tick:        number
   readonly wallclock:   number      // Date.now() at capture
@@ -1107,17 +1066,16 @@ interface InspectorSnapshot {
 
 ## Framework integration
 
-v0.1 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
+v1.0 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
 
 ---
 
 ## Quick-start example (updated)
 
 ```ts
-import { createWorld, defineComponent, entry, Has } from '@domecs/core'
+import { createWorld, defineComponent, entry } from '@domecs/core'
 import { mountDOM, defineView } from '@domecs/dom'
 import { createInputPlugin } from '@domecs/input'
-import { Sprite, createSpritesPlugin } from '@domecs/sprites'
 
 const Position = defineComponent<{ x: number; y: number }>('Position')
 const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
@@ -1125,27 +1083,23 @@ const Velocity = defineComponent<{ dx: number; dy: number }>('Velocity')
 const world = createWorld({ seed: 0xC0FFEE })
 
 world.use(createInputPlugin())
-world.use(createSpritesPlugin({
-  sheets: { hero: { url: '/hero.png', frameW: 16, frameH: 16, cols: 8, rows: 4 } },
-}))
 mountDOM(world, {
   slots: { stage: document.getElementById('stage')! },
   views: [
     defineView({
       slot: 'stage',
-      // Tuple-form query: `view.Position` and `view.Sprite` are typed.
+      // Tuple-form query: `view.Position` is typed.
       // `changedOn` is auto-derived from the query's `Has(T)` leaves,
-      // so the view redraws when either Position or Sprite is marked
-      // changed and stays silent otherwise (SPEC §5.3, P-3).
-      query: [Position, Sprite] as const,
+      // so the view redraws when Position is marked changed and stays
+      // silent otherwise (SPEC §5.3, P-3).
+      query: [Position] as const,
       create: () => {
         const el = document.createElement('div')
-        el.className = 'sprite'
+        el.className = 'dot'
         return el
       },
       update: (el, e) => {
         el.style.transform = `translate(${e.Position.x}px, ${e.Position.y}px)`
-        el.style.backgroundPosition = `-${e.Sprite.frame * 16}px 0`
       },
     }),
   ],
@@ -1165,10 +1119,9 @@ world.system('movement', {
 world.spawn([
   entry(Position, { x: 100, y: 100 }),
   entry(Velocity, { dx: 30, dy: 0 }),
-  entry(Sprite,   { sheet: 'hero', frame: 0 }),
 ])
 
 world.start()
 ```
 
-Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v0.1 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.
+Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v1.0 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.

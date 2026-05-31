@@ -30,6 +30,14 @@ All notable changes to DOMECS are documented here. The format is based on
   for that event plus the remaining events in the same flush still deliver —
   one bad handler can no longer crash the tick loop or starve the others.
 
+### Documentation
+
+- `doc/api.md`: removed pre-v1.0 drift — deleted the ghost `@domecs/sprites`
+  section (no such package ships), rewrote the quick-start to import only real
+  packages, retitled the reference to v1.0, swept the remaining `v0.1` version
+  labels to `v1.0`, and updated the inspector fault-kind example off the
+  now-removed `system_threw` kind.
+
 ## [1.0.0] — 2026-05-31
 
 First stable release. Completes the agent-legibility pass (Phases 0–4): the
