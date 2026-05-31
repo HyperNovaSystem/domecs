@@ -99,7 +99,7 @@ export {
   toJsonValue,
   MAX_CAUSE_DEPTH,
 } from './result.js'
-export type { Result, JsonValue, SerializedError } from './result.js'
+export type { Result, Ok, Err, JsonValue, SerializedError } from './result.js'
 export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint } from './errors.js'
 export type {
   DomecsError,

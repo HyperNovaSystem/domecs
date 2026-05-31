@@ -7,15 +7,22 @@
  * failure modes that callers should acknowledge.
  */
 
-export type Result<T, E> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E }
+/** The success arm of a {@link Result}. */
+export type Ok<T> = { readonly ok: true; readonly value: T }
+/** The failure arm of a {@link Result}. */
+export type Err<E> = { readonly ok: false; readonly error: E }
+
+export type Result<T, E> = Ok<T> | Err<E>
 
 export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value })
 export const err = <E>(error: E): Result<never, E> => ({ ok: false, error })
 
-export const isOk = <T, E>(r: Result<T, E>): r is { ok: true; value: T } => r.ok
-export const isErr = <T, E>(r: Result<T, E>): r is { ok: false; error: E } => !r.ok
+// Predicate on the *named* union constituents (not inline shapes) so TS
+// narrows BOTH branches: after `if (isErr(r))` the else-branch is `Ok<T>`,
+// and after `if (!isOk(r))` the then-branch is `Err<E>`. Inline predicate
+// types left `r` as the full union on the negative branch.
+export const isOk = <T, E>(r: Result<T, E>): r is Ok<T> => r.ok
+export const isErr = <T, E>(r: Result<T, E>): r is Err<E> => !r.ok
 
 export function mapR<T, U, E>(r: Result<T, E>, f: (t: T) => U): Result<U, E> {
   return r.ok ? ok(f(r.value)) : r
