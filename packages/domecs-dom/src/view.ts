@@ -16,7 +16,7 @@ import type {
  * `world.getComponent(view.id, T)` call.
  *
  * `changedOn`:
- *   - omitted (default): redraws are gated by `Changed(T)` for every `Has(T)`
+ *   - omitted (default): redraws are gated by `OnChanged(T)` for every `Has(T)`
  *     leaf in the view's query (P-3). A view over `[Position, Velocity]`
  *     auto-redraws when either component is marked changed.
  *   - explicit empty array (`changedOn: []`): redraw every tick (legacy

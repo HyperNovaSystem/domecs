@@ -1,14 +1,13 @@
 # domecs legibility — the contributor's law
 
-> **What this is:** a standing review checklist for every public API change in domecs. Run a public
-> change against the six laws below before merging. A "no" on any line is a design bug to fix or a
-> cost to consciously accept.
+> **What this is:** a standing review checklist for every public API change in domecs.
+> Run a public change against the six laws below before merging.
+> A "no" on any line is a design bug to fix or a cost to consciously accept.
 >
-> **Why it exists:** domecs is read far more by AI agents than by humans — agents move forward
-> token by token, reason locally, pattern-match from priors, and self-correct from errors. An API
-> designed for that reader is also harder for a human to misuse. The full reasoning is in the source
-> rubric, [`agent-legible-api-design.md`](./agent-legible-api-design.md); the v1.0 plan that applies
-> it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
+> **Why it exists:** domecs is read far more by AI agents than by humans — agents move forward token by token, reason locally, pattern-match from priors, and self-correct from errors.
+> An API designed for that reader is also harder for a human to misuse.
+> The full reasoning is in the source rubric, [`agent-legible-api-design.md`](./agent-legible-api-design.md);
+> the v1.0 plan that applies it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
 
 **Enforcement legend:** ✅ = enforced now (shipped in Phase 0) · ⏳ = the rule is binding on new code
 today, but its automated enforcement lands in the coordinated v1.0 break (Phases 2–4). Write to the
@@ -111,12 +110,11 @@ export its `kind` set as a const?
 
 ## L6 — Examples are tested documentation ⏳
 
-Agents copy examples far more than they parse prose. A drifted example teaches the wrong thing
-confidently, so examples are tested.
+Agents copy examples far more than they parse prose.
+A drifted example teaches the wrong thing confidently, so examples are tested.
 
 - Every public entry point gets at least one runnable example: a happy path and the error path.
-- Examples explicitly cover each behavioral branch (tick-delay events, the `changedOn` modes,
-  reactive entities-as-delta) so they cannot drift from the shipped types.
+- Examples explicitly cover each behavioral branch (tick-delay events, the `changedOn` modes, reactive entities-as-delta) so they cannot drift from the shipped types.
 
 **Enforcement status:** snippet-CI'd doctests land in Phase 4. Until then, new public entry points
 should carry a runnable example in their docs or tests.

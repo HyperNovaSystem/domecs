@@ -10,10 +10,9 @@ shipped `.d.ts` across 11 surface areas.
 
 ## 1. Goal & posture
 
-Make the domecs public surface **decidable from signature + one-line doc, spelled exactly one way,
-with errors that say how to fix.** An agent moving forward token-by-token should guess the right
-method, pass args in the right order, and self-correct from any failure — and the same properties
-make the surface harder for humans to misuse.
+Make the domecs public surface **decidable from signature + one-line doc, spelled exactly one way, with errors that say how to fix.**
+An agent moving forward token-by-token should guess the right
+method, pass args in the right order, and self-correct from any failure — and the same properties make the surface harder for humans to misuse.
 
 **Posture (decided):**
 
@@ -26,9 +25,7 @@ make the surface harder for humans to misuse.
   failure and is fixed first.
 - **Full canonical sweep + full self-describing root.** No conservative subset.
 
-**Non-goals (YAGNI — §9):** framework adapters, networked rollback, runtime `dev`/`diag` proxy
-diagnostics, and reworking the `defineComponent` dual-overload `Name` duplication (a documented
-TypeScript limitation — keep, document).
+**Non-goals (YAGNI — §9):** framework adapters, networked rollback, runtime `dev`/`diag` proxy diagnostics, and reworking the `defineComponent` dual-overload `Name` duplication (a documented TypeScript limitation — keep, document).
 
 ---
 
@@ -83,7 +80,8 @@ A standing review checklist for every future public change. Lands at `domecs/doc
 
 ## 4. The naming language (full canonical sweep)
 
-The whole surface adopts one verb language. Renames below are exhaustive for v1.0.
+The whole surface adopts one verb language.
+Renames below are exhaustive for v1.0.
 
 | Class | Law | Renames |
 |-------|-----|---------|
@@ -95,24 +93,20 @@ The whole surface adopts one verb language. Renames below are exhaustive for v1.
 | **Factory** | `define*` = descriptor; `create*` = live/effectful instance | already consistent — codify the rule in L3, no renames |
 | **Mutate** | `add` = first attach, `set` = replace-or-create, `mark*Changed` = signal-without-replace | already consistent — codify in L3 |
 
-**Selector legality (pairs with §5):** the `count/list/select` one-shot selectors reject temporal
-nodes. The `On*` prefix makes that visible at the call site; §5 also narrows the one-shot `QueryDef`
-at the type level so an `On*` node is a compile error, not a runtime throw.
+**Selector legality (pairs with §5):** the `count/list/select` one-shot selectors reject temporal nodes.
+The `On*` prefix makes that visible at the call site; §5 also narrows the one-shot `QueryDef` at the type level so an `On*` node is a compile error, not a runtime throw.
 
 ---
 
 ## 5. Type-strengthening (prove-it)
 
 - **`SystemDef` → discriminated union** keyed on `schedule`:
-  `TickSystemDef | FixedSystemDef | EventSystemDef | OnceSystemDef | ReactiveSystemDef`. Each variant
-  carries only its valid fields (`rateHz` on Fixed; `triggers` on Event; `reactsTo` on Reactive),
-  making invalid combinations unrepresentable instead of throwing at registration. Document the
-  `schedule → 'tick'` default, the `enabled` per-tick gate, and the reactive `entities`-as-delta
-  semantics in docstrings.
-- **`ViewDef.changedOn` tri-state → union.** Today omitted / `[]` / `[Types]` encode three behaviors
-  by presence/emptiness. Replace with `{mode:'auto'} | {mode:'legacy'} | {mode:'explicit'; types}`.
-- **One-shot selector `QueryDef` narrowing.** Type-level guard so `OnAdded`/`OnRemoved`/`OnChanged`/
-  `OnChangedResource` cannot be passed to `countEntities`/`listEntities`/`selectViews`.
+  - `TickSystemDef | FixedSystemDef | EventSystemDef | OnceSystemDef | ReactiveSystemDef`.
+  - Each variant carries only its valid fields (`rateHz` on Fixed; `triggers` on Event; `reactsTo` on Reactive),
+  making invalid combinations unrepresentable instead of throwing at registration.
+  - Document the `schedule → 'tick'` default, the `enabled` per-tick gate, and the reactive `entities`-as-delta semantics in docstrings.
+- **`ViewDef.changedOn` tri-state → union.** Today omitted / `[]` / `[Types]` encode three behaviors by presence/emptiness.  Replace with `{mode:'auto'} | {mode:'legacy'} | {mode:'explicit'; types}`.
+- **One-shot selector `QueryDef` narrowing.**  Type-level guard so `OnAdded`/`OnRemoved`/`OnChanged`/ `OnChangedResource` cannot be passed to `countEntities`/`listEntities`/`selectViews`.
 - **`mountDOM` → `Result<MountHandle, MountError>`** (see §6) — failure becomes enumerable.
 - **`DomecsError` closure marker** — JSDoc declaring the union closed (adding a variant is breaking).
 
@@ -120,25 +114,14 @@ at the type level so an `On*` node is a compile error, not a runtime throw.
 
 ## 6. Self-describing root (full)
 
-The headline priority. Endpoint: one machine-readable manifest an agent reads to learn the whole
-live world.
+The headline priority.
+Endpoint: one machine-readable manifest an agent reads to learn the whole live world.
 
-- **Component.** Ship `describeComponent(type): ComponentDescriptor`; export
-  `ComponentDescriptor`/`ComponentSchema`/`FieldSchema`/`FieldKind` from `index`. **Remove
-  `InternalComponentType` (`__schema`/`__validate`/`__defaults`/`__tag`) from the public barrel** —
-  the typed descriptor becomes the only reflection path, not the `__` fields.
-- **Resource.** Add `world.resourceTypes(): ResourceType[]` and
-  `describeResource(type): ResourceDescriptor { name; hasValue; hasDefault }` — parity with components.
-- **Error.** Add `retryable: boolean` to **every** `DomecsError` variant (today only
-  `migration_failed` carries a signal); optional `idempotent?` on `SystemFault`; export
-  `getErrorRepairHint(e): string` (fix-only, exhaustive `match`); export `ERROR_KINDS` const +
-  `isKnownDomecsErrorKind` guard; closure JSDoc.
-- **Event.** `defineEvent(name, { schema? })` reusing the component `FieldSchema` vocabulary so an
-  optional payload schema becomes the event's self-description; `describeEvent()`; docstring that
-  `name` is an opaque diagnostic label (identity is the internal symbol); tested define→emit→
-  subscribe→tick-delay doctest.
-- **Root.** `world.describe(): WorldManifest` composes the partial reflectors and carries the
-  debug-tooling necessaries so an inspector/agent can render world state without further probing:
+- **Component.** Ship `describeComponent(type): ComponentDescriptor`;  export `ComponentDescriptor`/`ComponentSchema`/`FieldSchema`/`FieldKind` from `index`.  **Remove `InternalComponentType` (`__schema`/`__validate`/`__defaults`/`__tag`) from the public barrel** — the typed descriptor becomes the only reflection path, not the `__` fields.
+- **Resource.** Add `world.resourceTypes(): ResourceType[]` and `describeResource(type): ResourceDescriptor { name; hasValue; hasDefault }` — parity with components.
+- **Error.** Add `retryable: boolean` to **every** `DomecsError` variant (today only `migration_failed` carries a signal); optional `idempotent?` on `SystemFault`; export `getErrorRepairHint(e): string` (fix-only, exhaustive `match`); export `ERROR_KINDS` const + `isKnownDomecsErrorKind` guard; closure JSDoc.
+- **Event.** `defineEvent(name, { schema? })` reusing the component `FieldSchema` vocabulary so an optional payload schema becomes the event's self-description; `describeEvent()`; docstring that `name` is an opaque diagnostic label (identity is the internal symbol); tested define→emit→ subscribe→tick-delay doctest.
+- **Root.** `world.describe(): WorldManifest` composes the partial reflectors and carries the debug-tooling necessaries so an inspector/agent can render world state without further probing:
   ```ts
   interface WorldManifest {
     // schema surface (composed from the describe* family)
@@ -170,31 +153,31 @@ live world.
   2026-05-30):* `packages/*/dist/` is **gitignored**, consumers import **source**
   (`exports → ./src/index.ts`), and a **fresh** `pnpm -r build` emits a `dist/index.d.ts` that
   faithfully mirrors `src/index.ts` — `defineResource`/`ResourceType`/`ChangedResource`/
-  `SNAPSHOT_VERSION` etc. are all present. The symbols that looked "missing" were a **stale local
-  `dist/` build artifact**, not a source bug. So the real gap is not "rebuild dist" — it is that
+  `SNAPSHOT_VERSION` etc. are all present.  The symbols that looked "missing" were a **stale local
+  `dist/` build artifact**, not a source bug.  So the real gap is not "rebuild dist" — it is that
   there is **no committed, reviewable machine-readable contract** (dist can't be committed) and **no
-  CI** (none exists). Fix: a generator script writes each package's emitted barrel to a committed
+  CI** (none exists).  Fix: a generator script writes each package's emitted barrel to a committed
   `doc/api-surface/<pkg>.d.ts`; the first CI workflow runs typecheck → build → regenerate snapshot →
-  `git diff --exit-code` (the no-drift gate) → test. This makes the public surface a reviewed,
+  `git diff --exit-code` (the no-drift gate) → test.  This makes the public surface a reviewed,
   diffable artifact and is the prerequisite for every later change to be *visible*. Zero runtime
   change.
-- **Persist canonical-path decision (decided 2026-05-30).** `api.md` documents an aspirational
-  `createPersistence` / `Persistence` facade that the package does **not** ship; the shipped reality
-  is Result-typed free functions (`save`/`load`/`migrate` over a `Storage`). **Decision: bless the
+- **Persist canonical-path decision (decided 2026-05-30).**  `api.md` documents an aspirational
+  `createPersistence` / `Persistence` facade that the package does **not** ship;  the shipped reality
+  is Result-typed free functions (`save`/`load`/`migrate` over a `Storage`).  **Decision: bless the
   shipped free functions as canonical and delete the `createPersistence`/`Persistence` facade from
   `api.md`** (§II.1 one canonical path; the free functions are already the more legible, Result-typed
-  surface). No code change — this is an `api.md` correction folded into Phase 4 sync; no consumer
+  surface).  No code change — this is an `api.md` correction folded into Phase 4 sync; no consumer
   migration (nothing imported the facade because it never shipped).
-- **Tested doctests + sync.** Export `DEFAULT_INPUT_OPTIONS` (machine-readable input defaults);
+- **Tested doctests + sync.**  Export `DEFAULT_INPUT_OPTIONS` (machine-readable input defaults);
   snippet-CI'd examples for input defaults+override+read, event tick-delay, all four `changedOn`
-  modes, and `Result` error handling. Fix `api.md` prose-vs-type drifts (`InspectorOptions` real
+  modes, and `Result` error handling.  Fix `api.md` prose-vs-type drifts (`InspectorOptions` real
   fields are `bufferSize`/`recordStateChanges`/`timelineBufferSize`, not `slot`/`hotkey`/`detect`;
-  `Plugin` fields are `readonly`; `MountOptions.slots` is `Readonly`). Add an authoritative-source
+  `Plugin` fields are `readonly`; `MountOptions.slots` is `Readonly`).  Add an authoritative-source
   banner.
-- **Docstring/units polish (rank 13).** `PointerSnapshot.entered: readonly Entity[]`; document
-  `wheel`/`delta` units + sign; `GamepadSnapshot` button `value` range; `FaultEntry.detail` shape;
-  reference `MAX_CAUSE_DEPTH` from `normalizeCause`; `Signal.subscribe` unsubscribe idempotency;
-  export `QueryNodeKind` const map; document the `defineComponent` overload trade-off and the
+- **Docstring/units polish (rank 13).**  `PointerSnapshot.entered: readonly Entity[]`;  document
+  `wheel`/`delta` units + sign;  `GamepadSnapshot` button `value` range; `FaultEntry.detail` shape;
+  reference `MAX_CAUSE_DEPTH` from `normalizeCause`;  `Signal.subscribe` unsubscribe idempotency;
+  export `QueryNodeKind` const map;  document the `defineComponent` overload trade-off and the
   `QueryDef` tuple-vs-combinator inference fork.
 
 ---
@@ -210,14 +193,14 @@ live world.
 | **4** | Examples + `api.md` sync + docstring polish (§7) → **freeze v1.0** | additive | none |
 
 Phase 2 is the only consumer-breaking event; everything before is additive and everything after is
-additive. Phase 3 depends on rank-9 (`describeComponent`) landing first.
+additive.
+Phase 3 depends on rank-9 (`describeComponent`) landing first.
 
 ---
 
 ## 9. Out of scope (YAGNI)
 
-- `defineComponent` dual-overload `Name` duplication — documented TypeScript limitation; keep both
-  overloads, add a signature-level docstring on the trade-off.
+- `defineComponent` dual-overload `Name` duplication — documented TypeScript limitation;  keep both overloads, add a signature-level docstring on the trade-off.
 - First-party framework adapters (Svelte/React) — post-v1.0 roadmap.
 - Networked rollback / Worker host — long-term roadmap.
 - Runtime `dev`/`diag` proxy diagnostics (mutation-without-mark warnings) — explicitly deferred;

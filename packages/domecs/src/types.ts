@@ -78,7 +78,7 @@ export interface ComponentDescriptor {
 /**
  * A world-singleton value, addressed by identity rather than per-entity
  * (review #16). Defined with {@link defineResource}; read/written via
- * `world.resource(type)` / `world.setResource(type, value)`. The distinct
+ * `world.getResource(type)` / `world.setResource(type, value)`. The distinct
  * brand (`__resourceTag`) keeps resources from being passed where a
  * `ComponentType` is expected and vice-versa.
  */

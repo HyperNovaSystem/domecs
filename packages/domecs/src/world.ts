@@ -154,7 +154,7 @@ export interface World {
   setResource<T>(type: ResourceType<T>, value: T): void
   /**
    * Flag a resource as changed without replacing its value — for in-place
-   * edits (`world.resource(Cfg)!.v = 2`). Fires `ChangedResource(type)` gates
+   * edits (`world.getResource(Cfg)!.v = 2`). Fires `OnChangedResource(type)` gates
    * on the next tick (or the current one, if called inside a tick).
    */
   markResourceChanged<T>(type: ResourceType<T>): void
@@ -232,7 +232,7 @@ export interface World {
    *
    * - `onAdd` / `onRemove` fire when membership changes.
    * - `onChange` requires `def` to include at least one change-detection node
-   *   such as `Added(...)`, `Removed(...)`, or `Changed(...)`; plain `Has(...)`
+   *   such as `OnAdded(...)`, `OnRemoved(...)`, or `OnChanged(...)`; plain `Has(...)`
    *   queries do not support reactive change ticks.
    * - When valid, `onChange` fires for current members on ticks where the
    *   change-detection portion of the query is non-empty.
@@ -537,7 +537,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       // Entity-independent: true for every candidate on ticks where the
       // resource changed, false otherwise — so an entity-scoped query like
-      // And(Has(X), ChangedResource(R)) yields the X entities only on change
+      // And(Has(X), OnChangedResource(R)) yields the X entities only on change
       // ticks. See ChangedResource (#16).
       case 'changedResource': return tickResourcesChanged.has(node.resource.name)
     }
