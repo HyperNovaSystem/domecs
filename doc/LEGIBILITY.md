@@ -9,9 +9,10 @@
 > The full reasoning is in the source rubric, [`agent-legible-api-design.md`](./agent-legible-api-design.md);
 > the v1.0 plan that applies it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
 
-**Enforcement legend:** ✅ = enforced now (shipped in Phase 0) · ⏳ = the rule is binding on new code
-today, but its automated enforcement lands in the coordinated v1.0 break (Phases 2–4). Write to the
-rule regardless of which marker it carries — ⏳ means "no CI net yet," not "optional."
+**Enforcement legend:** ✅ = enforced in the shipped types/CI now (L1 in Phase 0; L3/L4/L5 in the
+v1.0 break, Phase 2) · ⏳ = the rule is binding on new code today, but its remaining automated
+enforcement lands later in the pass (Phases 3–4). Write to the rule regardless of which marker it
+carries — ⏳ means "no CI net yet," not "optional."
 
 ---
 
@@ -42,16 +43,17 @@ The reflective surface is part of the API, not a debugging afterthought.
 - Every new descriptor kind (component / resource / event) is enumerable through a typed `describe*`
   surface, and `world.describe()` is the root that composes them into a `WorldManifest`.
 
-**Enforcement status:** the `describe*` family + `world.describe()` land in Phase 3; error
-`retryable` + repair hints land in the Phase 2 break. Until then, any new error or descriptor must
-already be authored in this shape so the later sweep is mechanical.
+**Enforcement status:** the `describe*` family + `world.describe()` land in Phase 3; the error half
+shipped in the v1.0 break (Phase 2) — every `DomecsError` variant carries `retryable`, plus
+`getErrorRepairHint`, the `ERROR_KINDS` const, and `isKnownDomecsErrorKind`. Until the `describe*`
+sweep lands, any new descriptor must already be authored in this shape so it is mechanical.
 
 **Checklist:** New error → has `retryable` + repair hint? New descriptor kind → reachable through a
 typed `describe*`, not an ad-hoc field reach-in?
 
 ---
 
-## L3 — One naming language, published as law ⏳
+## L3 — One naming language, published as law ✅
 
 The whole surface speaks one verb language; the name encodes return cardinality and cost. No
 single-module change may reintroduce a sixth accessor shape.
@@ -65,15 +67,16 @@ single-module change may reintroduce a sixth accessor shape.
 | RNG | one `uniform*` family (`uniform`/`uniformInt`/`uniformRange`/`uniformRoll`; keep `pick`/`fork`/`seed`) |
 | Temporal query nodes | `On*` (e.g. `OnAdded`, `OnChanged`) — illegal in one-shot selectors; bare PascalCase (`Has`/`Where`/`Not`/`And`/`Or`) is structural/logical |
 
-**Enforcement status:** the exhaustive rename sweep is the Phase 2 break (full table in design spec §4).
-The rule binds new code now: a new accessor must fit one of the shapes above.
+**Enforcement status:** the exhaustive rename sweep shipped in the v1.0 break (Phase 2; full table in
+design spec §4) — `get*`/`count*`/`list*`/`select*`/`iter*` reads, the `uniform*` RNG family, and the
+`On*` temporal nodes are now the surface. A new accessor must fit one of the shapes above.
 
 **Checklist:** Does each new name fit the verb language and encode its cardinality/cost? Did this
 change avoid inventing a new accessor shape?
 
 ---
 
-## L4 — Prove invalid states unrepresentable (prove > check > witness) ⏳
+## L4 — Prove invalid states unrepresentable (prove > check > witness) ✅
 
 Encode each rule at the strongest rung the situation supports, and degrade gracefully:
 **prove** it in the type → **check** it at the boundary with a fix-oriented error → **witness** it
@@ -83,16 +86,17 @@ with a runnable example.
 - Registration-time or call-time throws are a last resort, not the design. If the type can make the
   wrong call unrepresentable, do that instead.
 
-**Enforcement status:** the type-strengthening pass (e.g. `SystemDef` discriminated union, one-shot
-`QueryDef` that rejects `On*` nodes at compile time) lands in Phase 2 (design spec §5). The principle
-governs every new type now.
+**Enforcement status:** the type-strengthening pass shipped in the v1.0 break (Phase 2; design spec §5)
+— `SystemDef` is a discriminated union on `schedule`, `ChangedOn` replaces the `changedOn` tri-state,
+`mountDOM` returns `Result`, and the one-shot selectors reject `On*` nodes at compile time via a
+negative brand. The principle governs every new type.
 
 **Checklist:** Could an invalid combination be made unrepresentable in the type rather than caught at
 runtime? Is any new behavior fork a discriminated union rather than a flag?
 
 ---
 
-## L5 — Closed sets are enumerable; the constructor↔discriminant mapping is explicit ⏳
+## L5 — Closed sets are enumerable; the constructor↔discriminant mapping is explicit ✅
 
 Anything with a fixed set of valid values is a closed, enumerable set — never a free-form string.
 
@@ -100,8 +104,9 @@ Anything with a fixed set of valid values is a closed, enumerable set — never 
 - Where constructors produce tagged values, ship the constructor→`kind` mapping explicitly so it is
   visible, not inferred.
 
-**Enforcement status:** the exported `kind` constants arrive with their unions in Phase 2. New closed
-sets must be authored as enumerable consts from the start.
+**Enforcement status:** the exported `kind` constants shipped with their unions in the v1.0 break
+(Phase 2) — `ERROR_KINDS` and `QueryNodeKind` are both exported consts. New closed sets must be
+authored as enumerable consts from the start.
 
 **Checklist:** Is every fixed-value parameter a closed set, not a magic string? Does each new union
 export its `kind` set as a const?
