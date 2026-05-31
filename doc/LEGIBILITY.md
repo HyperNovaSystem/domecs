@@ -10,9 +10,9 @@
 > the v1.0 plan that applies it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
 
 **Enforcement legend:** ✅ = enforced in the shipped types/CI now (L1 in Phase 0; L3/L4/L5 in the
-v1.0 break, Phase 2) · ⏳ = the rule is binding on new code today, but its remaining automated
-enforcement lands later in the pass (Phases 3–4). Write to the rule regardless of which marker it
-carries — ⏳ means "no CI net yet," not "optional."
+v1.0 break, Phase 2; L2 completed in Phase 3) · ⏳ = the rule is binding on new code today, but its
+remaining automated enforcement lands later in the pass (L6 in Phase 4). Write to the rule regardless
+of which marker it carries — ⏳ means "no CI net yet," not "optional."
 
 ---
 
@@ -35,7 +35,7 @@ diff reviewed as an API change.
 
 ---
 
-## L2 — Self-describing schemas and errors are first-class ⏳
+## L2 — Self-describing schemas and errors are first-class ✅
 
 The reflective surface is part of the API, not a debugging afterthought.
 
@@ -43,10 +43,12 @@ The reflective surface is part of the API, not a debugging afterthought.
 - Every new descriptor kind (component / resource / event) is enumerable through a typed `describe*`
   surface, and `world.describe()` is the root that composes them into a `WorldManifest`.
 
-**Enforcement status:** the `describe*` family + `world.describe()` land in Phase 3; the error half
-shipped in the v1.0 break (Phase 2) — every `DomecsError` variant carries `retryable`, plus
-`getErrorRepairHint`, the `ERROR_KINDS` const, and `isKnownDomecsErrorKind`. Until the `describe*`
-sweep lands, any new descriptor must already be authored in this shape so it is mechanical.
+**Enforcement status:** shipped in full. The error half shipped in the v1.0 break (Phase 2) — every
+`DomecsError` variant carries `retryable`, plus `getErrorRepairHint`, the `ERROR_KINDS` const, and
+`isKnownDomecsErrorKind`. The `describe*` family (`describeComponent`/`describeResource`/`describeEvent`)
+and the composing root `world.describe(): WorldManifest` shipped in Phase 3, along with
+`InspectorView.export(): InspectorSnapshot`. Every new descriptor kind must be reachable through this
+typed surface, not an ad-hoc field reach-in.
 
 **Checklist:** New error → has `retryable` + repair hint? New descriptor kind → reachable through a
 typed `describe*`, not an ad-hoc field reach-in?
