@@ -223,3 +223,32 @@ describe('snapshot.resources — round-trip (review #16)', () => {
     expect(w.getResource(Score)).toBe(0) // back to default; the 5 is gone
   })
 })
+
+describe('restore() validates registered resources (O-18)', () => {
+  it('throws on an invalid resource value and leaves the world untouched', () => {
+    const Hp = defineResource<number>('HpRestoreO18', {
+      default: 10,
+      validate: (v) => (v >= 0 ? true : 'must be >= 0'),
+    })
+    const w = createWorld()
+    w.setResource(Hp, 5)
+    const evil = JSON.parse(JSON.stringify(w.snapshot())) as ReturnType<typeof w.snapshot>
+    ;(evil.resources as Record<string, unknown>).HpRestoreO18 = -1
+    expect(() => w.restore(evil)).toThrow(/invalid resource "HpRestoreO18".*must be >= 0/)
+    // the throw happened before any state was wiped
+    expect(w.getResource(Hp)).toBe(5)
+  })
+
+  it('accepts valid values and passes unregistered names through untouched', () => {
+    const Hp = defineResource<number>('HpRestoreO18b', {
+      default: 10,
+      validate: (v) => (v >= 0 ? true : 'must be >= 0'),
+    })
+    const w = createWorld()
+    w.setResource(Hp, 5)
+    const snap = JSON.parse(JSON.stringify(w.snapshot())) as ReturnType<typeof w.snapshot>
+    ;(snap.resources as Record<string, unknown>).NeverRegisteredO18 = { weird: true }
+    expect(() => w.restore(snap)).not.toThrow()
+    expect(w.getResource(Hp)).toBe(5)
+  })
+})

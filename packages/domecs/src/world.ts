@@ -805,21 +805,26 @@ export function createWorld(options: WorldOptions = {}): World {
     for (const s of scheduler.systemsByMode('once')) {
       if (!s.ranOnce && isEnabled(s)) return true
     }
-    for (const s of scheduler.systemsByMode('tick')) {
-      if (!isEnabled(s)) continue
-      // The built-in fault consolidator is framework infrastructure — it
-      // should not keep the idle driver awake when there's nothing to
-      // consolidate. Treat it as passive when its query is empty.
-      if (
-        s.name === CONSOLIDATE_FAULTS_NAME &&
-        s.query !== undefined &&
-        s.query.size === 0
-      ) {
-        continue
-      }
-      return true
-    }
+    // Tick systems are gated off at scale 0 in step() (SPEC §4 step 4), so —
+    // like fixed systems below — they must not keep the idle driver spinning
+    // while paused. Renderers still get frames while paused via the mutation
+    // wake path (hasPendingComponentWork / bus pending in
+    // shouldKeepDriverAwake).
     if (time.scale !== 0) {
+      for (const s of scheduler.systemsByMode('tick')) {
+        if (!isEnabled(s)) continue
+        // The built-in fault consolidator is framework infrastructure — it
+        // should not keep the idle driver awake when there's nothing to
+        // consolidate. Treat it as passive when its query is empty.
+        if (
+          s.name === CONSOLIDATE_FAULTS_NAME &&
+          s.query !== undefined &&
+          s.query.size === 0
+        ) {
+          continue
+        }
+        return true
+      }
       for (const s of scheduler.systemsByMode('fixed')) {
         if (isEnabled(s)) return true
       }
@@ -1749,6 +1754,22 @@ export function createWorld(options: WorldOptions = {}): World {
       let s = snap
       for (const entry of plugins.list()) {
         if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
+      }
+
+      // Validate incoming resource values for every *registered* resource
+      // type BEFORE any state is wiped, so an invalid snapshot throws cleanly
+      // and leaves the world untouched instead of half-restored. This mirrors
+      // the setResource() contract; names with no registered type pass
+      // through (the name-keyed lazy contract). Component values are
+      // deliberately NOT re-validated here: the live path validates only at
+      // Component.create() and in-place field mutation is unvalidated, so a
+      // snapshot may legitimately hold values a validator was never asked to
+      // bless.
+      if (s.resources) {
+        for (const [name, value] of Object.entries(s.resources)) {
+          const type = resourceRegistry.get(name)
+          if (type) validateResource(internalResource(type), value, name)
+        }
       }
 
       // Wipe world state (preserve plugins, system registrations, signals).

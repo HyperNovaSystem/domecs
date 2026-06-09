@@ -8,6 +8,12 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `createLocalStorageStorage(prefix?)` in `@domecs/persist` (FINDINGS O-1) —
+  a browser `localStorage` adapter that namespaces slots under `prefix`
+  (default `'domecs:'`), resolves the backing store lazily from `globalThis`
+  (safe to import in headless/Node hosts), and maps missing-storage /
+  privacy-mode / quota throws to `persist_io` Results. Browser apps no longer
+  hand-roll this adapter.
 - `world.getSystem(name)` returns the live `SystemHandle` for a registered
   system (built-in or user-registered) by name, or `undefined`. This makes
   `SystemHandle.disable()` / `.enabled` reachable for built-in systems such as
@@ -24,6 +30,21 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Fixed
 
+- `mountDOM` no longer leaks queries on its error paths (FINDINGS O-17). The
+  `unregistered_slot` and `plugin_install_failed` returns now dispose the live
+  queries and `onAdd`/`onRemove` subscriptions built for already-processed
+  views, in addition to rolling back slot claims.
+- `restore()` now validates incoming values for *registered* resource types
+  before any world state is wiped (FINDINGS O-18), mirroring the
+  `setResource()` contract: an invalid value throws and leaves the world
+  untouched (surfaced as `persist_io` through `@domecs/persist` `load()`).
+  Component values are deliberately not re-validated — the live path
+  validates only at `Component.create()`, so snapshots may legitimately hold
+  values a validator was never asked to bless.
+- The idle rAF driver no longer spins at `setScale(0)` just because enabled
+  `tick` systems exist (FINDINGS O-19). `hasFrameSystems()` now mirrors the
+  scale gate that `step()` applies to tick systems; paused worlds still get
+  frames for rendering via the mutation wake path.
 - A throwing direct `on()` event handler no longer escapes `step()`. Such a
   handler is now quarantined as an `event_handler_threw` fault (`retryable:
   true`) routed to `world.signals.faultRaised`, and the remaining subscribers

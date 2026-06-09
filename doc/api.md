@@ -295,6 +295,10 @@ interface World {
   snapshot(options?: SnapshotOptions): WorldSnapshot
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
+  // Incoming values for *registered* resource types run their validate hook
+  // BEFORE any state is wiped (mirrors setResource); an invalid value throws
+  // and leaves the world untouched. Component values are not re-validated —
+  // the live path validates only at Component.create().
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -896,7 +900,11 @@ one canonical path. Every operation returns a `Result<..., DomecsError>`;
 `save`/`load` never throw on expected I/O or migration failures.
 
 `Storage` is a slot-keyed text store; a missing slot reads as `ok(null)`,
-not an error. `createMemoryStorage` ships an in-memory adapter.
+not an error. `createMemoryStorage` ships an in-memory adapter;
+`createLocalStorageStorage` ships a browser `localStorage` adapter that
+namespaces slots under `prefix` (default `'domecs:'`), resolves the backing
+store lazily from `globalThis` (safe to import in headless/Node hosts), and
+maps missing-storage / privacy-mode / quota throws to `persist_io`.
 
 ```ts
 interface Storage {
@@ -907,6 +915,7 @@ interface Storage {
 }
 
 function createMemoryStorage(initial?: Readonly<Record<string, string>>): Storage
+function createLocalStorageStorage(prefix?: string): Storage
 ```
 
 **Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
