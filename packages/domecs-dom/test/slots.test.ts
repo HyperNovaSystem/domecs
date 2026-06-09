@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent, isOk, isErr } from '@domecs/core'
+import { Has, createWorld, defineComponent, entry, isOk, isErr, type QueryResult } from '@domecs/core'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Tag = defineComponent<{}>('Tag')
@@ -117,5 +117,41 @@ describe('mountDOM — slot policy (SPEC §5.6)', () => {
     expect(isErr(r2)).toBe(true)
     if (isErr(r2)) expect(r2.error.kind).toBe('plugin_install_failed')
     if (isOk(r1)) r1.value.teardown()
+  })
+})
+
+describe('mountDOM — failed mounts roll back cleanly (O-17)', () => {
+  it('disposes the queries + subscriptions built before an error return', () => {
+    const world = createWorld({ headless: true })
+    // capture every query the mount creates so disposal is observable
+    const created: QueryResult[] = []
+    const origQuery = world.query.bind(world)
+    ;(world as { query: typeof world.query }).query = (def: Parameters<typeof world.query>[0]) => {
+      const q = origQuery(def)
+      created.push(q)
+      return q
+    }
+    const stage = document.createElement('div')
+    const good = defineView({
+      slot: 'stage',
+      query: [Tag],
+      create: () => document.createElement('i'),
+    })
+    const bad = defineView({
+      slot: 'not-a-slot',
+      query: [Tag],
+      create: () => document.createElement('i'),
+    })
+    const r = mountDOM(world, { slots: { stage }, views: [good, bad] })
+    expect(isErr(r)).toBe(true)
+    if (isErr(r)) expect(r.error.kind).toBe('unregistered_slot')
+    expect(created.length).toBeGreaterThan(0)
+    // a leaked live query would track this spawn; disposed queries report 0
+    world.spawn([entry(Tag, {})])
+    for (const q of created) expect(q.size).toBe(0)
+    // and the slot claims were rolled back, so the same slot mounts cleanly
+    const r2 = mountDOM(world, { slots: { stage }, views: [good] })
+    expect(isOk(r2)).toBe(true)
+    if (isOk(r2)) r2.value.teardown()
   })
 })

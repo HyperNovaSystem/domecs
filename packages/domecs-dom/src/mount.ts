@@ -70,11 +70,23 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
   mountedSlots.set(world, claimed)
 
   const states: ViewState[] = []
+  // Roll back everything built so far before an error return: slot claims,
+  // plus the live queries and onAdd/onRemove subscriptions of every view
+  // already processed (otherwise a failed mount leaks reactive queries that
+  // keep accumulating per-tick deltas forever).
+  const rollback = (): void => {
+    for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+    for (const state of states) {
+      state.unsubAdd()
+      state.unsubRemove()
+      state.query.dispose()
+      for (const q of state.changedQueries ?? []) q.dispose()
+    }
+  }
   for (const def of opts.views) {
     const slotEl = opts.slots[def.slot]
     if (!slotEl) {
-      // Undo the slot claims we just made before returning the error
-      for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+      rollback()
       return err({ kind: 'unregistered_slot', slot: def.slot })
     }
     const q = world.query(def.query)
@@ -122,8 +134,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     // world.use throws synchronously for programmer-error conditions
     // (e.g. duplicate plugin name). Map to an enumerable MountError.
     const reason = e instanceof Error ? e.message : String(e)
-    // Undo slot claims
-    for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+    rollback()
     return err({ kind: 'plugin_install_failed', reason })
   }
 
@@ -131,8 +142,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     // The install function returned an err Result (e.g. plugin_install_failed
     // from a caught throw inside install). Map the error kind to a reason string.
     const reason = `${useResult.error.kind}`
-    // Undo slot claims
-    for (const slotName of Object.keys(opts.slots)) claimed.delete(slotName)
+    rollback()
     return err({ kind: 'plugin_install_failed', reason })
   }
   const unuse = useResult.value

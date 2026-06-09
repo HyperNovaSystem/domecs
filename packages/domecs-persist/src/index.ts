@@ -17,7 +17,7 @@ export {
   type MigrationFailedError,
   type MigrationMap,
 } from './migrate.js'
-export { createMemoryStorage, type Storage } from './storage.js'
+export { createLocalStorageStorage, createMemoryStorage, type Storage } from './storage.js'
 export {
   createSnapshotHistory,
   diffSnapshots,
