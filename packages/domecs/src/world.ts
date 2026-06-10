@@ -1,5 +1,14 @@
 import { internal } from './component.js'
-import { internalResource, type InternalResourceType } from './resource.js'
+import { createRafDriver } from './driver.js'
+import { createResourceState } from './world-resources.js'
+import {
+  applySnapshot,
+  buildSnapshot,
+  type ArchetypeBucket,
+  type CompiledQuery,
+  type StepClock,
+  type WorldStateCtx,
+} from './world-state.js'
 import type {
   DomecsError,
   FaultEntry,
@@ -24,7 +33,7 @@ import {
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
 import { normalizeCause, toJsonValue, type Result } from './result.js'
-import { createRng, restoreRng, type Rng, type RngState } from './rng.js'
+import { createRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
@@ -404,22 +413,6 @@ export interface ActionResult {
   snapshot?: WorldSnapshot
 }
 
-interface ArchetypeBucket {
-  readonly key: string
-  readonly types: Set<string>
-  readonly entities: Set<Entity>
-}
-
-interface CompiledQuery {
-  id: number
-  node: QueryNode
-  hasTickFilter: boolean
-  hasRemoved: boolean
-  matchingArchetypes: Set<ArchetypeBucket>
-  structuralMembers: Set<Entity>
-  onAddFns: Set<(v: EntityView) => void>
-  onRemoveFns: Set<(v: EntityView) => void>
-}
 
 export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
@@ -474,18 +467,14 @@ export function createWorld(options: WorldOptions = {}): World {
 
   let scheduler!: Scheduler
   let plugins!: ReturnType<typeof createPluginRegistry>
-  let fixedStepCounter = 0
-  // F-5: rAF driver state. `rafHandle === null` means "not running".
-  let rafStarted = false
-  let rafHandle: number | null = null
-  let rafLastWallMs: number | null = null
-  let rafVisHandler: (() => void) | null = null
-  let rafWakeStep = false
-  let rafDtClampMs = 100
-  // F-3: drift-free fixed-step driver.
-  let totalScaledSeconds = 0
-  let fixedStepsFired = 0
-  let lastQuantizedElapsedMs = 0
+  // F-3: drift-free fixed-step driver. Grouped so the extracted
+  // restore mechanics (world-state.ts) can reset it in place.
+  const clock: StepClock = {
+    fixedStepCounter: 0,
+    totalScaledSeconds: 0,
+    fixedStepsFired: 0,
+    lastQuantizedElapsedMs: 0,
+  }
   let nextId: Entity = 0
   const alive = new Set<Entity>()
   // componentName -> Map<Entity, value>
@@ -510,16 +499,9 @@ export function createWorld(options: WorldOptions = {}): World {
   const pendingChanged = new Map<string, Set<Entity>>()
   let inTick = false
 
-  // World-singleton resources. `resources` holds materialized
-  // values by name; `resourceRegistry` guards against two ResourceType objects
-  // colliding on a name (mirrors typeRegistry). Resource-change tracking mirrors
-  // the component change sets: in-tick marks land in `tickResourcesChanged`,
-  // between-tick marks buffer in `pendingResourcesChanged` and are promoted at
-  // step 0 of the next tick (symmetric with tickChanged/pendingChanged).
-  const resources = new Map<string, unknown>()
-  const resourceRegistry = new Map<string, ResourceType<unknown>>()
-  const tickResourcesChanged = new Set<string>()
-  const pendingResourcesChanged = new Set<string>()
+  // World-singleton resources (#16) — registry, materialized values and the
+  // tick/pending change-set pair live in the extracted resource-state module.
+  const resourceState = createResourceState(() => inTick)
 
   // queries
   const queries: CompiledQuery[] = []
@@ -536,6 +518,40 @@ export function createWorld(options: WorldOptions = {}): World {
 
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
+
+  // O-23: snapshot/restore mechanics live in world-state.ts; this context
+  // threads the factory's closure state through to them. The reassignable
+  // closure vars (rand, nextId, emptyArch) are exposed as accessors.
+  const stateCtx: WorldStateCtx = {
+    alive,
+    stores,
+    typeRegistry,
+    archetypes,
+    entityArchetype,
+    tickAdded,
+    tickRemoved,
+    tickChanged,
+    pendingAdded,
+    pendingRemoved,
+    pendingChanged,
+    viewCache,
+    queries,
+    time,
+    clock,
+    resources: resourceState,
+    makeView: (entity) => makeView(entity),
+    ensureArchetype: (types) => ensureArchetype(types),
+    getRand: () => rand,
+    setRand: (r) => {
+      rand = r
+    },
+    setNextId: (id) => {
+      nextId = id
+    },
+    setEmptyArch: (arch) => {
+      emptyArch = arch
+    },
+  }
 
   function archetypeKeyFor(types: Set<string>): string {
     if (types.size === 0) return EMPTY_ARCH_KEY
@@ -617,7 +633,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // resource changed, false otherwise — so an entity-scoped query like
       // And(Has(X), OnChangedResource(R)) yields the X entities only on change
       // ticks. See ChangedResource (#16).
-      case 'changedResource': return tickResourcesChanged.has(node.resource.name)
+      case 'changedResource': return resourceState.changedThisTick(node.resource.name)
     }
   }
 
@@ -728,35 +744,6 @@ export function createWorld(options: WorldOptions = {}): World {
     storeFor(type)
   }
 
-  function requireRegisteredResource(
-    type: ResourceType<unknown>,
-  ): InternalResourceType<unknown> {
-    const existing = resourceRegistry.get(type.name)
-    if (existing && existing !== type) {
-      throw new Error(
-        `domecs: two distinct ResourceType objects share the name "${type.name}"`,
-      )
-    }
-    if (!existing) resourceRegistry.set(type.name, type)
-    return internalResource(type)
-  }
-
-  function validateResource(
-    meta: InternalResourceType<unknown>,
-    value: unknown,
-    name: string,
-  ): void {
-    if (!meta.__validate) return
-    const verdict = meta.__validate(value)
-    if (verdict !== true) {
-      throw new Error(`domecs: invalid resource "${name}": ${verdict}`)
-    }
-  }
-
-  function recordResourceChange(name: string): void {
-    ;(inTick ? tickResourcesChanged : pendingResourcesChanged).add(name)
-  }
-
   function iterateBag(
     bag: ComponentBag,
   ): Iterable<readonly [ComponentType<unknown>, unknown]> {
@@ -803,7 +790,7 @@ export function createWorld(options: WorldOptions = {}): World {
     if (!treeHas(node, changedResourceKind)) return false
     if (collectHasComponents(node).size > 0) return false
     for (const name of collectChangedResourceNames(node)) {
-      if (tickResourcesChanged.has(name)) return true
+      if (resourceState.changedThisTick(name)) return true
     }
     return false
   }
@@ -847,20 +834,22 @@ export function createWorld(options: WorldOptions = {}): World {
     return false
   }
 
-  function scheduleDriverFrame(): void {
-    if (!rafStarted || rafHandle !== null) return
-    const g = globalThis as unknown as {
-      requestAnimationFrame?: (cb: (t: number) => void) => number
-    }
-    if (typeof g.requestAnimationFrame !== 'function') return
-    rafHandle = g.requestAnimationFrame(frame)
-  }
+  // F-5: rAF bookkeeping lives in the driver module; the world supplies
+  // behaviour (step, pause/resume, idle policy) through hooks. The hooks
+  // close over `world`/`runTick` lazily — they only run once frames fire.
+  const driver = createRafDriver(
+    { idle, headless },
+    {
+      step: (dt) => runTick(dt),
+      pause: () => world.pause(),
+      resume: () => world.resume(),
+      shouldKeepAwake: () => shouldKeepDriverAwake(),
+      isInTick: () => inTick,
+    },
+  )
 
   function wakeDriver(): void {
-    if (!rafStarted || !idle || inTick) return
-    if (rafHandle !== null) return
-    if (rafLastWallMs !== null) rafWakeStep = true
-    scheduleDriverFrame()
+    driver.wake()
   }
 
   function runSystem(s: CompiledSystem, view: EventView): void {
@@ -963,26 +952,6 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
-  function frame(t: number): void {
-    if (!rafStarted) return
-    rafHandle = null
-    if (rafLastWallMs === null) {
-      // First frame primes the reference — skip the step to avoid a
-      // spurious dt = t (time-origin) on the very first tick.
-      rafLastWallMs = t
-      scheduleDriverFrame()
-      return
-    }
-    const gap = t - rafLastWallMs
-    rafLastWallMs = t
-    const dtMs = rafWakeStep ? 1 : (gap > rafDtClampMs ? rafDtClampMs : gap)
-    rafWakeStep = false
-    world.step(dtMs / 1000)
-    if (!rafStarted) return
-    if (!shouldKeepDriverAwake()) return
-    scheduleDriverFrame()
-  }
-
   /**
    * Core tick implementation shared by `step(dt)` and `stepOnce()`.
    *
@@ -1026,16 +995,14 @@ export function createWorld(options: WorldOptions = {}): World {
     drainInto(pendingRemoved, tickRemoved)
     drainInto(pendingChanged, tickChanged)
     // #16: same buffer-and-swap for resource-change marks.
-    tickResourcesChanged.clear()
-    for (const name of pendingResourcesChanged) tickResourcesChanged.add(name)
-    pendingResourcesChanged.clear()
+    resourceState.promoteChanges()
 
     const scaledDt = d * time.scale
     // F-3: accumulate unquantized scaled time, then derive ms-quantized
     // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
     // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
-    totalScaledSeconds += scaledDt
-    const newQuantizedMs = Math.round(totalScaledSeconds * 1000)
+    clock.totalScaledSeconds += scaledDt
+    const newQuantizedMs = Math.round(clock.totalScaledSeconds * 1000)
     // F-6: when the caller passed a positive dt, floor per-tick
     // quantized dt at 1 ms so sub-ms wall-clock frames never expose
     // scaledDelta = 0 to consumers that divide by it (PIDs, smoothing
@@ -1043,9 +1010,9 @@ export function createWorld(options: WorldOptions = {}): World {
     // Guard on `d`, not `rawDtMs`: `rawDtMs` can be 0 from quantization
     // carry even with positive caller dt, and that is exactly the case
     // we need to raise to 1 ms.
-    const rawDtMs = newQuantizedMs - lastQuantizedElapsedMs
+    const rawDtMs = newQuantizedMs - clock.lastQuantizedElapsedMs
     const dtMs = time.scale !== 0 && d > 0 && rawDtMs < 1 ? 1 : rawDtMs
-    lastQuantizedElapsedMs = newQuantizedMs
+    clock.lastQuantizedElapsedMs = newQuantizedMs
     time.delta = d
     time.scaledDelta = dtMs / 1000
     time.elapsed = newQuantizedMs / 1000
@@ -1066,18 +1033,18 @@ export function createWorld(options: WorldOptions = {}): World {
       // F-3: drive from cumulative unquantized seconds; ms-rounding drift
       // in per-tick scaledDelta does not entangle the scheduler.
       if (time.scale !== 0) {
-        const expected = Math.floor(totalScaledSeconds / time.fixedStep + 1e-9)
-        while (fixedStepsFired < expected) {
-          fixedStepsFired += 1
-          fixedStepCounter += 1
+        const expected = Math.floor(clock.totalScaledSeconds / time.fixedStep + 1e-9)
+        while (clock.fixedStepsFired < expected) {
+          clock.fixedStepsFired += 1
+          clock.fixedStepCounter += 1
           for (const s of scheduler.systemsByMode('fixed')) {
             if (!isEnabled(s)) continue
-            if (fixedStepCounter % s.fixedDivisor !== 0) continue
+            if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
             runSystem(s, eventView)
           }
         }
         time.fixedAccumulator =
-          totalScaledSeconds - fixedStepsFired * time.fixedStep
+          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
       }
 
       // SPEC §3 — `once` systems fire on first tick of world.
@@ -1259,28 +1226,16 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     getResource<T>(type: ResourceType<T>): T | undefined {
-      const meta = requireRegisteredResource(type as ResourceType<unknown>)
-      if (resources.has(type.name)) return resources.get(type.name) as T
-      if (meta.__default) {
-        const value = (meta.__default as () => T)()
-        validateResource(meta, value, type.name)
-        resources.set(type.name, value)
-        return value
-      }
-      return undefined
+      return resourceState.get(type)
     },
 
     setResource<T>(type: ResourceType<T>, value: T): void {
-      const meta = requireRegisteredResource(type as ResourceType<unknown>)
-      validateResource(meta, value, type.name)
-      resources.set(type.name, value)
-      recordResourceChange(type.name)
+      resourceState.set(type, value)
       wakeDriver()
     },
 
     markResourceChanged<T>(type: ResourceType<T>): void {
-      requireRegisteredResource(type as ResourceType<unknown>)
-      recordResourceChange(type.name)
+      resourceState.markChanged(type)
       wakeDriver()
     },
 
@@ -1289,7 +1244,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     resourceTypes(): ResourceType<unknown>[] {
-      return Array.from(resourceRegistry.values())
+      return resourceState.types()
     },
 
     *iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
@@ -1343,12 +1298,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     describeResource<T>(type: ResourceType<T>): ResourceDescriptor {
-      const meta = requireRegisteredResource(type as ResourceType<unknown>)
-      return {
-        name: type.name,
-        hasValue: resources.has(type.name),
-        hasDefault: meta.__default !== undefined,
-      }
+      return resourceState.describe(type)
     },
 
     describe(): WorldManifest {
@@ -1667,73 +1617,11 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     startLoop(options?: StartOptions): () => void {
-      // F-5: thin rAF driver. Every browser exemplar was hand-rolling this
-      // with bespoke dt-clamp / first-frame priming / visibility-pause
-      // logic. Owning it here gives one place to fix that mis-tune.
-      if (headless) {
-        throw new Error(
-          'domecs: World.startLoop() is disabled for worlds created with headless=true; use step(dt) instead',
-        )
-      }
-      const g = globalThis as unknown as {
-        requestAnimationFrame?: (cb: (t: number) => void) => number
-        cancelAnimationFrame?: (h: number) => void
-        document?: { hidden?: boolean; addEventListener: Function; removeEventListener: Function }
-      }
-      if (typeof g.requestAnimationFrame !== 'function' || typeof g.cancelAnimationFrame !== 'function') {
-        throw new Error(
-          'domecs: World.startLoop() requires requestAnimationFrame; use step(dt) in headless environments',
-        )
-      }
-      if (rafStarted) {
-        wakeDriver()
-        return () => world.stop()
-      }
-      rafStarted = true
-      rafDtClampMs = options?.dtClampMs ?? 100
-      // Default true; explicit `false` disables. Anything else (undefined,
-      // nullish, truthy) enables — the switch is strict boolean-false.
-      const pauseOnHidden = options?.pauseOnHidden !== false
-      rafLastWallMs = null
-      rafWakeStep = false
-      scheduleDriverFrame()
-      if (pauseOnHidden && g.document && typeof g.document.addEventListener === 'function') {
-        const doc = g.document
-        rafVisHandler = (): void => {
-          // Defensive: browsers may deliver a queued visibilitychange event
-          // after stop()+removeEventListener fires on the same microtask.
-          // Ignore it; the next startLoop() installs a fresh handler.
-          if (!rafStarted) return
-          if (doc.hidden) {
-            world.pause()
-          } else {
-            world.resume()
-            // Discard the accumulated wall-clock gap so the first post-
-            // resume frame primes cleanly instead of delivering a spike.
-            rafLastWallMs = null
-            scheduleDriverFrame()
-          }
-        }
-        doc.addEventListener('visibilitychange', rafVisHandler)
-      }
-      return () => world.stop()
+      return driver.startLoop(options)
     },
 
     stop(): void {
-      if (!rafStarted) return
-      const g = globalThis as unknown as {
-        cancelAnimationFrame?: (h: number) => void
-        document?: { removeEventListener: Function }
-      }
-      if (rafHandle !== null) g.cancelAnimationFrame?.(rafHandle)
-      rafStarted = false
-      rafHandle = null
-      rafLastWallMs = null
-      rafWakeStep = false
-      if (rafVisHandler && g.document && typeof g.document.removeEventListener === 'function') {
-        g.document.removeEventListener('visibilitychange', rafVisHandler)
-        rafVisHandler = null
-      }
+      driver.stop()
     },
 
     use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError> {
@@ -1747,42 +1635,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     snapshot(options?: SnapshotOptions): WorldSnapshot {
-      const pruneEmpty = options?.pruneEmptyEntities === true
-      const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
-      const sortedAlive = Array.from(alive).sort((a, b) => a - b)
-      for (const id of sortedAlive) {
-        const arch = entityArchetype.get(id)
-        if (!arch) continue
-        const components: Record<string, unknown> = {}
-        for (const name of arch.types) {
-          const type = typeRegistry.get(name)
-          if (type && internal(type).__transient) continue
-          const store = stores.get(name)
-          if (!store) continue
-          const v = store.get(id)
-          if (v !== undefined) components[name] = cloneSerializable(v)
-        }
-        if (pruneEmpty && Object.keys(components).length === 0) continue
-        entities.push({ id, components })
-      }
-      // #16: serialize materialized resources by name (deep-cloned like
-      // component values). Omit the field entirely when there are none so a
-      // resource-free world's snapshot is byte-identical to the pre-v2 shape
-      // (modulo `version`).
-      let resourcesSnap: Record<string, unknown> | undefined
-      if (resources.size > 0) {
-        resourcesSnap = {}
-        for (const [name, value] of resources) {
-          resourcesSnap[name] = cloneSerializable(value)
-        }
-      }
-      let snap: WorldSnapshot = {
-        version: SNAPSHOT_VERSION,
-        seed: rand.seed(),
-        tick: time.tick,
-        entities,
-        ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
-      }
+      let snap = buildSnapshot(stateCtx, options?.pruneEmptyEntities === true)
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
           snap = entry.handle.onSnapshot(snap) as WorldSnapshot
@@ -1797,106 +1650,7 @@ export function createWorld(options: WorldOptions = {}): World {
         if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
       }
 
-      // Validate incoming resource values for every *registered* resource
-      // type BEFORE any state is wiped, so an invalid snapshot throws cleanly
-      // and leaves the world untouched instead of half-restored. This mirrors
-      // the setResource() contract; names with no registered type pass
-      // through (the name-keyed lazy contract). Component values are
-      // deliberately NOT re-validated here: the live path validates only at
-      // Component.create() and in-place field mutation is unvalidated, so a
-      // snapshot may legitimately hold values a validator was never asked to
-      // bless.
-      if (s.resources) {
-        for (const [name, value] of Object.entries(s.resources)) {
-          const type = resourceRegistry.get(name)
-          if (type) validateResource(internalResource(type), value, name)
-        }
-      }
-
-      // Wipe world state (preserve plugins, system registrations, signals).
-      // Capture each live query's current members AS POPULATED VIEWS before the
-      // wipe: `buildView` reads stores eagerly, so views materialized here keep
-      // their component values after the stores are cleared. Index positionally
-      // — `q.id` is a world-global monotonic counter, NOT an index into the live
-      // `queries` array (disposed queries are spliced out), so `prevMembers[q.id]`
-      // looked up the wrong/undefined set after any dispose and onRemove misfired.
-      const prevViews = queries.map((q) =>
-        q.onRemoveFns.size > 0 ? Array.from(q.structuralMembers, (id) => makeView(id)) : null,
-      )
-      alive.clear()
-      stores.clear()
-      archetypes.clear()
-      entityArchetype.clear()
-      tickAdded.clear()
-      tickRemoved.clear()
-      tickChanged.clear()
-      pendingAdded.clear()
-      pendingRemoved.clear()
-      pendingChanged.clear()
-      // #16: resource values are part of the snapshot; clear then rehydrate.
-      // `resourceRegistry` (type identity) persists like `typeRegistry`.
-      resources.clear()
-      tickResourcesChanged.clear()
-      pendingResourcesChanged.clear()
-      viewCache.clear()
-      queries.forEach((q, i) => {
-        const views = prevViews[i]
-        if (views) for (const view of views) for (const fn of q.onRemoveFns) fn(view)
-        q.matchingArchetypes.clear()
-        q.structuralMembers.clear()
-      })
-      emptyArch = ensureArchetype(new Set<string>())
-
-      // PRNG state + tick.
-      rand = restoreRng(s.seed)
-      time.tick = s.tick
-      time.elapsed = 0
-      time.delta = 0
-      time.scaledDelta = 0
-      time.fixedAccumulator = 0
-      fixedStepCounter = 0
-      totalScaledSeconds = 0
-      fixedStepsFired = 0
-      lastQuantizedElapsedMs = 0
-
-      // Rehydrate entities + components (name-keyed; ComponentType objects
-      // attach lazily when callers mutate via addComponent/markChanged).
-      let maxId = -1
-      for (const rec of s.entities) {
-        alive.add(rec.id)
-        if (rec.id > maxId) maxId = rec.id
-        const types = new Set<string>()
-        for (const [name, value] of Object.entries(rec.components)) {
-          let store = stores.get(name)
-          if (!store) {
-            store = new Map()
-            stores.set(name, store)
-          }
-          store.set(rec.id, cloneSerializable(value))
-          types.add(name)
-        }
-        const arch = ensureArchetype(types)
-        arch.entities.add(rec.id)
-        entityArchetype.set(rec.id, arch)
-        for (const q of queries) {
-          if (q.matchingArchetypes.has(arch)) {
-            q.structuralMembers.add(rec.id)
-            if (q.onAddFns.size > 0) {
-              const view = makeView(rec.id)
-              for (const fn of q.onAddFns) fn(view)
-            }
-          }
-        }
-      }
-      nextId = maxId + 1
-
-      // #16: rehydrate resources by name (v1 snapshots have no `resources`,
-      // leaving the world's resource set empty — defaults re-materialize lazily).
-      if (s.resources) {
-        for (const [name, value] of Object.entries(s.resources)) {
-          resources.set(name, cloneSerializable(value))
-        }
-      }
+      applySnapshot(stateCtx, s)
     },
   }
 
