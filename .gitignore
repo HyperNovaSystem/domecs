@@ -153,3 +153,6 @@ playwright-report/
 
 # Doctest harness temp dir (extracted snippets + emitted JS)
 doc/.doctest/
+
+# SKiDL MCP plugin artifact
+skidl.erc
