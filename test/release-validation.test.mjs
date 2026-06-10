@@ -5,6 +5,7 @@ import {
   buildEsmImportProbe,
   findLegacyDomecsImportSpecifiers,
   rewriteDomecsDependencies,
+  writeEsmImportProbeFile,
 } from '../scripts/validate-release.mjs'
 
 test('rewriteDomecsDependencies replaces legacy package keys with packed scoped tarballs', () => {
@@ -103,6 +104,23 @@ test('buildEsmImportProbe imports every used package and prints the ok marker (r
 
 test('buildEsmImportProbe rejects a package name that could break out of the string literal', () => {
   assert.throws(() => buildEsmImportProbe(["@domecs/core')\nprocess.exit(1)//"]), /invalid package name/i)
+})
+
+test('writeEsmImportProbeFile writes the probe to a file so it survives win32 shell quoting', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-probe-'))
+  try {
+    const file = writeEsmImportProbeFile(dir, ['@domecs/core', '@domecs/dom'])
+    assert.equal(path.dirname(file), dir)
+    const source = fs.readFileSync(file, 'utf8')
+    assert.match(source, /import\(['"]@domecs\/core['"]\)/)
+    assert.match(source, /import\(['"]@domecs\/dom['"]\)/)
+    assert.match(source, /domecs-esm-smoke-ok/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('findLegacyDomecsImportSpecifiers flags old runtime imports only', () => {

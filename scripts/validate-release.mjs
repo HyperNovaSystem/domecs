@@ -101,6 +101,17 @@ export function buildEsmImportProbe(packageNames) {
   return `${imports}\nconsole.log('domecs-esm-smoke-ok')`
 }
 
+/**
+ * Write the ESM probe to a file inside the staged app instead of passing it
+ * via `node -e`: with `shell: true` on win32 a multiline -e argument is
+ * truncated at the first newline by cmd.exe, breaking the probe.
+ */
+export function writeEsmImportProbeFile(dir, packageNames) {
+  const file = path.join(dir, '.domecs-esm-probe.mjs')
+  fs.writeFileSync(file, `${buildEsmImportProbe(packageNames)}\n`)
+  return file
+}
+
 export function rewriteDomecsDependencies(packageJson, tarballSpecs) {
   const next = structuredClone(packageJson)
   const used = new Set()
@@ -382,9 +393,12 @@ function runAppSmoke(app, options) {
 
   // ESM import smoke: prove every packed @domecs package this app uses
   // actually loads from the staged install before exercising the app scripts.
-  run('node', ['--input-type=module', '-e', buildEsmImportProbe(app.usedPackages)], {
-    cwd: app.stageDir,
-  })
+  const probeFile = writeEsmImportProbeFile(app.stageDir, app.usedPackages)
+  try {
+    run('node', [path.basename(probeFile)], { cwd: app.stageDir })
+  } finally {
+    fs.rmSync(probeFile, { force: true })
+  }
 
   if (scripts.test) {
     run(installCommand, installCommand === 'pnpm' ? ['test'] : ['test'], {
