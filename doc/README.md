@@ -25,9 +25,7 @@ specification; the repository's root `README.md` is the pitch.
 
 11. **[../CHANGELOG.md](../CHANGELOG.md)** — Released changes, starting with v1.0.0.
 12. **[ROADMAP.md](ROADMAP.md)** — Post-v1.0 roadmap: directional items + tooling.
-13. **[../FINDINGS.md](../FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2), and deferred engine features (§3). **Canonical** — new findings land here.
-14. **[FINDINGS.md](FINDINGS.md)** — 2026-06-01 engine review snapshot (doc drift, API mismatches). Feeds the consolidated ledger above.
-15. **[FINDINGS_fleet.md](FINDINGS_fleet.md)** — Engine deficiencies surfaced by the fleet_app exemplar (O-16 repro recipe). Feeds the consolidated ledger above.
+13. **[../FINDINGS.md](../FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2, incl. the 2026-06-01 engine review O-20…O-26 and the fleet O-16 repro recipe), and deferred engine features (§3). **Canonical and sole findings file** — new findings land here.
 
 ## Reading order
 

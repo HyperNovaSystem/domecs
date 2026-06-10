@@ -1,10 +1,14 @@
 # DOMECS — Consolidated Findings & Audit Reference
 
-_Last updated: 2026-05-31 (post-v1.0 freeze)._
+_Last updated: 2026-06-10 (post-v1.0 freeze)._
 
 This is the **single** post-v1.0 findings reference for the DOMECS engine. It
 merges the 2026-05-29 29-agent engine audit (the A/B/C priority synthesis) with
-the durable design input mined from the per-exemplar audits.
+the durable design input mined from the per-exemplar audits, the **2026-06-01
+engine review** (formerly `doc/FINDINGS.md` — its open items are O-20…O-26
+below), and the fleet O-16 repro recipe (formerly `doc/FINDINGS_fleet.md`).
+Both former `doc/` files were folded in here on 2026-06-10 and deleted —
+git history retains the originals.
 
 The exemplar apps that produced these findings (Halls, Harbor, Fleet, Tessera,
 Lighthouse, Studio, Railroad, Prism, the Vite template, etc.) now live in
@@ -64,6 +68,20 @@ landed in the v1.0 break. These are recorded as closed; do not re-litigate.
 - `defineEvent` payload tick-delay (emit on tick N → visible to `event` systems
   on N+1) is documented and doctested.
 
+### Resolved post-freeze — doc-accuracy pass 2026-06-10 (commit e9b4103)
+The 2026-06-01 engine review's three doc-drift highs/mediums are fixed:
+- **Persistence docs drift** (review #1) — README/SPEC rewritten around the
+  shipped `save`/`load`/`Storage`/`createMemoryStorage` API; the
+  `createPersistence` / IndexedDB / autosave facade is now explicitly marked
+  *planned* (SPEC §7.2–7.3, ROADMAP).
+- **`world.resource(R)` → `world.getResource(R)`** (review #2) — all
+  user-facing mentions corrected.
+- **README status/roadmap contradiction** (review #5) — roadmap split into
+  shipped-in-v1.0 / planned (`@domecs/sprites`, `@domecs/worker`, IndexedDB
+  facade) / indefinitely deferred (Svelte/React adapters); SPEC package list
+  split shipped vs planned. Same pass also fixed `start()`→`startLoop()`,
+  `step()`→`stepOnce()`, `Changed/Added/Removed`→`On*` drift in `api.md`.
+
 ---
 
 ## 2. Open / actionable (still informs design)
@@ -93,6 +111,45 @@ review tier they map to.
 | O-17 | ~~`mountDOM` leaks queries + subscriptions on its error paths~~ — **fixed 2026-06-09**: the `unregistered_slot` / `plugin_install_failed` returns now dispose every already-built `ViewState` (unsub + `query.dispose()` + changed queries) alongside the slot-claim rollback; regression test in `domecs-dom/test/slots.test.ts`. | Railroad (2026-06-09 v1.0 migration audit) | A | Closed. |
 | O-18 | ~~`restore()` bypasses validators~~ — **fixed for resources 2026-06-09**: registered resource types validate before any state is wiped (mirrors `setResource`; invalid ⇒ throw with the world untouched, `persist_io` via `load()`). Component values stay un-revalidated by design — the live path validates only at `Component.create()`, in-place field mutation never re-validates, so restore-validating components would reject legitimately reachable states. Documented in `api.md`. | Railroad (2026-06-09 v1.0 migration audit) | B | Closed (resources); component trust boundary now documented. |
 | O-19 | ~~Idle driver spins at `setScale(0)` when tick systems exist~~ — **fixed 2026-06-09**: `hasFrameSystems()` now applies the same `time.scale !== 0` gate to tick systems that `step()` does; paused worlds still get frames for rendering via the mutation wake path (`hasPendingComponentWork` / bus pending). | Railroad (2026-06-09 v1.0 migration audit) | C | Closed. |
+
+### O-16 reproduction recipe (fleet, 2026-05-31)
+
+Confirmed deterministic repro — no real browser needed. Mount a view over
+`Has(TableRow)` whose `create`/`update` paint a per-entity *rank* into the node,
+then in one tick run a projection that `removeComponent(TableRow)` over the
+whole current window and `addComponent(TableRow)` for a freshly-sorted window
+(partial membership overlap). After a single `world.step`, the slot retains
+stale nodes carrying their PRE-sort rank.
+
+- **The trap that hid it:** the rendered row *count* stays correct (`= size`,
+  e.g. 50) — the corruption is duplicate/stale *content*, not extra nodes. A
+  test asserting only `childElementCount` passes while the DOM is visibly
+  wrong. Assert the set of rendered ranks equals `1..N` (no duplicates), not
+  just the length.
+- **Observed signature in fleet** (seed `0x51ee7`, window 50, sort speed desc
+  from the initial callsign-asc order): stale ranks `3,4,17,18,27,28,41,42`
+  survive as duplicates. Reproduces under rAF `startLoop` in a browser and in
+  jsdom via manual `world.step` — see `fleet_app/test/fleet.dom.test.ts`.
+- **Fleet-side mitigation (does not fix the engine):** `sim.ts
+  rebuildTableRows()` updates `TableRow` in place keyed by entity (remove only
+  leavers, add only enterers, mutate survivors) so the view never sees a mass
+  component exit. Any consumer doing hand-rolled despawn+respawn in one tick
+  still corrupts the DOM.
+
+### Engine review 2026-06-01 — open items
+
+Open remainder of the 2026-06-01 engine review (its #1/#2/#5 are resolved —
+see §1 "Resolved post-freeze"). Severity in the Tier column.
+
+| # | Finding | Tier | Notes |
+|---|---------|------|-------|
+| O-20 | **`changedOn` docs still describe the removed array API.** Code ships a discriminated union — `ViewDef.changedOn?: { mode: 'auto' } \| { mode: 'legacy' } \| { mode: 'explicit'; types: [...] }` (`domecs-dom/src/view.ts`); docs (`doc/api.md` §ViewDef ~838–871, `doc/SPEC.md` §5.3 ~500–514, `packages/domecs-dom/README.md` ~88) still say `changedOn: []` = legacy and `changedOn: [Type, ...]` = explicit. Copying the docs no longer type-checks. Doc-only fix: omitted/`{mode:'auto'}` → derive from `Has` leaves; `{mode:'legacy'}` → redraw every tick; `{mode:'explicit', types}` → gate on exactly those. | High (doc) | Only doc-drift item e9b4103 did not cover. |
+| O-21 | **`action(..., { dt: 0 })` returns the action event as a "downstream" event.** `action` emits, then `step(opts.dt)`, then reads `bus.pendingEvents()` (`world.ts` ~1601–1626). `dt <= 0` is an F-6 heartbeat — no flush — so the just-emitted action event stays pending and is returned in `events`, and the default verdict still reports `accepted: true, consumedTurn: true`, contradicting the documented "action event was consumed" invariant. Options: (a) reject `dt <= 0` (throw or structured rejected result), (b) treat `dt: 0` as `stepOnce()`, (c) keep heartbeat but compute `events` post-flush only and default `accepted: false, consumedTurn: false`. Needs a regression test either way. | High (code) | Edge-case correctness bug in the turn command API. |
+| O-22 | **Review-history comments leak into shipped source** — `review #16`/`#17`, `F-6`, `D-4` IDs, and a `__wake` comment saying "Remove after v0.2" in v1.0 code. Replace IDs with stable rationale/doc links; decide whether `world.__wake` survives v1.x and document it as compat debt with a removal plan if so. | Med | |
+| O-23 | **`world.ts` is a ~1,900-line multi-responsibility module** (entities, archetypes, queries, resources, event/tick orchestration, RAF driver, action/turn, plugins, snapshot/restore, reflection, faults). Extract incrementally — resource registry, snapshot/restore mechanics, RAF driver state — keeping the public `World` factory as orchestration. Do **after** doc fixes (O-20) so behavior stays pinned. | Med | |
+| O-24 | **`reactiveResourceFallback` semantics undocumented** — entity-scoped resource reactions (`And(Has(P), OnChangedResource(C))`) run over matching entities; *pure* resource reactions need the special fallback (one coalesced call, empty `ctx.entities`). Non-obvious split; add a SPEC subsection + examples for both forms and keep tests around them before touching query internals. | Med (doc) | |
+| O-25 | **Snapshot cloning is plain recursive `cloneSerializable`, not structured-clone** — no cycle detection (overflows in `snapshot()` before `save()`'s `persist_io` boundary); `Date`/`Map`/`Set`/class instances not preserved. Tighten docs to "plain-data/JSON-oriented"; optionally dev-only cycle/unsupported-value validation. | Low | |
+| O-26 | **Fault result shape-check is permissive** — `runSystem` accepts any object with an array `errors`; `buildFaultEntry` assumes `fault.error.kind`. Typoed fault entries produce vague errors. Consider a dev-only strict validator (tied to `strictReturns`) checking `{ error: { kind: string }, recoverable: boolean }` per fault. | Low | |
 
 ### Recipe / documentation gaps (no engine change required)
 These are recurring patterns the exemplars each re-discovered; the fix is a
