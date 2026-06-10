@@ -17,7 +17,7 @@ function createWorld(options?: WorldOptions): World
 
 interface WorldOptions {
   seed?:      number | [number, number, number, number]
-  headless?:  boolean      // default false; start() throws, world.step() drives ticks; no browser globals required
+  headless?:  boolean      // default false; startLoop() throws, world.step(dt) drives ticks; no browser globals required
   fixedStep?: number       // seconds; default 1/60
   idle?:      boolean      // default true; sleep RAF when no frame work remains
 }
@@ -143,11 +143,11 @@ const Score = defineResource<number>('Score', { default: 0 })
 const Config = defineResource<Cfg, 'Config'>('Config', { default: () => makeConfig() })
 
 world.setResource(Score, 10)      // validates, stores, marks changed
-world.resource(Score)             // → 10 (materializes default on first read)
+world.getResource(Score)          // → 10 (materializes default on first read)
 world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 ```
 
-Reactive systems observe resource edges via `ChangedResource(R)` in `reactsTo`
+Reactive systems observe resource edges via `OnChangedResource(R)` in `reactsTo`
 (see Query builder below and SPEC §4 step 6). Resources are part of
 `snapshot()` / `restore()` (Snapshot below).
 
@@ -157,9 +157,9 @@ Reactive systems observe resource edges via `ChangedResource(R)` in `reactsTo`
 interface World {
   // lifecycle
   //
-  // `start(options?)` installs an rAF-driven loop that computes wall-clock
+  // `startLoop(options?)` installs an rAF-driven loop that computes wall-clock
   // dt, clamps it, and pipes each frame into `step(dt)`. Returns a disposer
-  // that calls `stop()`. Calling `start()` on an already-running world is a
+  // that calls `stop()`. Calling `startLoop()` on an already-running world is a
   // no-op (returns the disposer) and also wakes a sleeping idle loop. In
   // environments without `requestAnimationFrame` it throws — use `step(dt)`
   // instead. Worlds created with `{ headless: true }` also throw even if rAF
@@ -169,24 +169,26 @@ interface World {
   // frame work remains (no enabled `tick`/`fixed`/unfired `once` systems, no
   // pending component work, no queued events). It wakes on external
   // `world.emit(...)`, structural component mutations / `markChanged`,
-  // `@domecs/input` activity, `resume()`, or an explicit `start()`.
+  // `@domecs/input` activity, `resume()`, or an explicit `startLoop()`.
   //
-  // `step(dt)` semantics:
+  // `step(dt)` semantics (`dt` is required):
   //   - `step(dt)` with `dt > 0`: normal tick advance.
-  //   - `step(0)` — F-6 heartbeat: no tick advance, no system execution,
-  //     no change-detection buffer swap. Plugin hooks + tickStart/tickEnd
-  //     signals + onRender still fire so UIs can paint initial state and
-  //     input plugins can republish snapshots between turns. Use this to
-  //     prime the world before `start()` or to poll between turns in a
-  //     turn-based game.
-  //   - `step()` (no arg): legacy "advance one tick with dt=0". Preserved
-  //     for `turn()` and turn-based exemplars. Not a heartbeat.
+  //   - `step(dt)` with `dt <= 0` — F-6 heartbeat: no tick advance, no system
+  //     execution, no change-detection buffer swap. Plugin hooks +
+  //     tickStart/tickEnd signals + onRender still fire so UIs can paint
+  //     initial state and input plugins can republish snapshots between
+  //     turns. Use this to prime the world before `startLoop()` or to poll
+  //     between turns in a turn-based game.
+  //   - `stepOnce()`: advance exactly one tick with `delta = 0` — the
+  //     turn-based single step. Systems run normally; time does not advance.
+  //     (This is the former no-arg `step()` behaviour. `turn()` uses it.)
   //   - `step(dt)` with `0 < dt < 1 ms`: dt is floored at 1 ms of
   //     scaled time so PID derivative consumers never see `scaledDelta=0`.
   //     See SPEC §2.7.
-  start(options?: StartOptions): () => void
+  startLoop(options?: StartOptions): () => void
   stop():   void
-  step(dt?: number):  void     // see rules above
+  step(dt: number):  void      // see rules above
+  stepOnce(): void             // one tick, delta = 0
   stepN(n: number, dt?: number): void
 
   // Turn-based action: emit an event and advance one tick.
@@ -469,18 +471,18 @@ type QueryNode =
 
 // Component shortcuts: take a ComponentType, produce a leaf node.
 function Has<T>(t: ComponentType<T>): QueryNode
-function Changed<T>(t: ComponentType<T>): QueryNode
-function Added<T>(t: ComponentType<T>): QueryNode
-function Removed<T>(t: ComponentType<T>): QueryNode
+function OnChanged<T>(t: ComponentType<T>): TemporalQueryNode
+function OnAdded<T>(t: ComponentType<T>): TemporalQueryNode
+function OnRemoved<T>(t: ComponentType<T>): TemporalQueryNode
 function Where<T>(t: ComponentType<T>, p: (v: T) => boolean): QueryNode
 
 // Resource change-detection node (SPEC §2.11): fires when resource R changed
 // in the previous tick. Structurally neutral — matches every entity on a
-// change tick, none otherwise — so And(Has(T), ChangedResource(R)) yields the
-// T entities only on R-change ticks; a bare ChangedResource(R) is a
+// change tick, none otherwise — so And(Has(T), OnChangedResource(R)) yields the
+// T entities only on R-change ticks; a bare OnChangedResource(R) is a
 // world-level edge a reactive system reacts to even in an empty world.
 // Counts as a change-detection node for the reactsTo contract (SPEC §4 step 6).
-function ChangedResource<T>(r: ResourceType<T>): QueryNode
+function OnChangedResource<T>(r: ResourceType<T>): TemporalQueryNode
 
 // Predicate combinators: take child QueryNodes, OR a bare ComponentType as a
 // one-arg shortcut for Has(T). `Not(Player)` and `Not(Has(Player))` are
@@ -520,7 +522,7 @@ interface WorldQuery {
 interface QueryHooks<Fields = Record<string, unknown>> {
   onAdd?:    (e: EntityView<Fields>) => void
   onRemove?: (e: EntityView<Fields>) => void
-  // Requires a change-detection query (Added/Removed/Changed/ChangedResource
+  // Requires a change-detection query (OnAdded/OnRemoved/OnChanged/OnChangedResource
   // somewhere in the tree). Fires at the reactive phase for every entity
   // currently in the query result after that tick's mutations are coalesced.
   onChange?: (e: EntityView<Fields>) => void
@@ -834,7 +836,7 @@ interface MountHandle {
 // component value types through to `create` / `update` / `destroy`.
 //
 // `changedOn` semantics (SPEC §5.3 update-gating rule, P-3):
-//   - omitted (default): redraws are gated by `Changed(T)` for every
+//   - omitted (default): redraws are gated by `OnChanged(T)` for every
 //     `Has(T)` leaf in `query`. A view over `[Position, Velocity]`
 //     auto-redraws when either component is marked changed.
 //   - `changedOn: []` (explicit empty): legacy "redraw every tick". Useful
@@ -1130,7 +1132,7 @@ world.spawn([
   entry(Velocity, { dx: 30, dy: 0 }),
 ])
 
-world.start()
+world.startLoop()
 ```
 
-Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v1.0 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `Changed(T)` semantics.
+Note: `world.markChanged` is explicit — this is the contract, not an adapter gap (SPEC §2.9). v1.0 is proxy-free in every build: there is no `WorldOptions.dev` and no `world.diag` surface. Future diagnostics may warn on **mutation-without-mark** or **mark-without-mutation**, but they must not change `OnChanged(T)` semantics.

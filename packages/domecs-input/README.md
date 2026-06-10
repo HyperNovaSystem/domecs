@@ -43,7 +43,7 @@ world.system('controls', { schedule: 'tick' }, ({ input }) => {
   }
 })
 
-world.start()
+world.startLoop()
 ```
 
 ## Snapshot shape
@@ -97,7 +97,7 @@ set input directly:
 
 ```ts
 world.setInput(snapshot)
-world.step()
+world.stepOnce()
 ```
 
 ## Related packages

@@ -70,7 +70,7 @@ if (!mounted.ok) {
 } else {
   const mount = mounted.value
 
-  world.step()
+  world.stepOnce()
 
   // Later:
   mount.teardown()
@@ -91,8 +91,8 @@ if (!mounted.ok) {
 - `teardown()` uninstalls the renderer plugin and removes mounted elements.
 
 `mountDOM` installs an internal DOMECS plugin and commits DOM changes from the
-world render phase, so it works with both manual `world.step()` loops and
-`world.start()`.
+world render phase, so it works with both manual `world.step(dt)` loops and
+`world.startLoop()`.
 
 The package is safe to import in Node/headless tests. `mountDOM` itself expects
 caller-provided slots for real views; it never looks up `document` on import.

@@ -63,7 +63,7 @@ for (const entity of world.query(Has(Position)).entities) {
 - `createWorld(options)` — create an ECS world.
 - `defineComponent<T>(name, options?)` — define typed component handles.
 - `defineResource<T>(name, options?)` — define a world-level named value
-  (score, level, gravity); `world.resource(R)` / `setResource(R, v)` /
+  (score, level, gravity); `world.getResource(R)` / `setResource(R, v)` /
   `markResourceChanged(R)`. React to changes with `OnChangedResource(R)`.
 - `entry(component, value)` — typed helper for heterogeneous spawn arrays.
 - `world.spawn(...)` / `world.despawn(...)` — manage entities.

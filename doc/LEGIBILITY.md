@@ -7,7 +7,7 @@
 > **Why it exists:** domecs is read far more by AI agents than by humans — agents move forward token by token, reason locally, pattern-match from priors, and self-correct from errors.
 > An API designed for that reader is also harder for a human to misuse.
 > The full reasoning is in the source rubric, [`agent-legible-api-design.md`](./agent-legible-api-design.md);
-> the v1.0 plan that applies it is [`2026-05-30-v1-legibility-pass-design.md`](./2026-05-30-v1-legibility-pass-design.md).
+> the executed v1.0 plan (`2026-05-30-v1-legibility-pass-design.md`) was removed after the freeze — retrieve from git history.
 
 **Enforcement legend:** ✅ = enforced in the shipped types/CI now. All six laws are now enforced
 (L1 in Phase 0; L3/L4/L5 in the v1.0 break, Phase 2; L2 completed in Phase 3; L6 in Phase 4).

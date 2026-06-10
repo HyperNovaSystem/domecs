@@ -1,6 +1,6 @@
 # DOMECS — Specification v1.0
 
-**Status:** v1.0 — final/authoritative. Code has shipped: all five `@domecs/*` packages are published at 1.0.0. Incorporates the critique in `critique.md` and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: all five `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`) are published at 1.0.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -20,14 +20,21 @@
 
 ## 1. Packages and layering
 
+Shipped at 1.0.0:
+
 ```
 @domecs/core           — core: World, entities, components, queries, systems, events, time
 @domecs/dom            — DOM renderer: views, mounting, diffing
 @domecs/input          — input collector: keyboard, pointer, touch, gamepad
-@domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
-@domecs/persist        — IndexedDB snapshot/restore, autosave, migrations
+@domecs/persist        — snapshot save/load over a Storage interface, migrations
 @domecs/inspector      — devtools panel, entity browser, time-travel scrubber
-@domecs/worker         — off-main-thread simulation host (v0.3)
+```
+
+Planned (do not exist yet):
+
+```
+@domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
+@domecs/worker         — off-main-thread simulation host
 ```
 
 ### Module dependency DAG
@@ -36,10 +43,10 @@
 @domecs/core
  ├── @domecs/input        (depends: core)
  ├── @domecs/dom          (depends: core)
- │    ├── @domecs/sprites (depends: core, dom)
+ │    ├── @domecs/sprites (planned; depends: core, dom)
  │    └── @domecs/inspector (depends: core, dom; uses core reflection)
  ├── @domecs/persist      (depends: core)
- └── @domecs/worker       (depends: core)
+ └── @domecs/worker       (planned; depends: core)
 ```
 
 No cycles.  Core is renderer-agnostic; the DOM renderer is framework-agnostic.
@@ -50,7 +57,7 @@ First-release packages must be safe to import under plain Node with no browser
 globals installed. `@domecs/core` is the authoritative headless runtime:
 `createWorld({ headless: true })` plus explicit `world.step(dt)` must run
 without `window`, `document`, `navigator`, `requestAnimationFrame`, or
-`cancelAnimationFrame`. `World.start()` remains browser-only and must throw a
+`cancelAnimationFrame`. `World.startLoop()` remains browser-only and must throw a
 clear error when rAF is unavailable or when the world was created with
 `headless: true`.
 
@@ -238,7 +245,7 @@ An event emitted during an event system's execution is delivered at step 1 of *t
 ```ts
 interface TimeState {
   tick:          number    // integer, monotonic
-  elapsed:       number    // seconds since world.start() (ms-quantized)
+  elapsed:       number    // seconds since world.startLoop() (ms-quantized)
   delta:         number    // seconds since last tick (raw, unquantized)
   scaledDelta:   number    // ms-quantized; see drift-free rule below
   scale:         number    // 0 = paused; 1 = real-time
@@ -326,7 +333,7 @@ const Config = defineResource<Cfg>('Config', {
 })
 
 world.setResource(Score, 10)
-world.resource(Score)          // → 10
+world.getResource(Score)       // → 10
 world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 ```
 
@@ -344,7 +351,7 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 
 | Mode       | Fires on                                | Sees                                |
 |------------|-----------------------------------------|-------------------------------------|
-| `once`     | `world.start()` (first tick of world)   | initial input/time                  |
+| `once`     | `world.startLoop()` (first tick of world) | initial input/time                |
 | `fixed`    | every `fixedStep` of scaled time        | integrated fixed delta              |
 | `tick`     | every render frame                      | scaled delta                        |
 | `event`    | events buffered from previous tick      | event view                          |
@@ -372,7 +379,7 @@ frames, no unfired `once` systems, no pending component work, and no queued
 events, the RAF loop sleeps.
 It resumes on external `world.emit()`, structural component mutations /
 `markChanged`, input activity through `@domecs/input`, `resume()`, an
-explicit `world.start()`, or a call to `world.requestTick()`.
+explicit `world.startLoop()`, or a call to `world.requestTick()`.
 
 **External wake API (normative, D-4).** External event sources that mutate
 world state from outside a tick — input plugins, WebSocket feeds, custom
@@ -384,14 +391,14 @@ path; reaching into engine-private members (such as the deprecated
 
 ### Headless mode
 
-`createWorld({ headless: true })` disables the realtime driver. `world.start()`
+`createWorld({ headless: true })` disables the realtime driver. `world.startLoop()`
 MUST throw even if the host environment exposes `requestAnimationFrame`;
 `world.step(deltaSeconds)` advances one tick manually.
 `world.stepN(steps)` advances N ticks. Used by tests, AI search, board game replay, server authority.
 
 ### Turn-based mode
 
-Equivalent to headless with a thin driver: `world.turn(action)` emits the action as an event, calls `world.step()`, returns when systems have quiesced.
+Equivalent to headless with a thin driver: `world.turn(action)` emits the action as an event, calls `world.stepOnce()`, returns when systems have quiesced.
 Roguelike default.
 
 **Command result (`action`, normative).** `world.action(type, payload, opts?)` is `turn()` with a structured return — `turn()` stays the void fire-and-forget form. It emits the action event, advances one tick (so the action flushes at step 1 and its handlers run in steps 3–6), then returns `{ accepted, consumedTurn, reason?, events, snapshot? }`:
@@ -570,9 +577,9 @@ interface WorldSnapshot {
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
-### 7.2 Autosave — eventually consistent
+### 7.2 Autosave — eventually consistent (planned; not in v1.0)
 
-Autosave is **not** a repeated sync `snapshot()`. It is an incremental, eventually-consistent writer:
+Autosave has not shipped — v1.0 persistence is explicit `save`/`load`. This section is the locked design for the planned facade. Autosave is **not** a repeated sync `snapshot()`. It is an incremental, eventually-consistent writer:
 
 ```
 per tick:
@@ -595,7 +602,10 @@ Explicit `snapshot()` remains the way to get a globally coherent world-at-T (man
 
 ### 7.3 Migrations
 
+The `createPersistence` facade below (IndexedDB database, per-component codecs) is **planned, not in v1.0** — the shipped surface is the snapshot-version chain described at the end of this section:
+
 ```ts
+// Planned facade — does not exist in v1.0.
 createPersistence(world, {
   database: 'my-domecs-app',
   version:  3,
@@ -631,7 +641,7 @@ This relies on:
 - `world.rand` is the only PRNG used in authoritative systems.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
 - Iteration order of queries is deterministic (archetype order, then entity id).
-- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (`@domecs/math` ships them as a plugin).
+- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
 The inspector can run an authoritative system in a sandbox and detect violations (PRNG, wall-clock, disallowed trig) by monkey-patching.
@@ -817,6 +827,6 @@ Headless mode (§3) makes system tests fast and framework-free.
 
 ## 17. Cross-references
 
-- `critique.md` — design flaws in the README proposal and the corrections applied here.
+- `critique.md` — design flaws in the README proposal and the corrections applied here. (Removed after the v1.0 freeze; retrieve from git history.)
 - `exemplars.md` — six applications whose requirements shaped v0.1.
 - `api.md` — concrete type and function signatures (next document).

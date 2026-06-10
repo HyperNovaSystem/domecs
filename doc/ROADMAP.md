@@ -22,11 +22,13 @@ is the forward-looking design queue.
   and no `DOMECS_LOCAL_DEV` alias branch), copy only tracked files
   (`git ls-files`, not the dir verbatim, so stale `dist/` isn't seeded), and
   strip `.git/` / `node_modules/`. (See also `../FINDINGS.md` §3.)
-- **Browser-durable `Storage` adapter** — `@domecs/persist` ships only
-  `createMemoryStorage`; every browser app hand-rolls a `localStorage`/IndexedDB
-  adapter. Ship `createLocalStorageStorage(prefix?)` (+ async IndexedDB),
-  ideally under a `@domecs/persist/web` entry to keep core DOM-free. (FINDINGS
-  O-1.)
+- **Browser-durable `Storage` adapter + `createPersistence` facade** —
+  `@domecs/persist` ships only `createMemoryStorage`; every browser app
+  hand-rolls a `localStorage`/IndexedDB adapter. Ship
+  `createLocalStorageStorage(prefix?)` (+ async IndexedDB), ideally under a
+  `@domecs/persist/web` entry to keep core DOM-free. (FINDINGS O-1.) On top of
+  that, the planned `createPersistence` facade (IndexedDB database + autosave,
+  SPEC §7.2–7.3) wraps `save`/`load` for the common case.
 - **Input extensions** — beyond the v1.0 raw DOM snapshot: target-relative
   pointer coordinates, hit-tested enter/leave tracking, and high-level action
   mapping, with dedicated tests.
@@ -34,7 +36,8 @@ is the forward-looking design queue.
 ## Larger efforts (new packages / subsystems)
 
 - **First-party framework adapters (Svelte / React)** — out of v1.0 scope
-  (design YAGNI); a post-v1.0 directional item.
+  (design YAGNI); **indefinitely deferred** — efficacy unproven. Revisit only if
+  external users demonstrate a reactivity mapping vanilla integration can't serve.
 - **`@domecs/inspector` maturation + diff snapshots** — build out the inspector
   (the `InspectorView.export()` serializable snapshot shipped in v1.0) and add a
   diff-snapshot ring buffer for time-travel / inspector workflows, once the

@@ -109,4 +109,4 @@ import renames, flag comments for `mountDOM`/`changedOn`, and guarded method ren
 
 ## Coverage matrix
 
-See `doc/phase2-coverage-matrix.md` for per-repo counts across all 8 lockstep consumers.
+The per-repo coverage matrix (`doc/phase2-coverage-matrix.md`, counts across all 8 lockstep consumers) was removed with the other executed plan docs after the v1.0 freeze — retrieve from git history.

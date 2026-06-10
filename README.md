@@ -6,7 +6,7 @@ A high-performance ECS game engine that renders to the DOM.
 Built for games whose complexity lives in their *systems and state* — inventories, dialogue trees, economies, crafting graphs, base-builders, roguelikes, idle/incremental, tactics, management sims — rather than in their pixels.
 
 Sprites in CSS.
-State in IndexedDB.
+State in serializable snapshots.
 Logic in plain functions over plain data.
 
 ---
@@ -43,11 +43,11 @@ It is trying to be the best engine in the world for games where the **model is t
 - **Deterministic scheduling** — tick / fixed-step / once / event-driven systems with explicit priority.
 - **Buffered event bus** — events emitted during a tick are flushed at the start of the next tick, so frame order never depends on system order.
 - **Retained-mode DOM renderer** — entities are invisible until they match a registered view; views mount / update / unmount per slot and diff only changed components.
-- **Sprite system** — CSS sprite sheets, animated frames, z-ordering, transforms, all driven by components.
-- **IndexedDB persistence** — first-class save/load, autosave, multi-slot, schema migrations, snapshot/restore for undo.
+- **Sprite-friendly views** — CSS sprite sheets, z-ordering, and transforms driven by components through DOM views. (A dedicated `@domecs/sprites` frame-animation package is planned.)
+- **Snapshot persistence** — Result-typed `save`/`load` over pluggable storage, multi-slot, schema migrations, snapshot history for undo/redo. (An IndexedDB + autosave facade is planned.)
 - **Input collector** — keyboard, mouse, pointer, touch, gamepad normalized into a per-tick input snapshot.
 - **Plugin architecture** — physics, pathfinding, dialogue, inspector, time-travel debugger all attach as plugins.
-- **Framework-agnostic** — vanilla by default; optional adapters for Svelte 5 reactive worlds and React via `useSyncExternalStore`.
+- **Framework-agnostic** — vanilla by default; integrate any framework from user code via `World.signals` and `snapshot()`. (First-party Svelte/React adapters are indefinitely deferred — value unproven.)
 - **TypeScript-first** — fully typed component schemas, query inference, system context.
 
 ---
@@ -85,7 +85,7 @@ npm install @domecs/core @domecs/dom @domecs/input
 Optional packages:
 
 ```bash
-npm install @domecs/persist     # IndexedDB save/load
+npm install @domecs/persist     # snapshot save/load + migrations
 npm install @domecs/inspector   # in-browser entity/component debugger
 ```
 
@@ -172,7 +172,7 @@ world.spawn([
   entry(Sprite,   { sheet: 'hero.png', frame: 0 }),
 ])
 
-world.start()
+world.startLoop()
 ```
 
 Entities are invisible by default. An entity mounts DOM only when it matches a registered view's query — here, the `sprite` view binds to `Sprite` and projects one element into the `stage` slot. An entity can project zero, one, or many views across slots (`stage`, `hud`, `portal`, `chrome`), or none at all.
@@ -209,20 +209,20 @@ See [`doc/error-handling.md`](doc/error-handling.md) for the full cookbook (retr
 ## Persistence
 
 ```ts
-import { createPersistence } from '@domecs/persist'
+import { save, load, createMemoryStorage } from '@domecs/persist'
 
-const persist = createPersistence(world, {
-  database: 'my-game',
-  version:  3,
-  migrate:  (from, to, snapshot) => snapshot, // upgrade old saves
-})
+const storage = createMemoryStorage() // or any object implementing Storage
 
-await persist.save('slot-1')
-await persist.load('slot-1')
-persist.autosave({ everyMs: 30_000 })
+const saved = save(world, storage, 'slot-1', { meta: { label: 'checkpoint' } })
+if (!saved.ok) console.error(saved.error)
+
+const loaded = load(world, storage, 'slot-1') // migrates old saves, then restores
+if (!loaded.ok) console.error(loaded.error)
 ```
 
-Saves are entity snapshots — components only, no DOM, no closures. Load rebuilds the world; the renderer mounts everything in a single pass.
+Saves are entity snapshots — components only, no DOM, no closures. Load migrates the envelope to the current `SNAPSHOT_VERSION` and rebuilds the world; the renderer mounts everything in a single pass. `createSnapshotHistory` adds a bounded undo/redo ring.
+
+A higher-level `createPersistence` facade (IndexedDB adapter, autosave) is planned — see `doc/ROADMAP.md`.
 
 ---
 
@@ -236,10 +236,10 @@ Saves are entity snapshots — components only, no DOM, no closures. Load rebuil
 │                   Systems · Events · Time   │
 ├─────────────────────────────────────────────┤
 │  @domecs/dom      Retained DOM renderer     │
-│  @domecs/persist  IndexedDB snapshots       │
+│  @domecs/persist  Snapshot save/load        │
 │  @domecs/inspector  Devtools panel          │
 ├─────────────────────────────────────────────┤
-│  Browser — DOM, CSS, IndexedDB, Pointer API │
+│  Browser — DOM, CSS, Storage, Pointer API   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -299,15 +299,25 @@ Or use DOMECS for the *menus* and embed a canvas for the action.
 
 ## Roadmap
 
+Shipped in v1.0.0:
+
 - [x] Project scaffold
-- [ ] Core engine (World, Entity, System, Query, Events, Time, Input)
-- [ ] DOM renderer with sprite components
-- [ ] IndexedDB persistence with migrations
-- [ ] Inspector / time-travel debugger
-- [ ] Svelte 5 reactive adapter
-- [ ] React adapter
-- [ ] Web Worker system host (off-main-thread simulation)
+- [x] Core engine (World, Entity, System, Query, Events, Time, Input)
+- [x] DOM renderer (retained-mode views, slots, change-gated updates)
+- [x] Snapshot persistence with schema migrations (`@domecs/persist`)
+- [x] Inspector / time-travel debugger (`@domecs/inspector`)
+
+Planned:
+
+- [ ] `@domecs/sprites` — sprite-sheet frame animation package
+- [ ] IndexedDB + autosave persistence facade (`createPersistence`)
+- [ ] `@domecs/worker` — Web Worker system host (off-main-thread simulation)
 - [ ] Networked rollback (long-term)
+
+Indefinitely deferred (value unproven):
+
+- Svelte 5 reactive adapter
+- React adapter
 
 ---
 

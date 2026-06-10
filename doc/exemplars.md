@@ -31,7 +31,7 @@ ASCII-art or tile-sprite dungeon crawler. Turn-based. Procedurally generated 128
 
 ### Required features
 
-- Non-RAF scheduling — a `step()` mode where `world.step()` advances exactly one tick.
+- Non-RAF scheduling — a step mode advancing exactly one tick (shipped as `world.stepOnce()`).
 - **Unrendered entities** — 16,000+ tile entities must not mount DOM. Renderer must key off a `Visible` or `OnScreen` component, not "does entity have a Sprite".
 - Deterministic PRNG — a seed defines the entire run; leaderboards verify runs.
 - Snapshot/restore for undo in dev mode; for save/load in prod.
@@ -213,6 +213,11 @@ Live-editing tool for DOMECS games. Entity tree, component inspector, prefab lib
 ---
 
 ## Requirement intersection
+
+> **Note on phase labels:** `v0.1`/`v0.2`/`v0.3` below are the original pre-1.0 planning
+> milestones, retained as history — they are not package versions. Everything marked
+> `v0.1` shipped in v1.0.0, as did several later-phase rows (reactive systems, schema
+> reflection, snapshot ring buffer); see `ROADMAP.md` for what remains open.
 
 Collating the six, the core must ship:
 
