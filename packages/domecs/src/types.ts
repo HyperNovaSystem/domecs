@@ -93,11 +93,15 @@ export interface ResourceDescriptor {
  *. Defined with {@link defineResource}; read/written via
  * `world.getResource(type)` / `world.setResource(type, value)`. The distinct
  * brand (`__resourceTag`) keeps resources from being passed where a
- * `ComponentType` is expected and vice-versa.
+ * `ComponentType` is expected and vice-versa. The brand's function type
+ * carries `T` so it is load-bearing (no phantom type parameter — consumers
+ * compiling engine source under `noUnusedParameters` would fail TS6133) and
+ * resources of different `T` are not mutually assignable. Purely type-level:
+ * `defineResource` never materializes the property at runtime.
  */
 export interface ResourceType<T, Name extends string = string> {
   readonly name: Name
-  readonly [__resourceTag]: symbol
+  readonly [__resourceTag]: (value: T) => void
 }
 
 /** Extract a resource's value type from its `ResourceType`. */
