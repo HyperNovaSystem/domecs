@@ -180,8 +180,29 @@ function commit(state: ViewState): void {
   }
   state.pendingDestroy.clear()
 
+  // O-16: an entity removed and re-added within one commit window (e.g. a
+  // same-tick remove-all/re-add projection) arrives here with its node still
+  // mounted — onAdd cancelled the pending destroy. The double-create guard
+  // must not silently drop it: the node's content predates the re-add and the
+  // OnChanged gate never fires for it (a re-add is an Added mark, not a
+  // Changed mark). Repaint it in the update phase below, or rebuild the node
+  // outright when create() is the only painter.
+  let readded: Set<Entity> | null = null
   for (const [id, view] of state.pendingCreate) {
-    if (state.mounted.has(id)) continue
+    const existing = state.mounted.get(id)
+    if (existing) {
+      if (state.def.update) {
+        existing.view = view
+        ;(readded ??= new Set()).add(id)
+      } else {
+        state.def.destroy?.(existing.el, existing.view)
+        existing.el.remove()
+        const el = state.def.create(view)
+        state.slotEl.appendChild(el)
+        state.mounted.set(id, { el, view })
+      }
+      continue
+    }
     const el = state.def.create(view)
     state.slotEl.appendChild(el)
     state.mounted.set(id, { el, view })
@@ -197,9 +218,9 @@ function commit(state: ViewState): void {
         rec.view = view
         state.def.update(rec.el, view)
       }
-    } else if (changed.size > 0) {
+    } else if (changed.size > 0 || readded !== null) {
       for (const view of state.query.entities) {
-        if (!changed.has(view.id)) continue
+        if (!changed.has(view.id) && !readded?.has(view.id)) continue
         const rec = state.mounted.get(view.id)
         if (!rec) continue
         rec.view = view
