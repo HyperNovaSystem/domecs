@@ -84,9 +84,10 @@ if (!mounted.ok) {
 - Each view has a `query`; matching entities get mounted into the view's slot.
 - `create(entity)` returns the element for a matching entity.
 - `update(el, entity)` runs during render commits. By default it is gated
-  on `OnChanged(T)` for every `Has(T)` leaf in the view's `query`. Pass an
-  explicit `changedOn` array to narrow the gate, or `changedOn: []` to
-  redraw every tick (e.g. for time-driven animations).
+  on `OnChanged(T)` for every `Has(T)` leaf in the view's `query`. Pass
+  `changedOn: { mode: 'explicit', types: [Position] }` to narrow the gate,
+  or `changedOn: { mode: 'legacy' }` to redraw every tick (e.g. for
+  time-driven animations).
 - `destroy(el, entity)` is called before an element is removed.
 - `teardown()` uninstalls the renderer plugin and removes mounted elements.
 

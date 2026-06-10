@@ -1,6 +1,6 @@
 import type { Entity } from './types.js'
 
-// v2 (review #16) added the optional `resources` field. The persist layer's
+// v2 added the optional `resources` field. The persist layer's
 // built-in 1->2 migration upgrades older saves (a v1 snapshot simply has no
 // resources).
 export const SNAPSHOT_VERSION = 2
@@ -26,7 +26,7 @@ export interface WorldSnapshot {
     readonly components: Record<string, unknown>
   }>
   /**
-   * World-singleton resources, keyed by resource name (review #16, v2).
+   * World-singleton resources, keyed by resource name (v2).
    * Omitted entirely when the world has no materialized resources. Values are
    * deep-cloned at snapshot time, like component values.
    */

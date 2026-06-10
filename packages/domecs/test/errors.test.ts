@@ -312,6 +312,68 @@ describe('BETTER_ERRORS Phase 4 — strictReturns dev-mode guardrail', () => {
     w.step(0.016)
     expect(warn).not.toHaveBeenCalled()
   })
+
+  describe('per-fault validation (strict mode only)', () => {
+    it('warns once and skips a fault entry missing error.kind', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const w = createWorld({ strictReturns: true })
+      const entries: unknown[] = []
+      w.signals.faultRaised.subscribe((f) => entries.push(f))
+      // `kind` typo'd as `knid` — error.kind resolves to undefined.
+      const malformed = { error: { knid: 'oops' }, recoverable: true }
+      w.system('badFault', { schedule: 'tick' }, () => ({
+        errors: [malformed],
+      }) as unknown as void)
+      w.step(0.016)
+      w.step(0.016)
+      expect(warn).toHaveBeenCalledTimes(1)
+      const [msg] = warn.mock.calls[0]!
+      expect(String(msg)).toContain('"badFault"')
+      expect(String(msg)).toContain('error.kind')
+      expect(entries).toHaveLength(0) // malformed entry not emitted
+    })
+
+    it('warns once and skips a fault entry with non-boolean recoverable', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const w = createWorld({ strictReturns: true })
+      const malformed = { error: { kind: 'plugin/x', retryable: false }, recoverable: 'yes' }
+      w.system('badRecoverable', { schedule: 'tick' }, () => ({
+        errors: [malformed],
+      }) as unknown as void)
+      w.step(0.016)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).toContain('recoverable')
+    })
+
+    it('well-formed faults in the same result still process when a sibling is malformed', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const w = createWorld({ strictReturns: true })
+      const entries: unknown[] = []
+      w.signals.faultRaised.subscribe((f) => entries.push(f))
+      const good = { error: { kind: 'plugin/y', retryable: false }, recoverable: true }
+      const bad = { error: {}, recoverable: true }
+      w.system('mixed', { schedule: 'tick' }, () => ({
+        errors: [bad, good],
+      }) as unknown as void)
+      w.step(0.016)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(entries).toHaveLength(1)
+    })
+
+    it('does not validate faults when strictReturns is off (permissive path unchanged)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const w = createWorld()
+      const entries: unknown[] = []
+      w.signals.faultRaised.subscribe((f) => entries.push(f))
+      const malformed = { error: { knid: 'oops' }, recoverable: true }
+      w.system('permissive', { schedule: 'tick' }, () => ({
+        errors: [malformed],
+      }) as unknown as void)
+      w.step(0.016)
+      expect(warn).not.toHaveBeenCalled()
+      expect(entries).toHaveLength(1) // permissive: still emitted as before
+    })
+  })
 })
 
 describe('BETTER_ERRORS Phase 5 — retryable, repair hints, ERROR_KINDS', () => {

@@ -442,6 +442,20 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
    **`reactsTo` contract (F-5, normative).** A reactive system's `reactsTo` query MUST contain at least one change-detection node (`OnAdded`, `OnRemoved`, `OnChanged`, or `OnChangedResource`), optionally composed with `Has` / `Not` / `And` / `Or` / `Where` as filters. A `reactsTo` query composed entirely of structural predicates (e.g. `Has(Player)`) is a contract violation and engine implementations MUST reject it at `world.system(...)` registration time with a thrown error.
 
    **Resource-gated reactive fire (normative).** A `reactsTo` query whose only change-detection node is `OnChangedResource(R)` and that carries no `Has` leaf is a *world-level* trigger: it fires whenever `R` changed, even in an empty world, with `ctx.entities` empty. When such a query also carries a `Has(T)` leaf (e.g. `And(Has(T), OnChangedResource(R))`) it is entity-scoped and fires with the `T` entities on `R`-change ticks — and does not fire in a world with no `T`, matching the structural semantics of `OnChangedResource` in §2.4. Rationale: reactive semantics are edge-triggered ("fire when the query result changes"); a structural-only query has no tick-scoped edge, so the only well-defined behavior would be level-triggered ("fire every tick while non-empty"), which is what `tick` + `enabled: () => q.size > 0` already expresses. The change-detection requirement makes the fire-on-change contract intrinsic to the query rather than dependent on user convention.
+
+   Implementation note: structurally, `OnChangedResource` is neutral (it constrains *when*, not *which entities*), so the pure-resource form has zero structural members and needs a dedicated fallback path in the scheduler — entity-scoped and world-level resource reactions are evaluated differently. Both forms are pinned by tests (`resources.test.ts`, "ChangedResource — reactive gating"); changes to query evaluation must keep both green.
+
+   ```ts
+   // World-level: fires once per Config-change tick, ctx.entities === [].
+   world.system('onConfig', { schedule: 'reactive', reactsTo: OnChangedResource(Config) },
+     (ctx) => applyConfig(ctx.world.getResource(Config)))
+
+   // Entity-scoped: fires on Config-change ticks with the matching Hud
+   // entities; never fires while no entity has Hud.
+   world.system('hudRescale', { schedule: 'reactive',
+     reactsTo: And(Has(Hud), OnChangedResource(Config)) },
+     (ctx) => { for (const e of ctx.entities) rescale(e) })
+   ```
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
 8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
 
@@ -497,18 +511,21 @@ Renderer commits are **batched** per slot. One DOM write per element per tick, r
 **Update gating rule (normative, P-3).** A view's `update` callback is gated
 by a per-view set of *redraw triggers*:
 
-1. If `ViewDef.changedOn` is **omitted** (default), the renderer derives
-   the set from every `Has(T)` leaf in the view's `query` — explicitly
-   negated branches (`Not(...)`) are excluded. A view over
-   `[Position, Velocity]` thus auto-redraws when either component is
+`ViewDef.changedOn` is a discriminated union
+(`{ mode: 'auto' } | { mode: 'legacy' } | { mode: 'explicit'; types: [...] }`):
+
+1. If `ViewDef.changedOn` is **omitted** (default) or `{ mode: 'auto' }`,
+   the renderer derives the set from every `Has(T)` leaf in the view's
+   `query` — explicitly negated branches (`Not(...)`) are excluded. A view
+   over `[Position, Velocity]` thus auto-redraws when either component is
    marked changed.
-2. If `ViewDef.changedOn` is an **explicit empty array** (`changedOn: []`),
-   the renderer falls back to the legacy "redraw every tick" behaviour.
-   Useful for time-driven animations whose view depends on `time.elapsed`
-   rather than component identity.
-3. If `ViewDef.changedOn` is an **explicit non-empty array**, redraws are
-   gated on exactly that set, ignoring whatever the query implies. Used
-   for finer-grained narrowing.
+2. If `ViewDef.changedOn` is **`{ mode: 'legacy' }`**, the renderer falls
+   back to the legacy "redraw every tick" behaviour. Useful for time-driven
+   animations whose view depends on `time.elapsed` rather than component
+   identity.
+3. If `ViewDef.changedOn` is **`{ mode: 'explicit', types: [Position] }`**,
+   redraws are gated on exactly that set, ignoring whatever the query
+   implies. Used for finer-grained narrowing.
 
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
@@ -571,7 +588,7 @@ interface WorldSnapshot {
 
 `SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
 
-`snapshot()` is a **synchronous**, coherent-world-at-tick-T structural clone. It is the explicit-save / export / determinism-test path. No transient components are included. The object is safe to `JSON.stringify` iff all component values are JSON-serializable; otherwise a structured-clone codec applies. At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
+`snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
 `snapshot(options?)` accepts `SnapshotOptions`. `pruneEmptyEntities` (default `false`) drops entities whose serializable bag is empty once transient components are excluded — transient-only and bare `spawn()` entities. The default records every alive entity so id/archetype membership round-trips exactly. `@domecs/persist`'s `pruneTransientOnlyEntities()` plugin applies the same prune on the no-arg `save()` path via `onSnapshot`.
 

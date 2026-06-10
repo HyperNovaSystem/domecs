@@ -177,7 +177,7 @@ export function Where<T>(
 }
 /**
  * Tick-gate that is true on ticks where the world resource `resource` changed
- * (review #16). Structurally neutral — it constrains *when* a query matches,
+ *. Structurally neutral — it constrains *when* a query matches,
  * not *which* entities. Bare `OnChangedResource(R)` matches the whole world on
  * change ticks; compose with `And(Has(X), OnChangedResource(R))` to scope the
  * reaction to `X` entities. Reactive only: rejected by the one-shot selectors.
@@ -211,7 +211,7 @@ export function treeHas(
 
 /**
  * Collect the names of every resource referenced by a `OnChangedResource(R)`
- * leaf anywhere in the tree (review #16). Used by the reactive scheduler's
+ * leaf anywhere in the tree. Used by the reactive scheduler's
  * resource-only fallback to fire a `reactsTo: OnChangedResource(R)` system in an
  * entity-empty world where the structural member count is zero.
  */

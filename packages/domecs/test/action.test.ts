@@ -155,6 +155,56 @@ describe('world.action — turn-based command result (#17)', () => {
     expect(w.time.delta).toBe(0.016)
   })
 
+  describe('non-positive dt (heartbeat — action not processed)', () => {
+    it('does not report the unprocessed action event as a downstream event', () => {
+      const w = createWorld()
+      const r = w.action(Move, { entity: 0, dx: 1, dy: 0 }, { dt: 0 })
+      expect(r.events).toEqual([])
+    })
+
+    it('defaults to accepted:false / consumedTurn:false with a reason', () => {
+      const w = createWorld()
+      const r = w.action(Move, { entity: 0, dx: 1, dy: 0 }, { dt: 0 })
+      expect(r.accepted).toBe(false)
+      expect(r.consumedTurn).toBe(false)
+      expect(r.reason).toMatch(/heartbeat/)
+    })
+
+    it('does not invoke the resolver (there was no tick to adjudicate)', () => {
+      const w = createWorld()
+      let called = 0
+      const r = w.action(Move, { entity: 0, dx: 1, dy: 0 }, {
+        dt: -1,
+        resolve: () => {
+          called++
+          return { accepted: true }
+        },
+      })
+      expect(called).toBe(0)
+      expect(r.accepted).toBe(false)
+    })
+
+    it('leaves the action pending: the next real tick delivers it', () => {
+      const w = createWorld()
+      const seen: number[] = []
+      w.system('actor', { schedule: 'event', triggers: [Move] }, (ctx) => {
+        for (const m of ctx.events.of(Move)) seen.push(m.entity)
+      })
+      const startTick = w.time.tick
+      w.action(Move, { entity: 9, dx: 1, dy: 0 }, { dt: 0 })
+      expect(seen).toEqual([]) // heartbeat: no systems ran
+      expect(w.time.tick).toBe(startTick) // no tick advanced
+      w.stepOnce()
+      expect(seen).toEqual([9]) // the buffered action flushed on the real tick
+    })
+
+    it('still honors snapshot:true on a heartbeat', () => {
+      const w = createWorld()
+      const r = w.action(Move, { entity: 0, dx: 0, dy: 0 }, { dt: 0, snapshot: true })
+      expect(r.snapshot).toBeDefined()
+    })
+  })
+
   it('turn() stays void', () => {
     const w = createWorld()
     const ret = w.turn(Move, { entity: 0, dx: 1, dy: 0 }) as unknown

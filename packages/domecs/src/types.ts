@@ -28,7 +28,7 @@ export interface ComponentOptions<T> {
   transient?: boolean
   validate?: (value: T) => true | string
   /**
-   * Optional field-level schema for reflection (review #14). Lets dev tools
+   * Optional field-level schema for reflection. Lets dev tools
    * render edit widgets for this component from the world alone via
    * `world.describeComponent(type)` — no hand-rolled per-app schema registry.
    * When omitted, `describeComponent` infers field kinds from `defaults`.
@@ -36,7 +36,7 @@ export interface ComponentOptions<T> {
   schema?: ComponentSchema
 }
 
-/** Field kinds a reflection widget can render (review #14). */
+/** Field kinds a reflection widget can render. */
 export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
 
 /**
@@ -90,7 +90,7 @@ export interface ResourceDescriptor {
 
 /**
  * A world-singleton value, addressed by identity rather than per-entity
- * (review #16). Defined with {@link defineResource}; read/written via
+ *. Defined with {@link defineResource}; read/written via
  * `world.getResource(type)` / `world.setResource(type, value)`. The distinct
  * brand (`__resourceTag`) keeps resources from being passed where a
  * `ComponentType` is expected and vice-versa.

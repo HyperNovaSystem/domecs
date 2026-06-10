@@ -135,7 +135,7 @@ export interface World {
    */
   setInput(snap: InputSnapshot): void
   /**
-   * Public idle-driver wake (D-4). External event sources — input plugins,
+   * Public idle-driver wake. External event sources — input plugins,
    * WebSocket feeds, custom drivers — call `world.requestTick()` after they
    * mutate world state from outside a tick so the idle RAF loop schedules a
    * frame. No-op when the driver is not running, when `idle: false`, or when
@@ -150,7 +150,7 @@ export interface World {
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
   /**
-   * Read a world-singleton resource (review #16). Returns the current value,
+   * Read a world-singleton resource. Returns the current value,
    * lazily materializing the declared default on first read, or `undefined`
    * when no default was declared and nothing has been set. The returned object
    * is the live singleton — mutating it mutates the resource.
@@ -213,7 +213,7 @@ export interface World {
   archetype(entity: Entity): ComponentType<unknown>[]
   /**
    * Reflect a component's name, transient flag, default value, and field
-   * schema (review #14). `fields` resolves to the explicit `schema.fields`
+   * schema. `fields` resolves to the explicit `schema.fields`
    * when one was declared, otherwise it is inferred from `defaults` by runtime
    * `typeof`. Lets dev tools build edit widgets from the world alone — no
    * per-app schema registry. Works on any `ComponentType` without prior
@@ -295,7 +295,7 @@ export interface World {
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
-   * Turn-based command with a structured result (#17). Emits `type`, advances
+   * Turn-based command with a structured result. Emits `type`, advances
    * one tick (like `turn()`), then reports `{ accepted, consumedTurn, reason,
    * events, snapshot? }`. `events` are the events emitted *during* the tick
    * (the command's downstream effects — the action event itself was flushed
@@ -327,6 +327,10 @@ export interface WorldOptions {
    * Dev-mode guardrail (BETTER_ERRORS Phase 4). When true, a system that
    * returns a non-void value not shaped like `SystemResult` (e.g. typo'd
    * `{ erorrs: [...] }`) logs a one-shot console.warn naming the system.
+   * Also validates each fault entry's shape
+   * (`{ error: { kind: string, ... }, recoverable: boolean }`) — malformed
+   * entries are warned about (one-shot per system) and skipped instead of
+   * producing a vague entry with an undefined kind.
    * Off by default — production code should not pay the shape-check cost.
    * See doc/error-handling.md.
    */
@@ -376,7 +380,10 @@ export type ActionResolver = (ctx: {
 export interface ActionOptions {
   /** dt forwarded to the underlying `step`. Omit for a turn-based tick
    *  advance (like `turn()`); a non-positive explicit dt is a heartbeat and
-   *  will not process the action (see §4.0). */
+   *  will not process the action (see §4.0) — the result is then
+   *  `{ accepted: false, consumedTurn: false, events: [] }` with a reason,
+   *  the resolver is not invoked, and the action stays buffered for the
+   *  next real tick. */
   dt?: number
   /** Compute accepted/consumedTurn/reason from the tick's events + world. */
   resolve?: ActionResolver
@@ -503,7 +510,7 @@ export function createWorld(options: WorldOptions = {}): World {
   const pendingChanged = new Map<string, Set<Entity>>()
   let inTick = false
 
-  // World-singleton resources (review #16). `resources` holds materialized
+  // World-singleton resources. `resources` holds materialized
   // values by name; `resourceRegistry` guards against two ResourceType objects
   // colliding on a name (mirrors typeRegistry). Resource-change tracking mirrors
   // the component change sets: in-tick marks land in `tickResourcesChanged`,
@@ -888,10 +895,32 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
+  // strictReturns-only per-fault shape check: the permissive default trusts
+  // typed callers, but a typo'd entry (e.g. `{ knid }`, `recoverable: 'yes'`)
+  // would otherwise surface downstream as a vague entry with an undefined kind.
+  function isWellFormedFault(fault: unknown): boolean {
+    if (fault === null || typeof fault !== 'object') return false
+    const f = fault as { error?: unknown; recoverable?: unknown }
+    if (typeof f.recoverable !== 'boolean') return false
+    if (f.error === null || typeof f.error !== 'object') return false
+    return typeof (f.error as { kind?: unknown }).kind === 'string'
+  }
+
   function handleSystemResult(s: CompiledSystem, result: SystemResult): void {
     const errors = result.errors
     if (!errors || errors.length === 0) return
     for (const fault of errors) {
+      if (strictReturns && !isWellFormedFault(fault)) {
+        if (!warnedSystems.has(s.id)) {
+          warnedSystems.add(s.id)
+          const f = fault as { error?: { kind?: unknown }; recoverable?: unknown } | null
+          // eslint-disable-next-line no-console
+          console.warn(
+            `domecs: system "${s.name}" returned a malformed fault entry — expected { error: { kind: string, ... }, recoverable: boolean } but got error.kind: ${typeof f?.error?.kind}, recoverable: ${typeof f?.recoverable}; the entry is skipped. See doc/error-handling.md.`,
+          )
+        }
+        continue
+      }
       const entry: FaultEntry = buildFaultEntry(s.name, fault)
       if (fault.entity === undefined) {
         sigFaultRaised.emit({ source: s.name, tick: time.tick, entry })
@@ -1599,18 +1628,30 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
-      // #17: a typed turn() that surfaces a structured command result. Emit the
+      // A typed turn() that surfaces a structured command result. Emit the
       // action, advance one tick (the action flushes at step 1 and its handlers
       // run during steps 3–6), then read back the events those handlers emitted
       // — they are now buffered as "pending" for next tick, so bus.pendingEvents
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
       bus.emit(type, payload)
+      const heartbeat = opts.dt !== undefined && opts.dt <= 0
       opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
-      const events = bus.pendingEvents()
-      const verdict = opts.resolve
-        ? opts.resolve({ events, world })
-        : { accepted: true, consumedTurn: true }
+      // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
+      // is still pending — not consumed, not processed — so it must not be
+      // reported as a downstream event, the resolver has no tick to
+      // adjudicate, and the command cannot have been accepted. The action
+      // stays buffered and flushes on the next real tick.
+      const events = heartbeat ? [] : bus.pendingEvents()
+      const verdict = heartbeat
+        ? {
+            accepted: false,
+            consumedTurn: false,
+            reason: 'heartbeat (dt <= 0): action not processed; it remains pending for the next tick',
+          }
+        : opts.resolve
+          ? opts.resolve({ events, world })
+          : { accepted: true, consumedTurn: true }
       const consumedTurn = verdict.consumedTurn ?? verdict.accepted
       const result: ActionResult = {
         accepted: verdict.accepted,
@@ -1859,10 +1900,6 @@ export function createWorld(options: WorldOptions = {}): World {
     },
   }
 
-  // D-4: `__wake` is the deprecated alias for `world.requestTick()`. Kept
-  // for one release cycle so any external plugins still on the private side
-  // channel continue to compile. Remove after v0.2.
-  ;(world as World & { __wake?: () => void }).__wake = wakeDriver
   scheduler = createScheduler(world.query.bind(world), fixedStep)
   plugins = createPluginRegistry(world)
 

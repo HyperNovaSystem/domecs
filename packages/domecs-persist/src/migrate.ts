@@ -18,7 +18,7 @@ export type MigrationMap = ReadonlyMap<number, Migration>
  * Framework-supplied migration steps, applied as the floor beneath any
  * user-supplied chain in {@link load} (user keys win on collision).
  *
- * - `1 → 2` (review #16): resources were added to `WorldSnapshot` at v2. A v1
+ * - `1 → 2`: resources were added to `WorldSnapshot` at v2. A v1
  *   snapshot simply lacks them, so the step is a pure version bump —
  *   `world.restore` treats the absent `resources` as an empty set.
  */

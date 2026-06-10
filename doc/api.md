@@ -199,8 +199,12 @@ interface World {
   // are the events emitted during the action's tick (downstream effects; the
   // action event itself was consumed at step 1). The verdict comes from
   // opts.resolve (default { accepted: true, consumedTurn: true }; an omitted
-  // consumedTurn mirrors accepted). action always advances one tick;
-  // consumedTurn is a reported value, not engine-enforced. SPEC §3.
+  // consumedTurn mirrors accepted). action advances one tick — except with an
+  // explicit opts.dt <= 0 (F-6 heartbeat): the action is NOT processed and
+  // stays buffered for the next real tick; the result is then
+  // { accepted: false, consumedTurn: false, events: [] } with a reason, and
+  // opts.resolve is not invoked. consumedTurn is a reported value, not
+  // engine-enforced. SPEC §3.
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
 
   // entities
@@ -348,7 +352,8 @@ interface ActionVerdict {
 }
 
 interface ActionOptions {
-  dt?:       number                      // forwarded to step(); omit for a turn-based advance
+  dt?:       number                      // forwarded to step(); omit for a turn-based advance.
+                                         // dt <= 0 = heartbeat: action not processed (see above)
   resolve?:  ActionResolver
   snapshot?: boolean | SnapshotOptions   // true = defaults; object = forwarded options
 }
@@ -835,18 +840,26 @@ interface MountHandle {
 // ViewDef carries optional typed `Fields` so tuple-form queries thread
 // component value types through to `create` / `update` / `destroy`.
 //
-// `changedOn` semantics (SPEC §5.3 update-gating rule, P-3):
-//   - omitted (default): redraws are gated by `OnChanged(T)` for every
-//     `Has(T)` leaf in `query`. A view over `[Position, Velocity]`
-//     auto-redraws when either component is marked changed.
-//   - `changedOn: []` (explicit empty): legacy "redraw every tick". Useful
-//     for time-driven animations where the view depends on `time.elapsed`
-//     rather than component identity.
-//   - `changedOn: [Type, ...]`: explicit gate. Overrides the auto-derive.
+// `changedOn` semantics (SPEC §5.3 update-gating rule, P-3) — a
+// discriminated union, NOT an array:
+//   - omitted (default) or `{ mode: 'auto' }`: redraws are gated by
+//     `OnChanged(T)` for every `Has(T)` leaf in `query`. A view over
+//     `[Position, Velocity]` auto-redraws when either component is marked
+//     changed.
+//   - `{ mode: 'legacy' }`: "redraw every tick". Useful for time-driven
+//     animations where the view depends on `time.elapsed` rather than
+//     component identity.
+//   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
+//     those component types. Overrides the auto-derive.
+type ChangedOn =
+  | { readonly mode: 'auto' }
+  | { readonly mode: 'legacy' }
+  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>> }
+
 interface ViewDef<Fields = Record<string, unknown>> {
   slot:         string
   query:        QueryShorthand
-  changedOn?:   readonly ComponentType<unknown>[]
+  changedOn?:   ChangedOn
   create(entity: EntityView<Fields>): HTMLElement
   update?(el: HTMLElement, entity: EntityView<Fields>): void
   destroy?(el: HTMLElement, entity: EntityView<Fields>): void
@@ -1077,7 +1090,7 @@ interface InspectorSnapshot {
 
 ## Framework integration
 
-v1.0 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a structurally-cloneable handoff suitable for any framework's external store.
+v1.0 ships no first-party framework adapters (see SPEC §11).  Integrate from user code by subscribing to `World.signals` and calling `world.markChanged(entity, type)` from systems that mutate components.  `snapshot()` is a plain-data (JSON-oriented) handoff suitable for any framework's external store (see SPEC §7 for the plain-data contract).
 
 ---
 

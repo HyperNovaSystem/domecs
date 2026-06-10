@@ -44,9 +44,8 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
   return {
     name: '@domecs/input',
     install(world: World): Result<PluginHandle, DomecsError> {
-      // D-4: external event sources rouse the idle driver via the public
-      // `world.requestTick()`. The plugin used to reach into a private
-      // `world.__wake` symbol; that path is gone.
+      // External event sources rouse the idle driver via the public
+      // `world.requestTick()`.
       const wake = (): void => world.requestTick()
       const doc = typeof document !== 'undefined' ? document : undefined
       const win = typeof window !== 'undefined' ? window : undefined

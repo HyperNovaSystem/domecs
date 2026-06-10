@@ -95,7 +95,7 @@ export function getErrorRepairHint(e: DomecsError): string {
  * Render a {@link DomecsError} as a single human-readable line for logs,
  * toasts, and inspector UI. Built on {@link match}, so adding a variant to
  * the union breaks this at compile time until a case is supplied — no
- * silent `[object Object]` fallthrough. Pairs with `tapErr` (review #5):
+ * silent `[object Object]` fallthrough. Pairs with `tapErr`:
  * `tapErr(world.use(p), (e) => console.warn(describeError(e)))`.
  */
 export function describeError(e: DomecsError): string {

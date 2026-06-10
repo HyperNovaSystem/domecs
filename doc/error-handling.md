@@ -277,7 +277,7 @@ When you add a new `DomecsError` variant:
 
 ## Dev-mode guardrail
 
-`createWorld({ strictReturns: true })` enables a one-time-per-system `console.warn` when a system returns a non-`void`, non-`SystemResult` value (e.g. accidentally returning a number from a for-each). Default off — production worlds skip the runtime check; tests and dev builds opt in.
+`createWorld({ strictReturns: true })` enables a one-time-per-system `console.warn` when a system returns a non-`void`, non-`SystemResult` value (e.g. accidentally returning a number from a for-each). It also validates each fault entry's shape — every fault must be `{ error: { kind: string, ... }, recoverable: boolean }`; a malformed entry (typo'd `kind`, string `recoverable`) is warned about and skipped rather than producing a vague `FaultEntry` with an undefined kind. Default off — production worlds skip the runtime checks and trust typed callers; tests and dev builds opt in.
 
 ```ts
 const world = createWorld({ strictReturns: true })
