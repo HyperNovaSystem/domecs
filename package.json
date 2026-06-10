@@ -15,7 +15,7 @@
     "api:check": "node --test test/api-surface.test.mjs",
     "doctest": "node scripts/doctest.mjs",
     "doctest:check": "node --test test/doctest.test.mjs",
-    "publish:npm": "pnpm -r --filter './packages/*' build && pnpm -r --filter './packages/*' publish --access public",
+    "publish:npm": "pnpm -r --filter \"@domecs/*\" build && pnpm -r --filter \"@domecs/*\" publish --access public",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
   },
   "devDependencies": {
