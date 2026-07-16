@@ -14,6 +14,10 @@ All notable changes to DOMECS are documented here. The format is based on
 - Cold-install smoke: `node scripts/cold-install.mjs` (and
   `RUN_COLD_INSTALL=1` node test) packs tarballs into an empty temp project
   and probes published-layout imports.
+- Agent legibility mini-app: `example/agent-legibility` + `pnpm test:legibility`.
+- Plantroom WS-4 scaffold: `example/plantroom` (tags/alarms/pump, branch
+  compare, `pnpm test:plantroom`).
+- Bench workloads: windowed projection + plain baseline; `pnpm bench:write`.
 - `loadIfPresent(world, storage, slot, opts?)` in `@domecs/persist` (FINDINGS
   O-28) — boot-friendly load where a missing slot is `ok(false)` rather than
   `persist_io`. Real I/O / parse / migration / restore failures remain `err`.

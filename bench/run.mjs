@@ -9,13 +9,15 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|all
  *   node bench/run.mjs --entities 20000 --ticks 200
+ *   node bench/run.mjs --write   # also write bench/results.json
  */
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { writeFileSync, mkdirSync } from 'node:fs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const coreUrl = pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href
@@ -25,7 +27,9 @@ const args = parseArgs(process.argv.slice(2))
 const workload = args.workload ?? 'all'
 const entityCount = Number(args.entities ?? 5_000)
 const ticks = Number(args.ticks ?? 100)
+const windowSize = Number(args.window ?? 50)
 const fixedStep = 1 / 60
+const writeResults = !!args.write
 
 const Position = defineComponent('BenchPosition', {
   defaults: { x: 0, y: 0 },
@@ -35,6 +39,9 @@ const Velocity = defineComponent('BenchVelocity', {
 })
 const Telemetry = defineComponent('BenchTelemetry', {
   defaults: { value: 0, dirty: false },
+})
+const Row = defineComponent('BenchRow', {
+  defaults: { rank: 0, label: '' },
 })
 
 const results = []
@@ -54,6 +61,24 @@ if (workload === 'all' || workload === 'telemetry') {
 if (workload === 'all' || workload === 'snapshot') {
   results.push(runSnapshot({ entityCount: Math.min(entityCount, 5_000) }))
 }
+if (workload === 'all' || workload === 'windowed') {
+  results.push(
+    runWindowed({
+      entityCount: Math.min(entityCount, 2_000),
+      ticks,
+      windowSize,
+    }),
+  )
+}
+if (workload === 'all' || workload === 'baseline') {
+  results.push(
+    runPlainBaseline({
+      entityCount: Math.min(entityCount, 5_000),
+      ticks,
+      fixedStep,
+    }),
+  )
+}
 
 const summary = {
   when: new Date().toISOString(),
@@ -67,8 +92,16 @@ for (const r of results) {
       `p50=${fmtMs(r.p50Ms)} p95=${fmtMs(r.p95Ms)}` +
       (r.snapshotBytes != null ? ` snapBytes=${r.snapshotBytes}` : '') +
       (r.snapshotMs != null ? ` snapMs=${fmtMs(r.snapshotMs)}` : '') +
-      (r.deterministic != null ? ` deterministic=${r.deterministic}` : ''),
+      (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
+      (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : ''),
   )
+}
+
+if (writeResults) {
+  mkdirSync(join(root, 'bench'), { recursive: true })
+  const out = join(root, 'bench/results.json')
+  writeFileSync(out, JSON.stringify(summary, null, 2) + '\n')
+  console.error(`[bench] wrote ${out}`)
 }
 
 // --- workloads ----------------------------------------------------------------
@@ -174,6 +207,109 @@ function runSnapshot({ entityCount }) {
     snapshotMs,
     snapshotBytes: bytes,
     deterministic,
+  }
+}
+
+/**
+ * Windowed projection: maintain a visible window of `windowSize` rows over
+ * a larger entity set by add/remove of a Row component (fleet-shaped).
+ * Counts synthetic DOM updates (create/update/destroy callbacks), no real DOM.
+ */
+function runWindowed({ entityCount, ticks, windowSize }) {
+  const world = createWorld({ headless: true })
+  const ids = []
+  for (let i = 0; i < entityCount; i++) {
+    ids.push(world.spawn([entry(Telemetry, { value: i, dirty: false })]))
+  }
+
+  let domUpdates = 0
+  let windowStart = 0
+  const visible = new Set()
+
+  // Simulate retained view: only entities with Row are "mounted"
+  world.system('window-project', { schedule: 'tick' }, () => {
+    const next = new Set()
+    for (let k = 0; k < windowSize; k++) {
+      next.add(ids[(windowStart + k) % ids.length])
+    }
+    for (const id of visible) {
+      if (!next.has(id)) {
+        world.removeComponent(id, Row)
+        domUpdates++ // destroy
+        visible.delete(id)
+      }
+    }
+    for (const id of next) {
+      if (!visible.has(id)) {
+        world.addComponent(id, Row, { rank: 0, label: String(id) })
+        domUpdates++ // create + first paint
+        visible.add(id)
+      } else {
+        const r = world.getComponent(id, Row)
+        if (r) {
+          r.rank = (r.rank + 1) % 1000
+          world.markChanged(id, Row)
+          domUpdates++ // update
+        }
+      }
+    }
+    windowStart = (windowStart + 3) % ids.length
+  })
+
+  // Prime first window
+  world.step(1 / 60)
+
+  const samples = []
+  const startUpdates = domUpdates
+  for (let t = 0; t < ticks; t++) {
+    const t0 = performance.now()
+    world.step(1 / 60)
+    samples.push(performance.now() - t0)
+  }
+  const { p50, p95 } = percentiles(samples)
+  return {
+    workload: 'windowed',
+    entities: entityCount,
+    ticks,
+    windowSize,
+    p50Ms: p50,
+    p95Ms: p95,
+    domUpdates: domUpdates - startUpdates,
+  }
+}
+
+/**
+ * Plain hand-rolled baseline for soak-shaped work: arrays + for-loops,
+ * no ECS. Used to compare plumbing cost / overhead narrative.
+ */
+function runPlainBaseline({ entityCount, ticks, fixedStep }) {
+  const xs = new Float64Array(entityCount)
+  const ys = new Float64Array(entityCount)
+  const dx = new Float64Array(entityCount)
+  const dy = new Float64Array(entityCount)
+  for (let i = 0; i < entityCount; i++) {
+    xs[i] = i % 100
+    ys[i] = (i * 3) % 100
+    dx[i] = 0.01
+    dy[i] = -0.02
+  }
+  const samples = []
+  for (let t = 0; t < ticks; t++) {
+    const t0 = performance.now()
+    for (let i = 0; i < entityCount; i++) {
+      xs[i] += dx[i]
+      ys[i] += dy[i]
+    }
+    samples.push(performance.now() - t0)
+  }
+  const { p50, p95 } = percentiles(samples)
+  return {
+    workload: 'baseline-plain',
+    entities: entityCount,
+    ticks,
+    p50Ms: p50,
+    p95Ms: p95,
+    note: 'hand-rolled Float64Array loops; not feature-equivalent',
   }
 }
 

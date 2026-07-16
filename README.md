@@ -348,10 +348,10 @@ Direction is governed by [`plan/PLAN.md`](plan/PLAN.md). Summary:
 | Workstream | Focus |
 |---|---|
 | **WS-0** | Positioning & hygiene (this README; API-stable labeling) |
-| **WS-1** | Benchmark suite — evidence before more features |
-| **WS-2** | Adoption-killer fixes (first paint, pause, persist first-run, docs) |
-| **WS-3** | Agent operability — `createAgentBridge`, [`AGENTS.md`](AGENTS.md), [`skills/domecs`](skills/domecs/SKILL.md) |
-| **WS-4** | One flagship operable-simulation reference |
+| **WS-1** | Benchmark suite — `pnpm bench` (soak/telemetry/snapshot/windowed/baseline) |
+| **WS-2** | Adoption-killer fixes (first paint, pause, persist first-run, docs, cold-install) |
+| **WS-3** | Agent operability — `createAgentBridge`, [`AGENTS.md`](AGENTS.md), skill, legibility mini-app |
+| **WS-4** | Flagship scaffold — [`example/plantroom`](example/plantroom) (branch/compare episode) |
 
 **Frozen until kill gates clear:** `@domecs/sprites`, React/Svelte adapters,
 network rollback / generalized Worker host, `create-domecs` scaffolder,

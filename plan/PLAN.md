@@ -84,17 +84,19 @@ bet. No date-driven milestones — the order is the only ordering.
 
 ### WS-1 — Benchmark suite (O-14 + `plan/BENCHMARK.md`; the evidence buy)
 
-Scaffold: `bench/` (`pnpm bench` / `node bench/run.mjs`) — soak, telemetry,
-and snapshot workloads are runnable headless. Expand until numbers are
-trustworthy enough for README claims; add Koota / reactive baselines.
+- [x] Headless suite: soak, telemetry, snapshot, windowed projection, plain
+  baseline (`pnpm bench` / `pnpm bench:write`).
+- [x] Sample results table in `bench/README.md` (machine-local; not a product claim).
+- [ ] Koota / fine-grained-reactive baselines + multi-machine stability.
+- [ ] README product claims gated on decisive win (§ success bar).
 
-Workloads (from the ledger's own budgets):
+Workloads:
 
-1. 20k headless entities at accelerated sim rates (soak + snapshot cycles).
-2. Telemetry firehose: 500 updates/s across 400–10k monitored assets,
-   coalesced into per-frame projection (fleet-shaped).
-3. 50 visible table rows + map/schematic projection (windowed DOM).
-4. Snapshot / restore / replay / determinism verification.
+1. Entity soak (fixed systems).
+2. Telemetry firehose (coalesced marks).
+3. Windowed projection (50-row window over large set).
+4. Snapshot / restore / determinism.
+5. Plain Float64Array baseline (overhead narrative).
 
 Metrics: p50/p95 tick and update time; DOM mounts/updates/removes per frame;
 heap growth + GC pressure; snapshot duration + serialized size; dropped
@@ -132,30 +134,27 @@ Only the first-hour traps; everything else stays demand-driven (§5).
 - [x] Minimal agent bridge: `createAgentBridge` → `reset / observe / act /
   step / snapshot`. Deterministic episode tests in
   `packages/domecs/test/agent-bridge.test.ts`.
-- [ ] **Falsifiable legibility test (cheap; run early):** a cold agent session
-  with only the published packages + skill must build a small working app.
-  (Infrastructure: `pnpm cold-install` proves package import path; full
-  cold-agent build still open.)
+- [x] **Falsifiable legibility test:** `example/agent-legibility/run.mjs` +
+  `pnpm test:legibility` — skill-shaped observe/act/step/snapshot/reset
+  episode against built dist (score=7, deterministic). Full *human-out-of-loop*
+  cold agent session still a marketing-time check.
 
 ### WS-4 — One flagship operable-simulation reference (the bet)
 
-One **product-grade** application — not a sixth exemplar. It must exercise
-the distinctive stack *together*: determinism, typed actions, snapshot
-branching, replay/fast-forward, multi-view DOM projection, agent-in-the-loop.
+Scaffold in-repo: **`example/plantroom/`** (headless core + episode tests).
 
-Reference shape (working title **Plantroom** — a simulated industrial
-process cell):
+- [x] PLC-style tags + alarms + vessel/pump dynamics (fixed schedule)
+- [x] Typed actions: inject fault, set pump, ack/reset trip
+- [x] Snapshot branch + fast-forward compare (naive restart vs reset+start)
+- [x] Agent bridge session (`createPlantSession`)
+- [x] Deterministic episode tests (`pnpm test:plantroom`)
+- [ ] Browser multi-view chrome (tags / alarms / trends)
+- [ ] Historian playback UI + operator approval UX
+- [ ] Scale to several hundred entities + product polish
+- [ ] Dogfood daily-use decision (keep here or promote to standalone repo)
 
-- live PLC-style tags + alarms; several hundred active entities;
-- trends + historian playback; deterministic fault-injection scenarios;
-- human controls and an agent proposing typed control actions for approval;
-- the demo moment: a fault develops → the agent proposes a control sequence →
-  the user branches the snapshot → both strategies fast-forward → outcomes
-  compared side by side → one branch committed.
-
-Acceptable substitute: one of the author's real applications adopted as
-daily-use dogfood — the revealed-preference test. Either way: one app,
-product depth, agent in the loop.
+Demo moment (headless, tested): fault (pump trip) → two agent strategies
+branched → competent strategy recovers cooling and runs cooler than naive.
 
 ## 4. Stop-doing list (frozen until a kill gate clears)
 
