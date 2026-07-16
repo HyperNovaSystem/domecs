@@ -17,10 +17,12 @@ forward design input*, not as live per-app trackers. Resolved/vestigial content
 has been deliberately purged — git history retains the originals.
 
 Cross-references:
-- `doc/LEGIBILITY.md` — the six legibility laws (all enforced as of v1.0).
-- `doc/api.md` + `doc/api-surface/` — the authoritative type contract.
-- `doc/SPEC.md` — runtime semantics.
-- `ROADMAP.md` — the home for the v0.2+/deferred items below.
+- `PLAN.md` — the governing post-v1.0 plan (priorities, stop-doing list, kill gates).
+- `../doc/LEGIBILITY.md` — the six legibility laws (all enforced as of v1.0).
+- `../doc/api.md` + `../doc/api-surface/` — the authoritative type contract.
+- `../doc/SPEC.md` — runtime semantics.
+- `../doc/ROADMAP.md` — the itemized feature queue for the v0.2+/deferred
+  items below (subordinate to `PLAN.md`).
 
 ---
 
@@ -228,7 +230,7 @@ blessed recipe or example, not new API:
 
 ## 3. Deferred / needs a design decision (C-tier & v0.2+)
 
-Park these in `ROADMAP.md`:
+Park these in `../doc/ROADMAP.md`:
 
 - **`capability-typing`** — `CapabilityMap` augmentation so `world.capability(name)`
   is typed without triple-casts. Typing-contract change.

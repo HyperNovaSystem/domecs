@@ -25,7 +25,8 @@ specification; the repository's root `README.md` is the pitch.
 
 11. **[../CHANGELOG.md](../CHANGELOG.md)** — Released changes, starting with v1.0.0.
 12. **[ROADMAP.md](ROADMAP.md)** — Post-v1.0 roadmap: directional items + tooling.
-13. **[../FINDINGS.md](../FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2, incl. the 2026-06-01 engine review O-20…O-26 and the fleet O-16 repro recipe), and deferred engine features (§3). **Canonical and sole findings file** — new findings land here.
+13. **[../plan/FINDINGS.md](../plan/FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2, incl. the 2026-06-01 engine review O-20…O-26 and the fleet O-16 repro recipe), and deferred engine features (§3). **Canonical and sole findings file** — new findings land here.
+14. **[../plan/PLAN.md](../plan/PLAN.md)** — Governing post-v1.0 plan: thesis, workstreams, stop-doing list, kill gates.
 
 ## Reading order
 
@@ -34,7 +35,7 @@ specification; the repository's root `README.md` is the pitch.
 - Implementing a plugin → `SPEC.md` § 9, then `api.md` plugin interface.
 - Packaging or deploying an app → `PACKAGING.md`, then the standalone Vite example apps (the root README's Live demos table links all five).
 - Proposing a public API change → `LEGIBILITY.md` (the six laws) and `agent-legible-api-design.md`, then `api-surface/`.
-- Planning future work → `ROADMAP.md` and `../FINDINGS.md`.
+- Planning future work → `../plan/PLAN.md` (governing), then `ROADMAP.md` and `../plan/FINDINGS.md`.
 
 ## Stability
 

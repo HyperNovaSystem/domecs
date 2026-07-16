@@ -156,3 +156,9 @@ doc/.doctest/
 
 # SKiDL MCP plugin artifact
 skidl.erc
+
+# Planning workspace — only consolidated outputs are tracked (public repo;
+# raw notes/reviews stay local)
+plan/*
+!plan/PLAN.md
+!plan/FINDINGS.md

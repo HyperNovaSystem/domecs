@@ -598,8 +598,10 @@ Items from TYPE_EVAL.md that remain **independent** and can land in either order
   conventions and type-test guarantees codified in the same doc.
 - README "Errors as Components" section: concise pitch with a worked
   example, links to the cookbook + spec.
-- `FINDINGS.md` row E-1..E-4 records the four shipped phases with the
-  resolving commit SHAs.
+- The findings ledger (now `plan/FINDINGS.md`) recorded the four shipped
+  phases as rows E-1..E-4 with the resolving commit SHAs; those resolved
+  rows were purged in the 2026-06-10 consolidation — git history retains
+  them.
 - The representative `match`-based type tests already shipped in Phase 1
   (`packages/domecs/test/errors.test.ts §8/8b/9`) — the doc cross-
   references them and documents how to add new `DomecsError` variants

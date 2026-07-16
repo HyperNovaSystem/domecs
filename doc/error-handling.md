@@ -306,4 +306,4 @@ world.step(0.016)  // logs: "domecs: system \"typo\" returned a value that is no
 ## See also
 
 - [BETTER_ERRORS.md](BETTER_ERRORS.md) — full proposal and design rationale.
-- [FINDINGS.md](../FINDINGS.md) — consolidated cross-package status.
+- [FINDINGS.md](../plan/FINDINGS.md) — consolidated cross-package status.

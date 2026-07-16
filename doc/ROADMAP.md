@@ -2,11 +2,17 @@
 
 _Post-v1.0 roadmap. Date: 2026-05-31._
 
+> **Direction note (2026-07-16):** priorities are now governed by
+> [`plan/PLAN.md`](../plan/PLAN.md). Several lanes below (scaffolder, sprites,
+> vite plugin, framework adapters, worker/rollback) are **frozen** by that
+> plan's stop-doing list until its kill gates clear. This file remains the
+> itemized feature queue.
+
 This file covers the **larger directional items + tooling** beyond the v1.0
 freeze. Deferred *engine* features (range/spatial indexes, async snapshot,
 multi-world `EntityRef`, scene schema registry, redaction, capability typing,
 `dispatch` alias, benchmark budgets, etc.) are tracked in
-[`../FINDINGS.md` §3](../FINDINGS.md) and are not re-listed here — consult that
+[`../plan/FINDINGS.md` §3](../plan/FINDINGS.md) and are not re-listed here — consult that
 ledger for the engine-API deltas; this file is the home for the cross-cutting
 directional work and the publishable tooling.
 
@@ -21,7 +27,7 @@ is the forward-looking design queue.
   pending. Must emit a workspace variant (`--workspace <path>` with `file:` deps
   and no `DOMECS_LOCAL_DEV` alias branch), copy only tracked files
   (`git ls-files`, not the dir verbatim, so stale `dist/` isn't seeded), and
-  strip `.git/` / `node_modules/`. (See also `../FINDINGS.md` §3.)
+  strip `.git/` / `node_modules/`. (See also `../plan/FINDINGS.md` §3.)
 - **Browser-durable `Storage` adapter + `createPersistence` facade** —
   `@domecs/persist` ships only `createMemoryStorage`; every browser app
   hand-rolls a `localStorage`/IndexedDB adapter. Ship
@@ -60,10 +66,10 @@ is the forward-looking design queue.
   structured-clone messaging contracts are stable. Needs a constrained
   serializable system-definition subset and a documented sim-vs-presentation
   split. Pairs with the async/chunked snapshot and canonical-hash work in
-  `../FINDINGS.md` §3 (O-9, O-10, O-11).
+  `../plan/FINDINGS.md` §3 (O-9, O-10, O-11).
 - **The v0.2+ engine architecture queue** — range indexes, spatial layers,
   virtualized DOM views, keyed reconciliation, multi-world `EntityRef`, scene
-  schema/codec registry, benchmark budgets. Tracked in `../FINDINGS.md` §3.
+  schema/codec registry, benchmark budgets. Tracked in `../plan/FINDINGS.md` §3.
 
 ## Known documented limitations (no fix planned)
 
