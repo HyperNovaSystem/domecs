@@ -1,7 +1,7 @@
 import { createWorld, defineComponent, err, ok, type WorldSnapshot } from '@domecs/core'
 import { entry } from '@domecs/core'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { load, save } from '../src/persist.js'
+import { load, loadIfPresent, save } from '../src/persist.js'
 import { createMemoryStorage, type Storage } from '../src/storage.js'
 import type { Migration } from '../src/migrate.js'
 
@@ -28,7 +28,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(t?.name).toBe('goblin')
   })
 
-  it('load on an empty slot returns persist_io', () => {
+  it('load on an empty slot returns persist_io (non-retryable)', () => {
     const w = createWorld()
     const r = load(w, storage, 'missing')
     expect(r.ok).toBe(false)
@@ -37,8 +37,25 @@ describe('@domecs/persist — save/load round-trip', () => {
       if (r.error.kind === 'persist_io') {
         expect(r.error.op).toBe('load')
         expect(r.error.cause.message).toMatch(/empty/)
+        expect(r.error.retryable).toBe(false)
       }
     }
+  })
+
+  it('loadIfPresent treats empty slot as ok(false) first-run (O-28)', () => {
+    const w = createWorld()
+    const missing = loadIfPresent(w, storage, 'missing')
+    expect(missing.ok).toBe(true)
+    if (missing.ok) expect(missing.value).toBe(false)
+
+    const e = w.spawn([entry(Health, { hp: 3 })])
+    expect(save(w, storage, 'slot').ok).toBe(true)
+
+    const w2 = createWorld()
+    const loaded = loadIfPresent(w2, storage, 'slot')
+    expect(loaded.ok).toBe(true)
+    if (loaded.ok) expect(loaded.value).toBe(true)
+    expect(w2.getComponent(e, Health)?.hp).toBe(3)
   })
 
   it('load on malformed JSON returns persist_io with the parse cause', () => {

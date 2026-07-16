@@ -7,7 +7,7 @@ Every seam returns a `Result<…, DomecsError>` — I/O failures surface as
 exceptions. A failed save or migration leaves the target slot's prior bytes
 intact. See `doc/BETTER_ERRORS.md` Phase 2 for the discipline this enforces.
 
-> Status: v1.0 — stable.
+> Status: v1.0 — **API-stable** (semver honored; product contract hardening via 1.0.x).
 
 ## Install
 
@@ -19,7 +19,7 @@ npm install @domecs/persist
 
 ```ts
 import { createWorld, defineComponent, entry } from '@domecs/core'
-import { save, load, createMemoryStorage } from '@domecs/persist'
+import { save, load, loadIfPresent, createMemoryStorage } from '@domecs/persist'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 
@@ -32,8 +32,11 @@ const saved = save(world, storage, 'slot-1', { meta: { label: 'checkpoint' } })
 if (!saved.ok) console.error(saved.error)
 
 const restored = createWorld()
-const loaded = load(restored, storage, 'slot-1')
-if (!loaded.ok) console.error(loaded.error)
+// Boot path: missing slot is ok(false), not an error.
+const boot = loadIfPresent(restored, storage, 'slot-1')
+if (!boot.ok) console.error(boot.error)
+else if (!boot.value) { /* first run */ }
+// Strict path still available: load() returns persist_io on empty slots.
 ```
 
 ## Main API
@@ -43,7 +46,11 @@ if (!loaded.ok) console.error(loaded.error)
 - `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`
   (default `SNAPSHOT_VERSION`), then restore. `opts.migrations` is overlaid on
   `BUILTIN_MIGRATIONS` (caller keys win), so a legacy v1 save upgrades
-  transparently with no caller config.
+  transparently with no caller config. Empty slots return `persist_io` with
+  `retryable: false` (message includes `empty`).
+- `loadIfPresent(world, storage, slot, opts?)` — boot-friendly (O-28):
+  `ok(true)` loaded, `ok(false)` missing slot, `err(...)` for real failures.
+  Prefer this for first-run restore paths.
 - `migrate(snapshot, target, migrations)` — run a version migration chain.
 - `BUILTIN_MIGRATIONS` — framework-supplied steps applied as the floor beneath
   any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply

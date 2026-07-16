@@ -151,6 +151,14 @@ export interface World {
    * already inside a tick.
    */
   requestTick(): void
+  /**
+   * Spawn an entity, optionally with an initial component bag.
+   *
+   * **Shallow-copy semantics (O-34):** each value is shallow-merged via
+   * `ComponentType.create()`. Top-level scalars on the caller's object stop
+   * tracking the live store; nested object/array refs stay shared. Prefer
+   * capturing the entity id and reading via {@link World.getComponent}.
+   */
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   has(entity: Entity, type: ComponentType<unknown>): boolean
@@ -299,6 +307,12 @@ export interface World {
    * Advance exactly one tick with `delta = 0` — the turn-based single step.
    * Systems run normally; time does not advance. This is the former no-arg
    * `step()` behaviour.
+   *
+   * **Fixed schedule (O-37):** `fixed` systems only run when the scaled-time
+   * accumulator crosses a step boundary. `stepOnce()` uses dt=0, so the
+   * accumulator never advances and `fixed` systems never fire. For headless
+   * tests of fixed-schedule sims, use `step(world.time.fixedStep)` (or
+   * `stepN(n, dt)` with a positive `dt`).
    */
   stepOnce(): void
   stepN(n: number, dt?: number): void
@@ -355,8 +369,13 @@ export interface StartOptions {
   /** Per-frame dt ceiling in ms (default 100). Prevents tab-return spikes
    *  from exploding into hundreds of fixed-step ticks. */
   dtClampMs?: number
-  /** Pause via {@link World.pause} when `document.hidden` flips true, resume
-   *  on re-show. Default true; has no effect outside a DOM. */
+  /**
+   * When `document.hidden` flips true, pause via {@link World.pause} if the
+   * world was running; on re-show, resume **only** a pause this driver
+   * initiated. App-managed pauses (`world.pause()` / Pause button) are not
+   * trampled. Default true; has no effect outside a DOM. Pass `false` to
+   * opt out entirely.
+   */
   pauseOnHidden?: boolean
 }
 
@@ -843,6 +862,7 @@ export function createWorld(options: WorldOptions = {}): World {
       step: (dt) => runTick(dt),
       pause: () => world.pause(),
       resume: () => world.resume(),
+      isPaused: () => time.scale === 0,
       shouldKeepAwake: () => shouldKeepDriverAwake(),
       isInTick: () => inTick,
     },
@@ -1563,6 +1583,11 @@ export function createWorld(options: WorldOptions = {}): World {
       // Turn-based single advance: full tick with d=0. This is the former
       // no-arg step() behaviour — systems run, change-detection fires, but
       // time does not advance.
+      //
+      // O-37: fixed systems are driven by the scaled-time accumulator, which
+      // only advances when dt > 0. stepOnce() therefore never fires `fixed`
+      // systems — use step(fixedStep) (or stepN with a dt) for headless tests
+      // of fixed-schedule sims.
       runTick(undefined)
     },
 

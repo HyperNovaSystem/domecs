@@ -19,6 +19,8 @@ export interface DriverHooks {
   step(dt: number): void
   pause(): void
   resume(): void
+  /** Whether the world is currently paused (`time.scale === 0`). */
+  isPaused(): boolean
   /** Idle policy: keep scheduling frames while this returns true. */
   shouldKeepAwake(): boolean
   /** Mutations made by systems mid-tick must not re-arm the driver. */
@@ -43,6 +45,8 @@ export function createRafDriver(
   let rafVisHandler: (() => void) | null = null
   let rafWakeStep = false
   let rafDtClampMs = 100
+  /** True only when *this* driver initiated a pause via visibility hide (O-32). */
+  let visibilityOwnedPause = false
 
   function scheduleDriverFrame(): void {
     if (!rafStarted || rafHandle !== null) return
@@ -110,15 +114,23 @@ export function createRafDriver(
     scheduleDriverFrame()
     if (pauseOnHidden && g.document && typeof g.document.addEventListener === 'function') {
       const doc = g.document
+      visibilityOwnedPause = false
       rafVisHandler = (): void => {
         // Defensive: browsers may deliver a queued visibilitychange event
         // after stop()+removeEventListener fires on the same microtask.
         // Ignore it; the next startLoop() installs a fresh handler.
         if (!rafStarted) return
         if (doc.hidden) {
-          hooks.pause()
-        } else {
+          // O-32: only claim ownership when the world was running. An
+          // app-managed pause (Pause button → world.pause()) must not be
+          // auto-resumed when the tab becomes visible again.
+          if (!hooks.isPaused()) {
+            hooks.pause()
+            visibilityOwnedPause = true
+          }
+        } else if (visibilityOwnedPause) {
           hooks.resume()
+          visibilityOwnedPause = false
           // Discard the accumulated wall-clock gap so the first post-
           // resume frame primes cleanly instead of delivering a spike.
           rafLastWallMs = null
@@ -141,6 +153,7 @@ export function createRafDriver(
     rafHandle = null
     rafLastWallMs = null
     rafWakeStep = false
+    visibilityOwnedPause = false
     if (rafVisHandler && g.document && typeof g.document.removeEventListener === 'function') {
       g.document.removeEventListener('visibilitychange', rafVisHandler)
       rafVisHandler = null

@@ -5,7 +5,7 @@ Browser input collector plugin for DOMECS.
 `@domecs/input` listens to keyboard, pointer, wheel, focus, and gamepad state and
 publishes a per-tick `InputSnapshot` to `world.input`.
 
-> Status: v1.0 — stable.
+> Status: v1.0 — **API-stable** (semver honored; product contract hardening via 1.0.x).
 
 ## Install
 
@@ -53,6 +53,11 @@ The plugin writes an `InputSnapshot` at tick start:
 - `keys` — currently held keyboard `KeyboardEvent.code` values.
 - `keyDelta.pressed` — keys pressed since the previous snapshot.
 - `keyDelta.released` — keys released since the previous snapshot.
+
+> **`keyDelta` is render-tick-scoped (O-35).** Edges live for exactly one
+> collector publish (one render tick under `startLoop`). A `fixed` system at
+> 4 Hz will miss most presses. Put edge-triggered input on a `tick` system
+> (or read held `keys` when you only need “is down”).
 - `mods` — `ctrl`, `alt`, `shift`, `meta` modifier state.
 - `pointer` — pointer position, buttons, movement delta, wheel delta, and
   reserved `entered` entity ids. The collector currently leaves `entered`

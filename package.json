@@ -2,7 +2,7 @@
   "name": "domecs-workspace",
   "private": true,
   "version": "2026.6.8",
-  "description": "DOMECS — ECS-driven DOM game engine. Workspace root.",
+  "description": "DOMECS — deterministic ECS runtime for DOM-heavy operable simulations. Workspace root.",
   "packageManager": "pnpm@10.30.2",
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "doctest": "node scripts/doctest.mjs",
     "doctest:check": "node --test test/doctest.test.mjs",
     "publish:npm": "pnpm -r --filter \"@domecs/*\" build && pnpm -r --filter \"@domecs/*\" publish --access public",
+    "bench": "node bench/run.mjs",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
   },
   "devDependencies": {

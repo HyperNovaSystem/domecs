@@ -39,6 +39,7 @@ specification; the repository's root `README.md` is the pitch.
 
 ## Stability
 
-v1.0 — all five `@domecs/*` packages are at `1.0.0`. The public surface is
-frozen and additive going forward; see `../CHANGELOG.md`. Tracked in Reqall
-under project **HyperNovaSystem/domecs**.
+v1.0 — **API-stable**. All five `@domecs/*` packages are at `1.0.0`. Semver is
+honored; the product contract continues to harden via corrective `1.0.x`
+releases. See `../CHANGELOG.md` and governing direction in
+`../plan/PLAN.md`.

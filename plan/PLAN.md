@@ -72,16 +72,21 @@ bet. No date-driven milestones — the order is the only ordering.
 
 ### WS-0 — Positioning & repo hygiene (hours; do now)
 
-- README: replace "high-performance" with measured-claim language —
+- [x] README: replace "high-performance" with measured-claim language —
   *"performance-oriented, deterministic ECS runtime for DOM-heavy
   simulations; benchmark characterization in progress."*
-- Reframe v1.0 as **API-stable** (semver honored; product contract still
+- [x] Reframe v1.0 as **API-stable** (semver honored; product contract still
   hardening via 1.0.x).
-- Lead the pitch with operable simulation + agent operation; keep games as
+- [x] Lead the pitch with operable simulation + agent operation; keep games as
   the demo section, not the headline.
-- Open GitHub issue creation; publish GitHub Releases for existing tags.
+- [x] GitHub Issues already enabled; published GitHub Release for `v1.0.0`
+  (https://github.com/HyperNovaSystem/domecs/releases/tag/v1.0.0).
 
 ### WS-1 — Benchmark suite (O-14 + `plan/BENCHMARK.md`; the evidence buy)
+
+Scaffold: `bench/` (`pnpm bench` / `node bench/run.mjs`) — soak, telemetry,
+and snapshot workloads are runnable headless. Expand until numbers are
+trustworthy enough for README claims; add Koota / reactive baselines.
 
 Workloads (from the ledger's own budgets):
 
@@ -109,14 +114,14 @@ README. Losing is also output: claims get corrected to match.
 
 Only the first-hour traps; everything else stays demand-driven (§5).
 
-| Item | Ledger | Type |
-|---|---|---|
-| First paint under default `changedOn: auto` (mounted-but-never-updated static entities) | O-2 | code (A-tier) |
-| Pause semantics: document scale-0 gating; provenance-aware `pauseOnHidden` resume | O-3, O-32 | code + doc |
-| Browser-importable ESM dist for no-build consumers | O-33 | packaging |
-| `load()` distinguishes missing slot from I/O failure (first-run is the common path) | O-28 | code |
-| Document the traps: `spawn` shallow-copy; `keyDelta` render-tick scope; `stepOnce` vs `fixed` | O-34, O-35, O-37 | docs |
-| Cold-install test from an empty repo (published packages only) | — | infra |
+| Item | Ledger | Type | Status |
+|---|---|---|---|
+| First paint under default `changedOn: auto` | O-2 | code (A-tier) | **done** |
+| Pause semantics: document scale-0 gating; provenance-aware `pauseOnHidden` resume | O-3, O-32 | code + doc | **done** (O-3 `runWhilePaused` still fuel) |
+| Browser-importable ESM dist for no-build consumers | O-33 | packaging | npm already ships `dist/`; import-map docs added; cold-install CI open |
+| `loadIfPresent` + empty-slot non-retryable | O-28 | code | **done** |
+| Document traps: spawn shallow-copy; keyDelta scope; stepOnce vs fixed | O-34, O-35, O-37 | docs | **done** |
+| Cold-install test from an empty repo (published packages only) | — | infra | open |
 
 ### WS-3 — Agent operability surface (the wedge; thin facade only)
 

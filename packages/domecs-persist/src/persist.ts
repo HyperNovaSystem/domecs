@@ -85,7 +85,9 @@ export function save(
  *
  * Errors:
  * - `persist_io`: missing slot, malformed JSON, non-snapshot payload, or
- *   a `world.restore` throw.
+ *   a `world.restore` throw. Empty slots use `retryable: false` (first-run
+ *   is deterministic until something is saved). Prefer
+ *   {@link loadIfPresent} for boot paths where "no save yet" is normal.
  * - `migration_failed`: any step in the chain to `targetVersion` fails.
  */
 export function load(
@@ -101,12 +103,45 @@ export function load(
       kind: 'persist_io',
       op: 'load',
       cause: normalizeCause(new Error(`slot "${slot}" is empty`)),
-      retryable: true,
+      // Missing slot is deterministic until the app writes one — not a
+      // transient I/O blip (O-28). First-run boot should use loadIfPresent.
+      retryable: false,
     })
   }
+  return applyLoadedBytes(world, slot, read.value, opts)
+}
+
+/**
+ * Boot-friendly load (O-28): missing slot is success with `false`, not an
+ * error. Real I/O / parse / migration / restore failures remain `err(...)`.
+ *
+ * - `ok(true)` — snapshot was loaded and restored
+ * - `ok(false)` — slot was empty (first run); world is untouched
+ * - `err(...)` — storage/read/parse/migrate/restore failure
+ */
+export function loadIfPresent(
+  world: World,
+  storage: Storage,
+  slot: string,
+  opts: LoadOptions = {},
+): Result<boolean, DomecsError> {
+  const read = storage.read(slot)
+  if (!read.ok) return read
+  if (read.value === null) return ok(false)
+  const applied = applyLoadedBytes(world, slot, read.value, opts)
+  if (!applied.ok) return applied
+  return ok(true)
+}
+
+function applyLoadedBytes(
+  world: World,
+  slot: string,
+  bytes: string,
+  opts: LoadOptions,
+): Result<void, DomecsError> {
   let parsed: unknown
   try {
-    parsed = JSON.parse(read.value)
+    parsed = JSON.parse(bytes)
   } catch (cause) {
     return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
   }

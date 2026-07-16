@@ -206,6 +206,14 @@ function commit(state: ViewState): void {
     const el = state.def.create(view)
     state.slotEl.appendChild(el)
     state.mounted.set(id, { el, view })
+    // O-2 first paint: under change-gated modes (auto/explicit), a newly
+    // mounted entity has no OnChanged mark, so the gated update phase would
+    // never run. Call update() once at create. Skip when changedQueries is
+    // null (legacy / create-only): the full-update path already paints every
+    // mounted entity this commit, and double-firing would break call counts.
+    if (state.def.update && state.changedQueries !== null) {
+      state.def.update(el, view)
+    }
   }
   state.pendingCreate.clear()
 

@@ -182,13 +182,21 @@ interface World {
   //   - `stepOnce()`: advance exactly one tick with `delta = 0` — the
   //     turn-based single step. Systems run normally; time does not advance.
   //     (This is the former no-arg `step()` behaviour. `turn()` uses it.)
+  //     O-37: fixed systems are driven by the scaled-time accumulator, which
+  //     only advances when dt > 0. stepOnce() therefore never fires `fixed`
+  //     systems — use step(fixedStep) for headless fixed-schedule tests.
   //   - `step(dt)` with `0 < dt < 1 ms`: dt is floored at 1 ms of
   //     scaled time so PID derivative consumers never see `scaledDelta=0`.
   //     See SPEC §2.7.
+  //
+  // Pause / scale-0 gating (O-3): `tick` and `fixed` systems do not run while
+  // `time.scale === 0` (pause / setScale(0)). Control input that must work
+  // while paused belongs on the always-fires `tickStart` signal, plugin
+  // onTickStart, or outside the world (DOM keydown → pause/resume/setScale).
   startLoop(options?: StartOptions): () => void
   stop():   void
   step(dt: number):  void      // see rules above
-  stepOnce(): void             // one tick, delta = 0
+  stepOnce(): void             // one tick, delta = 0; fixed systems do not fire
   stepN(n: number, dt?: number): void
 
   // Turn-based action: emit an event and advance one tick.
@@ -325,12 +333,15 @@ interface World {
 
 type Entity = number
 
-// Options for `World.start`. The rAF driver is intentionally thin:
+// Options for `World.startLoop`. The rAF driver is intentionally thin:
 // compute wall-clock dt, clamp it, pipe it to step(dt). Consumers that
 // need custom scheduling keep using `step()` directly.
 interface StartOptions {
   dtClampMs?:    number   // default 100
-  pauseOnHidden?: boolean // default true
+  // Default true. On document.hidden, pause only if the world was running;
+  // on re-show, resume only a pause the driver itself initiated (O-32).
+  // App-managed world.pause() is not trampled. Pass false to opt out.
+  pauseOnHidden?: boolean
 }
 
 // world.action types (#17). EmittedEvent pairs a buffered payload with its
@@ -941,6 +952,8 @@ before calling `world.restore`.
 ```ts
 function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
+// Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
+function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
 
 interface SaveOptions {
   meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)

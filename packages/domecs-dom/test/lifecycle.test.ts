@@ -153,7 +153,7 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     handle.teardown()
   })
 
-  it('does not call update when no Changed observed (changedOn gates updates)', () => {
+  it('calls update once on mount (first paint) then gates subsequent updates on Changed', () => {
     const world = createWorld({ headless: true })
     let updateCalls = 0
     const view = defineView({
@@ -177,15 +177,44 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
     world.stepOnce()
-    expect(updateCalls).toBe(0)
-    world.stepOnce()
-    expect(updateCalls).toBe(0)
-
-    world.markChanged(a, Sprite)
+    // O-2: first paint runs update once at create even without OnChanged.
+    expect(updateCalls).toBe(1)
     world.stepOnce()
     expect(updateCalls).toBe(1)
 
+    world.markChanged(a, Sprite)
+    world.stepOnce()
+    expect(updateCalls).toBe(2)
+
     handle.teardown()
+  })
+
+  it('first-paints static entities under default changedOn:auto (O-2)', () => {
+    const world = createWorld({ headless: true })
+    const view = defineView({
+      slot: 'stage',
+      query: Has(Sprite),
+      // changedOn omitted → auto
+      create() {
+        const el = document.createElement('span')
+        el.textContent = '' // intentionally empty — update paints
+        return el
+      },
+      update(el, e) {
+        el.textContent = (e as unknown as { Sprite: { glyph: string } }).Sprite.glyph
+      },
+    })
+    const r = mountDOM(world, { slots: { stage }, views: [view] })
+    expect(isOk(r)).toBe(true)
+    if (!isOk(r)) throw new Error('mount failed')
+
+    const id = world.spawn()
+    world.addComponent(id, Sprite, { glyph: 'X' })
+    world.stepOnce()
+    expect(stage.firstElementChild?.textContent).toBe('X')
+    // No markChanged; content must stay painted (not cleared/empty).
+    world.stepOnce()
+    expect(stage.firstElementChild?.textContent).toBe('X')
   })
 
 
@@ -214,14 +243,15 @@ describe('mountDOM — view lifecycle (SPEC §5.3)', () => {
     const a = world.spawn()
     world.addComponent(a, Sprite, { glyph: '@' })
     world.stepOnce()
-    expect(updateCalls).toBe(0)
+    // O-2 first paint + auto-derived gate for subsequent ticks.
+    expect(updateCalls).toBe(1)
     world.stepOnce()
     // No markChanged yet → auto-derived gate keeps update silent.
-    expect(updateCalls).toBe(0)
+    expect(updateCalls).toBe(1)
 
     world.markChanged(a, Sprite)
     world.stepOnce()
-    expect(updateCalls).toBe(1)
+    expect(updateCalls).toBe(2)
 
     handle.teardown()
   })

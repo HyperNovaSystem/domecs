@@ -50,7 +50,34 @@ layouts.
 
 That is the right app shape.
 The framework packages intentionally expose TypeScript source directly in the workspace, e.g. `"exports": { ".": "./src/index.ts" }`, so examples and local development keep working immediately after `pnpm install`.
-For npm publication, `publishConfig` rewrites the package metadata to built `dist` JavaScript and declaration exports.
+For npm publication, `publishConfig` rewrites the package metadata to built `dist` JavaScript and declaration exports — verified on the published `@domecs/core@1.0.0` tarball (`main`/`types`/`exports` → `./dist/*`).
+
+### No-build / import-map consumers (O-33)
+
+Published packages are plain ESM under `dist/`. A static page can load them
+with an import map once the files are served (or via a CDN that respects
+package `exports`):
+
+```html
+<script type="importmap">
+{
+  "imports": {
+    "@domecs/core": "https://cdn.jsdelivr.net/npm/@domecs/core@1.0.0/dist/index.js",
+    "@domecs/persist": "https://cdn.jsdelivr.net/npm/@domecs/persist@1.0.0/dist/index.js"
+  }
+}
+</script>
+<script type="module">
+  import { createWorld } from '@domecs/core'
+  const world = createWorld({ headless: true })
+  world.stepOnce()
+</script>
+```
+
+Workspace `file:` consumers still resolve TypeScript source and need a
+bundler (Vite) or `tsc`. Use the published (or `pnpm pack`) path for
+zero-build validation — `pnpm run release:validate` already probes packed
+tarballs.
 
 
 ## Release validation

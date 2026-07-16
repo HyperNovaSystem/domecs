@@ -334,4 +334,36 @@ describe('World.start() — visibilitychange handling (F-5)', () => {
     expect(w.time.scale).toBe(1)
     w.stop()
   })
+
+  it('pauseOnHidden does not resume an app-managed pause (O-32)', () => {
+    const w = createWorld()
+    w.startLoop()
+    // App Pause button — deliberate pause while the tab is visible.
+    w.pause()
+    expect(w.time.scale).toBe(0)
+    // Tab hide while already paused: driver must not claim ownership.
+    doc.hidden = true
+    doc._dispatch()
+    expect(w.time.scale).toBe(0)
+    // Tab re-show must leave the world paused (app owns the pause).
+    doc.hidden = false
+    doc._dispatch()
+    expect(w.time.scale).toBe(0)
+    w.resume()
+    expect(w.time.scale).toBe(1)
+    w.stop()
+  })
+
+  it('pauseOnHidden still auto-resumes a visibility-initiated pause (O-32)', () => {
+    const w = createWorld()
+    w.startLoop()
+    expect(w.time.scale).toBe(1)
+    doc.hidden = true
+    doc._dispatch()
+    expect(w.time.scale).toBe(0)
+    doc.hidden = false
+    doc._dispatch()
+    expect(w.time.scale).toBe(1)
+    w.stop()
+  })
 })

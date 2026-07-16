@@ -8,6 +8,9 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `loadIfPresent(world, storage, slot, opts?)` in `@domecs/persist` (FINDINGS
+  O-28) — boot-friendly load where a missing slot is `ok(false)` rather than
+  `persist_io`. Real I/O / parse / migration / restore failures remain `err`.
 - `createLocalStorageStorage(prefix?)` in `@domecs/persist` (FINDINGS O-1) —
   a browser `localStorage` adapter that namespaces slots under `prefix`
   (default `'domecs:'`), resolves the backing store lazily from `globalThis`
@@ -30,6 +33,15 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Fixed
 
+- **O-2 first paint:** under default `changedOn: auto` (and explicit gating),
+  `mountDOM` now calls `update()` once when a node is created, so static
+  entities are not left empty/at (0,0) until an unrelated change marks them.
+- **O-32 `pauseOnHidden` provenance:** the rAF driver only auto-resumes a
+  pause it initiated. App-managed `world.pause()` (e.g. a Pause button) is no
+  longer trampled when the tab becomes visible again.
+- **O-28 empty-slot retryability:** `load()` on a missing slot now returns
+  `persist_io` with `retryable: false` (first-run is deterministic until a
+  save exists). Prefer `loadIfPresent` for boot paths.
 - `mountDOM` no longer leaks queries on its error paths (FINDINGS O-17). The
   `unregistered_slot` and `plugin_install_failed` returns now dispose the live
   queries and `onAdd`/`onRemove` subscriptions built for already-processed
@@ -53,6 +65,11 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Documentation
 
+- Root README repositioned for operable simulation + agent operation; drops
+  unearned "high-performance" claim; labels v1.0 as **API-stable** (PLAN WS-0).
+- Documented first-hour traps: `spawn` shallow-copy (O-34), `keyDelta`
+  render-tick scope (O-35), `stepOnce` vs `fixed` (O-37), scale-0 gating for
+  `tick`/`fixed` (O-3), and provenance-aware `pauseOnHidden` (O-32).
 - `doc/api.md`: removed pre-v1.0 drift — deleted the ghost `@domecs/sprites`
   section (no such package ships), rewrote the quick-start to import only real
   packages, retitled the reference to v1.0, swept the remaining `v0.1` version

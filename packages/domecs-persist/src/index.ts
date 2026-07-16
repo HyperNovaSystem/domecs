@@ -4,6 +4,7 @@
  */
 export {
   load,
+  loadIfPresent,
   pruneTransientOnlyEntities,
   save,
   type LoadOptions,

@@ -36,6 +36,12 @@ export type ChangedOn =
  * `changedOn` controls when the `update` callback fires; see {@link ChangedOn}
  * for the three modes. Omitting `changedOn` is equivalent to
  * `{ mode: 'auto' }`.
+ *
+ * **First paint (O-2):** on mount, `update` (when provided) runs once for each
+ * newly created node even under `auto` / `explicit` gating, so entities that
+ * are spawned and never marked changed still render. Subsequent updates stay
+ * change-gated. Use `{ mode: 'legacy' }` only when you need every mounted
+ * entity redrawn every tick (time-driven animation).
  */
 export interface ViewDef<Fields = Record<string, unknown>> {
   readonly slot: string
