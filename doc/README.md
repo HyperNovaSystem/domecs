@@ -31,6 +31,7 @@ specification; the repository's root `README.md` is the pitch.
 ## Reading order
 
 - New to the project → [../README.md](../README.md), then `SPEC.md`.
+- Agents / AI tooling → [../AGENTS.md](../AGENTS.md) and [../skills/domecs/SKILL.md](../skills/domecs/SKILL.md).
 - Implementing core → `SPEC.md` §§ 2–4, 8, then `api.md` sections for `@domecs/core`.
 - Implementing a plugin → `SPEC.md` § 9, then `api.md` plugin interface.
 - Packaging or deploying an app → `PACKAGING.md`, then the standalone Vite example apps (the root README's Live demos table links all five).

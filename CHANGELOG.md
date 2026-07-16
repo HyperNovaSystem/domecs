@@ -8,6 +8,12 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `createAgentBridge(world, opts?)` in `@domecs/core` (PLAN WS-3) — thin agent
+  facade: `reset` / `observe` / `act` / `step` / `snapshot` over existing
+  world APIs. Ships with root `AGENTS.md` and `skills/domecs/SKILL.md`.
+- Cold-install smoke: `node scripts/cold-install.mjs` (and
+  `RUN_COLD_INSTALL=1` node test) packs tarballs into an empty temp project
+  and probes published-layout imports.
 - `loadIfPresent(world, storage, slot, opts?)` in `@domecs/persist` (FINDINGS
   O-28) — boot-friendly load where a missing slot is `ok(false)` rather than
   `persist_io`. Real I/O / parse / migration / restore failures remain `err`.

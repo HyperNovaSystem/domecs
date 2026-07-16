@@ -1,6 +1,12 @@
 export { defineComponent } from './component.js'
 export { defineResource } from './resource.js'
 export { createWorld } from './world.js'
+export { createAgentBridge } from './agent.js'
+export type {
+  AgentBridge,
+  AgentBridgeOptions,
+  AgentObservation,
+} from './agent.js'
 export { defineEvent } from './events.js'
 export { createRng, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'

@@ -17,6 +17,8 @@
     "doctest:check": "node --test test/doctest.test.mjs",
     "publish:npm": "pnpm -r --filter \"@domecs/*\" build && pnpm -r --filter \"@domecs/*\" publish --access public",
     "bench": "node bench/run.mjs",
+    "cold-install": "node scripts/cold-install.mjs",
+    "test:cold-install": "node --test test/cold-install.test.mjs",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
   },
   "devDependencies": {

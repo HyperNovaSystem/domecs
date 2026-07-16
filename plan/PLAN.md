@@ -121,20 +121,21 @@ Only the first-hour traps; everything else stays demand-driven (§5).
 | Browser-importable ESM dist for no-build consumers | O-33 | packaging | npm already ships `dist/`; import-map docs added; cold-install CI open |
 | `loadIfPresent` + empty-slot non-retryable | O-28 | code | **done** |
 | Document traps: spawn shallow-copy; keyDelta scope; stepOnce vs fixed | O-34, O-35, O-37 | docs | **done** |
-| Cold-install test from an empty repo (published packages only) | — | infra | open |
+| Cold-install test from an empty repo (published packages only) | — | infra | **scripted** (`pnpm cold-install`; opt-in `RUN_COLD_INSTALL=1`) |
 
 ### WS-3 — Agent operability surface (the wedge; thin facade only)
 
-- `AGENTS.md` + an installable **DOMECS skill** (SKILL.md + the recipe
-  patterns from the ledger §2).
-- Compact machine-readable world manifest — package the shipped
-  `world.describe()`; nothing new.
-- Minimal agent bridge over existing APIs: `reset / observe / act / step /
-  snapshot`. Deterministic episode tests.
-- **Falsifiable legibility test (cheap; run early):** a cold agent session
+- [x] `AGENTS.md` + installable **DOMECS skill** (`skills/domecs/SKILL.md` +
+  recipe patterns from the ledger §2).
+- [x] Compact machine-readable world manifest — package the shipped
+  `world.describe()` via `bridge.observe()`; nothing new.
+- [x] Minimal agent bridge: `createAgentBridge` → `reset / observe / act /
+  step / snapshot`. Deterministic episode tests in
+  `packages/domecs/test/agent-bridge.test.ts`.
+- [ ] **Falsifiable legibility test (cheap; run early):** a cold agent session
   with only the published packages + skill must build a small working app.
-  Pass ⇒ ship-the-knowledge is a real distribution channel. Fail ⇒ the
-  legibility story needs repair before any marketing. Cost: ~one afternoon.
+  (Infrastructure: `pnpm cold-install` proves package import path; full
+  cold-agent build still open.)
 
 ### WS-4 — One flagship operable-simulation reference (the bet)
 

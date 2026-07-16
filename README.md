@@ -350,7 +350,7 @@ Direction is governed by [`plan/PLAN.md`](plan/PLAN.md). Summary:
 | **WS-0** | Positioning & hygiene (this README; API-stable labeling) |
 | **WS-1** | Benchmark suite — evidence before more features |
 | **WS-2** | Adoption-killer fixes (first paint, pause, persist first-run, docs) |
-| **WS-3** | Agent operability surface (`AGENTS.md`, skill, observe/act/step/snapshot) |
+| **WS-3** | Agent operability — `createAgentBridge`, [`AGENTS.md`](AGENTS.md), [`skills/domecs`](skills/domecs/SKILL.md) |
 | **WS-4** | One flagship operable-simulation reference |
 
 **Frozen until kill gates clear:** `@domecs/sprites`, React/Svelte adapters,

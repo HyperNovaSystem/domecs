@@ -955,6 +955,19 @@ function load(world: World, storage: Storage, slot: string, opts?: LoadOptions):
 // Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
 function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
 
+// --- Agent bridge (WS-3; @domecs/core) ---------------------------------------
+// Thin facade over World — no new runtime semantics.
+function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge
+interface AgentBridge {
+  readonly world: World
+  reset(): void
+  captureBaseline(): void
+  observe(): AgentObservation  // tick, scale, entityCount, manifest (= describe())
+  act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  step(dt?: number): void      // omit dt → stepOnce; positive dt → step(dt)
+  snapshot(options?: SnapshotOptions): WorldSnapshot
+}
+
 interface SaveOptions {
   meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)
   savedAt?: number                    // override stamped ms-epoch timestamp; default Date.now()
