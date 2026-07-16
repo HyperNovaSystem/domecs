@@ -2,7 +2,8 @@
 
 _Consolidated 2026-07-16 from: `plan/NOTES.md` (direction), `plan/FINDINGS.md`
 (the O-ledger), `plan/BENCHMARK.md`, `doc/ROADMAP.md`, and three independent
-external engine reviews (2026-07, kept as local untracked notes in `plan/`)._
+external engine reviews (2026-07; synthesized here, originals removed after
+capture)._
 
 This file is the **governing plan**. `plan/FINDINGS.md` remains the
 engineering ledger and `doc/ROADMAP.md` the itemized feature queue; where this
@@ -206,5 +207,6 @@ mode.
 - **`plan/FINDINGS.md`** — engineering ledger (shipped / open O-items /
   deferred); moved from the repo root 2026-07-16.
 - **`doc/ROADMAP.md`** — itemized feature queue; subordinate to this plan.
-- `plan/NOTES.md`, `plan/BENCHMARK.md`, and the external review notes — raw
-  inputs; deliberately untracked (public repo), superseded by this file.
+- `plan/NOTES.md`, `plan/BENCHMARK.md` — raw inputs; deliberately untracked
+  (public repo), superseded by this file. The three external review notes
+  were removed 2026-07-16 after their content was captured here.
