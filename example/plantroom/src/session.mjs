@@ -1,28 +1,60 @@
 /**
- * Plantroom agent session — bridge + snapshot branch / fast-forward compare.
+ * Plantroom agent session — bridge, branch compare, proposals, historian scrub.
  */
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPlantWorld } from './model.mjs'
+import {
+  createPlantWorld,
+  proposalRestartOnly,
+  proposalResetAndStart,
+  SetPump,
+  InjectFault,
+  AcknowledgeAlarm,
+  Historian,
+} from './model.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const { createAgentBridge } = await import(
   pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href
 )
 
+const eventMap = {
+  SetPump,
+  InjectFault,
+  AcknowledgeAlarm,
+}
+
 /**
- * @param {{ seed?: number | number[] }} [opts]
+ * @param {{ seed?: number | number[], sensorCount?: number }} [opts]
  */
 export function createPlantSession(opts = {}) {
-  const plant = createPlantWorld(opts)
+  const plant = createPlantWorld({
+    seed: opts.seed,
+    sensorCount: opts.sensorCount ?? 200,
+    headless: true,
+  })
   const { world, ids, components, events } = plant
   const bridge = createAgentBridge(world)
   bridge.captureBaseline()
 
   const fixedStep = world.time.fixedStep
+  /** @type {import('./buildPlant.js').Proposal | null} */
+  let pending = null
+  /** @type {Array<{ tick: number, snapshot: object }>} */
+  const checkpoints = []
+  const checkpointEvery = 20
+  const checkpointCapacity = 40
 
-  return {
+  function maybeCheckpoint() {
+    const tick = world.time.tick
+    if (tick <= 0 || tick % checkpointEvery !== 0) return
+    if (checkpoints.some((c) => c.tick === tick)) return
+    checkpoints.push({ tick, snapshot: world.snapshot() })
+    while (checkpoints.length > checkpointCapacity) checkpoints.shift()
+  }
+
+  const session = {
     world,
     bridge,
     ids,
@@ -34,60 +66,118 @@ export function createPlantSession(opts = {}) {
       return bridge.observe()
     },
 
-    /** Inject a deterministic fault (demo moment step 1). */
     injectPumpTrip() {
       return bridge.act(events.InjectFault, { kind: 'pump_trip' })
     },
 
-    /** Agent proposal: try to restart pump (may fail while tripped). */
+    queueProposal(proposal) {
+      pending = proposal
+      return pending
+    },
+
+    getPendingProposal() {
+      return pending
+    },
+
+    rejectProposal() {
+      const was = pending
+      pending = null
+      return was
+    },
+
+    approveProposal() {
+      if (!pending) return { applied: false, results: [] }
+      const results = []
+      for (const step of pending.steps) {
+        const et = eventMap[step.event]
+        if (!et) throw new Error(`unknown proposal event ${step.event}`)
+        results.push(bridge.act(et, step.payload))
+        maybeCheckpoint()
+      }
+      pending = null
+      return { applied: true, results }
+    },
+
     proposeRestartPump() {
       return bridge.act(events.SetPump, { running: true })
     },
 
-    /** Better proposal: reset trip then restart. */
     proposeResetAndStart() {
-      const ack = bridge.act(events.AcknowledgeAlarm, { code: 'PUMP-TRIP', reset: true })
+      const ack = bridge.act(events.AcknowledgeAlarm, {
+        code: 'PUMP-TRIP',
+        reset: true,
+      })
       const start = bridge.act(events.SetPump, { running: true })
       return { ack, start }
     },
 
-    /** Advance plant by n fixed steps. */
-    fastForward(steps) {
-      for (let i = 0; i < steps; i++) bridge.step(fixedStep)
+    agentSuggestAfterFault(kind = 'smart') {
+      const proposal =
+        kind === 'naive' ? proposalRestartOnly() : proposalResetAndStart()
+      return session.queueProposal(proposal)
     },
 
-    /**
-     * Branch current state, run strategy A and B for `steps`, compare outcomes.
-     * @param {(s: ReturnType<typeof createPlantSession>) => void} strategyA
-     * @param {(s: ReturnType<typeof createPlantSession>) => void} strategyB
-     */
+    fastForward(steps) {
+      for (let i = 0; i < steps; i++) {
+        bridge.step(fixedStep)
+        maybeCheckpoint()
+      }
+    },
+
     compareBranches(steps, strategyA, strategyB) {
       const base = bridge.snapshot()
-
-      // Branch A
       world.restore(base)
-      strategyA(this)
-      this.fastForward(steps)
-      const outcomeA = readOutcome(this)
+      strategyA(session)
+      session.fastForward(steps)
+      const outcomeA = readOutcome(session)
 
-      // Branch B
       world.restore(base)
-      strategyB(this)
-      this.fastForward(steps)
-      const outcomeB = readOutcome(this)
+      strategyB(session)
+      session.fastForward(steps)
+      const outcomeB = readOutcome(session)
 
-      // Leave world on branch B by default; caller can restore base if needed
       return { outcomeA, outcomeB, base }
     },
 
+    getHistorian() {
+      return world.getResource(Historian)
+    },
+
+    getCheckpoints() {
+      return checkpoints.slice()
+    },
+
+    /**
+     * Restore nearest checkpoint at or before `tick`.
+     * @returns {boolean}
+     */
+    restoreHistorianCheckpoint(tick) {
+      if (checkpoints.length === 0) return false
+      let best = null
+      for (const cp of checkpoints) {
+        if (cp.tick <= tick) best = cp
+      }
+      if (!best) best = checkpoints[0]
+      world.restore(best.snapshot)
+      return true
+    },
+
     readOutcome() {
-      return readOutcome(this)
+      return readOutcome(session)
+    },
+
+    entityCount() {
+      return bridge.observe().entityCount
     },
 
     reset() {
+      pending = null
+      checkpoints.length = 0
       bridge.reset()
     },
   }
+
+  return session
 }
 
 function readOutcome(session) {

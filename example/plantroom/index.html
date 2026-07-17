@@ -10,14 +10,15 @@
     <header class="top">
       <h1>Plantroom</h1>
       <p class="sub">
-        Operable industrial cell · determinism · typed actions · snapshot branch · agent bridge
+        Flagship operable cell · ~200 sensors · typed actions · agent proposals ·
+        historian scrub · snapshot branch
       </p>
       <div class="toolbar" id="toolbar">
         <button type="button" data-act="run">Run</button>
         <button type="button" data-act="pause">Pause</button>
         <button type="button" data-act="fault">Inject pump trip</button>
-        <button type="button" data-act="naive">Agent: restart only</button>
-        <button type="button" data-act="smart">Agent: reset + start</button>
+        <button type="button" data-act="propose-naive">Agent propose: restart</button>
+        <button type="button" data-act="propose-smart">Agent propose: reset+start</button>
         <button type="button" data-act="branch">Branch compare (×40)</button>
         <button type="button" data-act="reset">Reset episode</button>
       </div>
@@ -26,7 +27,7 @@
 
     <main class="grid">
       <section class="panel">
-        <h2>Tags</h2>
+        <h2>Tags (critical)</h2>
         <div id="slot-tags" class="slot tags"></div>
       </section>
       <section class="panel">
@@ -36,14 +37,37 @@
       <section class="panel">
         <h2>Plant</h2>
         <div id="slot-plant" class="slot plant"></div>
+        <p class="meta" id="sensor-meta">sensors: —</p>
       </section>
+
+      <section class="panel approval" id="approval-panel">
+        <h2>Operator approval</h2>
+        <div id="proposal" class="proposal empty">
+          No pending agent proposal. Inject a fault, then ask the agent to propose.
+        </div>
+        <div class="approval-actions">
+          <button type="button" data-act="approve" id="btn-approve" disabled>Approve</button>
+          <button type="button" data-act="reject" id="btn-reject" disabled>Reject</button>
+        </div>
+      </section>
+
       <section class="panel wide">
-        <h2>Trend (level / temp)</h2>
-        <canvas id="trend" width="640" height="160" aria-label="Level and temperature trend"></canvas>
+        <h2>Historian</h2>
+        <div class="historian-controls">
+          <label>
+            Scrub
+            <input type="range" id="scrub" min="0" max="0" value="0" />
+          </label>
+          <span id="scrub-label" class="meta">live</span>
+          <button type="button" data-act="live">Return to live</button>
+          <button type="button" data-act="restore-cp">Restore checkpoint @ scrub</button>
+        </div>
+        <canvas id="trend" width="720" height="180" aria-label="Historian level and temperature"></canvas>
       </section>
+
       <section class="panel wide">
         <h2>Branch outcomes</h2>
-        <pre id="branch" class="branch">Run “Branch compare” after a fault to compare strategies.</pre>
+        <pre id="branch" class="branch">Run “Branch compare” after a fault to compare strategies side by side.</pre>
       </section>
     </main>
 

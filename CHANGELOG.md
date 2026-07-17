@@ -19,6 +19,9 @@ All notable changes to DOMECS are documented here. The format is based on
   compare, `pnpm test:plantroom`).
 - Plantroom multi-view browser chrome (Vite): tags / alarms / plant slots +
   trend canvas + toolbar branch compare.
+- Plantroom WS-4 complete: historian scrub + checkpoint restore, operator
+  approval panel for agent proposals, ~200 sensors scale, shared
+  `buildPlant.js` domain, dogfood decision (stay in monorepo).
 - Bench workloads: windowed projection + plain baseline; `pnpm bench:write`.
 - Bench compare: Koota + hand-rolled signals baselines (`--workload compare`);
   honest no-decisive-win writeup in `bench/COMPARISON.md`.

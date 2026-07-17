@@ -352,7 +352,7 @@ Direction is governed by [`plan/PLAN.md`](plan/PLAN.md). Summary:
 | **WS-1** | Benchmark suite — `pnpm bench` (soak/telemetry/snapshot/windowed/baseline) |
 | **WS-2** | Adoption-killer fixes (first paint, pause, persist first-run, docs, cold-install) |
 | **WS-3** | Agent operability — `createAgentBridge`, [`AGENTS.md`](AGENTS.md), skill, legibility mini-app |
-| **WS-4** | Flagship scaffold — [`example/plantroom`](example/plantroom) (branch/compare episode) |
+| **WS-4** | Flagship **Plantroom** — [`example/plantroom`](example/plantroom) (approval, historian, branch, scale) |
 
 **Frozen until kill gates clear:** `@domecs/sprites`, React/Svelte adapters,
 network rollback / generalized Worker host, `create-domecs` scaffolder,

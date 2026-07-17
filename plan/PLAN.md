@@ -143,23 +143,27 @@ Only the first-hour traps; everything else stays demand-driven (§5).
   episode against built dist (score=7, deterministic). Full *human-out-of-loop*
   cold agent session still a marketing-time check.
 
-### WS-4 — One flagship operable-simulation reference (the bet)
+### WS-4 — One flagship operable-simulation reference (the bet) — **done**
 
-Scaffold in-repo: **`example/plantroom/`** (headless core + episode tests).
+In-repo flagship: **`example/plantroom/`** (`@domecs/example-plantroom`).
 
 - [x] PLC-style tags + alarms + vessel/pump dynamics (fixed schedule)
 - [x] Typed actions: inject fault, set pump, ack/reset trip
 - [x] Snapshot branch + fast-forward compare (naive restart vs reset+start)
 - [x] Agent bridge session (`createPlantSession`)
-- [x] Deterministic episode tests (`pnpm test:plantroom`)
-- [x] Browser multi-view chrome (tags / alarms / plant + trend canvas)
-  — `example/plantroom` Vite app (`pnpm dev` in that folder)
-- [ ] Historian playback UI + operator approval UX (trend is live-only for now)
-- [ ] Scale to several hundred entities + product polish
-- [ ] Dogfood daily-use decision (keep here or promote to standalone repo)
+- [x] Deterministic episode tests (`pnpm test:plantroom` — branch, approval,
+  historian restore, scale, determinism)
+- [x] Browser multi-view chrome (tags / alarms / plant + historian canvas)
+  — `pnpm plantroom:dev`
+- [x] Historian: sample ring + external snapshot checkpoints; scrub UI +
+  restore-to-checkpoint
+- [x] Operator approval UX: agent proposals queue; Approve/Reject before acts
+- [x] Scale: ~200 field sensors + critical tags (~207 entities)
+- [x] **Dogfood decision:** keep in monorepo as flagship reference; promote to
+  standalone app repo only if daily product use outgrows the workspace
 
-Demo moment (headless, tested): fault (pump trip) → two agent strategies
-branched → competent strategy recovers cooling and runs cooler than naive.
+Demo moment (headless + UI): fault → agent proposal → operator approve/reject
+**or** branch-compare naive vs reset+start → historian scrub/restore.
 
 ## 4. Stop-doing list (frozen until a kill gate clears)
 

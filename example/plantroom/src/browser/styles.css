@@ -47,7 +47,9 @@ h1 {
   gap: 0.4rem;
 }
 
-.toolbar button {
+.toolbar button,
+.approval-actions button,
+.historian-controls button {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -57,9 +59,26 @@ h1 {
   font: inherit;
 }
 
-.toolbar button:hover {
+.toolbar button:hover,
+.approval-actions button:hover:not(:disabled),
+.historian-controls button:hover {
   border-color: var(--accent);
   color: #fff;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#btn-approve:not(:disabled) {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+#btn-reject:not(:disabled) {
+  border-color: var(--crit);
+  color: var(--crit);
 }
 
 .status {
@@ -92,6 +111,11 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.panel.approval {
+  grid-column: 1 / -1;
+  border-color: #3a4d63;
+}
+
 .panel h2 {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
@@ -105,6 +129,12 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.meta {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .tag-row,
@@ -166,6 +196,66 @@ h1 {
   color: var(--crit);
 }
 
+.proposal {
+  padding: 0.75rem;
+  border-radius: 6px;
+  background: #121820;
+  border: 1px solid #243041;
+  min-height: 4rem;
+  line-height: 1.45;
+}
+
+.proposal.empty {
+  color: var(--muted);
+}
+
+.proposal h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.proposal .rationale {
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.proposal ol {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.historian-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.historian-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  flex: 1;
+  min-width: 12rem;
+}
+
+.historian-controls input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
 #trend {
   width: 100%;
   height: auto;
@@ -180,6 +270,11 @@ h1 {
   font-size: 0.85rem;
   color: var(--text);
   line-height: 1.45;
+}
+
+.scrub-marker {
+  stroke: #fff;
+  stroke-width: 1;
 }
 
 @media (max-width: 900px) {

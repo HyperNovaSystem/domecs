@@ -1,54 +1,63 @@
 # Plantroom — flagship operable simulation (WS-4)
 
-Working title for the PLAN capstone: a simulated industrial process cell that
-exercises the distinctive DOMECS stack **together**:
+Product-depth reference for DOMECS: a simulated industrial process cell that
+exercises the distinctive stack **together**:
 
-- deterministic fixed-step physics-ish plant model
-- typed control actions (`world.action` / agent bridge)
-- snapshot branching + fast-forward compare
-- multi-view projection targets (tags / alarms / trends)
-- agent-in-the-loop proposals for operator approval
+| Capability | Where |
+|------------|--------|
+| Deterministic fixed-step plant | `src/buildPlant.js` |
+| Typed control actions | `SetPump`, `InjectFault`, `AcknowledgeAlarm` |
+| Agent proposals + **operator approval** | session + browser approval panel |
+| Snapshot **branch compare** | session / toolbar |
+| **Historian** samples + checkpoint restore | resource + external checkpoint ring |
+| Multi-view DOM | Tags / Alarms / Plant slots |
+| Scale | **200 field sensors** + critical tags (~207 entities) |
+| Agent bridge | `createAgentBridge` |
 
-## Status
+## Dogfood decision
 
-**Headless core + multi-view browser chrome.** Historian-as-canvas trend is
-minimal; full product polish / dogfood decision still open.
+**Keep Plantroom in this monorepo** as the flagship reference app
+(`example/plantroom`, package `@domecs/example-plantroom`).
 
-## Run tests
+Rationale: it validates the operable-sim stack against workspace packages
+without a second publish cycle. Promote to a standalone HyperNovaSystem repo
+later if daily product use outgrows the monorepo (not required to close WS-4).
+
+## Run tests (headless)
 
 ```bash
 # from repo root
 pnpm --filter @domecs/core build
 pnpm test:plantroom
-# or:
-node --test example/plantroom/test/episode.test.mjs
 ```
+
+Covers: branch compare, operator approval gate, historian checkpoint restore,
+entity scale, determinism.
 
 ## Browser UI
 
 ```bash
-cd example/plantroom
-pnpm install
-pnpm dev
+pnpm plantroom:dev
 # → http://localhost:5179
+
+pnpm plantroom:build
 ```
 
-Multi-view slots: **Tags**, **Alarms**, **Plant** (vessel+pump), plus trend
-canvas and branch-compare readout. Toolbar drives inject-fault, agent
-proposals, and snapshot branch compare.
+### Demo moment (UI)
 
-## Demo moment (target)
+1. **Run** the plant (auto-starts).
+2. **Inject pump trip** — fault + auto-queues a competent agent proposal.
+3. **Approve** or **Reject** in the Operator approval panel.
+4. Or run **Branch compare** to fast-forward naive vs reset+start strategies.
+5. **Historian scrub** — drag the scrubber; **Restore checkpoint @ scrub**
+   reloads the nearest snapshot checkpoint ≤ that tick.
+6. **Return to live** resumes sampling after scrub.
 
-1. Fault develops (cooling pump trip).
-2. Agent proposes a control sequence via typed actions.
-3. Operator branches the snapshot.
-4. Both strategies fast-forward; outcomes compared.
-5. One branch committed.
-
-## Layout
+### Layout
 
 | Path | Role |
 |------|------|
-| `src/model.mjs` | Components, events, systems (tags, alarms, plant) |
-| `src/session.mjs` | Agent bridge + branch/fast-forward helpers |
-| `test/episode.test.mjs` | Deterministic fault → propose → branch episode |
+| `src/buildPlant.js` | Shared domain factory |
+| `src/model.mjs` / `session.mjs` | Headless + agent session |
+| `src/browser/*` | Vite multi-view chrome |
+| `test/episode.test.mjs` | WS-4 acceptance tests |
