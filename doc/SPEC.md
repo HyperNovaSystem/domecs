@@ -407,6 +407,7 @@ Roguelike default.
 - `accepted` / `consumedTurn` / `reason` come from an optional `opts.resolve({ events, world })` verdict — game policy, which the engine does not interpret. The default verdict is `{ accepted: true, consumedTurn: true }`; when a resolver omits `consumedTurn` it defaults to `accepted` (an accepted command spends the turn, a rejected one does not). `consumedTurn` is a *reported* value for the caller's turn bookkeeping — `action` always advances exactly one tick regardless, because turn-consumption policy can only be decided by systems that run *inside* the tick.
 - `snapshot` is attached only when `opts.snapshot` is set (`true` for defaults, or a `SnapshotOptions` object to forward e.g. `pruneEmptyEntities`).
 - `opts.dt` is forwarded to `step`; omit it for a turn-based tick advance (as `turn()` does). A non-positive explicit `dt` is a heartbeat (§4.0) and will not process the action.
+- **Payload validation (O-39, normative).** When the event type was defined with a `schema`, `action()` validates the payload *before* emitting: a non-object payload, a field not declared in the schema, a wrong-typed declared field, or an out-of-`options` enum value returns `{ accepted: false, consumedTurn: false, reason, events: [] }` — no event is emitted and **no tick advances** (the malformed command never enters the world). Declared fields absent from the payload are treated as optional (`FieldSchema` carries no required-marker). Schema-less events are not validated, and `turn()` / `emit` are never validated — the check is an *action-boundary* contract.
 
 ---
 
@@ -590,12 +591,15 @@ interface WorldSnapshot {
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
   entities:   { id: number; components: Record<string, unknown> }[]
+  nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
   meta?:      Record<string, unknown>
 }
 ```
 
 `SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
+
+**Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 

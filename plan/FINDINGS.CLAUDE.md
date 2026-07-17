@@ -43,16 +43,19 @@ Fixes were applied on this branch after the review. Per-item disposition:
   documented; child-process-per-engine isolation deferred), R-21 (`stop()`
   now relinquishes an owned pause; the hidden-tab ownership-epoch limit is
   documented on `StartOptions.pauseOnHidden` rather than re-engineered).
-- **Documented + ledgered, engine change deferred** — R-7 (→ ledger O-38:
-  snapshot id-cursor field is the real fix; reset-before-first-episode is
-  now the documented pattern), R-8 (→ ledger O-39: schema validation in
-  `action()`; the Plantroom `CommandResult` resolver ships as the
-  mitigation pattern), R-22 and R-23 (bridge `reset()`/`step(0)` semantics
-  documented at the bridge, api.md, and AGENTS.md).
-- **Left for the maintainer** — R-33 (the v1.0.0 GitHub Release body edit
-  needs release-edit permissions this session does not have: run
-  `gh release edit v1.0.0 --notes-file <fixed.md>` with backticks
-  restored).
+- **Fixed (second pass, 2026-07-17)** — R-7 (→ O-38 closed:
+  `WorldSnapshot.nextId` + restore honoring it, regression test, SPEC
+  §7.1) and R-8 (→ O-39 closed: `action()` validates payloads against a
+  declared event schema — no emit, no tick on rejection; Plantroom command
+  events now declare schemas as the dogfood example; the `CommandResult`
+  resolver remains the domain-adjudication layer on top).
+- **Documented only** — R-22 and R-23 (bridge `reset()`/`step(0)`
+  semantics documented at the bridge, api.md, and AGENTS.md).
+- **Left for the maintainer** — R-33: editing the v1.0.0 GitHub Release is
+  policy-blocked for this session type (the API returns 403 "Creating,
+  editing, or deleting releases is not permitted" regardless of scopes).
+  The corrected body is committed at `doc/release-notes/v1.0.0.md`; run
+  `gh release edit v1.0.0 --notes-file doc/release-notes/v1.0.0.md`.
 
 **Verdict.** This is a strong, honest tranche: the plan is coherent, the
 WS-2 fixes are real and well-documented, the agent surface is genuinely thin,

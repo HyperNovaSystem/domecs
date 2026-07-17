@@ -74,9 +74,17 @@ export function buildPlant(core) {
     }),
   })
 
-  const SetPump = defineEvent('SetPump') // { running: boolean }
-  const InjectFault = defineEvent('InjectFault') // { kind: 'pump_trip' }
-  const AcknowledgeAlarm = defineEvent('AcknowledgeAlarm') // { code, reset? }
+  // Declared schemas make world.action reject malformed payloads at the
+  // boundary (O-39) and publish the command contract via world.describe().
+  const SetPump = defineEvent('SetPump', {
+    schema: { fields: { running: { kind: 'boolean' } } },
+  })
+  const InjectFault = defineEvent('InjectFault', {
+    schema: { fields: { kind: { kind: 'enum', options: ['pump_trip'] } } },
+  })
+  const AcknowledgeAlarm = defineEvent('AcknowledgeAlarm', {
+    schema: { fields: { code: { kind: 'string' }, reset: { kind: 'boolean' } } },
+  })
   /**
    * Downstream verdict for every control command:
    * `{ command, applied, reason }`. Read it with {@link resolveCommand} so
@@ -84,7 +92,15 @@ export function buildPlant(core) {
    * nothing (restart of a latched pump, ack of an inactive alarm, unknown
    * fault kind) instead of blindly accepting.
    */
-  const CommandResult = defineEvent('CommandResult')
+  const CommandResult = defineEvent('CommandResult', {
+    schema: {
+      fields: {
+        command: { kind: 'string' },
+        applied: { kind: 'boolean' },
+        reason: { kind: 'string' },
+      },
+    },
+  })
 
   /**
    * Action resolver over the `CommandResult` the control systems emit.

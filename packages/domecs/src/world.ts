@@ -19,6 +19,7 @@ import type {
 import {
   createEventBus,
   internalEvent,
+  validateEventPayload,
   type EmittedEvent,
   type EventBus,
   type EventDescriptor,
@@ -580,6 +581,7 @@ export function createWorld(options: WorldOptions = {}): World {
     setRand: (r) => {
       rand = r
     },
+    getNextId: () => nextId,
     setNextId: (id) => {
       nextId = id
     },
@@ -1619,6 +1621,20 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // O-39: when the event declares a schema, the command boundary rejects
+      // malformed payloads outright — no emit, no tick, no consumed turn —
+      // instead of accepting a command whose handler will silently no-op or
+      // NaN-poison state. Schema-less events remain unvalidated (declare a
+      // schema on agent-facing commands to opt in). turn()/emit stay raw.
+      const invalid = validateEventPayload(type, payload)
+      if (invalid !== null) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `invalid payload for "${type.name}": ${invalid}`,
+          events: [],
+        }
+      }
       // A typed turn() that surfaces a structured command result. Emit the
       // action, advance one tick (the action flushes at step 1 and its handlers
       // run during steps 3–6), then read back the events those handlers emitted

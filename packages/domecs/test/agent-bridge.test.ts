@@ -83,6 +83,23 @@ describe('createAgentBridge (WS-3)', () => {
     expect(world.getComponent(id, Counter)?.n).toBe(10)
   })
 
+  it('entity ids assigned after reset() match ids assigned on the live world (O-38)', () => {
+    const world = createWorld({ headless: true })
+    world.spawn([entry(Counter, { n: 1 })])
+    const scratch = world.spawn([entry(Counter, { n: 2 })]) // highest id
+    world.despawn(scratch) // despawn the max-id entity BEFORE the baseline
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+
+    // Episode 1 runs directly on live state; episode 2 on restored state.
+    // The snapshot carries the id cursor, so both assign the same id — the
+    // restored world must not recycle the despawned scratch id.
+    const liveId = world.spawn([entry(Counter, { n: 3 })])
+    bridge.reset()
+    const restoredId = world.spawn([entry(Counter, { n: 3 })])
+    expect(restoredId).toBe(liveId)
+  })
+
   it('pending follow-up events do not leak across reset() into the next episode', () => {
     // An event system that emits a downstream event: the follow-up is
     // pending (tick-delayed) when the episode ends. reset() + step must NOT

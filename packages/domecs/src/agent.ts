@@ -46,11 +46,10 @@ export interface AgentBridge {
    * `setInput` data carries that into the next episode — restore them
    * explicitly at episode boundaries if your episodes touch either.
    *
-   * For comparable episodes, call `reset()` once BEFORE the first episode
-   * too: entity-id assignment on a restored world derives from the highest
-   * live id, so a first episode run directly on live setup state can
-   * assign different ids than post-reset episodes when setup despawned the
-   * max-id entity (see plan/FINDINGS.md O-38).
+   * Entity-id assignment is stable across `reset()`: the snapshot carries
+   * the id cursor (O-38), so ids assigned after a restore match ids the
+   * live world would have assigned. Pending events are discarded by
+   * `restore()`, so an abandoned episode's events never fire into the next.
    */
   reset(): void
   /** Replace the baseline with a snapshot of the current world state. */
@@ -77,9 +76,8 @@ export interface AgentBridge {
 /**
  * Create an agent bridge over an existing world.
  *
- * Typical episode loop (note the reset() BEFORE the first episode — it
- * makes entity-id assignment identical across all episodes, see
- * {@link AgentBridge.reset}):
+ * Typical episode loop (the reset() before the first episode is boundary
+ * hygiene — every episode then starts from the identical restored state):
  * ```ts
  * const bridge = createAgentBridge(world)
  * bridge.reset()

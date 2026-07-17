@@ -212,7 +212,12 @@ interface World {
   // stays buffered for the next real tick; the result is then
   // { accepted: false, consumedTurn: false, events: [] } with a reason, and
   // opts.resolve is not invoked. consumedTurn is a reported value, not
-  // engine-enforced. SPEC §3.
+  // engine-enforced.
+  // O-39: when the event declares a schema, the payload is validated FIRST —
+  // unknown fields, wrong-typed declared fields, or out-of-enum values reject
+  // with { accepted: false, reason } before any emit and with NO tick advance.
+  // Absent declared fields are optional; schema-less events are unvalidated,
+  // as are turn()/emit. SPEC §3.
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
 
   // entities
@@ -805,10 +810,15 @@ interface AgentBridge {
 Notes:
 - `reset()` does **not** restore `time.scale` or input state (the snapshot
   does not carry them); restore those explicitly at episode boundaries if
-  episodes touch either. Call `reset()` once before the FIRST episode too,
-  so entity-id assignment is identical across all episodes (O-38).
+  episodes touch either. Entity-id assignment is stable across `reset()`
+  (the snapshot carries the id cursor, O-38) and pending events from the
+  abandoned episode are discarded by `restore()`.
 - `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
   same as `step()` — guard computed dt values that can round to 0.
+- `act()` validates the payload when the event declares a `schema`
+  (unknown fields / wrong-typed fields / out-of-enum values →
+  `{ accepted: false, reason }`, no tick consumed). Schema-less events are
+  unvalidated — declare schemas on agent-facing commands (O-39).
 
 ---
 

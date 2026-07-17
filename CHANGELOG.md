@@ -18,6 +18,18 @@ All notable changes to DOMECS are documented here. The format is based on
   pause, so a stop+startLoop cycle while the tab is hidden can no longer
   orphan the world at scale 0; the remaining ownership limit is documented
   on `StartOptions.pauseOnHidden`. (R-21)
+- `@domecs/core`: snapshots carry the entity-id cursor (`WorldSnapshot.nextId`,
+  optional) and `restore()` honors it — ids assigned after a restore now
+  match the live world even when the highest-id entity was despawned before
+  the snapshot, so `AgentBridge.reset()` episodes are id-comparable. Older
+  snapshots without the field fall back to the previous maxAliveId+1
+  derivation. (O-38)
+- `@domecs/core`: `world.action()` validates payloads against the event's
+  declared `schema` before emitting — unknown fields, wrong-typed fields,
+  or out-of-enum values return `{ accepted: false, reason }` with no emit
+  and no tick advance. **Behavior change** for schema-declaring events
+  (previously accepted unvalidated); schema-less events and `turn()`/`emit`
+  are unchanged. Plantroom's command events now declare schemas. (O-39)
 - `@domecs/core`: `world.restore()` discards pending (undelivered) events
   before applying the snapshot — events emitted on the abandoned timeline
   no longer fire into the first tick after a restore, so identical

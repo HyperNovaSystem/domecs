@@ -65,6 +65,7 @@ export interface WorldStateCtx {
   // Reassignable factory closure vars, threaded as accessors.
   getRand(): Rng
   setRand(r: Rng): void
+  getNextId(): Entity
   setNextId(id: Entity): void
   setEmptyArch(arch: ArchetypeBucket): void
 }
@@ -95,6 +96,7 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     seed: ctx.getRand().seed(),
     tick: ctx.time.tick,
     entities,
+    nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
   }
 }
@@ -184,7 +186,11 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
       }
     }
   }
-  ctx.setNextId(maxId + 1)
+  // O-38: honor the snapshot's id cursor so post-restore id assignment
+  // matches the live world even when the max-id entity was despawned before
+  // the snapshot. Older snapshots lack the field — fall back to the derived
+  // cursor. Never allow a corrupt cursor to re-issue a live id.
+  ctx.setNextId(Math.max(s.nextId ?? 0, maxId + 1))
 
   // #16: rehydrate resources by name (v1 snapshots have no `resources`,
   // leaving the world's resource set empty — defaults re-materialize lazily).
