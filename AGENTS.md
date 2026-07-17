@@ -55,6 +55,9 @@ const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
 const id = world.spawn([entry(Health, { hp: 10 })])
 const agent = createAgentBridge(world)
 agent.captureBaseline()
+agent.reset()                        // episode-boundary hygiene: every
+                                     // episode starts from the identical
+                                     // restored state
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
@@ -150,7 +153,15 @@ components are `markChanged`.
 
 - [ ] Headless: `createWorld({ headless: true })` + `step`/`stepOnce` tests pass
 - [ ] Determinism: same seed + same acts → identical `JSON.stringify(snapshot())`
+  (key-order-stable today; a canonical serializer/hash is tracked as ledger
+  O-11 — switch to it when it ships)
 - [ ] Agent loop: `reset → observe → act → step → snapshot` is enough for the task
 - [ ] No invented methods; imports resolve from published `@domecs/*` only
+
+Two `act`/`step` sharp edges: `act()` validates payloads **only when the
+event declares a `schema`** (then typo'd fields / wrong types return
+`accepted: false` with a reason — declare schemas on every agent-facing
+command; schema-less events stay unvalidated), and `bridge.step(0)` is a
+heartbeat (no systems run), unlike `bridge.step()`.
 
 Installable skill companion: [`skills/domecs/SKILL.md`](skills/domecs/SKILL.md).

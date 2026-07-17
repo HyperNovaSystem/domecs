@@ -320,6 +320,7 @@ A higher-level `createPersistence` facade (IndexedDB adapter, autosave) is plann
 - `fixed` — fixed timestep (default 60 Hz), with accumulator; safe for physics. **Also gated at scale 0.**
 - `event` — fires only when matching events are emitted.
 - `once` — runs at world start (initialization).
+- `reactive` — fires on the change-delta of a `reactsTo` query (e.g. `OnChanged(Position)`); the delta arrives as `ctx.entities`.
 - Always-on while paused: `tickStart` signal and plugin `onTickStart` — put pause/resume/save hotkeys there, or handle keys outside the world.
 
 ### Determinism

@@ -6,6 +6,66 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-07-17 review tranche — see `plan/FINDINGS.CLAUDE.md`)
+
+- `@domecs/dom`: O-2 first paint is now driven from the update phase with a
+  fresh commit-time entity view — an entity created *and* marked changed in
+  one commit window gets exactly one `update()` (was two), and components
+  added later in the same window (spawn bags) are visible to the first
+  paint. SPEC §5.3 / api.md / package README document the first-paint
+  exception. (R-4/R-5/R-6)
+- `@domecs/core`: `stop()` relinquishes a `pauseOnHidden` driver-owned
+  pause, so a stop+startLoop cycle while the tab is hidden can no longer
+  orphan the world at scale 0; the remaining ownership limit is documented
+  on `StartOptions.pauseOnHidden`. (R-21)
+- `@domecs/core`: snapshots carry the entity-id cursor (`WorldSnapshot.nextId`,
+  optional) and `restore()` honors it — ids assigned after a restore now
+  match the live world even when the highest-id entity was despawned before
+  the snapshot, so `AgentBridge.reset()` episodes are id-comparable. Older
+  snapshots without the field fall back to the previous maxAliveId+1
+  derivation. (O-38)
+- `@domecs/core`: `world.action()` validates payloads against the event's
+  declared `schema` before emitting — unknown fields, wrong-typed fields,
+  or out-of-enum values return `{ accepted: false, reason }` with no emit
+  and no tick advance. **Behavior change** for schema-declaring events
+  (previously accepted unvalidated); schema-less events and `turn()`/`emit`
+  are unchanged. Plantroom's command events now declare schemas. (O-39)
+- `@domecs/core`: `world.restore()` discards pending (undelivered) events
+  before applying the snapshot — events emitted on the abandoned timeline
+  no longer fire into the first tick after a restore, so identical
+  `AgentBridge.reset()` episodes can no longer diverge on leftover event
+  state. Events a plugin emits during `onRestore` still survive. SPEC §7.1
+  now states the contract normatively. (R-34)
+- `@domecs/core`: `describeComponent` / `describeEvent` clone `FieldSchema`
+  values — manifests no longer share mutable references with live
+  reflection metadata.
+- `@domecs/core`: `getErrorRepairHint` for `persist_io` distinguishes
+  deterministic failures (empty slot → use `loadIfPresent`) from transient
+  IO; `doc/error-handling.md`'s retry example consults `e.retryable`
+  instead of retrying every `persist_io`. (R-15)
+- Plantroom flagship: restore-aware shared checkpoint ring (stale
+  abandoned-timeline checkpoints are dropped on restore; no fallback past
+  the requested tick), `compareBranches` is a pure evaluator that returns
+  the world to the shared base and resumes a paused world for its rollouts,
+  the plant holds a genuine steady state via a LIC-101 level loop (alarms
+  only on real upsets, HI-TEMP added), alarm acks latch honestly, and every
+  control command answers through a `CommandResult` resolver so
+  `world.action` verdicts are truthful. Checkpoint cadence keys to sim
+  time (frame-rate independent), and restored state repaints while paused
+  via a heartbeat. (R-1/R-9..R-14/R-24/R-25)
+- Bench: warmup discard for every engine, GC isolation under
+  `--expose-gc`, compare verdicts scoped to same-N rows, cross-engine
+  `domUpdates` equivalence check, telemetry workload with real coalescing
+  pressure (`coalesceRatio`), warmed repeated snapshot percentiles with a
+  stepped determinism check, and an actionable missing-dist guard.
+  (R-2/R-3/R-18/R-19/R-28/R-29/R-30)
+- Infra: CI runs the WS-3 legibility gate; `plantroom:build:pages` actually
+  passes `--base=/domecs/`; `publish:npm` filters by `./packages/*`
+  directory; Pages workflow uses `configure-pages` (first-deploy safe) and
+  `cancel-in-progress: false`; cold-install discovers tarballs on disk
+  (space-safe on Windows) and announces a retained stage on failure.
+  (R-17/R-26/R-27)
+
 ### Added
 
 - `createAgentBridge(world, opts?)` in `@domecs/core` (PLAN WS-3) — thin agent

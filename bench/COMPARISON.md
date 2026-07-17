@@ -22,8 +22,15 @@ Run:
 
 ```bash
 pnpm --filter @domecs/core build
-pnpm bench -- --workload compare --entities 5000 --ticks 100
+node --expose-gc bench/run.mjs --workload compare --entities 5000 --ticks 100
 ```
+
+Every engine gets the same unmeasured warmup (`--warmup`, default 30) before
+sampling, a full GC runs between workloads when `--expose-gc` is set, the
+verdict is computed only from the compare-phase rows (identical entity
+counts), and `compare-summary.windowedWorkEqual` checks the three windowed
+harnesses reported identical `domUpdates` — see bench/README.md
+"Methodology".
 
 ## Plumbing complexity (implementation cost)
 
@@ -66,6 +73,11 @@ If neither clears after honest measurement: correct README claims (already
 - Soak p95 favors raw data layout. Plain arrays and Koota SoA may beat DOMECS
   AoS component maps — that is expected and **not** a kill signal for the
   operable-sim thesis.
+- The DOMECS rows are timed at full `world.step()` cost (scheduler, event
+  flush, change-buffer swap, per-entity `markChanged`); the Koota and
+  signals rows time a bare loop with no frame machinery. That asymmetry is
+  deliberate — DOMECS is measured at the cost an app actually pays — but it
+  means soak ratios understate DOMECS's raw iteration speed.
 - Windowed p95 is closer to product shape (projection churn).
 - Prefer `compare-summary.decisiveRuntimeWins` and Plantroom episode
   complexity over single-number soak bragging.

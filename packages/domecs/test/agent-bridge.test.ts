@@ -82,4 +82,51 @@ describe('createAgentBridge (WS-3)', () => {
     bridge.reset()
     expect(world.getComponent(id, Counter)?.n).toBe(10)
   })
+
+  it('entity ids assigned after reset() match ids assigned on the live world (O-38)', () => {
+    const world = createWorld({ headless: true })
+    world.spawn([entry(Counter, { n: 1 })])
+    const scratch = world.spawn([entry(Counter, { n: 2 })]) // highest id
+    world.despawn(scratch) // despawn the max-id entity BEFORE the baseline
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+
+    // Episode 1 runs directly on live state; episode 2 on restored state.
+    // The snapshot carries the id cursor, so both assign the same id — the
+    // restored world must not recycle the despawned scratch id.
+    const liveId = world.spawn([entry(Counter, { n: 3 })])
+    bridge.reset()
+    const restoredId = world.spawn([entry(Counter, { n: 3 })])
+    expect(restoredId).toBe(liveId)
+  })
+
+  it('pending follow-up events do not leak across reset() into the next episode', () => {
+    // An event system that emits a downstream event: the follow-up is
+    // pending (tick-delayed) when the episode ends. reset() + step must NOT
+    // deliver the abandoned episode's follow-up into the fresh episode.
+    const Echo = defineEvent<{ from: string }>('AgentEcho')
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const id = world.spawn([entry(Counter, { n: 0 })])
+    world.system('on-inc', { schedule: 'event', triggers: [Inc] }, ({ events, world: w }) => {
+      for (const _ of events.of(Inc)) {
+        const c = w.getComponent(id, Counter)!
+        c.n += 1
+        w.markChanged(id, Counter)
+        events.emit(Echo, { from: 'inc' })
+      }
+    })
+    let echoes = 0
+    world.system('on-echo', { schedule: 'event', triggers: [Echo] }, ({ events }) => {
+      for (const _ of events.of(Echo)) echoes++
+    })
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+
+    bridge.act(Inc, { by: 1 }) // emits Echo, pending for the NEXT tick
+    bridge.reset()
+    echoes = 0
+    bridge.step() // first tick of the next episode
+    expect(echoes).toBe(0)
+    expect(world.getComponent(id, Counter)?.n).toBe(0)
+  })
 })

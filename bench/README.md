@@ -39,26 +39,50 @@ Losing is output: claims stay conservative.
 ```bash
 pnpm --filter @domecs/core build
 pnpm bench
-pnpm bench -- --workload compare --entities 5000 --ticks 100
+node --expose-gc bench/run.mjs --workload compare --entities 5000 --ticks 100
 pnpm bench:write
 ```
 
-## Sample compare (Node v24, 5k soak / 2k windowed, 80 ticks, 2026-07-17)
+## Methodology
+
+- **Warmup:** every workload (including the Koota/signals/plain baselines)
+  runs `--warmup` unmeasured ticks first (default 30), so p50/p95 describe
+  warmed steady state, not JIT/IC cold-start. Cold-vs-warm differed by up to
+  ~5× per engine before this, enough to flip verdicts on noise.
+- **GC isolation:** run with `node --expose-gc` to force a full GC between
+  workloads (`gcBetween: true` in the summary). All engines still share one
+  process; child-process-per-engine is the stronger isolation if numbers
+  look noisy.
+- **Equal work check:** the three windowed harnesses mirror each other's
+  priming and counting exactly; `compare-summary.windowedWorkEqual` asserts
+  the reported `domUpdates` match across engines, and the note carries a
+  WARNING when they don't.
+- **Verdict scope:** ratios are computed only from the compare-phase rows
+  (identical entity counts by construction) — a standalone `soak` at a
+  different `--entities` can never leak into the verdict.
+- **Snapshot workload:** repeated warmed snapshots (real percentiles), and
+  the `deterministic` flag steps the source and the restored twin forward
+  together and compares final snapshots — restore fidelity plus dynamic
+  continuation, not just round-trip serialization.
+- **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
+  per-tick coalescing actually engages; `coalesceRatio` reports marks issued
+  per change delivered (≈10 when coalescing works).
+
+## Sample compare (Node v22, 2k entities, 40 ticks, warmup 20, gc on, 2026-07-17)
 
 | Workload | Engine | p50 | p95 | vs DOMECS p95 |
 |----------|--------|-----|-----|---------------|
-| soak | **domecs** | 0.68ms | 1.35ms | 1.0× |
-| soak | koota | 0.41ms | 1.34ms | ~same |
-| soak | signals | 0.38ms | 1.15ms | DOMECS ~1.18× slower |
-| windowed | **domecs** | 0.025ms | 0.075ms | 1.0× |
-| windowed | koota | 0.040ms | 0.097ms | DOMECS ~0.77× (faster) |
-| windowed | signals | 0.019ms | 0.049ms | DOMECS ~1.54× slower |
+| soak | **domecs** | 0.31ms | 0.40ms | 1.0× |
+| soak | koota | 0.32ms | 0.36ms | DOMECS ~1.13× slower |
+| soak | signals | 0.19ms | 0.28ms | DOMECS ~1.46× slower |
+| windowed | **domecs** | 0.033ms | 0.072ms | 1.0× |
+| windowed | koota | 0.063ms | 0.110ms | DOMECS **0.65×** (decisive) |
+| windowed | signals | 0.022ms | 0.048ms | DOMECS ~1.5× slower |
 
-**Decisive runtime wins (≥30% p95):** host- and N-dependent. A second pass
-(2k entities, 40 ticks) showed **windowed vs Koota at 0.42× p95** (decisive).
-The 5k/80-tick pass above was only ~0.77× (not decisive). Treat as
-**promising on windowed projection, not a frozen claim** until multi-machine
-stability.
+**Decisive runtime wins (≥30% p95):** host- and N-dependent. With warmup and
+GC isolation in place, windowed-vs-Koota measured **0.65× p95** on this host
+(decisive); soak does not win. Treat as **promising on windowed projection,
+not a frozen claim** until multi-machine stability.
 
 **Plumbing:** micro-shapes do not show “half the code” vs Koota; product value is the operable stack (action / snapshot / agent), not soak iteration. See COMPARISON.md.
 

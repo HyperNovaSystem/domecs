@@ -69,6 +69,9 @@ bridge.reset()                         // episode boundary
 - **markChanged** after in-place component mutation
 - **spawn shallow-copy** — scalars diverge; nested refs stay shared
 - **stepOnce ≠ fixed** — fixed needs positive `dt`
+- **declare `schema` on command events** — `world.action`/`bridge.act`
+  then rejects malformed payloads (`accepted: false` + reason); without a
+  schema, payloads pass through unvalidated
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
 - **loadIfPresent** for first-run boot (`@domecs/persist`)

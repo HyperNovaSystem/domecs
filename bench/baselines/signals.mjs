@@ -2,6 +2,9 @@
  * Hand-rolled fine-grained reactive store baseline (PLAN WS-1).
  * Not Solid/TanStack — a minimal signal+store that an app would write
  * instead of adopting an ECS, for plumbing / runtime comparison.
+ *
+ * Warmup and windowed priming mirror bench/run.mjs exactly — see the note
+ * in baselines/koota.mjs.
  */
 import { performance } from 'node:perf_hooks'
 
@@ -31,7 +34,7 @@ function signal(initial) {
   }
 }
 
-export function runSignalsSoak({ entityCount, ticks }) {
+export function runSignalsSoak({ entityCount, ticks, warmupTicks = 0 }) {
   // Array of { x, y, dx, dy } as signals — fine-grained style.
   const entities = []
   for (let i = 0; i < entityCount; i++) {
@@ -54,13 +57,18 @@ export function runSignalsSoak({ entityCount, ticks }) {
     })
   }
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
+  const tickFn = () => {
     for (const e of entities) {
       e.x.set(e.x.get() + e.dx.get())
       e.y.set(e.y.get() + e.dy.get())
     }
+  }
+  for (let t = 0; t < warmupTicks; t++) tickFn()
+
+  const samples = []
+  for (let t = 0; t < ticks; t++) {
+    const t0 = performance.now()
+    tickFn()
     samples.push(performance.now() - t0)
   }
   const { p50, p95 } = percentiles(samples)
@@ -75,7 +83,7 @@ export function runSignalsSoak({ entityCount, ticks }) {
   }
 }
 
-export function runSignalsWindowed({ entityCount, ticks, windowSize }) {
+export function runSignalsWindowed({ entityCount, ticks, windowSize, warmupTicks = 0 }) {
   const entities = []
   for (let i = 0; i < entityCount; i++) {
     entities.push({
@@ -109,15 +117,8 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize }) {
   }
 
   const visible = new Set()
-  for (let k = 0; k < windowSize; k++) {
-    const e = entities[k]
-    mount(e)
-    visible.add(e)
-  }
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
+  const tickFn = () => {
     const next = new Set()
     for (let k = 0; k < windowSize; k++) {
       next.add(entities[(windowStart + k) % entities.length])
@@ -137,6 +138,17 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize }) {
       }
     }
     windowStart = (windowStart + 3) % entities.length
+  }
+
+  // Prime (mounts first window, advances windowStart to 3) + warmup —
+  // excluded from timing and from the reported domUpdates.
+  for (let t = 0; t < 1 + warmupTicks; t++) tickFn()
+
+  const samples = []
+  const startUpdates = domUpdates
+  for (let t = 0; t < ticks; t++) {
+    const t0 = performance.now()
+    tickFn()
     samples.push(performance.now() - t0)
   }
 
@@ -149,6 +161,6 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize }) {
     windowSize,
     p50Ms: p50,
     p95Ms: p95,
-    domUpdates,
+    domUpdates: domUpdates - startUpdates,
   }
 }

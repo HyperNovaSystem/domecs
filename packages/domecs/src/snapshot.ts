@@ -26,6 +26,15 @@ export interface WorldSnapshot {
     readonly components: Record<string, unknown>
   }>
   /**
+   * Entity-id cursor at snapshot time (O-38). Restoring honors it, so ids
+   * assigned after a restore match ids assigned on the live world even when
+   * the highest-id entity was despawned before the snapshot (previously the
+   * cursor was re-derived as maxAliveId+1, recycling despawned ids and
+   * making episodes incomparable). Optional: snapshots from older builds
+   * lack it, and restore falls back to the maxAliveId+1 derivation.
+   */
+  readonly nextId?: number
+  /**
    * World-singleton resources, keyed by resource name (v2).
    * Omitted entirely when the world has no materialized resources. Values are
    * deep-cloned at snapshot time, like component values.

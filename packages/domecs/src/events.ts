@@ -41,6 +41,57 @@ export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
 }
 
 /**
+ * O-39: shallow payload validation against an event's declared schema, used
+ * by `world.action()` so the typed command boundary rejects malformed
+ * commands instead of accepting them as no-ops. Only applies when the event
+ * was defined with `{ schema }` — schema-less events stay unvalidated.
+ *
+ * Rules (FieldSchema carries no required-marker, so absence is optional):
+ * - payload must be a plain object
+ * - keys not declared in the schema are rejected (catches typo'd fields)
+ * - declared keys, when present, must match their `kind` (`enum` must be a
+ *   member of `options`); `unknown` accepts anything
+ *
+ * @returns `null` when valid, else a human-readable reason fragment.
+ */
+export function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null {
+  const schema = internalEvent(type).__schema
+  if (!schema) return null
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    return 'expected an object payload'
+  }
+  const fields = schema.fields
+  for (const key of Object.keys(payload)) {
+    if (!(key in fields)) {
+      const declared = Object.keys(fields).join(', ') || '(none)'
+      return `unknown field "${key}" — declared fields: ${declared}`
+    }
+  }
+  for (const [key, spec] of Object.entries(fields)) {
+    const v = (payload as Record<string, unknown>)[key]
+    if (v === undefined) continue
+    switch (spec.kind) {
+      case 'number':
+      case 'string':
+      case 'boolean':
+        if (typeof v !== spec.kind) return `field "${key}" must be a ${spec.kind}, got ${typeof v}`
+        break
+      case 'enum':
+        if (!spec.options?.includes(v as string | number)) {
+          return `field "${key}" must be one of ${JSON.stringify(spec.options ?? [])}`
+        }
+        break
+      case 'object':
+        if (v === null || typeof v !== 'object') return `field "${key}" must be an object`
+        break
+      case 'unknown':
+        break
+    }
+  }
+  return null
+}
+
+/**
  * Result of `world.describeEvent(type)`. `fields` is the declared
  * `schema.fields` when present (`fieldsSource: 'schema'`), otherwise empty
  * (`fieldsSource: 'none'`). Events have no defaults to infer from, so unlike
@@ -87,6 +138,14 @@ export interface EventBus {
    * defined but never used in this world is unknowable and will not appear.
    */
   knownTypes(): EventType<unknown>[]
+  /**
+   * Drop all pending (undelivered) events. Called by `world.restore()`:
+   * events queued before a restore belong to the abandoned timeline and
+   * must not fire into the first tick after it (SPEC §7.1). The current
+   * (already-flushed) view is left alone — it is replaced wholesale at the
+   * next flush.
+   */
+  clear(): void
 }
 
 /**
@@ -190,6 +249,9 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     knownTypes(): EventType<unknown>[] {
       return Array.from(typeByTag.values())
+    },
+    clear(): void {
+      pending = new Map()
     },
   }
 }

@@ -40,6 +40,16 @@ export interface AgentBridge {
   /**
    * Restore the baseline snapshot. Systems, plugins, and type definitions
    * remain; entity/resource state returns to the baseline.
+   *
+   * Not restored (the snapshot does not carry them): `time.scale` and
+   * input state. An episode that ends paused/rescaled or with stale
+   * `setInput` data carries that into the next episode — restore them
+   * explicitly at episode boundaries if your episodes touch either.
+   *
+   * Entity-id assignment is stable across `reset()`: the snapshot carries
+   * the id cursor (O-38), so ids assigned after a restore match ids the
+   * live world would have assigned. Pending events are discarded by
+   * `restore()`, so an abandoned episode's events never fire into the next.
    */
   reset(): void
   /** Replace the baseline with a snapshot of the current world state. */
@@ -50,7 +60,13 @@ export interface AgentBridge {
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
   /**
    * Advance simulation. Omit `dt` for turn-based {@link World.stepOnce};
-   * pass a positive `dt` for {@link World.step} (required for `fixed` systems).
+   * pass a positive `dt` for {@link World.step} (required for `fixed`
+   * systems).
+   *
+   * `step(0)` (or a negative dt) is NOT `step()`: an explicit non-positive
+   * dt is the F-6 heartbeat — no systems run, no change-detection swap. A
+   * computed dt that rounds to 0 therefore silently advances nothing;
+   * guard the call site if that would be a bug.
    */
   step(dt?: number): void
   /** Capture a plain-data snapshot — delegates to {@link World.snapshot}. */
@@ -60,7 +76,8 @@ export interface AgentBridge {
 /**
  * Create an agent bridge over an existing world.
  *
- * Typical episode loop:
+ * Typical episode loop (the reset() before the first episode is boundary
+ * hygiene — every episode then starts from the identical restored state):
  * ```ts
  * const bridge = createAgentBridge(world)
  * bridge.reset()

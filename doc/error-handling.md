@@ -60,7 +60,10 @@ import { assertNever, type DomecsError } from '@domecs/core'
 
 function shouldRetry(e: DomecsError): boolean {
   switch (e.kind) {
-    case 'persist_io':       return true
+    // Not a flat `true`: empty-slot load() is deterministic (retryable:
+    // false, O-28) — first-run boot paths belong on loadIfPresent, not in
+    // a retry loop. The variant's own field carries the distinction.
+    case 'persist_io':       return e.retryable
     case 'migration_failed': return e.recoverable
     case 'plugin_install_failed':
     case 'schema_mismatch':

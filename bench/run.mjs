@@ -6,34 +6,60 @@
  * still point at TypeScript source for monorepo DX, so we import dist by file
  * URL rather than package name (avoids resolving @domecs scope to src/).
  *
+ * Methodology:
+ * - Every workload runs `--warmup` unmeasured ticks first (default 30) so
+ *   p50/p95 describe warmed steady state, not JIT/IC cold-start.
+ * - When Node is started with --expose-gc, a full GC runs between workloads
+ *   so one engine's garbage is not attributed to the next; `gcBetween` in
+ *   the summary records whether that isolation was active. All engines
+ *   still share one process — child-process-per-engine is the stronger
+ *   isolation if numbers look noisy.
+ * - Compare-mode rows are tagged `phase: 'compare'` and the verdict is
+ *   computed ONLY from those rows, so a standalone soak at a different
+ *   entity count can never leak into the ratios.
+ *
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
  *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|compare|all
- *   node bench/run.mjs --entities 20000 --ticks 200
+ *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --write   # also write bench/results.json
  */
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { runKootaSoak, runKootaWindowed } from './baselines/koota.mjs'
 import { runSignalsSoak, runSignalsWindowed } from './baselines/signals.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const coreUrl = pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href
-const { createWorld, defineComponent, entry } = await import(coreUrl)
+const distEntry = join(root, 'packages/domecs/dist/index.js')
+if (!existsSync(distEntry)) {
+  console.error('[bench] packages/domecs/dist not found.')
+  console.error('[bench] Build @domecs/core first:  pnpm --filter @domecs/core build')
+  process.exit(1)
+}
+const { createWorld, defineComponent, entry, OnChanged } = await import(
+  pathToFileURL(distEntry).href
+)
 
 const args = parseArgs(process.argv.slice(2))
 const workload = args.workload ?? 'all'
 const entityCount = Number(args.entities ?? 5_000)
 const ticks = Number(args.ticks ?? 100)
+const warmupTicks = Number(args.warmup ?? 30)
 const windowSize = Number(args.window ?? 50)
 const fixedStep = 1 / 60
 const writeResults = !!args.write
 const compareN = Math.min(entityCount, 5_000)
 const compareWindowN = Math.min(entityCount, 2_000)
+const gcAvailable = typeof globalThis.gc === 'function'
+
+/** Full GC between workloads when --expose-gc is set (see header). */
+function maybeGc() {
+  if (gcAvailable) globalThis.gc()
+}
 
 const Position = defineComponent('BenchPosition', {
   defaults: { x: 0, y: 0 },
@@ -49,24 +75,30 @@ const Row = defineComponent('BenchRow', {
 })
 
 const results = []
+function record(row) {
+  maybeGc()
+  results.push(row)
+  return row
+}
 
 if (workload === 'all' || workload === 'soak') {
-  results.push(runSoak({ entityCount, ticks, fixedStep }))
+  record(runSoak({ entityCount, ticks, fixedStep }))
 }
 if (workload === 'all' || workload === 'telemetry') {
-  results.push(
+  record(
     runTelemetry({
       entityCount: Math.min(entityCount, 2_000),
+      hotEntities: 100,
+      updatesPerTick: 1_000,
       ticks,
-      updatesPerTick: 8,
     }),
   )
 }
 if (workload === 'all' || workload === 'snapshot') {
-  results.push(runSnapshot({ entityCount: Math.min(entityCount, 5_000) }))
+  record(runSnapshot({ entityCount: Math.min(entityCount, 5_000), repeats: 20 }))
 }
 if (workload === 'all' || workload === 'windowed') {
-  results.push(
+  record(
     runWindowed({
       entityCount: Math.min(entityCount, 2_000),
       ticks,
@@ -75,7 +107,7 @@ if (workload === 'all' || workload === 'windowed') {
   )
 }
 if (workload === 'all' || workload === 'baseline') {
-  results.push(
+  record(
     runPlainBaseline({
       entityCount: Math.min(entityCount, 5_000),
       ticks,
@@ -84,36 +116,43 @@ if (workload === 'all' || workload === 'baseline') {
   )
 }
 // Cross-engine comparison (soak + windowed): DOMECS vs Koota vs signals.
+// Rows are collected locally and tagged phase:'compare' — the verdict is
+// derived ONLY from these rows (identical entity counts by construction).
 if (workload === 'all' || workload === 'compare') {
-  results.push(runSoak({ entityCount: compareN, ticks, fixedStep }))
-  results.push(runKootaSoak({ entityCount: compareN, ticks }))
-  results.push(runSignalsSoak({ entityCount: compareN, ticks }))
-  results.push(
-    runWindowed({ entityCount: compareWindowN, ticks, windowSize }),
-  )
-  results.push(
-    runKootaWindowed({ entityCount: compareWindowN, ticks, windowSize }),
-  )
-  results.push(
-    runSignalsWindowed({ entityCount: compareWindowN, ticks, windowSize }),
-  )
-  results.push(summarizeComparison(results))
+  const bench = { ticks, warmupTicks }
+  const compareRunners = [
+    () => runSoak({ entityCount: compareN, ticks, fixedStep }),
+    () => runKootaSoak({ entityCount: compareN, ...bench }),
+    () => runSignalsSoak({ entityCount: compareN, ...bench }),
+    () => runWindowed({ entityCount: compareWindowN, ticks, windowSize }),
+    () => runKootaWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
+    () => runSignalsWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
+  ]
+  const compareRows = []
+  for (const run of compareRunners) {
+    maybeGc()
+    compareRows.push(run())
+  }
+  for (const row of compareRows) record({ ...row, phase: 'compare' })
+  record(summarizeComparison(compareRows))
 }
 
 const summary = {
   when: new Date().toISOString(),
   host: process.version,
+  warmupTicks,
+  gcBetween: gcAvailable,
   results,
 }
 console.log(JSON.stringify(summary, null, 2))
 for (const r of results) {
   console.error(
-    `[${r.workload}] n=${r.entities} ticks=${r.ticks ?? '-'} ` +
+    `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities} ticks=${r.ticks ?? '-'} ` +
       `p50=${fmtMs(r.p50Ms)} p95=${fmtMs(r.p95Ms)}` +
       (r.snapshotBytes != null ? ` snapBytes=${r.snapshotBytes}` : '') +
-      (r.snapshotMs != null ? ` snapMs=${fmtMs(r.snapshotMs)}` : '') +
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
-      (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : ''),
+      (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : '') +
+      (r.coalesceRatio != null ? ` coalesce=${r.coalesceRatio}` : ''),
   )
 }
 
@@ -146,6 +185,8 @@ function runSoak({ entityCount, ticks, fixedStep }) {
     ])
   }
 
+  for (let t = 0; t < warmupTicks; t++) world.step(fixedStep)
+
   const samples = []
   for (let t = 0; t < ticks; t++) {
     const t0 = performance.now()
@@ -155,6 +196,7 @@ function runSoak({ entityCount, ticks, fixedStep }) {
   const { p50, p95 } = percentiles(samples)
   return {
     workload: 'soak',
+    engine: 'domecs',
     entities: entityCount,
     ticks,
     p50Ms: p50,
@@ -162,24 +204,44 @@ function runSoak({ entityCount, ticks, fixedStep }) {
   }
 }
 
-function runTelemetry({ entityCount, ticks, updatesPerTick }) {
+/**
+ * Telemetry firehose with genuine coalescing pressure: many updates per tick
+ * repeatedly hitting a small hot subset, so multiple markChanged calls land
+ * on the same entity+component within one tick. A reactive consumer counts
+ * delivered change notifications; `coalesceRatio` = marks issued per change
+ * delivered (≈ updatesPerTick / hotEntities when coalescing works).
+ */
+function runTelemetry({ entityCount, hotEntities, updatesPerTick, ticks }) {
   const world = createWorld({ headless: true })
   const ids = []
   for (let i = 0; i < entityCount; i++) {
     ids.push(world.spawn([entry(Telemetry, { value: 0, dirty: false })]))
   }
-  let cursor = 0
-  world.system('bench-coalesce', { schedule: 'tick' }, () => {
+  const hot = ids.slice(0, Math.min(hotEntities, ids.length))
+  let marksIssued = 0
+  let changesDelivered = 0
+  world.system('bench-firehose', { schedule: 'tick' }, () => {
     for (let k = 0; k < updatesPerTick; k++) {
-      const id = ids[(cursor + k) % ids.length]
+      const id = hot[k % hot.length]
       const t = world.getComponent(id, Telemetry)
       if (!t) continue
       t.value += 1
       t.dirty = true
       world.markChanged(id, Telemetry)
+      marksIssued++
     }
-    cursor = (cursor + updatesPerTick) % ids.length
   })
+  world.system(
+    'bench-consume',
+    { schedule: 'reactive', reactsTo: OnChanged(Telemetry) },
+    ({ entities }) => {
+      changesDelivered += entities.length
+    },
+  )
+
+  for (let t = 0; t < warmupTicks; t++) world.step(1 / 60)
+  marksIssued = 0
+  changesDelivered = 0
 
   const samples = []
   for (let t = 0; t < ticks; t++) {
@@ -190,16 +252,31 @@ function runTelemetry({ entityCount, ticks, updatesPerTick }) {
   const { p50, p95 } = percentiles(samples)
   return {
     workload: 'telemetry',
+    engine: 'domecs',
     entities: entityCount,
+    hotEntities: hot.length,
     ticks,
     updatesPerTick,
+    marksIssued,
+    changesDelivered,
+    coalesceRatio: changesDelivered > 0 ? Number((marksIssued / changesDelivered).toFixed(1)) : null,
     p50Ms: p50,
     p95Ms: p95,
   }
 }
 
-function runSnapshot({ entityCount }) {
+function runSnapshot({ entityCount, repeats }) {
   const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  world.system(
+    'bench-move',
+    { schedule: 'tick', query: [Position, Velocity] },
+    ({ entities }) => {
+      for (const e of entities) {
+        e.BenchPosition.x += e.BenchVelocity.dx
+        e.BenchPosition.y += e.BenchVelocity.dy
+      }
+    },
+  )
   for (let i = 0; i < entityCount; i++) {
     world.spawn([
       entry(Position, { x: i, y: i * 2 }),
@@ -208,23 +285,47 @@ function runSnapshot({ entityCount }) {
   }
   for (let i = 0; i < 10; i++) world.step(1 / 60)
 
-  const t0 = performance.now()
-  const snap = world.snapshot()
-  const snapshotMs = performance.now() - t0
+  // Warmed, repeated snapshot timing — a single cold call is not a percentile.
+  for (let i = 0; i < 3; i++) world.snapshot()
+  const samples = []
+  let snap = null
+  for (let i = 0; i < repeats; i++) {
+    const t0 = performance.now()
+    snap = world.snapshot()
+    samples.push(performance.now() - t0)
+  }
   const bytes = JSON.stringify(snap).length
 
-  const world2 = createWorld({ headless: true })
+  // Determinism proper: restore into a twin world with the SAME systems,
+  // step both forward, and compare the resulting snapshots — a lossy
+  // round-trip OR missing dynamic state (accumulator, clock) fails this.
+  const world2 = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  world2.system(
+    'bench-move',
+    { schedule: 'tick', query: [Position, Velocity] },
+    ({ entities }) => {
+      for (const e of entities) {
+        e.BenchPosition.x += e.BenchVelocity.dx
+        e.BenchPosition.y += e.BenchVelocity.dy
+      }
+    },
+  )
   world2.restore(snap)
-  const a = JSON.stringify(world.snapshot())
-  const b = JSON.stringify(world2.snapshot())
-  const deterministic = a === b
+  for (let i = 0; i < 10; i++) {
+    world.step(1 / 60)
+    world2.step(1 / 60)
+  }
+  const deterministic =
+    JSON.stringify(world.snapshot()) === JSON.stringify(world2.snapshot())
 
+  const { p50, p95 } = percentiles(samples)
   return {
     workload: 'snapshot',
+    engine: 'domecs',
     entities: entityCount,
-    p50Ms: snapshotMs,
-    p95Ms: snapshotMs,
-    snapshotMs,
+    repeats,
+    p50Ms: p50,
+    p95Ms: p95,
     snapshotBytes: bytes,
     deterministic,
   }
@@ -234,6 +335,9 @@ function runSnapshot({ entityCount }) {
  * Windowed projection: maintain a visible window of `windowSize` rows over
  * a larger entity set by add/remove of a Row component (fleet-shaped).
  * Counts synthetic DOM updates (create/update/destroy callbacks), no real DOM.
+ * The priming step mounts the first window and advances windowStart to 3 and
+ * is excluded from both timing and domUpdates — the koota/signals baselines
+ * mirror this exactly so domUpdates is comparable across engines.
  */
 function runWindowed({ entityCount, ticks, windowSize }) {
   const world = createWorld({ headless: true })
@@ -276,8 +380,8 @@ function runWindowed({ entityCount, ticks, windowSize }) {
     windowStart = (windowStart + 3) % ids.length
   })
 
-  // Prime first window
-  world.step(1 / 60)
+  // Prime first window + warmup (excluded from timing and counters)
+  for (let t = 0; t < 1 + warmupTicks; t++) world.step(1 / 60)
 
   const samples = []
   const startUpdates = domUpdates
@@ -289,6 +393,7 @@ function runWindowed({ entityCount, ticks, windowSize }) {
   const { p50, p95 } = percentiles(samples)
   return {
     workload: 'windowed',
+    engine: 'domecs',
     entities: entityCount,
     ticks,
     windowSize,
@@ -313,18 +418,24 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
     dx[i] = 0.01
     dy[i] = -0.02
   }
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
+  const tickFn = () => {
     for (let i = 0; i < entityCount; i++) {
       xs[i] += dx[i]
       ys[i] += dy[i]
     }
+  }
+  for (let t = 0; t < warmupTicks; t++) tickFn()
+
+  const samples = []
+  for (let t = 0; t < ticks; t++) {
+    const t0 = performance.now()
+    tickFn()
     samples.push(performance.now() - t0)
   }
   const { p50, p95 } = percentiles(samples)
   return {
     workload: 'baseline-plain',
+    engine: 'plain',
     entities: entityCount,
     ticks,
     p50Ms: p50,
@@ -335,8 +446,9 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
 
 // --- compare --------------------------------------------------------------------
 
-function summarizeComparison(all) {
-  const pick = (name) => all.find((r) => r.workload === name)
+/** Derives the verdict ONLY from the compare-phase rows passed in. */
+function summarizeComparison(compareRows) {
+  const pick = (name) => compareRows.find((r) => r.workload === name)
   const soak = {
     domecs: pick('soak'),
     koota: pick('koota-soak'),
@@ -357,6 +469,15 @@ function summarizeComparison(all) {
     windowed_domecs_vs_signals_p95: ratio(windowed.domecs, windowed.signals),
   }
 
+  // Work-equivalence check: the three windowed harnesses must report the
+  // same domUpdates for the same logical work, or the timing comparison is
+  // comparing different work.
+  const domUpdateCounts = [windowed.domecs, windowed.koota, windowed.signals]
+    .filter(Boolean)
+    .map((r) => r.domUpdates)
+  const windowedWorkEqual =
+    domUpdateCounts.length === 3 && domUpdateCounts.every((n) => n === domUpdateCounts[0])
+
   // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor.
   const wins = []
   for (const [k, v] of Object.entries(verdict)) {
@@ -370,11 +491,14 @@ function summarizeComparison(all) {
     p50Ms: 0,
     p95Ms: 0,
     verdict,
+    windowedWorkEqual,
+    windowedDomUpdates: domUpdateCounts,
     decisiveRuntimeWins: wins,
     note:
-      wins.length > 0
+      (windowedWorkEqual ? '' : 'WARNING: windowed domUpdates differ across engines — timings are not comparing equal work. ') +
+      (wins.length > 0
         ? `Decisive runtime win(s): ${wins.join('; ')}`
-        : 'No decisive (≥30% p95) runtime win on this host; check plumbing comparison in bench/COMPARISON.md',
+        : 'No decisive (≥30% p95) runtime win on this host; check plumbing comparison in bench/COMPARISON.md'),
   }
 }
 

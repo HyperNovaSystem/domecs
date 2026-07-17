@@ -153,6 +153,12 @@ export function createRafDriver(
     rafHandle = null
     rafLastWallMs = null
     rafWakeStep = false
+    // O-32 residual: a pause this driver took on tab-hide must not outlive
+    // the driver. Relinquish it on stop() so a stop()+startLoop() cycle
+    // while hidden cannot orphan the world at scale 0 with no owner (the
+    // fresh handler generation would read scale 0 as app-managed and never
+    // auto-resume).
+    if (visibilityOwnedPause) hooks.resume()
     visibilityOwnedPause = false
     if (rafVisHandler && g.document && typeof g.document.removeEventListener === 'function') {
       g.document.removeEventListener('visibilitychange', rafVisHandler)

@@ -407,6 +407,7 @@ Roguelike default.
 - `accepted` / `consumedTurn` / `reason` come from an optional `opts.resolve({ events, world })` verdict — game policy, which the engine does not interpret. The default verdict is `{ accepted: true, consumedTurn: true }`; when a resolver omits `consumedTurn` it defaults to `accepted` (an accepted command spends the turn, a rejected one does not). `consumedTurn` is a *reported* value for the caller's turn bookkeeping — `action` always advances exactly one tick regardless, because turn-consumption policy can only be decided by systems that run *inside* the tick.
 - `snapshot` is attached only when `opts.snapshot` is set (`true` for defaults, or a `SnapshotOptions` object to forward e.g. `pruneEmptyEntities`).
 - `opts.dt` is forwarded to `step`; omit it for a turn-based tick advance (as `turn()` does). A non-positive explicit `dt` is a heartbeat (§4.0) and will not process the action.
+- **Payload validation (O-39, normative).** When the event type was defined with a `schema`, `action()` validates the payload *before* emitting: a non-object payload, a field not declared in the schema, a wrong-typed declared field, or an out-of-`options` enum value returns `{ accepted: false, consumedTurn: false, reason, events: [] }` — no event is emitted and **no tick advances** (the malformed command never enters the world). Declared fields absent from the payload are treated as optional (`FieldSchema` carries no required-marker). Schema-less events are not validated, and `turn()` / `emit` are never validated — the check is an *action-boundary* contract.
 
 ---
 
@@ -527,6 +528,15 @@ by a per-view set of *redraw triggers*:
    redraws are gated on exactly that set, ignoring whatever the query
    implies. Used for finer-grained narrowing.
 
+**First-paint exception (O-2).** Under `auto` / `explicit` gating, `update`
+(when provided) runs **once** for each newly created node in the commit that
+mounts it, using a fresh commit-time entity view — entities that are spawned
+and never marked changed still render, and components added later in the
+same commit window are visible to that first paint. An entity that is both
+created and marked changed in one window still gets exactly one `update` for
+that commit. Subsequent commits stay change-gated. (Under `legacy` the
+full-redraw path already covers new nodes.)
+
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
 
@@ -581,6 +591,7 @@ interface WorldSnapshot {
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
   entities:   { id: number; components: Record<string, unknown> }[]
+  nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
   meta?:      Record<string, unknown>
 }
@@ -588,11 +599,15 @@ interface WorldSnapshot {
 
 `SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
 
+**Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
+
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
 `snapshot(options?)` accepts `SnapshotOptions`. `pruneEmptyEntities` (default `false`) drops entities whose serializable bag is empty once transient components are excluded — transient-only and bare `spawn()` entities. The default records every alive entity so id/archetype membership round-trips exactly. `@domecs/persist`'s `pruneTransientOnlyEntities()` plugin applies the same prune on the no-arg `save()` path via `onSnapshot`.
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
+
+**Pending events (normative).** `restore()` discards all pending (undelivered) events before applying the snapshot: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. Events a plugin emits during its `onRestore` hook are preserved (the clear happens first). The event bus is transient by design and is never part of the snapshot envelope; durable history belongs in components/resources (the durable-log pattern).
 
 ### 7.2 Autosave — eventually consistent (planned; not in v1.0)
 

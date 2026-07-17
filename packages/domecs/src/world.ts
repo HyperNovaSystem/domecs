@@ -19,6 +19,7 @@ import type {
 import {
   createEventBus,
   internalEvent,
+  validateEventPayload,
   type EmittedEvent,
   type EventBus,
   type EventDescriptor,
@@ -96,6 +97,15 @@ const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'changedResource',
 ])
 const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
+
+// The manifest is a plain-data handoff: clone FieldSchema values so no
+// consumer holds references into the live component/event schema metadata
+// (mutating a manifest must never corrupt reflection world-wide).
+function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
+  const out: Record<string, FieldSchema> = {}
+  for (const [key, value] of Object.entries(src)) out[key] = { ...value }
+  return out
+}
 
 // Infer a reflection FieldKind from a default value's runtime type. Used by
 // describeComponent when a component declares no explicit schema (#14).
@@ -375,6 +385,13 @@ export interface StartOptions {
    * initiated. App-managed pauses (`world.pause()` / Pause button) are not
    * trampled. Default true; has no effect outside a DOM. Pass `false` to
    * opt out entirely.
+   *
+   * Known limit: ownership is tracked as a flag, not an epoch. If the tab
+   * hides while running (driver claims the pause) and app logic then calls
+   * `resume()` followed by its own `pause()` while still hidden, the stale
+   * ownership bit makes re-show resume over that app pause. Apps driving
+   * pause state from background logic (timers, sockets) should pass
+   * `pauseOnHidden: false` and manage visibility themselves.
    */
   pauseOnHidden?: boolean
 }
@@ -564,6 +581,7 @@ export function createWorld(options: WorldOptions = {}): World {
     setRand: (r) => {
       rand = r
     },
+    getNextId: () => nextId,
     setNextId: (id) => {
       nextId = id
     },
@@ -1294,7 +1312,7 @@ export function createWorld(options: WorldOptions = {}): World {
       let fields: Record<string, FieldSchema>
       let fieldsSource: ComponentDescriptor['fieldsSource']
       if (meta.__schema) {
-        fields = { ...meta.__schema.fields }
+        fields = cloneFields(meta.__schema.fields)
         fieldsSource = 'schema'
       } else if (defaults && Object.keys(defaults).length > 0) {
         fields = {}
@@ -1312,7 +1330,7 @@ export function createWorld(options: WorldOptions = {}): World {
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
       if (meta.__schema) {
-        return { name: type.name, fields: { ...meta.__schema.fields }, fieldsSource: 'schema' }
+        return { name: type.name, fields: cloneFields(meta.__schema.fields), fieldsSource: 'schema' }
       }
       return { name: type.name, fields: {}, fieldsSource: 'none' }
     },
@@ -1603,6 +1621,20 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // O-39: when the event declares a schema, the command boundary rejects
+      // malformed payloads outright — no emit, no tick, no consumed turn —
+      // instead of accepting a command whose handler will silently no-op or
+      // NaN-poison state. Schema-less events remain unvalidated (declare a
+      // schema on agent-facing commands to opt in). turn()/emit stay raw.
+      const invalid = validateEventPayload(type, payload)
+      if (invalid !== null) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `invalid payload for "${type.name}": ${invalid}`,
+          events: [],
+        }
+      }
       // A typed turn() that surfaces a structured command result. Emit the
       // action, advance one tick (the action flushes at step 1 and its handlers
       // run during steps 3–6), then read back the events those handlers emitted
@@ -1670,6 +1702,12 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     restore(snap: WorldSnapshot): void {
+      // Discard pending (undelivered) events first: they were emitted on the
+      // timeline being abandoned and would otherwise fire into the first
+      // tick after the restore, making identical episodes diverge (SPEC
+      // §7.1). Cleared before the plugin chain so anything a plugin emits
+      // during onRestore survives.
+      bus.clear()
       let s = snap
       for (const entry of plugins.list()) {
         if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot

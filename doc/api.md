@@ -212,7 +212,12 @@ interface World {
   // stays buffered for the next real tick; the result is then
   // { accepted: false, consumedTurn: false, events: [] } with a reason, and
   // opts.resolve is not invoked. consumedTurn is a reported value, not
-  // engine-enforced. SPEC §3.
+  // engine-enforced.
+  // O-39: when the event declares a schema, the payload is validated FIRST —
+  // unknown fields, wrong-typed declared fields, or out-of-enum values reject
+  // with { accepted: false, reason } before any emit and with NO tick advance.
+  // Absent declared fields are optional; schema-less events are unvalidated,
+  // as are turn()/emit. SPEC §3.
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
 
   // entities
@@ -770,6 +775,51 @@ if (isErr(result)) {
 }
 ```
 
+### Agent bridge (WS-3)
+
+Thin facade over `World` — no new runtime semantics. One control loop
+(`reset → observe → act → step → snapshot`) shared by agents and UIs.
+
+```ts
+function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge
+
+interface AgentBridgeOptions {
+  // Snapshot used by reset(). Omitted → captured from `world` at
+  // construction time (after any setup the caller already performed).
+  baseline?: WorldSnapshot
+}
+
+interface AgentObservation {
+  readonly tick:        number
+  readonly scale:       number
+  readonly entityCount: number
+  readonly manifest:    WorldManifest   // = world.describe()
+}
+
+interface AgentBridge {
+  readonly world: World                // escape hatch for setup/queries
+  reset(): void                        // restore baseline (see notes below)
+  captureBaseline(): void              // re-capture baseline from current state
+  observe(): AgentObservation
+  act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  step(dt?: number): void              // omit dt → stepOnce; positive dt → step(dt)
+  snapshot(options?: SnapshotOptions): WorldSnapshot
+}
+```
+
+Notes:
+- `reset()` does **not** restore `time.scale` or input state (the snapshot
+  does not carry them); restore those explicitly at episode boundaries if
+  episodes touch either. Entity-id assignment is stable across `reset()`
+  (the snapshot carries the id cursor, O-38) and pending events from the
+  abandoned episode are discarded by `restore()`.
+- `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
+  same as `step()` — guard computed dt values that can round to 0.
+- `act()` validates the payload when the event declares a `schema`
+  (unknown fields / wrong-typed fields / out-of-enum values →
+  `{ accepted: false, reason }`, no tick consumed). Schema-less events are
+  unvalidated — declare schemas on agent-facing commands (O-39).
+
 ---
 
 ## `@domecs/input`
@@ -862,6 +912,11 @@ interface MountHandle {
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
 //     those component types. Overrides the auto-derive.
+//
+// First paint (O-2): under `auto`/`explicit`, `update` also runs once for
+// each newly created node in the commit that mounts it (fresh commit-time
+// view; exactly one update even if the entity was also marked changed that
+// window). Later commits stay change-gated.
 type ChangedOn =
   | { readonly mode: 'auto' }
   | { readonly mode: 'legacy' }
@@ -954,19 +1009,6 @@ function save(world: World, storage: Storage, slot: string, opts?: SaveOptions):
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
 // Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
 function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
-
-// --- Agent bridge (WS-3; @domecs/core) ---------------------------------------
-// Thin facade over World — no new runtime semantics.
-function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge
-interface AgentBridge {
-  readonly world: World
-  reset(): void
-  captureBaseline(): void
-  observe(): AgentObservation  // tick, scale, entityCount, manifest (= describe())
-  act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
-  step(dt?: number): void      // omit dt → stepOnce; positive dt → step(dt)
-  snapshot(options?: SnapshotOptions): WorldSnapshot
-}
 
 interface SaveOptions {
   meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)

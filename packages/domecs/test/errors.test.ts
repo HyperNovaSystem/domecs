@@ -389,6 +389,16 @@ describe('BETTER_ERRORS Phase 5 — retryable, repair hints, ERROR_KINDS', () =>
     }
   })
 
+  it('persist_io repair hint distinguishes deterministic failures from transient IO (O-28)', () => {
+    const base = {
+      kind: 'persist_io',
+      op: 'load',
+      cause: { name: 'Error', message: 'slot "x" is empty' },
+    } as const
+    expect(getErrorRepairHint({ ...base, retryable: true } as DomecsError)).toMatch(/reachable/)
+    expect(getErrorRepairHint({ ...base, retryable: false } as DomecsError)).toMatch(/loadIfPresent/)
+  })
+
   it('isKnownDomecsErrorKind discriminates', () => {
     // Regression guard: system_threw was dropped from the union (issue #2733).
     expect(isKnownDomecsErrorKind('system_threw')).toBe(false)

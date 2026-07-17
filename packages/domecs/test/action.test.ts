@@ -210,4 +210,55 @@ describe('world.action — turn-based command result (#17)', () => {
     const ret = w.turn(Move, { entity: 0, dx: 1, dy: 0 }) as unknown
     expect(ret).toBeUndefined()
   })
+
+  describe('payload validation against a declared schema (O-39)', () => {
+    const Strike = defineEvent<{ amount: number; kind?: string }>('Strike', {
+      schema: {
+        fields: {
+          amount: { kind: 'number' },
+          kind: { kind: 'enum', options: ['slash', 'pierce'] },
+        },
+      },
+    })
+
+    it('rejects a typo’d field: no emit, no tick, no consumed turn', () => {
+      const w = createWorld()
+      const seen: number[] = []
+      w.system('on-strike', { schedule: 'event', triggers: [Strike] }, (ctx) => {
+        for (const s of ctx.events.of(Strike)) seen.push(s.amount)
+      })
+      const startTick = w.time.tick
+      const r = w.action(Strike, { amoutn: 3 } as never)
+      expect(r.accepted).toBe(false)
+      expect(r.consumedTurn).toBe(false)
+      expect(r.reason).toMatch(/unknown field "amoutn"/)
+      expect(r.events).toEqual([])
+      expect(w.time.tick).toBe(startTick) // command never entered the world
+      w.stepOnce()
+      expect(seen).toEqual([]) // and was not buffered either
+    })
+
+    it('rejects a wrong-typed field and an out-of-enum value', () => {
+      const w = createWorld()
+      const bad = w.action(Strike, { amount: 'three' } as never)
+      expect(bad.accepted).toBe(false)
+      expect(bad.reason).toMatch(/must be a number/)
+      const badEnum = w.action(Strike, { amount: 1, kind: 'bludgeon' } as never)
+      expect(badEnum.accepted).toBe(false)
+      expect(badEnum.reason).toMatch(/must be one of/)
+    })
+
+    it('accepts a valid payload; absent declared fields are optional', () => {
+      const w = createWorld()
+      const r = w.action(Strike, { amount: 2 })
+      expect(r.accepted).toBe(true)
+      expect(r.consumedTurn).toBe(true)
+    })
+
+    it('schema-less events remain unvalidated (opt-in strictness)', () => {
+      const w = createWorld()
+      const r = w.action(Move, { wat: true } as never)
+      expect(r.accepted).toBe(true)
+    })
+  })
 })

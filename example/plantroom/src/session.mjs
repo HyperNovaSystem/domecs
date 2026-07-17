@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createPlantWorld,
+  resolveCommand,
   proposalRestartOnly,
   proposalResetAndStart,
   SetPump,
@@ -13,6 +14,7 @@ import {
   AcknowledgeAlarm,
   Historian,
 } from './model.mjs'
+import { createCheckpointRing, compareBranches } from './checkpoints.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const { createAgentBridge } = await import(
@@ -41,17 +43,15 @@ export function createPlantSession(opts = {}) {
   const fixedStep = world.time.fixedStep
   /** @type {import('./buildPlant.js').Proposal | null} */
   let pending = null
-  /** @type {Array<{ tick: number, snapshot: object }>} */
-  const checkpoints = []
-  const checkpointEvery = 20
-  const checkpointCapacity = 40
+  let proposalSeq = 0
+  const ring = createCheckpointRing(world, {
+    getSampleCount: () => world.getResource(Historian)?.total ?? 0,
+    everySamples: 10,
+    capacity: 40,
+  })
 
-  function maybeCheckpoint() {
-    const tick = world.time.tick
-    if (tick <= 0 || tick % checkpointEvery !== 0) return
-    if (checkpoints.some((c) => c.tick === tick)) return
-    checkpoints.push({ tick, snapshot: world.snapshot() })
-    while (checkpoints.length > checkpointCapacity) checkpoints.shift()
+  function act(type, payload) {
+    return bridge.act(type, payload, { resolve: resolveCommand })
   }
 
   const session = {
@@ -67,11 +67,12 @@ export function createPlantSession(opts = {}) {
     },
 
     injectPumpTrip() {
-      return bridge.act(events.InjectFault, { kind: 'pump_trip' })
+      return act(events.InjectFault, { kind: 'pump_trip' })
     },
 
     queueProposal(proposal) {
-      pending = proposal
+      proposalSeq += 1
+      pending = { ...proposal, id: `prop-${proposalSeq}` }
       return pending
     },
 
@@ -85,29 +86,41 @@ export function createPlantSession(opts = {}) {
       return was
     },
 
+    /**
+     * Apply the pending proposal through the action boundary. All step event
+     * names are resolved BEFORE the first act — a malformed proposal is
+     * rejected atomically instead of half-applied.
+     */
     approveProposal() {
-      if (!pending) return { applied: false, results: [] }
-      const results = []
+      if (!pending) return { applied: false, results: [], reason: 'no pending proposal' }
+      const resolved = []
       for (const step of pending.steps) {
         const et = eventMap[step.event]
-        if (!et) throw new Error(`unknown proposal event ${step.event}`)
-        results.push(bridge.act(et, step.payload))
-        maybeCheckpoint()
+        if (!et) {
+          return {
+            applied: false,
+            results: [],
+            reason: `unknown proposal event ${step.event}`,
+          }
+        }
+        resolved.push({ et, payload: step.payload })
+      }
+      const results = []
+      for (const step of resolved) {
+        results.push(act(step.et, step.payload))
+        ring.maybeCheckpoint()
       }
       pending = null
       return { applied: true, results }
     },
 
     proposeRestartPump() {
-      return bridge.act(events.SetPump, { running: true })
+      return act(events.SetPump, { running: true })
     },
 
     proposeResetAndStart() {
-      const ack = bridge.act(events.AcknowledgeAlarm, {
-        code: 'PUMP-TRIP',
-        reset: true,
-      })
-      const start = bridge.act(events.SetPump, { running: true })
+      const ack = act(events.AcknowledgeAlarm, { code: 'PUMP-TRIP', reset: true })
+      const start = act(events.SetPump, { running: true })
       return { ack, start }
     },
 
@@ -120,23 +133,27 @@ export function createPlantSession(opts = {}) {
     fastForward(steps) {
       for (let i = 0; i < steps; i++) {
         bridge.step(fixedStep)
-        maybeCheckpoint()
+        ring.maybeCheckpoint()
       }
     },
 
+    /**
+     * Pure evaluator: rolls each strategy forward from the same base
+     * snapshot and puts the world BACK on base before returning. Applying a
+     * winner is an explicit follow-up (through the approval flow). Nothing
+     * speculative enters the checkpoint ring.
+     */
     compareBranches(steps, strategyA, strategyB) {
-      const base = bridge.snapshot()
-      world.restore(base)
-      strategyA(session)
-      session.fastForward(steps)
-      const outcomeA = readOutcome(session)
-
-      world.restore(base)
-      strategyB(session)
-      session.fastForward(steps)
-      const outcomeB = readOutcome(session)
-
-      return { outcomeA, outcomeB, base }
+      const { outcomes, base } = compareBranches({
+        world,
+        bridge,
+        ring,
+        steps,
+        fixedStep,
+        strategies: [() => strategyA(session), () => strategyB(session)],
+        readOutcome: () => readOutcome(session),
+      })
+      return { outcomeA: outcomes[0], outcomeB: outcomes[1], base }
     },
 
     getHistorian() {
@@ -144,22 +161,17 @@ export function createPlantSession(opts = {}) {
     },
 
     getCheckpoints() {
-      return checkpoints.slice()
+      return ring.list()
     },
 
     /**
-     * Restore nearest checkpoint at or before `tick`.
+     * Restore nearest checkpoint at or before `tick`. Returns `false` when
+     * no checkpoint ≤ `tick` exists — it never falls forward to a later
+     * checkpoint. Checkpoints from the abandoned future are dropped.
      * @returns {boolean}
      */
     restoreHistorianCheckpoint(tick) {
-      if (checkpoints.length === 0) return false
-      let best = null
-      for (const cp of checkpoints) {
-        if (cp.tick <= tick) best = cp
-      }
-      if (!best) best = checkpoints[0]
-      world.restore(best.snapshot)
-      return true
+      return ring.restoreAtOrBefore(tick)
     },
 
     readOutcome() {
@@ -172,7 +184,8 @@ export function createPlantSession(opts = {}) {
 
     reset() {
       pending = null
-      checkpoints.length = 0
+      proposalSeq = 0
+      ring.clear()
       bridge.reset()
     },
   }
@@ -186,6 +199,7 @@ function readOutcome(session) {
   const pump = world.getComponent(ids.pump, components.Pump)
   const trip = world.getComponent(ids.alarmTrip, components.Alarm)
   const hi = world.getComponent(ids.alarmHi, components.Alarm)
+  const hiTemp = world.getComponent(ids.alarmHiTemp, components.Alarm)
   return {
     level: vessel?.level ?? 0,
     temp: vessel?.temp ?? 0,
@@ -193,5 +207,6 @@ function readOutcome(session) {
     pumpTrip: !!pump?.trip,
     alarmTrip: !!trip?.active,
     alarmHiLevel: !!hi?.active,
+    alarmHiTemp: !!hiTemp?.active,
   }
 }
