@@ -1,6 +1,9 @@
 /**
  * Cold-install gate (PLAN WS-2). Skipped unless RUN_COLD_INSTALL=1 so default
- * CI stays fast; release paths and manual checks set the env var.
+ * CI stays fast. Nothing sets the env var automatically today — run it
+ * manually (`pnpm cold-install`, or `RUN_COLD_INSTALL=1 pnpm test:cold-install`)
+ * before publishing. It exercises locally packed tarballs (the exact payload
+ * `pnpm publish` would ship), not the registry.
  */
 import { describe, it } from 'node:test'
 import { spawnSync } from 'node:child_process'

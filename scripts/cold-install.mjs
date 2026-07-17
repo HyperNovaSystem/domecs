@@ -49,12 +49,17 @@ for (const p of packs) {
   const pkgDir = path.join(root, p.dir)
   console.error(`[cold-install] pnpm pack ${p.name}…`)
   // pnpm pack rewrites workspace:* → version and applies publishConfig → dist.
-  const out = run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
-  const match = out.match(/[^\s]+\.tgz/)
-  if (!match) throw new Error(`could not parse pack path from:\n${out}`)
-  const tgzPath = match[0].trim()
+  // Discover the tarball on disk instead of parsing stdout — paths containing
+  // spaces (the Windows temp-dir default) would truncate a token-based match.
+  const before = new Set(fs.readdirSync(stage).filter((f) => f.endsWith('.tgz')))
+  run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
+  const created = fs.readdirSync(stage).filter((f) => f.endsWith('.tgz') && !before.has(f))
+  if (created.length !== 1) {
+    throw new Error(`expected exactly one new tarball for ${p.name}, saw: ${created.join(', ') || '(none)'}`)
+  }
+  const tgzPath = path.join(stage, created[0])
   tarballByName[p.name] = tgzPath
-  console.error(`[cold-install]   → ${path.basename(tgzPath)}`)
+  console.error(`[cold-install]   → ${created[0]}`)
 }
 
 fs.writeFileSync(
@@ -104,7 +109,14 @@ console.log(JSON.stringify({ ok: true, tick: obs.tick, entityCount: obs.entityCo
 const probePath = path.join(stage, 'probe.mjs')
 fs.writeFileSync(probePath, probe)
 console.error('[cold-install] run probe…')
-const result = run('node', [probePath], { cwd: stage })
+let result
+try {
+  result = run('node', [probePath], { cwd: stage })
+} catch (err) {
+  // Deliberate: the stage survives failures so the wreckage can be inspected.
+  console.error(`[cold-install] FAILED — stage left for inspection: ${stage}`)
+  throw err
+}
 console.log(result.trim())
 console.error('[cold-install] OK')
 

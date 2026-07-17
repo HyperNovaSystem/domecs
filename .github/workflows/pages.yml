@@ -20,9 +20,11 @@ permissions:
   pages: write
   id-token: write
 
+# cancel-in-progress stays false per the official Pages pattern: in-flight
+# production deployments complete; queued runs are still skipped.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -38,6 +40,11 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Enable Pages (first-deploy safe — no manual settings flip needed)
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b  # v5.0.0
+        with:
+          enablement: true
 
       - name: Build runtime packages (Plantroom aliases to source; build is still good hygiene)
         run: pnpm --filter @domecs/core --filter @domecs/dom build
