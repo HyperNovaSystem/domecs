@@ -4,8 +4,9 @@
 
 A **performance-oriented, deterministic ECS runtime for DOM-heavy
 simulations** — with retained DOM projections so humans and AI agents can
-operate the same live world. Benchmark characterization is in progress
-(see [`plan/PLAN.md`](plan/PLAN.md) WS-1).
+operate the same live world. Benchmarks live in [`bench/`](bench/)
+(including Koota / signals compare); **no decisive runtime win is claimed
+yet** — see [`bench/COMPARISON.md`](bench/COMPARISON.md).
 
 The product is the **operable simulation**: deterministic scheduling,
 headless stepping, structured `action()`, snapshots / branching / replay,

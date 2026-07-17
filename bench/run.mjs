@@ -9,7 +9,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200
  *   node bench/run.mjs --write   # also write bench/results.json
  */
@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { writeFileSync, mkdirSync } from 'node:fs'
+import { runKootaSoak, runKootaWindowed } from './baselines/koota.mjs'
+import { runSignalsSoak, runSignalsWindowed } from './baselines/signals.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const coreUrl = pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href
@@ -30,6 +32,8 @@ const ticks = Number(args.ticks ?? 100)
 const windowSize = Number(args.window ?? 50)
 const fixedStep = 1 / 60
 const writeResults = !!args.write
+const compareN = Math.min(entityCount, 5_000)
+const compareWindowN = Math.min(entityCount, 2_000)
 
 const Position = defineComponent('BenchPosition', {
   defaults: { x: 0, y: 0 },
@@ -78,6 +82,22 @@ if (workload === 'all' || workload === 'baseline') {
       fixedStep,
     }),
   )
+}
+// Cross-engine comparison (soak + windowed): DOMECS vs Koota vs signals.
+if (workload === 'all' || workload === 'compare') {
+  results.push(runSoak({ entityCount: compareN, ticks, fixedStep }))
+  results.push(runKootaSoak({ entityCount: compareN, ticks }))
+  results.push(runSignalsSoak({ entityCount: compareN, ticks }))
+  results.push(
+    runWindowed({ entityCount: compareWindowN, ticks, windowSize }),
+  )
+  results.push(
+    runKootaWindowed({ entityCount: compareWindowN, ticks, windowSize }),
+  )
+  results.push(
+    runSignalsWindowed({ entityCount: compareWindowN, ticks, windowSize }),
+  )
+  results.push(summarizeComparison(results))
 }
 
 const summary = {
@@ -310,6 +330,51 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
     p50Ms: p50,
     p95Ms: p95,
     note: 'hand-rolled Float64Array loops; not feature-equivalent',
+  }
+}
+
+// --- compare --------------------------------------------------------------------
+
+function summarizeComparison(all) {
+  const pick = (name) => all.find((r) => r.workload === name)
+  const soak = {
+    domecs: pick('soak'),
+    koota: pick('koota-soak'),
+    signals: pick('signals-soak'),
+  }
+  const windowed = {
+    domecs: pick('windowed'),
+    koota: pick('koota-windowed'),
+    signals: pick('signals-windowed'),
+  }
+  const ratio = (a, b) =>
+    a && b && b.p95Ms > 0 ? Number((a.p95Ms / b.p95Ms).toFixed(3)) : null
+
+  const verdict = {
+    soak_domecs_vs_koota_p95: ratio(soak.domecs, soak.koota),
+    soak_domecs_vs_signals_p95: ratio(soak.domecs, soak.signals),
+    windowed_domecs_vs_koota_p95: ratio(windowed.domecs, windowed.koota),
+    windowed_domecs_vs_signals_p95: ratio(windowed.domecs, windowed.signals),
+  }
+
+  // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor.
+  const wins = []
+  for (const [k, v] of Object.entries(verdict)) {
+    if (v != null && v <= 0.7) wins.push(`${k} (${v}×)`)
+  }
+
+  return {
+    workload: 'compare-summary',
+    engine: 'meta',
+    entities: compareN,
+    p50Ms: 0,
+    p95Ms: 0,
+    verdict,
+    decisiveRuntimeWins: wins,
+    note:
+      wins.length > 0
+        ? `Decisive runtime win(s): ${wins.join('; ')}`
+        : 'No decisive (≥30% p95) runtime win on this host; check plumbing comparison in bench/COMPARISON.md',
   }
 }
 

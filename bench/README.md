@@ -1,9 +1,12 @@
 # DOMECS benchmarks (WS-1 / O-14)
 
 Headless-by-default harnesses that measure runtime behavior — not just
-correctness. Results feed the honest performance claims in the root README.
+correctness. Results feed honest performance language in the root README.
 
-## Workloads (from `plan/PLAN.md` WS-1)
+See also **[COMPARISON.md](./COMPARISON.md)** for baselines and success-bar
+interpretation.
+
+## Workloads
 
 | # | Workload | CLI | What it stresses |
 |---|----------|-----|------------------|
@@ -12,53 +15,56 @@ correctness. Results feed the honest performance claims in the root README.
 | 3 | **Windowed projection** | `windowed` | 50-row window over large set |
 | 4 | **Snapshot / restore** | `snapshot` | Snapshot size/time + determinism |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
+| 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
 
-## Metrics
+## Baselines (implemented)
 
-- p50 / p95 tick and update time
-- DOM mounts / updates / removes per frame (workload 3)
-- Heap growth (where the host exposes it)
-- Snapshot duration + serialized size
-- Determinism: identical seeds → identical snapshot digests
+| Engine | Path | Notes |
+|--------|------|-------|
+| **Koota** | `baselines/koota.mjs` | `koota` package (workspace devDependency) |
+| **Signals** | `baselines/signals.mjs` | Hand-rolled per-field fine-grained store |
+| **Plain** | in `run.mjs` | Float64Array floor |
 
-## Baselines (planned)
+## Success bar (PLAN)
 
-- Koota
-- Fine-grained reactive + TanStack Virtual (or hand-rolled signals)
-- Plain store + DOM
+Win **one** valuable workload decisively:
 
-## Success bar
+- ≈≥30% better p95 **or**
+- ≈half the app plumbing for equivalent behavior
 
-Win **one** valuable workload decisively — ≈≥30% better p95 runtime, **or**
-≈half the app plumbing. Losing is also output: claims get corrected.
+Losing is output: claims stay conservative.
 
 ## Run
 
 ```bash
-# from repo root (after pnpm install + build of packages)
 pnpm --filter @domecs/core build
 pnpm bench
-pnpm bench -- --workload soak --entities 20000 --ticks 200
-pnpm bench:write   # also writes bench/results.json (gitignored)
+pnpm bench -- --workload compare --entities 5000 --ticks 100
+pnpm bench:write
 ```
 
-Output is JSON on stdout plus a short human summary.
+## Sample compare (Node v24, 5k soak / 2k windowed, 80 ticks, 2026-07-17)
 
-### Sample results (illustrative — re-run on your machine)
+| Workload | Engine | p50 | p95 | vs DOMECS p95 |
+|----------|--------|-----|-----|---------------|
+| soak | **domecs** | 0.68ms | 1.35ms | 1.0× |
+| soak | koota | 0.41ms | 1.34ms | ~same |
+| soak | signals | 0.38ms | 1.15ms | DOMECS ~1.18× slower |
+| windowed | **domecs** | 0.025ms | 0.075ms | 1.0× |
+| windowed | koota | 0.040ms | 0.097ms | DOMECS ~0.77× (faster) |
+| windowed | signals | 0.019ms | 0.049ms | DOMECS ~1.54× slower |
 
-Host Node v24, 2k entities, 40 ticks (2026-07-16):
+**Decisive runtime wins (≥30% p95):** host- and N-dependent. A second pass
+(2k entities, 40 ticks) showed **windowed vs Koota at 0.42× p95** (decisive).
+The 5k/80-tick pass above was only ~0.77× (not decisive). Treat as
+**promising on windowed projection, not a frozen claim** until multi-machine
+stability.
 
-| Workload | p50 | p95 | Notes |
-|----------|-----|-----|-------|
-| soak | 0.25ms | 0.80ms | fixed move systems |
-| telemetry | 0.01ms | 0.02ms | 8 marks/tick |
-| snapshot | 3.4ms | 3.4ms | ~189KB JSON; deterministic restore |
-| windowed | 0.03ms | 0.11ms | window=50 over 2k |
-| baseline-plain | 0.01ms | 0.21ms | Float64Array; not feature-equivalent |
-
-Koota / Solid baselines not wired yet — next measurement pass.
+**Plumbing:** micro-shapes do not show “half the code” vs Koota; product value is the operable stack (action / snapshot / agent), not soak iteration. See COMPARISON.md.
 
 ## Status
 
-Runnable characterization suite. Numbers are **not** yet a product claim;
-use them to correct README language when they stabilize across machines.
+- [x] Headless suite + baselines
+- [x] Compare summary + honest no-win documentation
+- [ ] Multi-machine stability pass
+- [ ] README product claims remain gated (no decisive runtime win yet)

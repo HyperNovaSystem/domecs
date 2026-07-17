@@ -11,16 +11,31 @@ exercises the distinctive DOMECS stack **together**:
 
 ## Status
 
-**Scaffold + headless core.** Product depth and browser chrome grow here (or
-in a standalone app repo) as dogfood demands.
+**Headless core + multi-view browser chrome.** Historian-as-canvas trend is
+minimal; full product polish / dogfood decision still open.
 
 ## Run tests
 
 ```bash
 # from repo root
 pnpm --filter @domecs/core build
+pnpm test:plantroom
+# or:
 node --test example/plantroom/test/episode.test.mjs
 ```
+
+## Browser UI
+
+```bash
+cd example/plantroom
+pnpm install
+pnpm dev
+# → http://localhost:5179
+```
+
+Multi-view slots: **Tags**, **Alarms**, **Plant** (vessel+pump), plus trend
+canvas and branch-compare readout. Toolbar drives inject-fault, agent
+proposals, and snapshot branch compare.
 
 ## Demo moment (target)
 

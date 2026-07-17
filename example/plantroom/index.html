@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plantroom — DOMECS operable sim</title>
+    <link rel="stylesheet" href="/src/browser/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Plantroom</h1>
+      <p class="sub">
+        Operable industrial cell · determinism · typed actions · snapshot branch · agent bridge
+      </p>
+      <div class="toolbar" id="toolbar">
+        <button type="button" data-act="run">Run</button>
+        <button type="button" data-act="pause">Pause</button>
+        <button type="button" data-act="fault">Inject pump trip</button>
+        <button type="button" data-act="naive">Agent: restart only</button>
+        <button type="button" data-act="smart">Agent: reset + start</button>
+        <button type="button" data-act="branch">Branch compare (×40)</button>
+        <button type="button" data-act="reset">Reset episode</button>
+      </div>
+      <pre class="status" id="status">booting…</pre>
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <h2>Tags</h2>
+        <div id="slot-tags" class="slot tags"></div>
+      </section>
+      <section class="panel">
+        <h2>Alarms</h2>
+        <div id="slot-alarms" class="slot alarms"></div>
+      </section>
+      <section class="panel">
+        <h2>Plant</h2>
+        <div id="slot-plant" class="slot plant"></div>
+      </section>
+      <section class="panel wide">
+        <h2>Trend (level / temp)</h2>
+        <canvas id="trend" width="640" height="160" aria-label="Level and temperature trend"></canvas>
+      </section>
+      <section class="panel wide">
+        <h2>Branch outcomes</h2>
+        <pre id="branch" class="branch">Run “Branch compare” after a fault to compare strategies.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/browser/main.js"></script>
+  </body>
+</html>

@@ -87,8 +87,12 @@ bet. No date-driven milestones — the order is the only ordering.
 - [x] Headless suite: soak, telemetry, snapshot, windowed projection, plain
   baseline (`pnpm bench` / `pnpm bench:write`).
 - [x] Sample results table in `bench/README.md` (machine-local; not a product claim).
-- [ ] Koota / fine-grained-reactive baselines + multi-machine stability.
-- [ ] README product claims gated on decisive win (§ success bar).
+- [x] Koota + hand-rolled signals baselines (`bench/baselines/*`, `--workload compare`).
+- [x] First compare documented in `bench/COMPARISON.md` + `bench/README.md`.
+  Windowed vs Koota looks promising (sometimes decisive, N-dependent);
+  soak does not win. Claims stay gated on multi-machine stability.
+- [ ] Multi-machine stability pass (re-run compare on second host / CI).
+- [x] README product claims stay gated — no unearned win language.
 
 Workloads:
 
@@ -148,8 +152,9 @@ Scaffold in-repo: **`example/plantroom/`** (headless core + episode tests).
 - [x] Snapshot branch + fast-forward compare (naive restart vs reset+start)
 - [x] Agent bridge session (`createPlantSession`)
 - [x] Deterministic episode tests (`pnpm test:plantroom`)
-- [ ] Browser multi-view chrome (tags / alarms / trends)
-- [ ] Historian playback UI + operator approval UX
+- [x] Browser multi-view chrome (tags / alarms / plant + trend canvas)
+  — `example/plantroom` Vite app (`pnpm dev` in that folder)
+- [ ] Historian playback UI + operator approval UX (trend is live-only for now)
 - [ ] Scale to several hundred entities + product polish
 - [ ] Dogfood daily-use decision (keep here or promote to standalone repo)
 

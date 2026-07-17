@@ -20,6 +20,8 @@
     "bench:write": "node bench/run.mjs --write",
     "test:legibility": "node --test test/agent-legibility.test.mjs",
     "test:plantroom": "node --test example/plantroom/test/episode.test.mjs",
+    "plantroom:dev": "pnpm --filter @domecs/example-plantroom dev",
+    "plantroom:build": "pnpm --filter @domecs/example-plantroom build",
     "cold-install": "node scripts/cold-install.mjs",
     "test:cold-install": "node --test test/cold-install.test.mjs",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
@@ -28,6 +30,7 @@
     "@types/jscodeshift": "^17.3.0",
     "@types/node": "^22.10.1",
     "jscodeshift": "^17.3.0",
+    "koota": "0.6.6",
     "typescript": "^5.6.3",
     "vitest": "^2.1.9"
   }
