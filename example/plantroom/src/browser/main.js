@@ -5,6 +5,7 @@ import { createAgentBridge, isOk } from '@domecs/core'
 import { defineView, mountDOM } from '@domecs/dom'
 import {
   createPlantWorld,
+  resolveCommand,
   Tag,
   Alarm,
   Pump,
@@ -16,6 +17,7 @@ import {
   proposalRestartOnly,
   proposalResetAndStart,
 } from './model-browser.js'
+import { createCheckpointRing, compareBranches } from '../checkpoints.mjs'
 
 const SENSOR_COUNT = 200
 const plant = createPlantWorld({
@@ -32,14 +34,30 @@ const eventMap = { SetPump, InjectFault, AcknowledgeAlarm }
 
 /** @type {import('../buildPlant.js').Proposal | null} */
 let pending = null
-/** @type {Array<{ tick: number, snapshot: object }>} */
-const checkpoints = []
-const checkpointEvery = 20
-const checkpointCapacity = 40
+let proposalSeq = 0
+// Checkpoint cadence keys to the historian sample counter (sim time), not
+// render ticks — coverage is frame-rate independent and the ring stays
+// timeline-consistent across restores/branch compares.
+const ring = createCheckpointRing(world, {
+  getSampleCount: () => world.getResource(Historian)?.total ?? 0,
+  everySamples: 10,
+  capacity: 40,
+})
 
 let mode = 'live' // 'live' | 'scrub'
 let scrubIndex = 0
 let running = true
+
+/** Act through the command resolver so rejections carry a reason. */
+function command(type, payload) {
+  return bridge.act(type, payload, { resolve: resolveCommand })
+}
+
+function setPending(proposal) {
+  proposalSeq += 1
+  pending = { ...proposal, id: `prop-${proposalSeq}` }
+  return pending
+}
 
 // --- multi-view (critical tags / alarms / plant only — sensors stay headless-heavy) --
 
@@ -71,9 +89,14 @@ const alarmView = defineView({
   update: (el, e) => {
     const a = e.Alarm
     el.classList.toggle('active', a.active)
+    el.classList.toggle('acked', a.acked)
     el.classList.toggle('warn', a.severity === 'alarm' || a.severity === 'warn')
     el.querySelector('.code').textContent = a.code
-    el.querySelector('.msg').textContent = a.active ? a.message : '— clear —'
+    el.querySelector('.msg').textContent = a.active
+      ? a.acked
+        ? `${a.message} (ACKED)`
+        : a.message
+      : '— clear —'
   },
 })
 
@@ -139,12 +162,9 @@ function getSamples() {
   return world.getResource(Historian)?.samples ?? []
 }
 
-function maybeCheckpoint() {
-  const tick = world.time.tick
-  if (tick <= 0 || tick % checkpointEvery !== 0) return
-  if (checkpoints.some((c) => c.tick === tick)) return
-  checkpoints.push({ tick, snapshot: world.snapshot() })
-  while (checkpoints.length > checkpointCapacity) checkpoints.shift()
+/** F-6 heartbeat: repaint the mounted DOM views after a restore while paused. */
+function heartbeat() {
+  world.step(0)
 }
 
 function syncScrubRange() {
@@ -213,7 +233,7 @@ function drawTrend() {
   ctx.fillStyle = '#e6b84d'
   ctx.fillText('temp', 48, 14)
   ctx.fillStyle = '#8b9bb0'
-  ctx.fillText(`${samples.length} samples · ${checkpoints.length} checkpoints`, 100, 14)
+  ctx.fillText(`${samples.length} samples · ${ring.list().length} checkpoints`, 100, 14)
 }
 
 // --- proposal UI -------------------------------------------------------------
@@ -252,15 +272,28 @@ function escapeHtml(s) {
 
 function approvePending() {
   if (!pending) return
+  // Resolve every step's event name BEFORE the first act — a malformed
+  // proposal is rejected atomically instead of half-applied.
+  const resolved = []
   for (const step of pending.steps) {
     const et = eventMap[step.event]
-    if (!et) throw new Error(`unknown event ${step.event}`)
-    bridge.act(et, step.payload)
-    maybeCheckpoint()
+    if (!et) {
+      refreshStatus(`proposal rejected: unknown event ${step.event}`)
+      pending = null
+      renderProposal()
+      return
+    }
+    resolved.push({ et, payload: step.payload })
+  }
+  const verdicts = []
+  for (const step of resolved) {
+    const r = command(step.et, step.payload)
+    verdicts.push(r.accepted ? 'ok' : `rejected (${r.reason ?? 'no reason'})`)
+    ring.maybeCheckpoint()
   }
   pending = null
   renderProposal()
-  refreshStatus('proposal approved & applied')
+  refreshStatus(`proposal applied: ${verdicts.join(' · ')}`)
 }
 
 function rejectPending() {
@@ -276,6 +309,7 @@ function readOutcome() {
   const pump = world.getComponent(ids.pump, Pump)
   const trip = world.getComponent(ids.alarmTrip, Alarm)
   const hi = world.getComponent(ids.alarmHi, Alarm)
+  const hiTemp = world.getComponent(ids.alarmHiTemp, Alarm)
   return {
     level: vessel?.level ?? 0,
     temp: vessel?.temp ?? 0,
@@ -283,6 +317,7 @@ function readOutcome() {
     pumpTrip: !!pump?.trip,
     alarmTrip: !!trip?.active,
     alarmHiLevel: !!hi?.active,
+    alarmHiTemp: !!hiTemp?.active,
   }
 }
 
@@ -304,7 +339,7 @@ function refreshStatus(extra = '') {
 
 function onFrame() {
   if (mode === 'live') {
-    maybeCheckpoint()
+    ring.maybeCheckpoint()
     syncScrubRange()
   }
   drawTrend()
@@ -371,18 +406,22 @@ function dispatch(act) {
     refreshStatus('paused')
   } else if (act === 'fault') {
     if (mode === 'scrub') returnToLive(false)
-    bridge.act(events.InjectFault, { kind: 'pump_trip' })
-    maybeCheckpoint()
+    const r = command(events.InjectFault, { kind: 'pump_trip' })
+    ring.maybeCheckpoint()
     // Auto-queue competent proposal for approval UX demo moment
-    pending = proposalResetAndStart()
+    setPending(proposalResetAndStart())
     renderProposal()
-    refreshStatus('fault injected · agent proposal pending')
+    refreshStatus(
+      r.accepted
+        ? 'fault injected · agent proposal pending'
+        : `fault rejected (${r.reason ?? 'no reason'})`,
+    )
   } else if (act === 'propose-naive') {
-    pending = proposalRestartOnly()
+    setPending(proposalRestartOnly())
     renderProposal()
     refreshStatus('naive proposal pending')
   } else if (act === 'propose-smart') {
-    pending = proposalResetAndStart()
+    setPending(proposalResetAndStart())
     renderProposal()
     refreshStatus('smart proposal pending')
   } else if (act === 'approve') {
@@ -392,55 +431,68 @@ function dispatch(act) {
     rejectPending()
   } else if (act === 'branch') {
     if (mode === 'scrub') returnToLive(false)
-    // Ensure a shared faulted base for a meaningful compare.
+    // Ensure a shared faulted base for a meaningful compare. The compare
+    // itself resumes a paused world for its rollouts, but the fault priming
+    // below steps the world directly, so resume first if needed.
     if (!readOutcome().pumpTrip) {
-      bridge.act(events.InjectFault, { kind: 'pump_trip' })
-      maybeCheckpoint()
+      const wasPaused = world.time.scale === 0
+      if (wasPaused) world.resume()
+      command(events.InjectFault, { kind: 'pump_trip' })
       for (let i = 0; i < 5; i++) {
         world.step(fixedStep)
-        maybeCheckpoint()
+        ring.maybeCheckpoint()
       }
+      if (wasPaused) world.pause()
     }
     pending = null
     renderProposal()
-    const base = bridge.snapshot()
 
-    world.restore(base)
-    bridge.act(events.SetPump, { running: true })
-    for (let i = 0; i < 40; i++) {
-      world.step(fixedStep)
-      maybeCheckpoint()
-    }
-    const outcomeA = readOutcome()
+    // Pure evaluator: both strategies roll from the same base; the world is
+    // put BACK on base afterward. Nothing speculative is checkpointed.
+    const { outcomes } = compareBranches({
+      world,
+      bridge,
+      ring,
+      steps: 40,
+      fixedStep,
+      strategies: [
+        () => command(events.SetPump, { running: true }),
+        () => {
+          command(events.AcknowledgeAlarm, { code: 'PUMP-TRIP', reset: true })
+          command(events.SetPump, { running: true })
+        },
+      ],
+      readOutcome,
+    })
+    const [outcomeA, outcomeB] = outcomes
+    heartbeat() // repaint the mounted views on the restored base
 
-    world.restore(base)
-    bridge.act(events.AcknowledgeAlarm, { code: 'PUMP-TRIP', reset: true })
-    bridge.act(events.SetPump, { running: true })
-    for (let i = 0; i < 40; i++) {
-      world.step(fixedStep)
-      maybeCheckpoint()
-    }
-    const outcomeB = readOutcome()
+    // The winning strategy is applied only through the approval flow.
+    setPending(proposalResetAndStart())
+    renderProposal()
 
     branchEl.textContent = [
-      'Branch compare (40 fixed steps after shared fault state):',
+      'Branch compare (40 fixed steps each from the shared fault state):',
       '',
-      `A naive restart →  trip=${outcomeA.pumpTrip} temp=${outcomeA.temp.toFixed(1)} level=${outcomeA.level.toFixed(1)}`,
-      `B reset+start  →  trip=${outcomeB.pumpTrip} temp=${outcomeB.temp.toFixed(1)} level=${outcomeB.level.toFixed(1)}`,
+      `A naive restart →  trip=${outcomeA.pumpTrip} temp=${outcomeA.temp.toFixed(1)} level=${outcomeA.level.toFixed(1)} hi-level=${outcomeA.alarmHiLevel}`,
+      `B reset+start  →  trip=${outcomeB.pumpTrip} temp=${outcomeB.temp.toFixed(1)} level=${outcomeB.level.toFixed(1)} hi-level=${outcomeB.alarmHiLevel}`,
       '',
       outcomeB.temp < outcomeA.temp
-        ? '✓ B cooler — competent strategy preferred; world left on branch B.'
-        : '? Unexpected: B not cooler; inspect plant state.',
+        ? '✓ B cooler — competent strategy preferred. World is back on the shared base;'
+        : '? Unexpected: B not cooler; inspect plant state. World is back on the shared base;',
+      '  Approve the queued proposal to apply strategy B for real.',
       '',
       'Tip: scrub the historian, then Restore checkpoint @ scrub.',
     ].join('\n')
     syncScrubRange()
     drawTrend()
-    refreshStatus('after branch compare (on B)')
+    refreshStatus('after branch compare (world on shared base · proposal pending)')
   } else if (act === 'reset') {
     pending = null
-    checkpoints.length = 0
+    proposalSeq = 0
+    ring.clear()
     bridge.reset()
+    heartbeat() // repaint the mounted views on the restored baseline
     mode = 'live'
     renderProposal()
     branchEl.textContent = 'Episode reset to baseline.'
@@ -453,21 +505,19 @@ function dispatch(act) {
     const samples = getSamples()
     const s = samples[scrubIndex]
     if (!s) return
-    let best = null
-    for (const cp of checkpoints) {
-      if (cp.tick <= s.tick) best = cp
-    }
-    if (!best) {
+    // Restores through the ring: checkpoints from the abandoned future are
+    // dropped, and there is no fallback to a checkpoint after the request.
+    if (!ring.restoreAtOrBefore(s.tick)) {
       refreshStatus('no checkpoint ≤ scrub tick')
       return
     }
-    world.restore(best.snapshot)
     mode = 'live'
     running = false
     world.pause()
+    heartbeat() // repaint the mounted views on the restored state
     syncScrubRange()
     drawTrend()
-    refreshStatus(`restored checkpoint tick ${best.tick}`)
+    refreshStatus(`restored checkpoint tick ${world.time.tick}`)
   }
 }
 

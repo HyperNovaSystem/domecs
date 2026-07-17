@@ -31,8 +31,10 @@ pnpm --filter @domecs/core build
 pnpm test:plantroom
 ```
 
-Covers: branch compare, operator approval gate, historian checkpoint restore,
-entity scale, determinism.
+Covers: steady state (no alarms without an upset), branch compare as a pure
+evaluator, operator approval gate with honest command verdicts, alarm
+ack latching, timeline-consistent historian checkpoint restore, entity scale,
+determinism (full snapshot compare).
 
 ## Browser UI
 
@@ -49,9 +51,10 @@ Deployed from `main` via `.github/workflows/pages.yml` (enable Pages → GitHub 
 
 ### Manual test path (≈2 min)
 
-1. **1 · Inject pump trip** — temp climbs; proposal appears. Key: `1`
+1. **1 · Inject pump trip** — level & temp climb; proposal appears. Key: `1`
 2. **2 · Approve** (or Reject + other proposal). Keys: `a` / `r`
-3. **Branch compare** — naive vs reset+start (auto-faults if healthy). Key: `b`
+3. **Branch compare** — evaluates naive vs reset+start from a shared fault
+   base, then returns to that base with the winner queued for approval. Key: `b`
 4. **Historian scrub** + **Restore checkpoint @ scrub**
 5. **Reset episode** — Key: `Esc` · Space toggles pause/run
 

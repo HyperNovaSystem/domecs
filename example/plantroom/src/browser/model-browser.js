@@ -12,6 +12,8 @@ import {
 const plant = buildPlant(core)
 
 export const createPlantWorld = plant.createPlantWorld
+export const resolveCommand = plant.resolveCommand
+export const CommandResult = plant.events.CommandResult
 export const Tag = plant.components.Tag
 export const Alarm = plant.components.Alarm
 export const Pump = plant.components.Pump

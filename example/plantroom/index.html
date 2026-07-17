@@ -37,9 +37,9 @@
       <section class="panel guide">
         <h2>Manual test path (≈2 min)</h2>
         <ol class="guide-list">
-          <li><strong>Inject pump trip</strong> — temp climbs; PUMP-TRIP alarm; agent proposal appears.</li>
+          <li><strong>Inject pump trip</strong> — level &amp; temp climb; PUMP-TRIP alarm; agent proposal appears.</li>
           <li><strong>Approve</strong> — competent recovery (reset trip + start pump). Or Reject and try the other proposal.</li>
-          <li><strong>Branch compare</strong> — if still healthy, injects a fault first; shows naive vs reset+start after 40 steps.</li>
+          <li><strong>Branch compare</strong> — if still healthy, injects a fault first; evaluates naive vs reset+start over 40 steps, then returns to the shared base with the winner queued for approval.</li>
           <li><strong>Historian scrub</strong> — drag scrubber; Restore checkpoint reloads nearest snapshot ≤ that tick.</li>
           <li><strong>Reset episode</strong> — back to baseline seed state.</li>
         </ol>
