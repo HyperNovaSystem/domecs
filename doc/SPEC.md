@@ -527,6 +527,15 @@ by a per-view set of *redraw triggers*:
    redraws are gated on exactly that set, ignoring whatever the query
    implies. Used for finer-grained narrowing.
 
+**First-paint exception (O-2).** Under `auto` / `explicit` gating, `update`
+(when provided) runs **once** for each newly created node in the commit that
+mounts it, using a fresh commit-time entity view — entities that are spawned
+and never marked changed still render, and components added later in the
+same commit window are visible to that first paint. An entity that is both
+created and marked changed in one window still gets exactly one `update` for
+that commit. Subsequent commits stay change-gated. (Under `legacy` the
+full-redraw path already covers new nodes.)
+
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
 

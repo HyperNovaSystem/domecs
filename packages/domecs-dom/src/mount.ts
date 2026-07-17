@@ -188,6 +188,7 @@ function commit(state: ViewState): void {
   // Changed mark). Repaint it in the update phase below, or rebuild the node
   // outright when create() is the only painter.
   let readded: Set<Entity> | null = null
+  let created: Set<Entity> | null = null
   for (const [id, view] of state.pendingCreate) {
     const existing = state.mounted.get(id)
     if (existing) {
@@ -208,11 +209,15 @@ function commit(state: ViewState): void {
     state.mounted.set(id, { el, view })
     // O-2 first paint: under change-gated modes (auto/explicit), a newly
     // mounted entity has no OnChanged mark, so the gated update phase would
-    // never run. Call update() once at create. Skip when changedQueries is
-    // null (legacy / create-only): the full-update path already paints every
-    // mounted entity this commit, and double-firing would break call counts.
+    // never run for it. Track created ids and merge them into the update
+    // phase below — the paint then uses a FRESH commit-time view (components
+    // added later in the same window are visible, unlike the onAdd-time
+    // `view` captured here) and an entity that was also marked changed this
+    // window still gets exactly one update() per commit. Skip when
+    // changedQueries is null (legacy / create-only): the full-update path
+    // already paints every mounted entity this commit.
     if (state.def.update && state.changedQueries !== null) {
-      state.def.update(el, view)
+      ;(created ??= new Set()).add(id)
     }
   }
   state.pendingCreate.clear()
@@ -226,9 +231,9 @@ function commit(state: ViewState): void {
         rec.view = view
         state.def.update(rec.el, view)
       }
-    } else if (changed.size > 0 || readded !== null) {
+    } else if (changed.size > 0 || readded !== null || created !== null) {
       for (const view of state.query.entities) {
-        if (!changed.has(view.id) && !readded?.has(view.id)) continue
+        if (!changed.has(view.id) && !readded?.has(view.id) && !created?.has(view.id)) continue
         const rec = state.mounted.get(view.id)
         if (!rec) continue
         rec.view = view

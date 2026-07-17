@@ -862,6 +862,11 @@ interface MountHandle {
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
 //     those component types. Overrides the auto-derive.
+//
+// First paint (O-2): under `auto`/`explicit`, `update` also runs once for
+// each newly created node in the commit that mounts it (fresh commit-time
+// view; exactly one update even if the entity was also marked changed that
+// window). Later commits stay change-gated.
 type ChangedOn =
   | { readonly mode: 'auto' }
   | { readonly mode: 'legacy' }
