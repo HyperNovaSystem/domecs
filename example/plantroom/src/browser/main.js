@@ -319,6 +319,24 @@ document.getElementById('toolbar').addEventListener('click', onAction)
 document.getElementById('approval-panel').addEventListener('click', onAction)
 document.querySelector('.historian-controls').addEventListener('click', onAction)
 
+// Keyboard shortcuts for manual testing
+window.addEventListener('keydown', (ev) => {
+  if (ev.target.matches('input, textarea, button')) return
+  const map = {
+    '1': 'fault',
+    a: 'approve',
+    r: 'reject',
+    b: 'branch',
+    ' ': running ? 'pause' : 'run',
+    p: 'run',
+    Escape: 'reset',
+  }
+  const act = map[ev.key]
+  if (!act) return
+  ev.preventDefault()
+  dispatch(act)
+})
+
 scrubEl.addEventListener('input', () => {
   mode = 'scrub'
   world.pause()
@@ -334,10 +352,13 @@ scrubEl.addEventListener('input', () => {
 })
 
 function onAction(ev) {
-  const btn = ev.target.closest('button[data-act]')
+  const btn = ev.target?.closest?.('button[data-act]')
   if (!btn) return
-  const act = btn.dataset.act
+  dispatch(btn.dataset.act)
+}
 
+/** @param {string} act */
+function dispatch(act) {
   if (act === 'run') {
     mode = 'live'
     running = true
@@ -371,7 +392,19 @@ function onAction(ev) {
     rejectPending()
   } else if (act === 'branch') {
     if (mode === 'scrub') returnToLive(false)
+    // Ensure a shared faulted base for a meaningful compare.
+    if (!readOutcome().pumpTrip) {
+      bridge.act(events.InjectFault, { kind: 'pump_trip' })
+      maybeCheckpoint()
+      for (let i = 0; i < 5; i++) {
+        world.step(fixedStep)
+        maybeCheckpoint()
+      }
+    }
+    pending = null
+    renderProposal()
     const base = bridge.snapshot()
+
     world.restore(base)
     bridge.act(events.SetPump, { running: true })
     for (let i = 0; i < 40; i++) {
@@ -399,7 +432,7 @@ function onAction(ev) {
         ? '✓ B cooler — competent strategy preferred; world left on branch B.'
         : '? Unexpected: B not cooler; inspect plant state.',
       '',
-      'Tip: use historian scrub to review samples recorded during the compare.',
+      'Tip: scrub the historian, then Restore checkpoint @ scrub.',
     ].join('\n')
     syncScrubRange()
     drawTrend()

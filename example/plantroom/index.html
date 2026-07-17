@@ -10,22 +10,45 @@
     <header class="top">
       <h1>Plantroom</h1>
       <p class="sub">
-        Flagship operable cell · ~200 sensors · typed actions · agent proposals ·
-        historian scrub · snapshot branch
+        DOMECS flagship operable cell · ~200 sensors · typed actions · agent
+        proposals · historian scrub · snapshot branch
       </p>
       <div class="toolbar" id="toolbar">
-        <button type="button" data-act="run">Run</button>
-        <button type="button" data-act="pause">Pause</button>
-        <button type="button" data-act="fault">Inject pump trip</button>
-        <button type="button" data-act="propose-naive">Agent propose: restart</button>
-        <button type="button" data-act="propose-smart">Agent propose: reset+start</button>
-        <button type="button" data-act="branch">Branch compare (×40)</button>
+        <button type="button" data-act="run" title="Resume live sim">Run</button>
+        <button type="button" data-act="pause" title="Pause live sim">Pause</button>
+        <button type="button" data-act="fault" title="Trip cooling pump + queue agent proposal">
+          1 · Inject pump trip
+        </button>
+        <button type="button" data-act="approve" class="primary" title="Apply pending proposal">
+          2 · Approve
+        </button>
+        <button type="button" data-act="reject" title="Drop pending proposal">Reject</button>
+        <button type="button" data-act="branch" title="Compare naive vs reset+start strategies">
+          Branch compare
+        </button>
+        <button type="button" data-act="propose-naive">Propose: restart only</button>
+        <button type="button" data-act="propose-smart">Propose: reset+start</button>
         <button type="button" data-act="reset">Reset episode</button>
       </div>
       <pre class="status" id="status">booting…</pre>
     </header>
 
     <main class="grid">
+      <section class="panel guide">
+        <h2>Manual test path (≈2 min)</h2>
+        <ol class="guide-list">
+          <li><strong>Inject pump trip</strong> — temp climbs; PUMP-TRIP alarm; agent proposal appears.</li>
+          <li><strong>Approve</strong> — competent recovery (reset trip + start pump). Or Reject and try the other proposal.</li>
+          <li><strong>Branch compare</strong> — if still healthy, injects a fault first; shows naive vs reset+start after 40 steps.</li>
+          <li><strong>Historian scrub</strong> — drag scrubber; Restore checkpoint reloads nearest snapshot ≤ that tick.</li>
+          <li><strong>Reset episode</strong> — back to baseline seed state.</li>
+        </ol>
+        <p class="meta">
+          Stack under test: <code>@domecs/core</code> + <code>@domecs/dom</code> ·
+          determinism · <code>action</code> · snapshots · agent bridge · multi-view DOM
+        </p>
+      </section>
+
       <section class="panel">
         <h2>Tags (critical)</h2>
         <div id="slot-tags" class="slot tags"></div>
@@ -43,10 +66,12 @@
       <section class="panel approval" id="approval-panel">
         <h2>Operator approval</h2>
         <div id="proposal" class="proposal empty">
-          No pending agent proposal. Inject a fault, then ask the agent to propose.
+          No pending agent proposal. Press <strong>1 · Inject pump trip</strong>.
         </div>
         <div class="approval-actions">
-          <button type="button" data-act="approve" id="btn-approve" disabled>Approve</button>
+          <button type="button" data-act="approve" id="btn-approve" class="primary" disabled>
+            Approve
+          </button>
           <button type="button" data-act="reject" id="btn-reject" disabled>Reject</button>
         </div>
       </section>

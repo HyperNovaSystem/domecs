@@ -3,9 +3,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
+// Project Pages: https://hypernovasystem.github.io/domecs/
+// Local dev / preview: base '/'. CI and PLANTROOM_BASE=/domecs/ use project path.
+const base =
+  process.env.PLANTROOM_BASE ??
+  (process.env.GITHUB_ACTIONS === 'true' ? '/domecs/' : '/')
 
 export default defineConfig({
   root,
+  base,
   resolve: {
     alias: {
       // Prefer TypeScript source for monorepo DX (same as other exemplars).

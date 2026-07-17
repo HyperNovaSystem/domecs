@@ -37,21 +37,23 @@ entity scale, determinism.
 ## Browser UI
 
 ```bash
+# from repo root
 pnpm plantroom:dev
 # → http://localhost:5179
 
 pnpm plantroom:build
 ```
 
-### Demo moment (UI)
+**GitHub Pages (this repo):** https://hypernovasystem.github.io/domecs/  
+Deployed from `main` via `.github/workflows/pages.yml` (enable Pages → GitHub Actions once if 404).
 
-1. **Run** the plant (auto-starts).
-2. **Inject pump trip** — fault + auto-queues a competent agent proposal.
-3. **Approve** or **Reject** in the Operator approval panel.
-4. Or run **Branch compare** to fast-forward naive vs reset+start strategies.
-5. **Historian scrub** — drag the scrubber; **Restore checkpoint @ scrub**
-   reloads the nearest snapshot checkpoint ≤ that tick.
-6. **Return to live** resumes sampling after scrub.
+### Manual test path (≈2 min)
+
+1. **1 · Inject pump trip** — temp climbs; proposal appears. Key: `1`
+2. **2 · Approve** (or Reject + other proposal). Keys: `a` / `r`
+3. **Branch compare** — naive vs reset+start (auto-faults if healthy). Key: `b`
+4. **Historian scrub** + **Restore checkpoint @ scrub**
+5. **Reset episode** — Key: `Esc` · Space toggles pause/run
 
 ### Layout
 

@@ -22,6 +22,7 @@
     "test:plantroom": "node --test example/plantroom/test/episode.test.mjs",
     "plantroom:dev": "pnpm --filter @domecs/example-plantroom dev",
     "plantroom:build": "pnpm --filter @domecs/example-plantroom build",
+    "plantroom:build:pages": "pnpm --filter @domecs/example-plantroom build",
     "cold-install": "node scripts/cold-install.mjs",
     "test:cold-install": "node --test test/cold-install.test.mjs",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"

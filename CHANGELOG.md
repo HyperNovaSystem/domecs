@@ -22,6 +22,8 @@ All notable changes to DOMECS are documented here. The format is based on
 - Plantroom WS-4 complete: historian scrub + checkpoint restore, operator
   approval panel for agent proposals, ~200 sensors scale, shared
   `buildPlant.js` domain, dogfood decision (stay in monorepo).
+- Plantroom polish for manual testing (guide path, keyboard shortcuts) and
+  GitHub Pages deploy (`.github/workflows/pages.yml` → `/domecs/`).
 - Bench workloads: windowed projection + plain baseline; `pnpm bench:write`.
 - Bench compare: Koota + hand-rolled signals baselines (`--workload compare`);
   honest no-decisive-win writeup in `bench/COMPARISON.md`.

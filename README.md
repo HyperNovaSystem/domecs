@@ -97,9 +97,24 @@ Semver is honored; the product contract is still hardening via corrective
 
 ## Live demos
 
-Five standalone exemplar apps — each its own repo, each deployed to GitHub Pages.
-They consume the `@domecs/*` packages from this repo via `file:../domecs/packages/*`,
-so clone any of them **alongside** `domecs` to develop on it.
+### Flagship (this repo)
+
+| Demo | What it exercises | Live | Source |
+|------|-------------------|------|--------|
+| **Plantroom** | Operable industrial cell: agent proposals + operator approval, snapshot branch compare, historian scrub, ~200 sensors, multi-view DOM | [▶ open](https://hypernovasystem.github.io/domecs/) | [`example/plantroom`](example/plantroom) |
+
+```bash
+pnpm plantroom:dev    # local → http://localhost:5179
+pnpm plantroom:build  # static dist/
+```
+
+GitHub Pages deploys Plantroom from `main` (`.github/workflows/pages.yml`).
+If the site 404s, enable **Settings → Pages → Source: GitHub Actions**.
+
+### Other exemplars (standalone repos)
+
+Stress/game demos in sibling repos (clone next to `domecs` for `file:` deps).
+They are not the product pitch — **Plantroom** is.
 
 | Demo | What it exercises | Live | Source |
 |------|-------------------|------|--------|
