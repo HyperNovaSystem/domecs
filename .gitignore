@@ -162,6 +162,7 @@ skidl.erc
 plan/*
 !plan/PLAN.md
 !plan/FINDINGS.md
+!plan/FINDINGS.CLAUDE.md
 
 # Machine-local bench output (regenerate with pnpm bench:write)
 bench/results.json
