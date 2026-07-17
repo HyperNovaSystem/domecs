@@ -23,6 +23,37 @@ built dist for the highest-severity claims. Verification labels below:
 and `test:plantroom` all pass. The findings below are about what the green
 gates don't cover.
 
+---
+
+## Fix status (2026-07-17, same PR)
+
+Fixes were applied on this branch after the review. Per-item disposition:
+
+- **Fixed** — R-1, R-2, R-3, R-4, R-5, R-6, R-9, R-10, R-11, R-12, R-13,
+  R-14, R-15, R-16, R-17, R-19, R-20, R-24, R-25, R-26, R-27, R-28, R-29,
+  R-30, R-31, R-32, and **R-34** (pending events leaked across
+  `world.restore()` — the review finding this file initially mis-refuted;
+  see the re-check section below; `restore()` now clears pending events,
+  SPEC §7.1 updated, regression test added). All notes except the two below
+  were also addressed (proposal ids, approve atomicity, HI-TEMP alarm,
+  manifest field cloning, publish filter, cold-install stage message,
+  pages.yml pattern, README `reactive` bullet, AGENTS.md caveats, PLAN
+  citations, persist README gaps).
+- **Partially fixed** — R-18 (GC between workloads under `--expose-gc` +
+  documented; child-process-per-engine isolation deferred), R-21 (`stop()`
+  now relinquishes an owned pause; the hidden-tab ownership-epoch limit is
+  documented on `StartOptions.pauseOnHidden` rather than re-engineered).
+- **Documented + ledgered, engine change deferred** — R-7 (→ ledger O-38:
+  snapshot id-cursor field is the real fix; reset-before-first-episode is
+  now the documented pattern), R-8 (→ ledger O-39: schema validation in
+  `action()`; the Plantroom `CommandResult` resolver ships as the
+  mitigation pattern), R-22 and R-23 (bridge `reset()`/`step(0)` semantics
+  documented at the bridge, api.md, and AGENTS.md).
+- **Left for the maintainer** — R-33 (the v1.0.0 GitHub Release body edit
+  needs release-edit permissions this session does not have: run
+  `gh release edit v1.0.0 --notes-file <fixed.md>` with backticks
+  restored).
+
 **Verdict.** This is a strong, honest tranche: the plan is coherent, the
 WS-2 fixes are real and well-documented, the agent surface is genuinely thin,
 and the bench writeups resist the temptation to claim unearned wins. The two
@@ -446,16 +477,21 @@ is visible.
 
 ---
 
-## Claims checked and not confirmed
+## Claims re-checked — one initial refutation was wrong
 
-- **"`bridge.reset()` leaks pending events into the next episode."**
-  Probed directly against the built dist: an event-schedule system emitting
-  a follow-up event on the episode's final tick, then `reset()` + step —
-  the follow-up did **not** fire post-reset (counters stayed at baseline).
-  The feared mechanism (event bus surviving `applySnapshot`) does not
-  materialize for system-emitted events. Recording it here because the
-  claim is plausible enough to resurface; a regression test pinning
-  "pending events do not cross restore()" would make it cheap to keep true.
+- **"`bridge.reset()` leaks pending events into the next episode" — the
+  review finding was CORRECT; this file originally recorded it as refuted
+  and that was a probe error.** The first probe inserted an extra
+  `bridge.step()` between the act and the reset, which delivered the
+  follow-up event *before* the reset — testing the wrong window. A
+  regression test resetting while the follow-up was still pending showed
+  the leak immediately: the abandoned episode's event fired into the first
+  tick of the next episode (`echoes === 1`), exactly as the reviewer
+  described. **Fixed in this PR (R-34):** `world.restore()` now discards
+  pending events before applying the snapshot (events a plugin emits during
+  `onRestore` survive), SPEC §7.1 states the contract normatively, and the
+  regression test pins it. Lesson recorded on purpose: a refutation probe
+  must reproduce the *claimed* timing before it counts as a refutation.
 
 ---
 

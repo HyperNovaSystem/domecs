@@ -87,6 +87,14 @@ export interface EventBus {
    * defined but never used in this world is unknowable and will not appear.
    */
   knownTypes(): EventType<unknown>[]
+  /**
+   * Drop all pending (undelivered) events. Called by `world.restore()`:
+   * events queued before a restore belong to the abandoned timeline and
+   * must not fire into the first tick after it (SPEC §7.1). The current
+   * (already-flushed) view is left alone — it is replaced wholesale at the
+   * next flush.
+   */
+  clear(): void
 }
 
 /**
@@ -190,6 +198,9 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     knownTypes(): EventType<unknown>[] {
       return Array.from(typeByTag.values())
+    },
+    clear(): void {
+      pending = new Map()
     },
   }
 }

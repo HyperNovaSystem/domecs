@@ -1686,6 +1686,12 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     restore(snap: WorldSnapshot): void {
+      // Discard pending (undelivered) events first: they were emitted on the
+      // timeline being abandoned and would otherwise fire into the first
+      // tick after the restore, making identical episodes diverge (SPEC
+      // §7.1). Cleared before the plugin chain so anything a plugin emits
+      // during onRestore survives.
+      bus.clear()
       let s = snap
       for (const entry of plugins.list()) {
         if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot

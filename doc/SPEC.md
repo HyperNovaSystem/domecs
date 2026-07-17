@@ -603,6 +603,8 @@ interface WorldSnapshot {
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
+**Pending events (normative).** `restore()` discards all pending (undelivered) events before applying the snapshot: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. Events a plugin emits during its `onRestore` hook are preserved (the clear happens first). The event bus is transient by design and is never part of the snapshot envelope; durable history belongs in components/resources (the durable-log pattern).
+
 ### 7.2 Autosave — eventually consistent (planned; not in v1.0)
 
 Autosave has not shipped — v1.0 persistence is explicit `save`/`load`. This section is the locked design for the planned facade. Autosave is **not** a repeated sync `snapshot()`. It is an incremental, eventually-consistent writer:
