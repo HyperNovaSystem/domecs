@@ -97,6 +97,15 @@ const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
 ])
 const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
 
+// The manifest is a plain-data handoff: clone FieldSchema values so no
+// consumer holds references into the live component/event schema metadata
+// (mutating a manifest must never corrupt reflection world-wide).
+function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
+  const out: Record<string, FieldSchema> = {}
+  for (const [key, value] of Object.entries(src)) out[key] = { ...value }
+  return out
+}
+
 // Infer a reflection FieldKind from a default value's runtime type. Used by
 // describeComponent when a component declares no explicit schema (#14).
 function inferFieldKind(value: unknown): FieldKind {
@@ -375,6 +384,13 @@ export interface StartOptions {
    * initiated. App-managed pauses (`world.pause()` / Pause button) are not
    * trampled. Default true; has no effect outside a DOM. Pass `false` to
    * opt out entirely.
+   *
+   * Known limit: ownership is tracked as a flag, not an epoch. If the tab
+   * hides while running (driver claims the pause) and app logic then calls
+   * `resume()` followed by its own `pause()` while still hidden, the stale
+   * ownership bit makes re-show resume over that app pause. Apps driving
+   * pause state from background logic (timers, sockets) should pass
+   * `pauseOnHidden: false` and manage visibility themselves.
    */
   pauseOnHidden?: boolean
 }
@@ -1294,7 +1310,7 @@ export function createWorld(options: WorldOptions = {}): World {
       let fields: Record<string, FieldSchema>
       let fieldsSource: ComponentDescriptor['fieldsSource']
       if (meta.__schema) {
-        fields = { ...meta.__schema.fields }
+        fields = cloneFields(meta.__schema.fields)
         fieldsSource = 'schema'
       } else if (defaults && Object.keys(defaults).length > 0) {
         fields = {}
@@ -1312,7 +1328,7 @@ export function createWorld(options: WorldOptions = {}): World {
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
       if (meta.__schema) {
-        return { name: type.name, fields: { ...meta.__schema.fields }, fieldsSource: 'schema' }
+        return { name: type.name, fields: cloneFields(meta.__schema.fields), fieldsSource: 'schema' }
       }
       return { name: type.name, fields: {}, fieldsSource: 'none' }
     },

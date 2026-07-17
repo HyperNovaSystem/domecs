@@ -1,9 +1,9 @@
 # DOMECS — Consolidated Plan (post-v1.0)
 
-_Consolidated 2026-07-16 from: `plan/NOTES.md` (direction), `plan/FINDINGS.md`
-(the O-ledger), `plan/BENCHMARK.md`, `doc/ROADMAP.md`, and three independent
-external engine reviews (2026-07; synthesized here, originals removed after
-capture)._
+_Consolidated 2026-07-16 from: `plan/NOTES.md` (direction; local, untracked),
+`plan/FINDINGS.md` (the O-ledger), `plan/BENCHMARK.md` (local, untracked),
+`doc/ROADMAP.md`, and three independent external engine reviews (2026-07;
+synthesized here, originals removed after capture)._
 
 This file is the **governing plan**. `plan/FINDINGS.md` remains the
 engineering ledger and `doc/ROADMAP.md` the itemized feature queue; where this
@@ -82,7 +82,7 @@ bet. No date-driven milestones — the order is the only ordering.
 - [x] GitHub Issues already enabled; published GitHub Release for `v1.0.0`
   (https://github.com/HyperNovaSystem/domecs/releases/tag/v1.0.0).
 
-### WS-1 — Benchmark suite (O-14 + `plan/BENCHMARK.md`; the evidence buy)
+### WS-1 — Benchmark suite (O-14; the evidence buy)
 
 - [x] Headless suite: soak, telemetry, snapshot, windowed projection, plain
   baseline (`pnpm bench` / `pnpm bench:write`).
@@ -91,7 +91,14 @@ bet. No date-driven milestones — the order is the only ordering.
 - [x] First compare documented in `bench/COMPARISON.md` + `bench/README.md`.
   Windowed vs Koota looks promising (sometimes decisive, N-dependent);
   soak does not win. Claims stay gated on multi-machine stability.
+- [x] Methodology hardening (2026-07-17): warmup discard, GC isolation under
+  `--expose-gc`, compare verdict scoped to same-N rows, cross-engine
+  `domUpdates` work-equivalence check, real coalescing pressure in the
+  telemetry workload.
 - [ ] Multi-machine stability pass (re-run compare on second host / CI).
+- [ ] Memory metrics: heap growth / GC pressure sampling, per-frame DOM
+  mount/update/remove split, dropped-frame tracking (promised below, not
+  yet recorded by the suite).
 - [x] README product claims stay gated — no unearned win language.
 
 Workloads:
@@ -102,9 +109,10 @@ Workloads:
 4. Snapshot / restore / determinism.
 5. Plain Float64Array baseline (overhead narrative).
 
-Metrics: p50/p95 tick and update time; DOM mounts/updates/removes per frame;
-heap growth + GC pressure; snapshot duration + serialized size; dropped
-frames.
+Metrics: p50/p95 tick and update time (shipped); snapshot duration +
+serialized size (shipped); coalescing ratio (shipped). Still open (tracked
+above): per-frame DOM mount/update/remove split, heap growth + GC pressure,
+dropped frames.
 
 Baselines: **Koota**; one fine-grained-reactive implementation (Solid or
 hand-rolled signals + TanStack Virtual); a plain hand-written store+DOM app.

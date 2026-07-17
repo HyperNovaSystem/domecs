@@ -770,6 +770,46 @@ if (isErr(result)) {
 }
 ```
 
+### Agent bridge (WS-3)
+
+Thin facade over `World` — no new runtime semantics. One control loop
+(`reset → observe → act → step → snapshot`) shared by agents and UIs.
+
+```ts
+function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge
+
+interface AgentBridgeOptions {
+  // Snapshot used by reset(). Omitted → captured from `world` at
+  // construction time (after any setup the caller already performed).
+  baseline?: WorldSnapshot
+}
+
+interface AgentObservation {
+  readonly tick:        number
+  readonly scale:       number
+  readonly entityCount: number
+  readonly manifest:    WorldManifest   // = world.describe()
+}
+
+interface AgentBridge {
+  readonly world: World                // escape hatch for setup/queries
+  reset(): void                        // restore baseline (see notes below)
+  captureBaseline(): void              // re-capture baseline from current state
+  observe(): AgentObservation
+  act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  step(dt?: number): void              // omit dt → stepOnce; positive dt → step(dt)
+  snapshot(options?: SnapshotOptions): WorldSnapshot
+}
+```
+
+Notes:
+- `reset()` does **not** restore `time.scale` or input state (the snapshot
+  does not carry them); restore those explicitly at episode boundaries if
+  episodes touch either. Call `reset()` once before the FIRST episode too,
+  so entity-id assignment is identical across all episodes (O-38).
+- `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
+  same as `step()` — guard computed dt values that can round to 0.
+
 ---
 
 ## `@domecs/input`
@@ -959,19 +999,6 @@ function save(world: World, storage: Storage, slot: string, opts?: SaveOptions):
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
 // Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
 function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
-
-// --- Agent bridge (WS-3; @domecs/core) ---------------------------------------
-// Thin facade over World — no new runtime semantics.
-function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge
-interface AgentBridge {
-  readonly world: World
-  reset(): void
-  captureBaseline(): void
-  observe(): AgentObservation  // tick, scale, entityCount, manifest (= describe())
-  act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
-  step(dt?: number): void      // omit dt → stepOnce; positive dt → step(dt)
-  snapshot(options?: SnapshotOptions): WorldSnapshot
-}
 
 interface SaveOptions {
   meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)

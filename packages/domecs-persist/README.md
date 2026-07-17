@@ -7,7 +7,8 @@ Every seam returns a `Result<…, DomecsError>` — I/O failures surface as
 exceptions. A failed save or migration leaves the target slot's prior bytes
 intact. See `doc/BETTER_ERRORS.md` Phase 2 for the discipline this enforces.
 
-> Status: v1.0 — **API-stable** (semver honored; product contract hardening via 1.0.x).
+> Status: v1.x — **API-stable** (semver honored; corrective patches ship as
+> 1.0.x, additive surface like `loadIfPresent` ships as minor releases).
 
 ## Install
 
@@ -51,6 +52,10 @@ else if (!boot.value) { /* first run */ }
 - `loadIfPresent(world, storage, slot, opts?)` — boot-friendly (O-28):
   `ok(true)` loaded, `ok(false)` missing slot, `err(...)` for real failures.
   Prefer this for first-run restore paths.
+- `createMemoryStorage(initial?)` — in-memory `Storage` adapter (tests, SSR).
+- `createLocalStorageStorage(prefix?)` — browser `localStorage` adapter
+  (default prefix `'domecs:'`); resolves the backing store lazily from
+  `globalThis`, so it is safe to import in headless/Node hosts.
 - `migrate(snapshot, target, migrations)` — run a version migration chain.
 - `BUILTIN_MIGRATIONS` — framework-supplied steps applied as the floor beneath
   any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply

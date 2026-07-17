@@ -58,6 +58,40 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w2.getComponent(e, Health)?.hp).toBe(3)
   })
 
+  it('loadIfPresent surfaces a real storage read failure as err, never ok(false)', () => {
+    // The O-28 contract has three legs; this pins the third. Conflating a
+    // read error with "missing" would boot fresh over a real save.
+    const flaky: Storage = {
+      read: () =>
+        err({
+          kind: 'persist_io',
+          op: 'load',
+          cause: { name: 'Error', message: 'quota / privacy-mode read failure' },
+          retryable: true,
+        }),
+      write: () => ok(undefined),
+      remove: () => ok(undefined),
+      list: () => ok([]),
+    }
+    const w = createWorld()
+    const r = loadIfPresent(w, flaky, 'slot')
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error.kind).toBe('persist_io')
+      if (r.error.kind === 'persist_io') {
+        expect(r.error.cause.message).toMatch(/read failure/)
+      }
+    }
+  })
+
+  it('loadIfPresent surfaces malformed stored bytes as err, never ok(false)', () => {
+    storage.write('bad', '{this is not json')
+    const w = createWorld()
+    const r = loadIfPresent(w, storage, 'bad')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('persist_io')
+  })
+
   it('load on malformed JSON returns persist_io with the parse cause', () => {
     storage.write('bad', '{this is not json')
     const w = createWorld()

@@ -27,8 +27,12 @@ export type EventId = string
  * Retryability rationale per variant:
  * - plugin_install_failed: false — install contracts are deterministic; a bad
  *   return/throw won't fix itself without code changes.
- * - persist_io: true — storage backends can have transient outages (disk full
- *   briefly, network blip); a retry is worth attempting.
+ * - persist_io: usually true — storage backends can have transient outages
+ *   (disk full briefly, network blip); a retry is worth attempting. False
+ *   when the failure is deterministic: `load()` on an empty slot (O-28)
+ *   stays empty until something is saved — boot paths should use
+ *   `loadIfPresent` instead of retrying. Always consult the `retryable`
+ *   field; do not hard-code by kind.
  * - migration_failed: false — a missing migrator or non-advancing version will
  *   always fail; code changes are required. (The existing `recoverable` field
  *   is distinct: it signals whether partial-load is safe, not retry-ability.)
@@ -75,7 +79,9 @@ export function getErrorRepairHint(e: DomecsError): string {
     plugin_install_failed: (x) =>
       `Plugin "${x.plugin}" failed to install. Check its install() return and dependency order.`,
     persist_io: (x) =>
-      `Persistence ${x.op} failed. Verify the Storage backend is reachable and writable.`,
+      x.retryable
+        ? `Persistence ${x.op} failed. Verify the Storage backend is reachable and writable.`
+        : `Persistence ${x.op} failed deterministically (e.g. empty slot on first run). Use loadIfPresent for boot paths or seed first-run defaults; retrying will not help.`,
     migration_failed: (x) =>
       `Snapshot migration ${x.from}->${x.to} failed: ${x.reason}. ${
         x.recoverable
