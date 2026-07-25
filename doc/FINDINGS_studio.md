@@ -81,3 +81,39 @@ would let a derived-component plugin populate itself for entities that exist
 at install time, and let a host app (like Studio) prime post-`restore()`
 state on demand, without the caller having to reason about tick/history side
 effects just to warm up one value.
+
+## 2026-07-25 — `RuleError` has no field-level tag, so a per-field UI must re-derive attribution itself
+
+`compileRule` (`packages/domecs-rules/src/rules.ts`) aggregates every defect
+found while compiling one `RuleDef` — a bad `when`/action `expr` syntax error,
+an unresolvable `Component` name in `query`/`when`/an action's `expr`, or a
+malformed action `set` target — into a single flat `RuleError[]`, each entry
+carrying only `{ rule, position, message }`. `position` is a character offset
+*within whichever individual expression string produced it* (or `-1` for a
+non-expression defect like a bad `query[i]` entry or `set` shape), but
+nothing in the error says *which* expression that was: not `"when"` vs.
+`"actions[2].expr"`, not an action index, nothing. For a rule with several
+actions plus a `when`, a caller holding just the `RuleError[]` cannot tell
+which specific input widget a given error belongs to without independently
+re-parsing/re-resolving each field itself and comparing.
+
+**Impact on Studio:** the Systems panel (`studio/src/panels/systems.ts`)
+wants an inline error next to the *specific* `when`/action `expr`/action
+`set` field the user is editing, live as they type. Since `compileRule`'s
+aggregate result can't be attributed back to one field, Studio does not use
+it for this — it calls `parseExpression` directly per field for syntax
+feedback, and duplicates `compileRule`'s own tiny action-`set`-shape check
+(`must be "Component.field"`) locally, both by necessity rather than choice.
+Component-resolution errors (an unknown `Component` name) are consequently
+*not* shown inline at all in Studio today — they only surface in aggregate,
+per-rule, through `RulesHandle.update()`'s returned map, via the app's
+problems strip. See `../studio/FINDINGS.md` for the reworked Systems panel
+this decision shaped, and `../studio/PLAN.md`'s M7 entry for the milestone
+that surfaced it.
+
+**Suggested engine fix (not built here):** tag each `RuleError` with which
+part of the `RuleDef` it came from — e.g. `field: 'when' | { action: number;
+part: 'set' | 'expr' }` alongside the existing `position`/`message` — so a
+caller can route each error to the right widget directly instead of
+re-deriving that mapping with its own parallel (and necessarily
+simplified/duplicated) validation pass.
