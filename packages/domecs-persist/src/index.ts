@@ -26,3 +26,10 @@ export {
   type SnapshotHistoryOptions,
   type SnapshotDiff,
 } from './history.js'
+export {
+  registerComponentTypes,
+  serializeComponentType,
+  type ComponentFieldData,
+  type ComponentTypeData,
+  type SchemaProblem,
+} from './schema.js'
