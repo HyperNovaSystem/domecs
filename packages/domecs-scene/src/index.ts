@@ -6,3 +6,4 @@ export {
   rootsOf,
   despawnTree,
 } from './hierarchy.js'
+export { installHierarchy } from './despawn-orphan-plugin.js'
