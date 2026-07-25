@@ -44,3 +44,40 @@ already-registered `ComponentType`'s schema/defaults in place by name,
 instead of only accepting-or-rejecting a second distinct object under that
 name. Out of scope for the Phase-1 Studio milestones; flagged for whoever
 picks up engine-side component-type mutation.
+
+## 2026-07-25 — composeTransforms only populates `World_` on a tick — no way to prime it without advancing `world.time.tick`
+
+`composeTransforms` (`packages/domecs-scene/src/compose-transforms.ts`)
+registers its resolver as a `{ schedule: 'tick' }` system — the only way to
+run it is `world.step(dt)` / `world.stepOnce()`, both of which unconditionally
+`time.tick += 1` (`world.ts`'s shared tick implementation) and run every
+other tick-schedule system too, not just this one. There is no lower-level
+"run this one system now" or "prime derived state without advancing time"
+primitive on `World`.
+
+**Impact on Studio:** a freshly spawned or freshly `restore()`d entity has no
+`World_` component at all until the host world's *next* tick — even though
+its `Local` value (and, for a root entity, therefore its true world value
+too) has existed since spawn. Studio wired `composeTransforms` onto
+`guestWorld` in M5 and switched its stage render to the composed
+`WorldTransform`, but `createDomecsStudio()` never ticks the guest world on
+construction (only user-driven Step/Play do), so the viewport would render
+nothing at all immediately after load. Worked around app-side with a
+`WorldTransform ?? GuestTransform` fallback (correct for roots by
+construction; briefly approximate for an already-parented entity until the
+next tick) rather than forcing a `stepOnce()` at construction time, which
+would have muddied `time.tick`/history-checkpoint counts and run every other
+`'tick'` system (e.g. this app's own demo motion system) as an unwanted side
+effect just to warm up one derived component. See `../studio/FINDINGS.md`
+("WorldTransform is unpopulated until the guest world's first tick") for the
+app-observable symptom and workaround.
+
+**Suggested engine fix (not built here):** either (a) let a plugin's
+`install()` run its system once synchronously at install time (opt-in, e.g.
+`composeTransforms(..., { primeOnInstall: true })`), or (b) expose a
+`world.runSystem(name)` / `world.runSchedule(schedule)` primitive that runs
+matching systems without touching `time.tick` or any other schedule — either
+would let a derived-component plugin populate itself for entities that exist
+at install time, and let a host app (like Studio) prime post-`restore()`
+state on demand, without the caller having to reason about tick/history side
+effects just to warm up one value.
