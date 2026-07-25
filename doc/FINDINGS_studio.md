@@ -117,3 +117,49 @@ part: 'set' | 'expr' }` alongside the existing `position`/`message` — so a
 caller can route each error to the right widget directly instead of
 re-deriving that mapping with its own parallel (and necessarily
 simplified/duplicated) validation pass.
+
+## 2026-07-25 — `@domecs/dom`'s `mountDOM` has no caller-invoked "patch now" entry point, and a heartbeat step used to fake one re-fires `tickEnd`
+
+Evaluated `packages/domecs-dom` (`mountDOM`/`defineView`) as the
+implementation for Studio's M8 keyed `.stage` sprite patcher before hand-
+rolling one; did not use it, for two related reasons.
+
+`mountDOM(world, { slots, views })` paints entirely from the *world's own*
+render phase — `plugins.callRender(world)` inside `runTick`, reached only via
+`world.step(dt)` / `world.stepOnce()`. There is no lower-level "run the
+renderer plugin's `onRender` now" primitive a caller can invoke directly and
+synchronously. A host that needs to force an immediate repaint outside the
+world's own tick cadence — e.g. right after re-mounting into a freshly
+recreated DOM container, before the next natural tick — has only one lever:
+an explicit `dt<=0` "heartbeat" `world.step(0)`, which the engine's own F-6
+contract documents as running "plugin hooks, signals, and onRender" with no
+system execution and no change-detection buffer swap.
+
+The problem: that heartbeat **still emits `sigTickEnd`** (`world.ts`'s
+`runTick`, the `dt <= 0` branch calls `plugins.callTickEnd(world)` then
+`sigTickEnd.emit(time)` same as a real tick). Any host that has wired its own
+UI re-render off `world.signals.tickEnd` — exactly Studio's `main.ts`
+(`guestWorld.signals.tickEnd.subscribe(() => { sync(); render(); ... })`) —
+would have that subscriber re-invoked *from inside* the very re-render path
+that triggered the forced heartbeat, a synchronous re-entrancy hazard with no
+guard against it in either `world.ts` or `@domecs/dom`.
+
+**Impact:** not a Studio-observable bug today (Studio didn't adopt
+`mountDOM` — see `../studio/FINDINGS.md`'s M8 entry for the full comparison
+and the hand-rolled patcher it used instead), but it is a real integration
+hazard for *any* `@domecs/dom` consumer that also drives its own re-render
+off `tickEnd` and ever needs a forced off-cycle repaint (e.g. after
+re-parenting a mounted slot).
+
+**Suggested engine fix (not built here):** give `World` a "run the render
+phase now" primitive distinct from `step`/`stepOnce` — one that invokes
+`plugins.callRender(world)` (and, if `@domecs/dom` needs it, nothing else:
+no `tickStart`/`tickEnd` signal, no system execution) so a host can force an
+immediate repaint without also re-triggering every `tickEnd`-driven side
+effect it or its plugins have wired up. `step(dt)`'s own public doc comment
+already flags the heartbeat case ("`dt <= 0` → heartbeat: plugin hooks +
+render fire, but system execution and change-detection buffer swap are
+skipped") but doesn't say "signals" the way the internal `runTick` F-6
+comment does — worth naming `tickEnd`/`tickStart` explicitly there too, so a
+consumer discovers this specific hazard from the public signature alone
+rather than needing to read `runTick`'s implementation.
