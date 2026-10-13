@@ -38,6 +38,12 @@ export interface WorldSnapshot {
    * fixed-step loop. Restore keeps them owed.
    */
   readonly fixedBacklog?: number
+  /**
+   * The `fixedStep` that `fixedBacklog` is counted in; present with it. A
+   * world restored with another `fixedStep` re-counts the owed time in its
+   * own steps instead of owing the same number of differently sized ones.
+   */
+  readonly fixedStep?: number
   readonly entities: ReadonlyArray<{
     readonly id: Entity
     readonly components: Record<string, unknown>

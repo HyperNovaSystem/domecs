@@ -3,6 +3,7 @@ import { defineComponent } from '../src/component.js'
 import { mergeSortedRuns, SortedIdSet } from '../src/id-set.js'
 import { defineEvent } from '../src/events.js'
 import { Has, OnAdded, OnRemoved, Where } from '../src/query.js'
+import { defineResource } from '../src/resource.js'
 import { ok } from '../src/result.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
 import { entry, type Entity } from '../src/types.js'
@@ -234,6 +235,7 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     live.w.step(0.25) // 2 steps due, none run
     const snap = live.w.snapshot()
     expect(snap.fixedBacklog).toBe(2)
+    expect(snap.fixedStep).toBe(0.1)
 
     const twin = mk()
     twin.w.restore(JSON.parse(JSON.stringify(snap)) as WorldSnapshot)
@@ -247,17 +249,52 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     expect(live.fired()).toBe(3)
   })
 
-  it('omits fixedBacklog after an ordinary tick', () => {
-    const { w } = mk()
-    w.step(0.25)
-    expect('fixedBacklog' in w.snapshot()).toBe(false)
+  it('carries the owed time, not the step count, into a world with another fixedStep', () => {
+    const live = mk()
+    live.w.step(0.25) // 2 steps run, 0.05 s left over
+    live.pauseNext()
+    live.w.step(0.25) // 3 more due, none run: 0.3 s owed
+    const snap = live.w.snapshot()
+    expect(snap.fixedBacklog).toBe(3)
+    const owed = live.w.time.fixedAccumulator
+    expect(owed).toBeCloseTo(0.3, 9)
+    live.w.resume()
+    live.w.step(0.05)
+    const liveRan = (live.fired() - 2) * 0.1 // fixed time run after resume
+
+    for (const fixedStep of [0.05, 0.2]) {
+      const w = createWorld({ headless: true, fixedStep })
+      let n = 0
+      w.system('count', { schedule: 'fixed' }, () => {
+        n += 1
+      })
+      w.restore(snap)
+      expect(w.time.fixedAccumulator).toBeCloseTo(owed, 9)
+      w.step(0.05)
+      // Same fixed time run plus left over as the live world, in other steps.
+      expect(n * fixedStep + w.time.fixedAccumulator).toBeCloseTo(
+        liveRan + live.w.time.fixedAccumulator,
+        9,
+      )
+    }
   })
 
-  it('rejects an invalid fixedBacklog', () => {
+  it('omits fixedBacklog and fixedStep after an ordinary tick', () => {
+    const { w } = mk()
+    w.step(0.25)
+    const snap = w.snapshot()
+    expect('fixedBacklog' in snap).toBe(false)
+    expect('fixedStep' in snap).toBe(false)
+  })
+
+  it('rejects an invalid fixedBacklog or fixedStep', () => {
     const { w } = mk()
     const snap = w.snapshot()
     for (const bad of [-1, 1.5, Number.NaN, null as unknown as number]) {
       expect(() => w.restore({ ...snap, fixedBacklog: bad })).toThrow(/fixedBacklog/)
+    }
+    for (const bad of [0, -0.1, Number.POSITIVE_INFINITY, null as unknown as number]) {
+      expect(() => w.restore({ ...snap, fixedBacklog: 1, fixedStep: bad })).toThrow(/fixedStep/)
     }
   })
 })
@@ -273,16 +310,15 @@ describe('restore — validation before anything is touched (O-40)', () => {
     expect(w.getComponent(e, Mark)).toEqual({ r: 1 })
   })
 
-  it('keeps pending events and skips onRestore hooks when the envelope is invalid', () => {
+  it('keeps pending events, and drops what onRestore emitted, when the envelope is invalid', () => {
     const Ping = defineEvent<number>('RcPing')
     const w = createWorld({ headless: true })
-    let hooked = 0
     w.use({
       name: 'rc-spy',
       install: () =>
         ok({
           onRestore: (snap: WorldSnapshot) => {
-            hooked += 1
+            w.emit(Ping, 99)
             return snap
           },
         }),
@@ -292,9 +328,69 @@ describe('restore — validation before anything is touched (O-40)', () => {
     const snap = w.snapshot()
     w.emit(Ping, 7)
     expect(() => w.restore({ ...snap, scaledTime: -1 })).toThrow(/scaledTime/)
-    expect(hooked).toBe(0)
     w.stepOnce()
     expect(pings).toEqual([7])
+
+    // A valid restore discards the pending event and keeps the hook's.
+    w.emit(Ping, 8)
+    w.restore(snap)
+    w.stepOnce()
+    expect(pings).toEqual([7, 99])
+  })
+
+  it('keeps pending events when an onRestore hook throws', () => {
+    const Ping = defineEvent<number>('RcPingThrow')
+    const w = createWorld({ headless: true })
+    w.use({
+      name: 'rc-throw',
+      install: () =>
+        ok({
+          onRestore: (): WorldSnapshot => {
+            throw new Error('hook failed')
+          },
+        }),
+    })
+    const pings: number[] = []
+    w.on(Ping, (n) => pings.push(n))
+    const snap = w.snapshot()
+    w.emit(Ping, 7)
+    expect(() => w.restore(snap)).toThrow(/hook failed/)
+    w.stepOnce()
+    expect(pings).toEqual([7])
+  })
+
+  it('validates the envelope the onRestore hooks produce, so a codec plugin round-trips', () => {
+    // onSnapshot encodes a resource value its validator would reject;
+    // onRestore decodes it. Only the decoded envelope must be valid.
+    const Hp = defineResource<number>('RcCodecHp', {
+      default: 10,
+      validate: (v) => (typeof v === 'number' ? true : 'must be a number'),
+    })
+    const codec = {
+      name: 'rc-codec',
+      install: () =>
+        ok({
+          onSnapshot: (snap: WorldSnapshot): WorldSnapshot => ({
+            ...snap,
+            resources: { ...snap.resources, RcCodecHp: `hp:${String(snap.resources?.RcCodecHp)}` },
+          }),
+          onRestore: (snap: WorldSnapshot): WorldSnapshot => ({
+            ...snap,
+            resources: {
+              ...snap.resources,
+              RcCodecHp: Number(String(snap.resources?.RcCodecHp).slice(3)),
+            },
+          }),
+        }),
+    }
+    const w = createWorld({ headless: true })
+    w.use(codec)
+    w.setResource(Hp, 5)
+    const snap = w.snapshot()
+    expect(snap.resources?.RcCodecHp).toBe('hp:5')
+    w.setResource(Hp, 6)
+    w.restore(snap)
+    expect(w.getResource(Hp)).toBe(5)
   })
 })
 

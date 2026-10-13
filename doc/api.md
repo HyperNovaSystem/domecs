@@ -654,6 +654,9 @@ interface WorldSnapshot {
   // Fixed steps due but not yet run (a tickStart hook paused after time
   // advanced); omitted when 0. restore() keeps them owed (O-40).
   readonly fixedBacklog?: number
+  // The fixedStep the backlog is counted in; present with it. A world
+  // restored with another fixedStep re-counts the owed time in its own steps.
+  readonly fixedStep?: number
   readonly entities: ReadonlyArray<{
     id:         Entity
     components: Record<string, unknown>

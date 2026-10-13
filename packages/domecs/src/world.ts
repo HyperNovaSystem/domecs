@@ -7,6 +7,7 @@ import {
   validateSnapshot,
   type ArchetypeBucket,
   type CompiledQuery,
+  type SnapshotClock,
   type StepClock,
   type WorldStateCtx,
 } from './world-state.js'
@@ -1722,21 +1723,28 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     restore(snap: WorldSnapshot): void {
-      // Discard pending (undelivered) events first: they were emitted on the
-      // timeline being abandoned and would otherwise fire into the first
-      // tick after the restore, making identical episodes diverge (SPEC
-      // §7.1). Cleared before the plugin chain so anything a plugin emits
-      // during onRestore survives.
-      // An invalid envelope is rejected before anything is touched — pending
-      // events, plugin onRestore state, or world state (O-40).
-      validateSnapshot(stateCtx, snap)
-      bus.clear()
+      // Pending (undelivered) events were emitted on the timeline being
+      // abandoned and would otherwise fire into the first tick after the
+      // restore, making identical episodes diverge (SPEC §7.1). They are set
+      // aside before the plugin chain, so anything a plugin emits during
+      // onRestore survives.
+      const abandoned = bus.takePending()
       let s = snap
-      for (const entry of plugins.list()) {
-        if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
+      let clock: SnapshotClock
+      try {
+        for (const entry of plugins.list()) {
+          if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
+        }
+        // The hooks may decode what their onSnapshot encoded, so it is the
+        // envelope they produce that must be valid. An invalid one — or a
+        // throwing hook — puts the pending events back and throws before
+        // world state is touched (O-40).
+        clock = validateSnapshot(stateCtx, s)
+      } catch (cause) {
+        bus.putBackPending(abandoned)
+        throw cause
       }
-
-      applySnapshot(stateCtx, s)
+      applySnapshot(stateCtx, s, clock)
     },
   }
 

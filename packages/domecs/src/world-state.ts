@@ -106,25 +106,20 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     seed: ctx.getRand().seed(),
     tick: ctx.time.tick,
     scaledTime: ctx.clock.totalScaledSeconds,
-    ...(fixedBacklog > 0 ? { fixedBacklog } : {}),
+    ...(fixedBacklog > 0 ? { fixedBacklog, fixedStep: ctx.time.fixedStep } : {}),
     entities,
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
   }
 }
 
-export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
-  // Validate incoming resource values for every *registered* resource
-  // type, and the O-40 clock fields, BEFORE any state is wiped, so an invalid snapshot throws cleanly
-  // and leaves the world untouched instead of half-restored. This mirrors
-  // the setResource() contract; names with no registered type pass
-  // through (the name-keyed lazy contract). Component values are
-  // deliberately NOT re-validated here: the live path validates only at
-  // Component.create() and in-place field mutation is unvalidated, so a
-  // snapshot may legitimately hold values a validator was never asked to
-  // bless.
-  const clock = validateSnapshot(ctx, s)
-
+/**
+ * Replace world state with `s`. The caller has already passed `s` through
+ * {@link validateSnapshot} — before any state is wiped, so an invalid
+ * snapshot throws cleanly instead of leaving the world half-restored — and
+ * hands over the clock it parsed.
+ */
+export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: SnapshotClock): void {
   // Wipe world state (preserve plugins, system registrations, signals).
   // Capture each live query's current members AS POPULATED VIEWS before the
   // wipe: `makeView` reads stores eagerly, so views materialized here keep
@@ -204,16 +199,28 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
   if (s.resources) ctx.resources.restoreValues(s.resources)
 }
 
+/** The clock fields of a snapshot, validated, with absent fields defaulted. */
+export interface SnapshotClock {
+  readonly scaledTime: number
+  readonly fixedBacklog: number
+  /** The step `fixedBacklog` is counted in; undefined means this world's. */
+  readonly fixedStep: number | undefined
+}
+
 /**
  * Check everything restore would reject — resource values and the clock
- * fields — without touching any state. `world.restore()` calls it before it
- * clears pending events or runs `onRestore` hooks; `applySnapshot` calls it
- * again for the hook-transformed envelope. Returns the parsed clock.
+ * fields — without touching any state. `world.restore()` calls it on the
+ * envelope the `onRestore` hooks produce, before it applies it. Returns the
+ * parsed clock.
  */
-export function validateSnapshot(
-  ctx: WorldStateCtx,
-  s: WorldSnapshot,
-): { scaledTime: number; fixedBacklog: number } {
+export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): SnapshotClock {
+  // Resource values are validated for every *registered* resource type,
+  // mirroring the setResource() contract; names with no registered type
+  // pass through (the name-keyed lazy contract). Component values are
+  // deliberately NOT validated: the live path validates only at
+  // Component.create() and in-place field mutation is unvalidated, so a
+  // snapshot may legitimately hold values a validator was never asked to
+  // bless.
   if (s.resources) ctx.resources.validateSnapshot(s.resources)
   // O-40: absent means a pre-O-40 envelope (clock at 0). Present-but-invalid
   // — including null — is rejected rather than read as absent.
@@ -229,7 +236,16 @@ export function validateSnapshot(
       `domecs: invalid snapshot fixedBacklog: expected an integer >= 0, got ${String(s.fixedBacklog)}`,
     )
   }
-  return { scaledTime, fixedBacklog }
+  const fixedStep = s.fixedStep
+  if (
+    fixedStep !== undefined &&
+    (typeof fixedStep !== 'number' || !Number.isFinite(fixedStep) || fixedStep <= 0)
+  ) {
+    throw new Error(
+      `domecs: invalid snapshot fixedStep: expected a finite number > 0, got ${String(fixedStep)}`,
+    )
+  }
+  return { scaledTime, fixedBacklog, fixedStep }
 }
 
 /**
@@ -239,15 +255,22 @@ export function validateSnapshot(
  * derived against this world's `fixedStep` rather than stored: a world
  * restored with a different `fixedStep` neither bursts through catch-up
  * steps nor stalls until the old count is reached. `fixedBacklog` keeps the
- * steps the live world still owed outstanding after the restore.
+ * steps the live world still owed outstanding after the restore — under
+ * another `fixedStep`, the time they stood for.
  */
 function resumeClock(
   ctx: WorldStateCtx,
-  { scaledTime, fixedBacklog }: { scaledTime: number; fixedBacklog: number },
+  { scaledTime, fixedBacklog, fixedStep }: SnapshotClock,
 ): void {
   const { clock, time } = ctx
   const quantizedMs = Math.round(scaledTime * 1000)
-  const fixedSteps = Math.max(0, fixedStepsDue(scaledTime, time.fixedStep) - fixedBacklog)
+  // Steps the live world had run, in the step size the backlog counts in.
+  const step = fixedStep ?? time.fixedStep
+  const ran = Math.max(0, fixedStepsDue(scaledTime, step) - fixedBacklog)
+  // Under another fixedStep, keep the fixed time those steps consumed and
+  // count it in this world's steps, so the time still owed carries over
+  // (within one step) rather than the number of steps.
+  const fixedSteps = step === time.fixedStep ? ran : fixedStepsDue(ran * step, time.fixedStep)
   clock.totalScaledSeconds = scaledTime
   clock.lastQuantizedElapsedMs = quantizedMs
   clock.fixedStepsFired = fixedSteps

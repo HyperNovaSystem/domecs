@@ -9,7 +9,8 @@ All notable changes to DOMECS are documented here. The format is based on
 ### Fixed (2026-10-13 engine review — restore continuity, O-40)
 
 - `@domecs/core`: snapshots carry the simulation clock (`WorldSnapshot.scaledTime`,
-  plus `fixedBacklog` when fixed steps are owed) and `restore()` resumes it —
+  plus `fixedBacklog` and its `fixedStep` when fixed steps are owed) and
+  `restore()` resumes it —
   `time.elapsed`, the fixed-step accumulator, and the fixed-step phase continue
   from the snapshot instead of restarting at 0, so `fixed` systems (including
   divisor-rate ones) fire on the live world's frames after a load, an undo, or
@@ -17,11 +18,11 @@ All notable changes to DOMECS are documented here. The format is based on
   fields restore with the clock at 0, as before. `SNAPSHOT_VERSION` stays 2
   (optional fields, like `nextId`). `time.fixedAccumulator` is now kept current
   on a tick where a `tickStart` hook paused the world.
-- `@domecs/core`: `restore()` validates the envelope (resource values and the
-  clock fields) before it discards pending events or runs `onRestore` hooks —
-  an invalid snapshot now throws with pending events and plugin state intact,
-  not just the entity state. `scaledTime: null` is rejected rather than read
-  as a pre-O-40 envelope.
+- `@domecs/core`: `restore()` validates the envelope the `onRestore` hooks
+  produce (resource values and the clock fields) before it touches world
+  state, and a failed restore — invalid envelope or throwing hook — now leaves
+  the pending events as they were instead of discarding them. `scaledTime:
+  null` is rejected rather than read as a pre-O-40 envelope.
 - `@domecs/core`: **behavior change** — query iteration is now ascending entity
   id everywhere (`query().entities`, system `ctx.entities`, reactive deltas,
   `listEntities`, `selectViews`, `countEntities`, `iterEntitiesWith`), and
