@@ -7,6 +7,7 @@ import {
 } from './snapshot.js'
 import type { TimeState } from './time.js'
 import type { ComponentType, Entity } from './types.js'
+import type { SortedIdSet } from './id-set.js'
 import type { EntityView, QueryNode } from './query.js'
 import type { ResourceState } from './world-resources.js'
 
@@ -21,7 +22,7 @@ import type { ResourceState } from './world-resources.js'
 export interface ArchetypeBucket {
   readonly key: string
   readonly types: Set<string>
-  readonly entities: Set<Entity>
+  readonly entities: SortedIdSet
 }
 
 export interface CompiledQuery {
@@ -30,12 +31,16 @@ export interface CompiledQuery {
   hasTickFilter: boolean
   hasRemoved: boolean
   matchingArchetypes: Set<ArchetypeBucket>
-  structuralMembers: Set<Entity>
+  structuralMembers: SortedIdSet
   onAddFns: Set<(v: EntityView) => void>
   onRemoveFns: Set<(v: EntityView) => void>
 }
 
-/** F-3 drift-free fixed-step bookkeeping, reset wholesale on restore. */
+/**
+ * F-3 drift-free fixed-step bookkeeping. Restore rebuilds it from the
+ * snapshot's `scaledTime` (O-40): every field is a pure function of
+ * `totalScaledSeconds` and `time.fixedStep` after a completed tick.
+ */
 export interface StepClock {
   fixedStepCounter: number
   totalScaledSeconds: number
@@ -95,6 +100,7 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     version: SNAPSHOT_VERSION,
     seed: ctx.getRand().seed(),
     tick: ctx.time.tick,
+    scaledTime: ctx.clock.totalScaledSeconds,
     entities,
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
@@ -112,6 +118,13 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
   // snapshot may legitimately hold values a validator was never asked to
   // bless.
   if (s.resources) ctx.resources.validateSnapshot(s.resources)
+  // O-40: same validate-before-wipe rule for the clock.
+  const scaledTime = s.scaledTime ?? 0
+  if (typeof scaledTime !== 'number' || !Number.isFinite(scaledTime) || scaledTime < 0) {
+    throw new Error(
+      `domecs: invalid snapshot scaledTime: expected a finite number >= 0, got ${String(s.scaledTime)}`,
+    )
+  }
 
   // Wipe world state (preserve plugins, system registrations, signals).
   // Capture each live query's current members AS POPULATED VIEWS before the
@@ -145,17 +158,12 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
   })
   ctx.setEmptyArch(ctx.ensureArchetype(new Set<string>()))
 
-  // PRNG state + tick.
+  // PRNG state + tick + clock.
   ctx.setRand(restoreRng(s.seed))
   ctx.time.tick = s.tick
-  ctx.time.elapsed = 0
   ctx.time.delta = 0
   ctx.time.scaledDelta = 0
-  ctx.time.fixedAccumulator = 0
-  ctx.clock.fixedStepCounter = 0
-  ctx.clock.totalScaledSeconds = 0
-  ctx.clock.fixedStepsFired = 0
-  ctx.clock.lastQuantizedElapsedMs = 0
+  resumeClock(ctx, scaledTime)
 
   // Rehydrate entities + components (name-keyed; ComponentType objects
   // attach lazily when callers mutate via addComponent/markChanged).
@@ -195,4 +203,24 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot): void {
   // #16: rehydrate resources by name (v1 snapshots have no `resources`,
   // leaving the world's resource set empty — defaults re-materialize lazily).
   if (s.resources) ctx.resources.restoreValues(s.resources)
+}
+
+/**
+ * O-40: rebuild the F-3 clock from the cumulative scaled time, using the
+ * exact expressions `runTick` uses, so after a completed tick every value
+ * matches the live world bit for bit. The fixed-step count is re-derived
+ * against this world's `fixedStep` rather than stored: a world restored
+ * with a different `fixedStep` neither bursts through catch-up steps nor
+ * stalls until the old count is reached.
+ */
+function resumeClock(ctx: WorldStateCtx, scaledTime: number): void {
+  const { clock, time } = ctx
+  const quantizedMs = Math.round(scaledTime * 1000)
+  const fixedSteps = Math.floor(scaledTime / time.fixedStep + 1e-9)
+  clock.totalScaledSeconds = scaledTime
+  clock.lastQuantizedElapsedMs = quantizedMs
+  clock.fixedStepsFired = fixedSteps
+  clock.fixedStepCounter = fixedSteps
+  time.elapsed = quantizedMs / 1000
+  time.fixedAccumulator = scaledTime - fixedSteps * time.fixedStep
 }

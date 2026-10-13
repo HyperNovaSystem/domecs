@@ -31,6 +31,7 @@ import {
   CONSOLIDATE_FAULTS_PRIORITY,
   Faulted,
 } from './faulted.js'
+import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
 import { normalizeCause, toJsonValue, type Result } from './result.js'
@@ -599,7 +600,7 @@ export function createWorld(options: WorldOptions = {}): World {
     const key = archetypeKeyFor(types)
     let bucket = archetypes.get(key)
     if (bucket) return bucket
-    bucket = { key, types, entities: new Set() }
+    bucket = { key, types, entities: new SortedIdSet() }
     archetypes.set(key, bucket)
     for (const q of queries) evaluateQueryAgainstArchetype(q, bucket)
     return bucket
@@ -692,6 +693,22 @@ export function createWorld(options: WorldOptions = {}): World {
       )
     }
     return { node, needsEntityFilter: treeHas(node, oneshotWhereKind) }
+  }
+
+  // One-shot selection in ascending entity id (SPEC §8, O-40). Archetype
+  // iteration order depends on when each archetype was first created, which
+  // a restore does not reproduce, so each matching archetype's id-ordered
+  // run is merged rather than returned archetype by archetype.
+  function selectIds(def: QueryDef): Entity[] {
+    const { node, needsEntityFilter } = oneshotNode(def)
+    const runs: Array<readonly Entity[]> = []
+    for (const arch of archetypes.values()) {
+      if (!evalStructural(node, arch.types)) continue
+      const ids = arch.entities.ordered()
+      if (ids.length === 0) continue
+      runs.push(needsEntityFilter ? ids.filter((e) => evalEntity(node, e)) : ids)
+    }
+    return mergeSortedRuns(runs)
   }
 
   function evaluateQueryAgainstArchetype(
@@ -1395,7 +1412,7 @@ export function createWorld(options: WorldOptions = {}): World {
         hasTickFilter,
         hasRemoved,
         matchingArchetypes: new Set(),
-        structuralMembers: new Set(),
+        structuralMembers: new SortedIdSet(),
         onAddFns: new Set(),
         onRemoveFns: new Set(),
       }
@@ -1412,13 +1429,14 @@ export function createWorld(options: WorldOptions = {}): World {
       const collectCandidates = (): Iterable<Entity> => {
         if (!hasRemoved) return q.structuralMembers
         // Removed: include entities that were removed this tick, which may
-        // no longer sit in any structurally matching archetype.
+        // no longer sit in any structurally matching archetype. Re-sorted so
+        // the union keeps ascending id order (SPEC §8, O-40).
         const set = new Set<Entity>(q.structuralMembers)
         for (const name of collectRemovedTypeNames(node)) {
           const s = tickRemoved.get(name)
           if (s) for (const e of s) set.add(e)
         }
-        return set
+        return Array.from(set).sort(byId)
       }
 
       let disposed = false
@@ -1482,29 +1500,11 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     listEntities(def: QueryDef): Entity[] {
-      const { node, needsEntityFilter } = oneshotNode(def)
-      const out: Entity[] = []
-      for (const arch of archetypes.values()) {
-        if (!evalStructural(node, arch.types)) continue
-        for (const e of arch.entities) {
-          if (needsEntityFilter && !evalEntity(node, e)) continue
-          out.push(e)
-        }
-      }
-      return out
+      return selectIds(def)
     },
 
     selectViews(def: QueryDef): EntityView[] {
-      const { node, needsEntityFilter } = oneshotNode(def)
-      const out: EntityView[] = []
-      for (const arch of archetypes.values()) {
-        if (!evalStructural(node, arch.types)) continue
-        for (const e of arch.entities) {
-          if (needsEntityFilter && !evalEntity(node, e)) continue
-          out.push(makeView(e))
-        }
-      }
-      return out
+      return selectIds(def).map((e) => makeView(e))
     },
 
     observe(def: QueryDef, hooks: QueryHooks): () => void {

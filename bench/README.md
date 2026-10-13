@@ -62,8 +62,10 @@ pnpm bench:write
   different `--entities` can never leak into the verdict.
 - **Snapshot workload:** repeated warmed snapshots (real percentiles), and
   the `deterministic` flag steps the source and the restored twin forward
-  together and compares final snapshots — restore fidelity plus dynamic
-  continuation, not just round-trip serialization.
+  together and compares final snapshots and clocks (`elapsed`,
+  `fixedAccumulator`) — restore fidelity plus dynamic continuation, not just
+  round-trip serialization. A sub-rate `fixed` system and frame times that
+  are not fixed-step multiples make a lost accumulator visible.
 - **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).

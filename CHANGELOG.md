@@ -6,6 +6,28 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — restore continuity, O-40)
+
+- `@domecs/core`: snapshots carry the simulation clock (`WorldSnapshot.scaledTime`,
+  optional) and `restore()` resumes it — `time.elapsed`, the fixed-step
+  accumulator, and the fixed-step phase continue from the snapshot instead of
+  restarting at 0, so `fixed` systems (including divisor-rate ones) fire on the
+  live world's frames after a load, an undo, or an `AgentBridge.reset()` to a
+  mid-run baseline. Older snapshots without the field restore with the clock at
+  0, as before; an invalid `scaledTime` throws before the world is touched.
+  `SNAPSHOT_VERSION` stays 2 (optional field, like `nextId`).
+- `@domecs/core`: **behavior change** — query iteration is now ascending entity
+  id everywhere (`query().entities`, system `ctx.entities`, reactive deltas,
+  `listEntities`, `selectViews`), as SPEC §8 always required. Live queries used
+  to iterate in the order entities joined and one-shot selectors archetype by
+  archetype, while a restored world iterated by id — so per-entity `rand`
+  draws and other order-dependent logic diverged after a restore. Code that
+  relied on join order will see a different order.
+- Bench: the snapshot workload's `deterministic` flag now steps a sub-rate
+  `fixed` system with frame times that are not fixed-step multiples and compares
+  the twins' clocks, so it actually catches a lost accumulator (it reported
+  `true` against the old engine).
+
 ### Fixed (2026-07-17 review tranche — see `plan/FINDINGS.CLAUDE.md`)
 
 - `@domecs/dom`: O-2 first paint is now driven from the update phase with a

@@ -265,8 +265,7 @@ function runTelemetry({ entityCount, hotEntities, updatesPerTick, ticks }) {
   }
 }
 
-function runSnapshot({ entityCount, repeats }) {
-  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+function registerSnapshotSystems(world) {
   world.system(
     'bench-move',
     { schedule: 'tick', query: [Position, Velocity] },
@@ -277,13 +276,31 @@ function runSnapshot({ entityCount, repeats }) {
       }
     },
   )
+  // A sub-base-rate fixed system: a restore that drops the accumulator or
+  // the fixed-step phase fires it on different frames than the source.
+  world.system(
+    'bench-drift',
+    { schedule: 'fixed', rateHz: 20, query: [Position] },
+    ({ entities }) => {
+      for (const e of entities) e.BenchPosition.x += 0.5
+    },
+  )
+}
+
+function runSnapshot({ entityCount, repeats }) {
+  // Frame times that are not multiples of the 1/60 fixed step, so the
+  // snapshot lands mid-accumulator and the determinism check exercises the
+  // clock.
+  const SNAPSHOT_DTS = [0.021, 1 / 144, 0.0333]
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  registerSnapshotSystems(world)
   for (let i = 0; i < entityCount; i++) {
     world.spawn([
       entry(Position, { x: i, y: i * 2 }),
       entry(Velocity, { dx: 1, dy: -1 }),
     ])
   }
-  for (let i = 0; i < 10; i++) world.step(1 / 60)
+  for (let i = 0; i < 10; i++) world.step(SNAPSHOT_DTS[i % SNAPSHOT_DTS.length])
 
   // Warmed, repeated snapshot timing — a single cold call is not a percentile.
   for (let i = 0; i < 3; i++) world.snapshot()
@@ -300,23 +317,19 @@ function runSnapshot({ entityCount, repeats }) {
   // step both forward, and compare the resulting snapshots — a lossy
   // round-trip OR missing dynamic state (accumulator, clock) fails this.
   const world2 = createWorld({ headless: true, seed: [1, 2, 3, 4] })
-  world2.system(
-    'bench-move',
-    { schedule: 'tick', query: [Position, Velocity] },
-    ({ entities }) => {
-      for (const e of entities) {
-        e.BenchPosition.x += e.BenchVelocity.dx
-        e.BenchPosition.y += e.BenchVelocity.dy
-      }
-    },
-  )
+  registerSnapshotSystems(world2)
   world2.restore(snap)
   for (let i = 0; i < 10; i++) {
-    world.step(1 / 60)
-    world2.step(1 / 60)
+    const dt = SNAPSHOT_DTS[(10 + i) % SNAPSHOT_DTS.length]
+    world.step(dt)
+    world2.step(dt)
   }
+  // The clock is compared directly too: a lost accumulator does not always
+  // change how many fixed steps land in a short window.
   const deterministic =
-    JSON.stringify(world.snapshot()) === JSON.stringify(world2.snapshot())
+    JSON.stringify(world.snapshot()) === JSON.stringify(world2.snapshot()) &&
+    world.time.elapsed === world2.time.elapsed &&
+    world.time.fixedAccumulator === world2.time.fixedAccumulator
 
   const { p50, p95 } = percentiles(samples)
   return {

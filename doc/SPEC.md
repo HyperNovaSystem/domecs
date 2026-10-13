@@ -245,7 +245,7 @@ An event emitted during an event system's execution is delivered at step 1 of *t
 ```ts
 interface TimeState {
   tick:          number    // integer, monotonic
-  elapsed:       number    // seconds since world.startLoop() (ms-quantized)
+  elapsed:       number    // scaled simulation seconds (ms-quantized); survives restore (§7.1)
   delta:         number    // seconds since last tick (raw, unquantized)
   scaledDelta:   number    // ms-quantized; see drift-free rule below
   scale:         number    // 0 = paused; 1 = real-time
@@ -273,6 +273,8 @@ of `pause`/`resume` silently corrupted the pre-pause target.
 3. Drive the fixed-step accumulator off the unquantized cumulative total (so the count of fixed steps fired in any time window equals `floor(cumulative / fixedStep)`, with no rounding drift).
 
 Result: `scaledDelta` keeps its §7 wire-format guarantee, and a `fixed` system at `rateHz = baseHz` fires exactly `N` times in `N * fixedStep` seconds of scaled time — at any `fixedStep`, ms-exact or not.
+
+Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all functions of that cumulative total, the snapshot carries only the total (`scaledTime`, §7.1) and `restore()` re-derives the rest (O-40).
 
 **Positive-floor rule (normative, F-6).** When `step(dt)` is called with a positive wall-clock `dt` and the world is not paused (`time.scale !== 0`), the per-tick ms-quantized dt MUST NOT be zero — it MUST be raised to a minimum of 1 ms (i.e. `scaledDelta >= 1e-3`). Without this, sub-ms wall-clock frames (common on high-refresh monitors) produce `scaledDelta = 0`, which yields `NaN` in any controller that divides by dt (PIDs, rate estimators, first-order smoothing filters). The floor applies only to the per-tick *published* value: the internal cumulative unquantized total is unchanged, so §2.7's drift-free guarantee still holds across any window that contains at least one normally-sized frame. The floor is bypassed when the caller explicitly requests a no-op heartbeat (§4 step 0 exception below) — a positive dt is the signal that real time elapsed.
 
@@ -590,6 +592,7 @@ interface WorldSnapshot {
   version:    number                             // current SNAPSHOT_VERSION = 2
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
+  scaledTime?: number                            // cumulative scaled seconds (O-40); see below
   entities:   { id: number; components: Record<string, unknown> }[]
   nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
@@ -600,6 +603,16 @@ interface WorldSnapshot {
 `SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
 
 **Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
+
+**Clock continuity (O-40, normative).** `snapshot()` records the cumulative unquantized scaled time (§2.7's drift-free total) as `scaledTime`. `restore()` resumes it and re-derives `time.elapsed`, the fixed-step count, and `time.fixedAccumulator` from it with the same expressions the tick uses, so a restored world's `fixed` systems — including divisor-rate ones — fire on the live world's frames, and `time.elapsed` continues instead of restarting at 0. The fixed-step count is derived against the *restoring* world's `fixedStep`: a world restored with a different `fixedStep` neither bursts through catch-up steps nor stalls. An invalid `scaledTime` (not a finite number ≥ 0) throws before any state is wiped. The field is optional — snapshots from older builds lack it and restore starts the clock at 0.
+
+**What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, and query iteration order (§8, ascending entity id). State outside the envelope is not carried:
+
+- `time.scale` and pause state — host controls; restore leaves the restoring world's own.
+- System `state` and closure variables — keep durable state in components or resources.
+- `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick.
+- Change marks from mutations made between ticks (e.g. a spawn or `action()` side effect after the last `step`) — restore clears them, so the restored world's next tick does not see them. Snapshot after a `step` for exact continuation.
+- A `world.rand` reference captured before the restore — restore installs a new generator; read `world.rand` or `ctx.rand` at use.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
@@ -672,7 +685,7 @@ This relies on:
 
 - `world.rand` is the only PRNG used in authoritative systems.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
-- Iteration order of queries is deterministic (archetype order, then entity id).
+- Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, and `selectViews` alike — regardless of the order entities joined a query or archetypes were created. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
 - Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
