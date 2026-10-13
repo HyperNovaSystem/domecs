@@ -593,6 +593,7 @@ interface WorldSnapshot {
   seed:       [number, number, number, number]  // PRNG state
   tick:       number
   scaledTime?: number                            // cumulative scaled seconds (O-40); see below
+  fixedBacklog?: number                          // fixed steps due but not yet run (O-40)
   entities:   { id: number; components: Record<string, unknown> }[]
   nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
@@ -604,15 +605,20 @@ interface WorldSnapshot {
 
 **Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
 
-**Clock continuity (O-40, normative).** `snapshot()` records the cumulative unquantized scaled time (§2.7's drift-free total) as `scaledTime`. `restore()` resumes it and re-derives `time.elapsed`, the fixed-step count, and `time.fixedAccumulator` from it with the same expressions the tick uses, so a restored world's `fixed` systems — including divisor-rate ones — fire on the live world's frames, and `time.elapsed` continues instead of restarting at 0. The fixed-step count is derived against the *restoring* world's `fixedStep`: a world restored with a different `fixedStep` neither bursts through catch-up steps nor stalls. An invalid `scaledTime` (not a finite number ≥ 0) throws before any state is wiped. The field is optional — snapshots from older builds lack it and restore starts the clock at 0.
+**Clock continuity (O-40, normative).** `snapshot()` records the cumulative unquantized scaled time (§2.7's drift-free total) as `scaledTime`, plus `fixedBacklog` — fixed steps that time made due but that have not run — when it is non-zero. The backlog is normally 0 after a completed tick; it is positive when a `tickStart` hook paused the world after time advanced (the live world runs those steps once resumed) or when the snapshot is taken inside the fixed-step loop. `restore()` resumes the total and re-derives `time.elapsed`, the fixed-step count (steps due, less the backlog), and `time.fixedAccumulator` with the same expressions the tick uses, so a restored world's `fixed` systems — including divisor-rate ones — fire on the live world's frames, and `time.elapsed` continues instead of restarting at 0. The count is derived against the *restoring* world's `fixedStep`: a world restored with a different `fixedStep` neither bursts through catch-up steps nor stalls. Both fields are optional — snapshots from older builds lack them and restore starts the clock at 0.
+
+**Validation before any effect (normative).** `restore()` validates the envelope — registered resource values (§2.11) and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0; `null` is invalid, only an absent field means "older build") — before it discards pending events or runs plugin `onRestore` hooks. An invalid envelope throws and leaves the world, its pending events, and plugin state untouched.
 
 **What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, and query iteration order (§8, ascending entity id). State outside the envelope is not carried:
 
+- Events still pending in the bus — emitted during the last tick (delivered at the next tick's step 1) or between ticks. Restore discards them (the pending-events rule below).
+- Change marks from mutations made between ticks (e.g. a spawn or `action()` side effect after the last `step`) — restore clears them, so the restored world's next tick does not see them.
 - `time.scale` and pause state — host controls; restore leaves the restoring world's own.
 - System `state` and closure variables — keep durable state in components or resources.
 - `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick.
-- Change marks from mutations made between ticks (e.g. a spawn or `action()` side effect after the last `step`) — restore clears them, so the restored world's next tick does not see them. Snapshot after a `step` for exact continuation.
 - A `world.rand` reference captured before the restore — restore installs a new generator; read `world.rand` or `ctx.rand` at use.
+
+Continuation is therefore exact when the snapshot is taken between ticks with no undelivered events and no out-of-tick mutations since the last `step`. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
@@ -685,7 +691,7 @@ This relies on:
 
 - `world.rand` is the only PRNG used in authoritative systems.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
-- Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, and `selectViews` alike — regardless of the order entities joined a query or archetypes were created. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
+- Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, `selectViews`, `countEntities`, and `iterEntitiesWith` alike — regardless of the order entities joined a query or archetypes were created. `Where` predicates are evaluated in the same order, so a predicate with side effects makes the same calls. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
 - Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 

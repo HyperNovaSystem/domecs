@@ -24,3 +24,12 @@ export function createTime(fixedStep: number): TimeState {
 export function quantizeMs(seconds: number): number {
   return Math.round(seconds * 1000) / 1000
 }
+
+/**
+ * Fixed steps due after `totalScaledSeconds` of scaled time (SPEC §2.7 F-3).
+ * Shared by the tick and by restore (O-40) so both derive the same count
+ * from the same float expression.
+ */
+export function fixedStepsDue(totalScaledSeconds: number, fixedStep: number): number {
+  return Math.floor(totalScaledSeconds / fixedStep + 1e-9)
+}

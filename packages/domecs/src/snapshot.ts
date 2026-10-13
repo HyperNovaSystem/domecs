@@ -30,6 +30,14 @@ export interface WorldSnapshot {
    * the clock at zero.
    */
   readonly scaledTime?: number
+  /**
+   * Fixed steps due under `scaledTime` that had not run yet (O-40). Omitted
+   * when 0 — the normal case after a completed tick. Positive when a
+   * `tickStart` hook paused the world after time advanced (the live world
+   * runs them on resume), or when the snapshot was taken inside the
+   * fixed-step loop. Restore keeps them owed.
+   */
+  readonly fixedBacklog?: number
   readonly entities: ReadonlyArray<{
     readonly id: Entity
     readonly components: Record<string, unknown>

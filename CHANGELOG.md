@@ -9,20 +9,28 @@ All notable changes to DOMECS are documented here. The format is based on
 ### Fixed (2026-10-13 engine review — restore continuity, O-40)
 
 - `@domecs/core`: snapshots carry the simulation clock (`WorldSnapshot.scaledTime`,
-  optional) and `restore()` resumes it — `time.elapsed`, the fixed-step
-  accumulator, and the fixed-step phase continue from the snapshot instead of
-  restarting at 0, so `fixed` systems (including divisor-rate ones) fire on the
-  live world's frames after a load, an undo, or an `AgentBridge.reset()` to a
-  mid-run baseline. Older snapshots without the field restore with the clock at
-  0, as before; an invalid `scaledTime` throws before the world is touched.
-  `SNAPSHOT_VERSION` stays 2 (optional field, like `nextId`).
+  plus `fixedBacklog` when fixed steps are owed) and `restore()` resumes it —
+  `time.elapsed`, the fixed-step accumulator, and the fixed-step phase continue
+  from the snapshot instead of restarting at 0, so `fixed` systems (including
+  divisor-rate ones) fire on the live world's frames after a load, an undo, or
+  an `AgentBridge.reset()` to a mid-run baseline. Older snapshots without the
+  fields restore with the clock at 0, as before. `SNAPSHOT_VERSION` stays 2
+  (optional fields, like `nextId`). `time.fixedAccumulator` is now kept current
+  on a tick where a `tickStart` hook paused the world.
+- `@domecs/core`: `restore()` validates the envelope (resource values and the
+  clock fields) before it discards pending events or runs `onRestore` hooks —
+  an invalid snapshot now throws with pending events and plugin state intact,
+  not just the entity state. `scaledTime: null` is rejected rather than read
+  as a pre-O-40 envelope.
 - `@domecs/core`: **behavior change** — query iteration is now ascending entity
   id everywhere (`query().entities`, system `ctx.entities`, reactive deltas,
-  `listEntities`, `selectViews`), as SPEC §8 always required. Live queries used
-  to iterate in the order entities joined and one-shot selectors archetype by
-  archetype, while a restored world iterated by id — so per-entity `rand`
-  draws and other order-dependent logic diverged after a restore. Code that
-  relied on join order will see a different order.
+  `listEntities`, `selectViews`, `countEntities`, `iterEntitiesWith`), and
+  `Where` predicates are evaluated in that order. SPEC §8 used to specify
+  "archetype order, then entity id", which neither the live path (join order)
+  nor restore (rebuilt by id) delivered consistently, so per-entity `rand`
+  draws and other order-dependent logic diverged after a restore; archetype
+  creation order cannot be restored, so §8 now specifies ascending id. Code
+  that relied on join order will see a different order.
 - Bench: the snapshot workload's `deterministic` flag now steps a sub-rate
   `fixed` system with frame times that are not fixed-step multiples and compares
   the twins' clocks, so it actually catches a lost accumulator (it reported

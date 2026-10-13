@@ -67,8 +67,20 @@ export class SortedIdSet implements Iterable<Entity> {
     return this.sorted
   }
 
+  /**
+   * Iterates the members as of the call, in ascending id order. Adds and
+   * deletes made while iterating are not reflected — a deleted id that was a
+   * member at the start is still yielded — so callers that mutate mid-loop
+   * must re-check membership.
+   */
   [Symbol.iterator](): Iterator<Entity> {
-    return this.ordered()[Symbol.iterator]()
+    const run = this.ordered()
+    const n = run.length
+    let i = 0
+    return {
+      next: (): IteratorResult<Entity> =>
+        i < n ? { value: run[i++]!, done: false } : { value: undefined, done: true },
+    }
   }
 
   private compactIfBacklogged(): void {
@@ -113,12 +125,31 @@ export function byId(a: Entity, b: Entity): number {
 
 /**
  * Merge disjoint ascending id runs (one per matching archetype) into one
- * ascending array. Pairwise two-way merges: O(n log k) with no comparator
- * calls, several times faster than sorting the concatenation.
+ * ascending array. Entity ids are dense non-negative integers, so when the
+ * id span is within 8x the result size the runs are marked into a bitmap and
+ * read back in order — linear, and independent of the number of runs. A
+ * sparse span falls back to pairwise two-way merges, O(n log k).
  */
 export function mergeSortedRuns(runs: ReadonlyArray<readonly Entity[]>): Entity[] {
   if (runs.length === 0) return []
   if (runs.length === 1) return runs[0]!.slice()
+  let lo = Number.POSITIVE_INFINITY
+  let hi = Number.NEGATIVE_INFINITY
+  let n = 0
+  for (const run of runs) {
+    if (run.length === 0) continue
+    n += run.length
+    if (run[0]! < lo) lo = run[0]!
+    if (run[run.length - 1]! > hi) hi = run[run.length - 1]!
+  }
+  if (n === 0) return []
+  if (hi - lo < 8 * n) {
+    const mark = new Uint8Array(hi - lo + 1)
+    for (const run of runs) for (let i = 0; i < run.length; i++) mark[run[i]! - lo] = 1
+    const out: Entity[] = []
+    for (let i = 0; i < mark.length; i++) if (mark[i] === 1) out.push(lo + i)
+    return out
+  }
   let level = runs
   while (level.length > 1) {
     const next: Array<readonly Entity[]> = []

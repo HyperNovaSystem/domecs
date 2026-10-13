@@ -4,6 +4,7 @@ import { createResourceState } from './world-resources.js'
 import {
   applySnapshot,
   buildSnapshot,
+  validateSnapshot,
   type ArchetypeBucket,
   type CompiledQuery,
   type StepClock,
@@ -54,7 +55,7 @@ import {
 } from './scheduler.js'
 import type { WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
-import { createTime, type TimeState } from './time.js'
+import { createTime, fixedStepsDue, type TimeState } from './time.js'
 import type {
   ComponentBag,
   ComponentDescriptor,
@@ -701,14 +702,21 @@ export function createWorld(options: WorldOptions = {}): World {
   // run is merged rather than returned archetype by archetype.
   function selectIds(def: QueryDef): Entity[] {
     const { node, needsEntityFilter } = oneshotNode(def)
+    return selectMatching(node, needsEntityFilter)
+  }
+
+  function selectMatching(node: QueryNode, needsEntityFilter: boolean): Entity[] {
     const runs: Array<readonly Entity[]> = []
     for (const arch of archetypes.values()) {
       if (!evalStructural(node, arch.types)) continue
       const ids = arch.entities.ordered()
-      if (ids.length === 0) continue
-      runs.push(needsEntityFilter ? ids.filter((e) => evalEntity(node, e)) : ids)
+      if (ids.length > 0) runs.push(ids)
     }
-    return mergeSortedRuns(runs)
+    const ids = mergeSortedRuns(runs)
+    // `Where` predicates run after the merge, so they see entities in id
+    // order too — a predicate with side effects (say, drawing world.rand)
+    // makes the same calls live and after a restore.
+    return needsEntityFilter ? ids.filter((e) => evalEntity(node, e)) : ids
   }
 
   function evaluateQueryAgainstArchetype(
@@ -1088,7 +1096,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // F-3: drive from cumulative unquantized seconds; ms-rounding drift
       // in per-tick scaledDelta does not entangle the scheduler.
       if (time.scale !== 0) {
-        const expected = Math.floor(clock.totalScaledSeconds / time.fixedStep + 1e-9)
+        const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
         while (clock.fixedStepsFired < expected) {
           clock.fixedStepsFired += 1
           clock.fixedStepCounter += 1
@@ -1098,9 +1106,12 @@ export function createWorld(options: WorldOptions = {}): World {
             runSystem(s, eventView)
           }
         }
-        time.fixedAccumulator =
-          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
       }
+      // Kept current even when a tickStart hook paused the world after time
+      // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
+      // and the accumulator reports them.
+      time.fixedAccumulator =
+        clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
 
       // SPEC §3 — `once` systems fire on first tick of world.
       for (const s of scheduler.systemsByMode('once')) {
@@ -1306,7 +1317,13 @@ export function createWorld(options: WorldOptions = {}): World {
       requireRegisteredType(type)
       const store = stores.get(type.name) as Map<Entity, T> | undefined
       if (!store) return
-      for (const [id, value] of store) yield { id, value }
+      // Ascending entity id, like every query form (SPEC §8, O-40). The ids
+      // are taken up front: an entity that loses the component mid-iteration
+      // is skipped, one that gains it is not visited.
+      for (const id of selectMatching(Has(type), false)) {
+        const value = store.get(id)
+        if (value !== undefined) yield { id, value }
+      }
     },
 
     archetype(entity: Entity): ComponentType<unknown>[] {
@@ -1426,8 +1443,8 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       const needsEntityFilter = hasTickFilter
-      const collectCandidates = (): Iterable<Entity> => {
-        if (!hasRemoved) return q.structuralMembers
+      const collectCandidates = (): readonly Entity[] => {
+        if (!hasRemoved) return q.structuralMembers.ordered()
         // Removed: include entities that were removed this tick, which may
         // no longer sit in any structurally matching archetype. Re-sorted so
         // the union keeps ascending id order (SPEC §8, O-40).
@@ -1443,9 +1460,13 @@ export function createWorld(options: WorldOptions = {}): World {
       const result: QueryResult = {
         get entities() {
           if (disposed) return []
+          // Indexed over the length read up front: membership changes made
+          // by a Where predicate mid-loop do not leak into this result.
           const candidates = collectCandidates()
+          const n = candidates.length
           const out: EntityView[] = []
-          for (const e of candidates) {
+          for (let i = 0; i < n; i++) {
+            const e = candidates[i]!
             if (needsEntityFilter && !evalEntity(node, e)) continue
             out.push(makeView(e))
           }
@@ -1454,9 +1475,11 @@ export function createWorld(options: WorldOptions = {}): World {
         get size() {
           if (disposed) return 0
           if (!needsEntityFilter && !hasRemoved) return q.structuralMembers.size
+          const candidates = collectCandidates()
+          const n = candidates.length
           let count = 0
-          for (const e of collectCandidates()) {
-            if (needsEntityFilter && !evalEntity(node, e)) continue
+          for (let i = 0; i < n; i++) {
+            if (needsEntityFilter && !evalEntity(node, candidates[i]!)) continue
             count++
           }
           return count
@@ -1487,14 +1510,11 @@ export function createWorld(options: WorldOptions = {}): World {
 
     countEntities(def: QueryDef): number {
       const { node, needsEntityFilter } = oneshotNode(def)
+      // Predicates run in id order (see selectMatching).
+      if (needsEntityFilter) return selectMatching(node, true).length
       let n = 0
       for (const arch of archetypes.values()) {
-        if (!evalStructural(node, arch.types)) continue
-        if (!needsEntityFilter) {
-          n += arch.entities.size
-          continue
-        }
-        for (const e of arch.entities) if (evalEntity(node, e)) n++
+        if (evalStructural(node, arch.types)) n += arch.entities.size
       }
       return n
     },
@@ -1707,6 +1727,9 @@ export function createWorld(options: WorldOptions = {}): World {
       // tick after the restore, making identical episodes diverge (SPEC
       // §7.1). Cleared before the plugin chain so anything a plugin emits
       // during onRestore survives.
+      // An invalid envelope is rejected before anything is touched — pending
+      // events, plugin onRestore state, or world state (O-40).
+      validateSnapshot(stateCtx, snap)
       bus.clear()
       let s = snap
       for (const entry of plugins.list()) {

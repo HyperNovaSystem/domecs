@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
-import { SortedIdSet } from '../src/id-set.js'
-import { Has, OnAdded, OnRemoved } from '../src/query.js'
+import { mergeSortedRuns, SortedIdSet } from '../src/id-set.js'
+import { defineEvent } from '../src/events.js'
+import { Has, OnAdded, OnRemoved, Where } from '../src/query.js'
+import { ok } from '../src/result.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
 import { entry, type Entity } from '../src/types.js'
 import { createWorld, type World } from '../src/world.js'
@@ -207,6 +209,95 @@ describe('restore continuity — clock (O-40)', () => {
   })
 })
 
+describe('restore continuity — fixed-step backlog (O-40)', () => {
+  // A tickStart hook that pauses lets time advance without running the
+  // frame's fixed steps; the live world runs them after resume.
+  function mk(): { w: World; fired: () => number; pauseNext: () => void } {
+    const w = createWorld({ headless: true, fixedStep: 0.1 })
+    let fired = 0
+    let pauseNext = false
+    w.system('count', { schedule: 'fixed' }, () => {
+      fired += 1
+    })
+    w.signals.tickStart.subscribe(() => {
+      if (pauseNext) {
+        pauseNext = false
+        w.pause()
+      }
+    })
+    return { w, fired: () => fired, pauseNext: () => (pauseNext = true) }
+  }
+
+  it('records owed steps and runs them after resume, like the live world', () => {
+    const live = mk()
+    live.pauseNext()
+    live.w.step(0.25) // 2 steps due, none run
+    const snap = live.w.snapshot()
+    expect(snap.fixedBacklog).toBe(2)
+
+    const twin = mk()
+    twin.w.restore(JSON.parse(JSON.stringify(snap)) as WorldSnapshot)
+    expect(twin.w.time.fixedAccumulator).toBe(live.w.time.fixedAccumulator)
+
+    for (const { w } of [live, twin]) {
+      w.resume()
+      w.step(0.05)
+    }
+    expect(twin.fired()).toBe(live.fired())
+    expect(live.fired()).toBe(3)
+  })
+
+  it('omits fixedBacklog after an ordinary tick', () => {
+    const { w } = mk()
+    w.step(0.25)
+    expect('fixedBacklog' in w.snapshot()).toBe(false)
+  })
+
+  it('rejects an invalid fixedBacklog', () => {
+    const { w } = mk()
+    const snap = w.snapshot()
+    for (const bad of [-1, 1.5, Number.NaN, null as unknown as number]) {
+      expect(() => w.restore({ ...snap, fixedBacklog: bad })).toThrow(/fixedBacklog/)
+    }
+  })
+})
+
+describe('restore — validation before anything is touched (O-40)', () => {
+  it('rejects scaledTime: null instead of reading it as absent', () => {
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(Mark, { r: 1 })])
+    const snap = w.snapshot()
+    expect(() =>
+      w.restore({ ...snap, entities: [], scaledTime: null as unknown as number }),
+    ).toThrow(/scaledTime/)
+    expect(w.getComponent(e, Mark)).toEqual({ r: 1 })
+  })
+
+  it('keeps pending events and skips onRestore hooks when the envelope is invalid', () => {
+    const Ping = defineEvent<number>('RcPing')
+    const w = createWorld({ headless: true })
+    let hooked = 0
+    w.use({
+      name: 'rc-spy',
+      install: () =>
+        ok({
+          onRestore: (snap: WorldSnapshot) => {
+            hooked += 1
+            return snap
+          },
+        }),
+    })
+    const pings: number[] = []
+    w.on(Ping, (n) => pings.push(n))
+    const snap = w.snapshot()
+    w.emit(Ping, 7)
+    expect(() => w.restore({ ...snap, scaledTime: -1 })).toThrow(/scaledTime/)
+    expect(hooked).toBe(0)
+    w.stepOnce()
+    expect(pings).toEqual([7])
+  })
+})
+
 describe('query iteration order — ascending entity id (SPEC §8, O-40)', () => {
   function outOfOrder(): { w: World; ids: Entity[] } {
     const w = createWorld({ headless: true })
@@ -253,6 +344,42 @@ describe('query iteration order — ascending entity id (SPEC §8, O-40)', () =>
     expect(w.listEntities([Mark])).toEqual([a, b, c])
     expect(w.selectViews(Has(Mark)).map((v) => v.id)).toEqual([a, b, c])
     expect(w.listEntities([Hot])).toEqual([a, b])
+  })
+
+  it('iterEntitiesWith yields ascending ids, live and after restore', () => {
+    const { w, ids } = outOfOrder()
+    expect([...w.iterEntitiesWith(Mark)].map((x) => x.id)).toEqual(ids)
+    const twin = createWorld({ headless: true })
+    twin.restore(w.snapshot())
+    expect([...twin.iterEntitiesWith(Mark)].map((x) => x.id)).toEqual(ids)
+  })
+
+  it('Where predicates run in id order across archetypes, so rand-drawing predicates match after restore', () => {
+    const pick = (w: World): { ids: Entity[]; visited: Entity[]; count: number } => {
+      const visited: Entity[] = []
+      const where = Where(Mark, () => w.rand.uniformInt(2) === 0)
+      const ids = w.listEntities(where)
+      const count = w.countEntities(
+        Where(Mark, (m) => {
+          visited.push(m.r)
+          return true
+        }),
+      )
+      return { ids, visited, count }
+    }
+    const live = createWorld({ headless: true, seed: 42 })
+    const a = live.spawn([entry(Mark, { r: 0 })])
+    const b = live.spawn([entry(Mark, { r: 1 }), entry(Hot, { heat: 0 })])
+    live.addComponent(a, Hot, { heat: 0 }) // a joins b's archetype after b
+    live.spawn([entry(Mark, { r: 2 })])
+    const snap = live.snapshot()
+    const twin = createWorld({ headless: true })
+    twin.restore(snap)
+    const l = pick(live)
+    const t = pick(twin)
+    expect(l.visited).toEqual([0, 1, 2])
+    expect(t).toEqual(l)
+    expect(b).toBeGreaterThan(a)
   })
 
   it('OnRemoved deltas list despawned entities by id', () => {
@@ -303,6 +430,22 @@ describe('SortedIdSet', () => {
     expect(s.size).toBe(0)
   })
 
+  it('iterates the members as of the call', () => {
+    const s = new SortedIdSet()
+    for (const id of [1, 3, 5]) s.add(id)
+    const seen: number[] = []
+    for (const id of s) {
+      seen.push(id)
+      if (id === 1) {
+        s.delete(3) // still yielded: it was a member when iteration began
+        s.add(9) // tail append: not yielded
+        s.add(2) // late insert: not yielded
+      }
+    }
+    expect(seen).toEqual([1, 3, 5])
+    expect([...s]).toEqual([1, 2, 5, 9])
+  })
+
   it('keeps the backlog bounded for a set nobody iterates', () => {
     const s = new SortedIdSet()
     for (let id = 0; id < 1000; id++) s.add(id)
@@ -319,14 +462,18 @@ describe('SortedIdSet', () => {
   })
 
   it('matches a reference model under random operations', () => {
-    let state = 12345
+    let state = 0x9e3779b9
     const next = (n: number): number => {
-      state = (state * 1103515245 + 12345) % 2147483648
-      return state % n
+      // xorshift32 — integer-exact, unlike a float LCG.
+      state ^= state << 13
+      state ^= state >>> 17
+      state ^= state << 5
+      return (state >>> 0) % n
     }
     const s = new SortedIdSet()
     const model = new Set<number>()
-    for (let i = 0; i < 5000; i++) {
+    let reads = 0
+    for (let i = 0; i < 20_000; i++) {
       const id = next(200)
       const op = next(10)
       if (op < 5) {
@@ -335,9 +482,26 @@ describe('SortedIdSet', () => {
       } else if (op < 9) {
         expect(s.delete(id)).toBe(model.delete(id))
       } else {
+        reads += 1
         expect([...s]).toEqual([...model].sort((a, b) => a - b))
       }
       expect(s.size).toBe(model.size)
     }
+    expect(reads).toBeGreaterThan(1000)
+  })
+})
+
+describe('mergeSortedRuns', () => {
+  it('merges dense and sparse disjoint runs into ascending order', () => {
+    const dense = [[0, 4, 8], [1, 5], [], [2, 3, 6, 7]]
+    expect(mergeSortedRuns(dense)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    const sparse = [[5, 1000], [3, 70_000], [900]]
+    expect(mergeSortedRuns(sparse)).toEqual([3, 5, 900, 1000, 70_000])
+    expect(mergeSortedRuns([])).toEqual([])
+    expect(mergeSortedRuns([[], []])).toEqual([])
+    const only = [1, 2]
+    const copy = mergeSortedRuns([only])
+    expect(copy).toEqual([1, 2])
+    expect(copy).not.toBe(only)
   })
 })

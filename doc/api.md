@@ -254,7 +254,8 @@ interface World {
   getSystem(name: string): SystemHandle | undefined
 
   // queries — every form iterates in ascending entity id (query().entities,
-  // system ctx.entities, reactive deltas, listEntities, selectViews; SPEC §8)
+  // system ctx.entities, reactive deltas, listEntities, selectViews,
+  // countEntities, iterEntitiesWith; Where predicates too — SPEC §8)
   query(def: QueryDef): QueryResult
   // Leak-free one-shot selectors: evaluate the current world without
   // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
@@ -650,6 +651,9 @@ interface WorldSnapshot {
   // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
   // the live cadence (O-40). Absent in older snapshots → clock starts at 0.
   readonly scaledTime?: number
+  // Fixed steps due but not yet run (a tickStart hook paused after time
+  // advanced); omitted when 0. restore() keeps them owed (O-40).
+  readonly fixedBacklog?: number
   readonly entities: ReadonlyArray<{
     id:         Entity
     components: Record<string, unknown>
