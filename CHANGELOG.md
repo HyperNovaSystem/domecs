@@ -6,6 +6,27 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — package high-severity items, O-52, O-56, O-58, O-66–O-68)
+
+- `@domecs/dom`: a view whose query has a `Where` filter mounts exactly the
+  entities that pass it and follows them in and out as the filtered fields
+  change (structural add/remove used to ignore `Where`). **Behavior change**:
+  temporal nodes (`OnAdded`/`OnRemoved`/`OnChanged`/`OnChangedResource`) in a
+  view query return the new `invalid_view_query` MountError. (O-52)
+- `@domecs/input`: a key released while a text input has focus is released
+  (it stayed held); an element `keyTarget` releases held keys when focus
+  leaves it; `pointercancel` and window blur clear pointer buttons and
+  `lostpointercapture` re-reads them; teardown resets `world.input`. (O-56, O-58, O-59)
+- `@domecs/rules`: expressions over 16384 characters or nesting deeper than
+  128 levels (`MAX_EXPRESSION_LENGTH`/`MAX_EXPRESSION_DEPTH`, exported) are
+  parse errors instead of stack overflows. (O-66)
+- `@domecs/rules`: **behavior change** — reads see own fields only;
+  `__proto__`/`constructor`/`prototype` are rejected at compile time; a write
+  must target an existing field of the same kind (a `null`/`undefined` field
+  takes any) with a finite number, and every target component must exist, or
+  the entity is skipped; every action is evaluated before any is written; writes
+  that do not change the value do not mark. (O-67, O-68, O-69)
+
 ### Fixed (2026-10-13 engine review — kernel hardening, O-41–O-50, O-62)
 
 - `@domecs/core`: `restore()` validates the whole snapshot before it touches

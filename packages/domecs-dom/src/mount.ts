@@ -1,4 +1,4 @@
-import type { ComponentType, Entity, EntityView, QueryResult, World } from '@domecs/core'
+import type { ComponentType, Entity, EntityView, QueryNode, QueryResult, World } from '@domecs/core'
 import { OnChanged, collectHasComponents, normalizeQuery, ok, err, type Result } from '@domecs/core'
 import type { ViewDef } from './view.js'
 
@@ -21,11 +21,15 @@ export interface MountHandle {
  * - `plugin_install_failed`: the internal renderer plugin could not be
  *   installed (e.g. `mountDOM` called twice on the same world after teardown
  *   has not fully cleaned up, or a programmer-error duplicate plugin name).
+ * - `invalid_view_query`: a view's query contains a temporal node
+ *   (`OnAdded`/`OnRemoved`/`OnChanged`/`OnChangedResource`). View membership
+ *   is a standing set; use `changedOn` for change-gated redraws (O-52).
  */
 export type MountError =
   | { readonly kind: 'slot_already_mounted'; readonly slot: string }
   | { readonly kind: 'unregistered_slot'; readonly slot: string }
   | { readonly kind: 'plugin_install_failed'; readonly reason: string }
+  | { readonly kind: 'invalid_view_query'; readonly slot: string; readonly reason: string }
 
 const mountedSlots = new WeakMap<World, Set<string>>()
 
@@ -42,6 +46,12 @@ interface ViewState {
   mounted: Map<Entity, MountedRecord>
   pendingCreate: Map<Entity, EntityView>
   pendingDestroy: Map<Entity, EntityView>
+  /**
+   * O-52: the query has a `Where` filter. Structural onAdd/onRemove ignore
+   * `Where`, so membership is reconciled against the filtered
+   * `query.entities` at each commit.
+   */
+  filtered: boolean
   unsubAdd: () => void
   unsubRemove: () => void
 }
@@ -89,6 +99,16 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       rollback()
       return err({ kind: 'unregistered_slot', slot: def.slot })
     }
+    const node = normalizeQuery(def.query)
+    const temporal = findKind(node, TEMPORAL_KINDS)
+    if (temporal) {
+      rollback()
+      return err({
+        kind: 'invalid_view_query',
+        slot: def.slot,
+        reason: `view queries cannot contain temporal nodes (found ${temporal}); use changedOn for change-gated redraws`,
+      })
+    }
     const q = world.query(def.query)
     const changedTypes = resolveChangedTypes(def)
     const state: ViewState = {
@@ -101,6 +121,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       mounted: new Map(),
       pendingCreate: new Map(),
       pendingDestroy: new Map(),
+      filtered: findKind(node, WHERE_KIND) !== null,
       unsubAdd: () => {},
       unsubRemove: () => {},
     }
@@ -169,7 +190,48 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
   })
 }
 
+const TEMPORAL_KINDS: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'removed',
+  'changed',
+  'changedResource',
+])
+const WHERE_KIND: ReadonlySet<QueryNode['kind']> = new Set(['where'])
+
+function findKind(node: QueryNode, kinds: ReadonlySet<QueryNode['kind']>): string | null {
+  if (kinds.has(node.kind)) return node.kind
+  if (node.kind === 'not') return findKind(node.child, kinds)
+  if (node.kind === 'and' || node.kind === 'or') {
+    for (const c of node.children) {
+      const hit = findKind(c, kinds)
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+/**
+ * O-52: bring a `Where` view's pending maps in line with the filtered
+ * membership — create for entities that match now (including ones that
+ * started matching through a field change), destroy for mounted entities
+ * that no longer match.
+ */
+function reconcileFiltered(state: ViewState): void {
+  const members = new Map<Entity, EntityView>()
+  for (const view of state.query.entities) members.set(view.id, view)
+  for (const id of state.pendingCreate.keys()) {
+    if (!members.has(id)) state.pendingCreate.delete(id)
+  }
+  for (const [id, view] of members) {
+    if (!state.mounted.has(id) && !state.pendingCreate.has(id)) state.pendingCreate.set(id, view)
+  }
+  for (const [id, rec] of state.mounted) {
+    if (!members.has(id) && !state.pendingDestroy.has(id)) state.pendingDestroy.set(id, rec.view)
+  }
+}
+
 function commit(state: ViewState): void {
+  if (state.filtered) reconcileFiltered(state)
   for (const id of state.pendingDestroy.keys()) {
     const rec = state.mounted.get(id)
     if (rec) {

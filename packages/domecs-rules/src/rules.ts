@@ -1,7 +1,13 @@
 import type { ComponentType, SystemHandle, World } from '@domecs/core'
 import { walkFieldRefs, type AstNode } from './ast.js'
 import { parseExpression } from './parser.js'
-import { evaluate, type EvalEnv } from './evaluator.js'
+import { evaluate, RuleEvalError, type EvalEnv } from './evaluator.js'
+
+/**
+ * O-67: field names a rule may never read or write. Reads are own-property
+ * only, and these names would reach the object's prototype machinery.
+ */
+const FORBIDDEN_FIELDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
 export interface RuleActionDef {
   /** Dotted "Component.field" target, same JSON shape as Studio's SystemData.actions. */
@@ -85,6 +91,12 @@ export function compileRule(
     return resolved
   }
 
+  function checkField(field: string, pos: number): void {
+    if (FORBIDDEN_FIELDS.has(field)) {
+      errors.push({ rule: def.name, position: pos, message: `Field name "${field}" is not allowed` })
+    }
+  }
+
   const queryTypes: ComponentType<any>[] = []
   for (const name of def.query) {
     const t = resolveAndTrack(name, -1, 'referenced in query')
@@ -98,7 +110,8 @@ export function compileRule(
       for (const e of parsed.errors) errors.push({ rule: def.name, position: e.position, message: e.message })
     } else {
       whenAst = parsed.ast
-      walkFieldRefs(whenAst, (component, _field, pos) => {
+      walkFieldRefs(whenAst, (component, field, pos) => {
+        checkField(field, pos)
         resolveAndTrack(component, pos, 'referenced in "when"')
       })
     }
@@ -117,6 +130,7 @@ export function compileRule(
     }
     const compName = action.set.slice(0, dotIdx)
     const fieldName = action.set.slice(dotIdx + 1)
+    checkField(fieldName, -1)
     const targetType = resolveAndTrack(compName, -1, `referenced in action "${action.set}"`)
 
     const parsed = parseExpression(action.expr)
@@ -124,7 +138,8 @@ export function compileRule(
       for (const e of parsed.errors) errors.push({ rule: def.name, position: e.position, message: e.message })
       continue
     }
-    walkFieldRefs(parsed.ast, (component, _field, pos) => {
+    walkFieldRefs(parsed.ast, (component, field, pos) => {
+      checkField(field, pos)
       resolveAndTrack(component, pos, `referenced in action "${action.set}" expr`)
     })
     if (targetType) {
@@ -142,6 +157,28 @@ export function compileRule(
     componentsByName,
   }
   return { rule, errors: [] }
+}
+
+/**
+ * O-67: a write must target an existing own field and keep its kind
+ * (number, string or boolean); a field holding `null` or `undefined` takes
+ * any of the three. Numbers must be finite. Anything else would add fields
+ * on a typo, store booleans from `&&`/`||` into numeric fields, or persist
+ * `Infinity` as `null`.
+ */
+function checkWrite(action: CompiledAction, current: Record<string, unknown>, value: unknown): void {
+  const target = `${action.component.name}.${action.field}`
+  if (!Object.hasOwn(current, action.field)) {
+    throw new RuleEvalError(`Cannot set ${target}: the component has no such field`)
+  }
+  const prior = current[action.field]
+  const before = typeof prior
+  if (prior !== null && prior !== undefined && typeof value !== before) {
+    throw new RuleEvalError(`Cannot set ${target}: expected a ${before}, got ${typeof value}`)
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new RuleEvalError(`Cannot set ${target}: ${value} is not a finite number`)
+  }
 }
 
 /** Register a single compiled rule as a `world.system(...)`. */
@@ -179,19 +216,33 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
                 | Record<string, number | string | boolean>
                 | undefined
               if (value === undefined) return undefined
-              return value[field]
+              // O-67: own properties only — never the prototype chain.
+              return Object.hasOwn(value, field) ? value[field] : undefined
             },
           }
 
           if (whenAst && !evaluate(whenAst, env)) continue
 
+          // O-68 (R3): evaluate and check every action before writing any,
+          // so a failing action leaves the entity untouched and every
+          // expression reads the pre-rule values.
+          const writes: Array<{ target: Record<string, unknown>; action: CompiledAction; value: unknown }> = []
           for (const action of actions) {
             const result = evaluate(action.ast, env)
             const current = world.getComponent(entity.id, action.component) as
               | Record<string, unknown>
               | undefined
-            if (current === undefined) continue
-            current[action.field] = result
+            // Atomic: a missing target component fails the whole entity.
+            if (current === undefined) {
+              throw new RuleEvalError(`Cannot set ${action.component.name}.${action.field}: the entity has no ${action.component.name}`)
+            }
+            checkWrite(action, current, result)
+            writes.push({ target: current, action, value: result })
+          }
+          for (const { target, action, value } of writes) {
+            // R9: an unchanged value is not a change.
+            if (Object.is(target[action.field], value)) continue
+            target[action.field] = value
             world.markChanged(entity.id, action.component)
           }
         } catch {

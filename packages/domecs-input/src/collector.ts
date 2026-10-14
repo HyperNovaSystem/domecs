@@ -98,10 +98,9 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       }
       function onKeyUp(ev: Event): void {
         const e = ev as KeyboardEvent
-        if (!shouldCaptureKeys()) {
-          syncMods(e)
-          return
-        }
+        // O-56: a release is always processed, even while a text input has
+        // focus — a key pressed in the game and released in a textarea
+        // must not stay held. Only presses pass through to text inputs.
         const code = e.code
         if (held.delete(code)) {
           releasedNext.add(code)
@@ -112,10 +111,26 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       }
       function onBlur(): void {
         if (!clearOnBlur) return
+        // O-59: pointer buttons stick otherwise; the up event goes elsewhere.
+        pointer.buttons = 0
+        releaseKeys()
+      }
+      function releaseKeys(): void {
         for (const c of held) releasedNext.add(c)
         held.clear()
         mods.ctrl = mods.alt = mods.shift = mods.meta = false
         wake()
+      }
+      // O-56: with an element keyTarget, keyup events after focus leaves it
+      // never reach the plugin, so held keys are released when it loses
+      // focus — not only when the whole window does. Pointer buttons are
+      // left alone: focus moves on mousedown, while a button is held.
+      function onFocusOut(ev: Event): void {
+        if (!clearOnBlur) return
+        const next = (ev as FocusEvent).relatedTarget as Node | null
+        const target = keyTarget as unknown as Node
+        if (next && typeof target.contains === 'function' && target.contains(next)) return
+        releaseKeys()
       }
       function syncMods(e: KeyboardEvent): void {
         mods.ctrl = e.ctrlKey
@@ -157,6 +172,17 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         pointer.buttons = e.buttons
         wake()
       }
+      // O-59: a cancelled pointer never sends pointerup.
+      function onPointerCancel(): void {
+        pointer.buttons = 0
+        wake()
+      }
+      // Losing capture does not release a button (capture can move mid-drag),
+      // so take the event's own button state.
+      function onLostCapture(ev: Event): void {
+        pointer.buttons = (ev as PointerEvent).buttons ?? 0
+        wake()
+      }
       function onWheel(ev: Event): void {
         const e = ev as WheelEvent
         pointer.wheel += e.deltaY
@@ -166,9 +192,13 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       keyTarget?.addEventListener('keydown', onKeyDown)
       keyTarget?.addEventListener('keyup', onKeyUp)
       win?.addEventListener('blur', onBlur)
+      const keyTargetIsElement = !!keyTarget && keyTarget !== doc
+      if (keyTargetIsElement) keyTarget.addEventListener('focusout', onFocusOut)
       pointerTarget?.addEventListener('pointermove', onPointerMove)
       pointerTarget?.addEventListener('pointerdown', onPointerDown)
       pointerTarget?.addEventListener('pointerup', onPointerUp)
+      pointerTarget?.addEventListener('pointercancel', onPointerCancel)
+      pointerTarget?.addEventListener('lostpointercapture', onLostCapture)
       wheelTarget?.addEventListener('wheel', onWheel, { passive: true } as AddEventListenerOptions)
 
       function currentFocus(): { activeTag: string; consumesKeys: boolean } {
@@ -236,10 +266,23 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
           keyTarget?.removeEventListener('keydown', onKeyDown)
           keyTarget?.removeEventListener('keyup', onKeyUp)
           win?.removeEventListener('blur', onBlur)
+          if (keyTargetIsElement) keyTarget.removeEventListener('focusout', onFocusOut)
           pointerTarget?.removeEventListener('pointermove', onPointerMove)
           pointerTarget?.removeEventListener('pointerdown', onPointerDown)
           pointerTarget?.removeEventListener('pointerup', onPointerUp)
+          pointerTarget?.removeEventListener('pointercancel', onPointerCancel)
+          pointerTarget?.removeEventListener('lostpointercapture', onLostCapture)
           wheelTarget?.removeEventListener('wheel', onWheel)
+          // O-58: otherwise the last snapshot, edges included, replays
+          // every tick after teardown.
+          world.setInput({
+            keys: new Set(),
+            keyDelta: { pressed: new Set(), released: new Set() },
+            mods: { ctrl: false, alt: false, shift: false, meta: false },
+            pointer: { x: 0, y: 0, buttons: 0, delta: { x: 0, y: 0 }, wheel: 0, entered: [] },
+            gamepads: [],
+            focus: { activeTag: '', consumesKeys: false },
+          })
         },
       })
     },

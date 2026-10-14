@@ -26,6 +26,16 @@ import { LexError, tokenize, type Token } from './lexer.js'
  * are enforced at parse time.
  */
 
+/**
+ * O-66: limits that keep rule data from overflowing the stack. The parser,
+ * `walkFieldRefs` and the evaluator all recurse over the AST, so its depth
+ * is bounded — nesting through parentheses, unary operators and ternaries,
+ * and long operator chains, which build a left-nested tree as deep as the
+ * chain is long. Exceeding either limit is a ParseError.
+ */
+export const MAX_EXPRESSION_LENGTH = 16_384
+export const MAX_EXPRESSION_DEPTH = 128
+
 export interface ParseError {
   position: number
   message: string
@@ -63,6 +73,8 @@ const FUNCTION_NAME_SET = new Set<string>(FUNCTION_NAMES)
 class Parser {
   private tokens: Token[]
   private index = 0
+  /** Current recursion depth through parseTernary/parseUnary (O-66). */
+  private depth = 0
 
   constructor(source: string) {
     this.tokens = tokenize(source)
@@ -98,7 +110,25 @@ class Parser {
     return node
   }
 
+  // Recursion guard only: a parenthesis and a unary operator each cost a
+  // level here, so allow twice the AST limit and let deepestNode() apply
+  // the exact one.
+  private enter(pos: number): void {
+    if (++this.depth > 2 * MAX_EXPRESSION_DEPTH) {
+      throw new ParseFailure(pos, `Expression nests deeper than ${MAX_EXPRESSION_DEPTH} levels`)
+    }
+  }
+
   private parseTernary(): AstNode {
+    this.enter(this.peek().pos)
+    try {
+      return this.parseTernaryInner()
+    } finally {
+      this.depth--
+    }
+  }
+
+  private parseTernaryInner(): AstNode {
     const cond = this.parseBinary(1)
     const t = this.peek()
     if (t.type === 'punct' && t.value === '?') {
@@ -137,8 +167,13 @@ class Parser {
     if (t.type === 'punct' && (t.value === '!' || t.value === '-')) {
       const pos = t.pos
       this.advance()
-      const operand = this.parseUnary()
-      return { kind: 'unary', op: t.value, operand, pos }
+      this.enter(pos)
+      try {
+        const operand = this.parseUnary()
+        return { kind: 'unary', op: t.value, operand, pos }
+      } finally {
+        this.depth--
+      }
     }
     return this.parsePrimary()
   }
@@ -243,9 +278,20 @@ class Parser {
  * (0-based offset into `source`), not an exception.
  */
 export function parseExpression(source: string): { ast: AstNode } | { errors: ParseError[] } {
+  if (source.length > MAX_EXPRESSION_LENGTH) {
+    return {
+      errors: [{ position: MAX_EXPRESSION_LENGTH, message: `Expression is longer than ${MAX_EXPRESSION_LENGTH} characters` }],
+    }
+  }
   try {
     const parser = new Parser(source)
     const ast = parser.parseProgram()
+    const deep = deepestNode(ast)
+    if (deep) {
+      return {
+        errors: [{ position: deep.pos, message: `Expression nests deeper than ${MAX_EXPRESSION_DEPTH} levels` }],
+      }
+    }
     return { ast }
   } catch (e) {
     if (e instanceof ParseFailure) {
@@ -259,3 +305,34 @@ export function parseExpression(source: string): { ast: AstNode } | { errors: Pa
 }
 
 export type { AstNode } from './ast.js'
+
+/**
+ * The first node found below {@link MAX_EXPRESSION_DEPTH}, or null. Walks with
+ * an explicit stack: long operator chains build trees deeper than the
+ * parser's own recursion, which is what the limit protects later passes from.
+ */
+function deepestNode(root: AstNode): AstNode | null {
+  const stack: Array<[AstNode, number]> = [[root, 1]]
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop()!
+    if (depth > MAX_EXPRESSION_DEPTH) return node
+    switch (node.kind) {
+      case 'unary':
+        stack.push([node.operand, depth + 1])
+        break
+      case 'binary':
+      case 'logical':
+        stack.push([node.left, depth + 1], [node.right, depth + 1])
+        break
+      case 'ternary':
+        stack.push([node.cond, depth + 1], [node.then, depth + 1], [node.else, depth + 1])
+        break
+      case 'call':
+        for (const a of node.args) stack.push([a, depth + 1])
+        break
+      default:
+        break
+    }
+  }
+  return null
+}

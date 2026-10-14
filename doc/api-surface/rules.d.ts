@@ -1,6 +1,6 @@
 export type { AstNode, BinaryOp, FunctionName, LogicalOp, UnaryOp } from './ast.js';
 export { FUNCTION_ARITY, FUNCTION_NAMES } from './ast.js';
-export { parseExpression } from './parser.js';
+export { MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, parseExpression } from './parser.js';
 export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
