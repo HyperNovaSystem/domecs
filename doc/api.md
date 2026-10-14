@@ -950,7 +950,16 @@ assert.equal(opts.clearOnBlur, true)        // untouched default survives
 ## `@domecs/dom`
 
 ```ts
-function mountDOM(world: World, options: MountOptions): MountHandle
+// Returns a Result. A world can take several mounts on distinct slots
+// (O-55); a slot already mounted is err slot_already_mounted.
+function mountDOM(world: World, options: MountOptions): Result<MountHandle, MountError>
+
+type MountError =
+  | { kind: 'slot_already_mounted'; slot: string }
+  | { kind: 'unregistered_slot'; slot: string }
+  | { kind: 'plugin_install_failed'; reason: string }
+  | { kind: 'invalid_view_query'; slot: string; reason: string }   // temporal node in a view query (O-52)
+  | { kind: 'invalid_changed_on'; slot: string; reason: string }   // update with no redraw trigger (O-55)
 
 interface MountOptions {
   readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
@@ -967,19 +976,22 @@ interface MountHandle {
 // `changedOn` semantics (SPEC §5.3 update-gating rule, P-3) — a
 // discriminated union, NOT an array:
 //   - omitted (default) or `{ mode: 'auto' }`: redraws are gated by
-//     `OnChanged(T)` for every `Has(T)` leaf in `query`. A view over
-//     `[Position, Velocity]` auto-redraws when either component is marked
-//     changed.
+//     `OnChanged(T)` for every `Has(T)` and `Where(T, …)` leaf in `query`
+//     not under a `Not`. A view over `[Position, Velocity]` auto-redraws
+//     when either component is marked changed. A view with `update` and no
+//     such leaf is err invalid_changed_on (O-55).
 //   - `{ mode: 'legacy' }`: "redraw every tick". Useful for time-driven
 //     animations where the view depends on `time.elapsed` rather than
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
-//     those component types. Overrides the auto-derive.
+//     those component types. Overrides the auto-derive. An empty list with
+//     `update` is err invalid_changed_on.
 //
 // First paint (O-2): under `auto`/`explicit`, `update` also runs once for
 // each newly created node in the commit that mounts it (fresh commit-time
 // view; exactly one update even if the entity was also marked changed that
-// window). Later commits stay change-gated.
+// window). Later commits stay change-gated. `create` gets the entity as it
+// is at the commit, with components added since it matched (O-55).
 type ChangedOn =
   | { readonly mode: 'auto' }
   | { readonly mode: 'legacy' }

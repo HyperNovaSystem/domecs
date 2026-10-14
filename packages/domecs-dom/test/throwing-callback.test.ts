@@ -203,3 +203,29 @@ describe('mountDOM — review regressions (O-53, O-54)', () => {
     expect(stage.textContent).toBe('hi')
   })
 })
+
+describe('mountDOM — create sees the commit-time entity (O-55 D2)', () => {
+  it('a component added after the entity matched, in the same frame, is in create', () => {
+    const A = defineComponent<{ v: number }>('D2A', { defaults: { v: 0 } })
+    const B = defineComponent<{ s: string }>('D2B', { defaults: { s: '' } })
+    const w = createWorld({ headless: true })
+    const stage = document.createElement('div')
+    const r = mountDOM(w, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage',
+        query: Has(A),
+        create: (e) => {
+          const el = document.createElement('i')
+          el.textContent = (e as unknown as { D2B?: { s: string } }).D2B?.s ?? 'none'
+          return el
+        },
+      })],
+    })
+    if (!isOk(r)) throw new Error('mount failed')
+    const id = w.spawn([entry(A, { v: 1 })])
+    w.addComponent(id, B, { s: 'late' })
+    w.stepOnce()
+    expect(stage.textContent).toBe('late')
+  })
+})

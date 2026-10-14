@@ -544,8 +544,11 @@ by a per-view set of *redraw triggers*:
 (`{ mode: 'auto' } | { mode: 'legacy' } | { mode: 'explicit'; types: [...] }`):
 
 1. If `ViewDef.changedOn` is **omitted** (default) or `{ mode: 'auto' }`,
-   the renderer derives the set from every `Has(T)` leaf in the view's
-   `query` — explicitly negated branches (`Not(...)`) are excluded. A view
+   the renderer derives the set from every `Has(T)` and `Where(T, …)` leaf
+   in the view's `query` — explicitly negated branches (`Not(...)`) are
+   excluded. A view with `update` whose query has no such leaf, or with an
+   empty `explicit` list, is rejected with the `invalid_changed_on`
+   MountError rather than silently redrawing every tick (O-55). A view
    over `[Position, Velocity]` thus auto-redraws when either component is
    marked changed.
 2. If `ViewDef.changedOn` is **`{ mode: 'legacy' }`**, the renderer falls
@@ -567,6 +570,9 @@ full-redraw path already covers new nodes.)
 
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
+`create` receives the entity's commit-time view, including components added
+after it matched in the same window (O-55); `destroy` receives the last view
+the renderer held for it.
 
 **A throwing view callback (O-53, normative).** A `create`, `update` or
 `destroy` that throws affects only its own entity. The commit continues with
@@ -605,7 +611,7 @@ Slots are named roots, registered at `mountDOM(world, { slots: {...} })` time. S
 
 Applications register custom slots as needed.
 
-**Slot-collision policy (normative).** Slot *mounting* (via `mountDOM({ slots: {...} })`) is exclusive: attempting to mount a second root to an already-mounted slot name **throws** at `mountDOM` call time. View *registration*, by contrast, is additive: any number of views from any number of plugins may target the same slot name, and the renderer **appends** elements into that slot in registration order. This is the same rule as §5.1's entity→zero-or-more-views — multiple views per slot are already legal; §5.6 makes it explicit that cross-plugin overlap is not a conflict. Ordering within a slot is registration order; plugins that care about z-order should stack layers via named sub-slots (e.g., `chrome:menu`, `chrome:toasts`) rather than racing against each other on a shared slot.
+**Slot-collision policy (normative).** Slot *mounting* (via `mountDOM({ slots: {...} })`) is exclusive: attempting to mount a second root to an already-mounted slot name returns `err({ kind: 'slot_already_mounted', slot })` from `mountDOM`. A world may take any number of mounts on distinct slots (O-55). View *registration*, by contrast, is additive: any number of views from any number of plugins may target the same slot name, and the renderer **appends** elements into that slot in registration order. This is the same rule as §5.1's entity→zero-or-more-views — multiple views per slot are already legal; §5.6 makes it explicit that cross-plugin overlap is not a conflict. Ordering within a slot is registration order; plugins that care about z-order should stack layers via named sub-slots (e.g., `chrome:menu`, `chrome:toasts`) rather than racing against each other on a shared slot.
 
 ---
 

@@ -24,14 +24,22 @@ export interface MountHandle {
  * - `invalid_view_query`: a view's query contains a temporal node
  *   (`OnAdded`/`OnRemoved`/`OnChanged`/`OnChangedResource`). View membership
  *   is a standing set; use `changedOn` for change-gated redraws (O-52).
+ * - `invalid_changed_on`: a view with `update` has no redraw trigger —
+ *   `{ mode: 'explicit', types: [] }`, or `auto` over a query with no
+ *   positive `Has`/`Where` leaf. Use `{ mode: 'legacy' }` to redraw every
+ *   tick on purpose (O-55).
  */
 export type MountError =
   | { readonly kind: 'slot_already_mounted'; readonly slot: string }
   | { readonly kind: 'unregistered_slot'; readonly slot: string }
   | { readonly kind: 'plugin_install_failed'; readonly reason: string }
   | { readonly kind: 'invalid_view_query'; readonly slot: string; readonly reason: string }
+  | { readonly kind: 'invalid_changed_on'; readonly slot: string; readonly reason: string }
 
 const mountedSlots = new WeakMap<World, Set<string>>()
+// O-55 (D7): each mountDOM installs its own renderer plugin, so a world can
+// take several mounts on distinct slots (SPEC §5.6).
+const mountCount = new WeakMap<World, number>()
 
 interface MountedRecord {
   el: HTMLElement
@@ -122,8 +130,19 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
         reason: `view queries cannot contain temporal nodes (found ${temporal}); use changedOn for change-gated redraws`,
       })
     }
-    const q = world.query(def.query)
     const changedTypes = resolveChangedTypes(def)
+    if (changedTypes === null) {
+      rollback()
+      return err({
+        kind: 'invalid_changed_on',
+        slot: def.slot,
+        reason:
+          def.changedOn?.mode === 'explicit'
+            ? 'changedOn { mode: "explicit" } needs at least one type'
+            : 'the view has update but its query has no Has/Where leaf to redraw on; pass changedOn explicitly, or { mode: "legacy" } to redraw every tick',
+      })
+    }
+    const q = world.query(def.query)
     const state: ViewState = {
       world,
       def,
@@ -154,8 +173,10 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     states.push(state)
   }
 
+  const n = (mountCount.get(world) ?? 0) + 1
+  mountCount.set(world, n)
   const rendererPlugin = {
-    name: '@domecs/dom/renderer',
+    name: n === 1 ? '@domecs/dom/renderer' : `@domecs/dom/renderer#${n}`,
     install() {
       return ok({
         onRender() {
@@ -335,9 +356,11 @@ function commit(state: ViewState, errors: unknown[]): void {
       }
       continue
     }
-    // A callback earlier in this commit may have despawned it.
-    if (!state.world.isAlive(id)) continue
-    if (!mount(state, id, view, errors)) continue
+    // A callback earlier in this commit may have despawned it. O-55 (D2):
+    // create sees the entity as it is now, not as it was when it matched.
+    const current = state.world.getView(id)
+    if (!current) continue
+    if (!mount(state, id, current, errors)) continue
     // O-2 first paint: under change-gated modes (auto/explicit), a newly
     // mounted entity has no OnChanged mark, so the gated update phase would
     // never run for it. Track created ids and merge them into the update
@@ -428,21 +451,35 @@ function collectChanged(changedQueries: QueryResult[] | null): Map<Entity, Entit
 /**
  * Resolve the set of components this view should treat as redraw triggers.
  *
- * - `changedOn` omitted / `{ mode: 'auto' }`: derive from the `Has(T)` leaves
- *   of the view's query. P-3.
+ * - `changedOn` omitted / `{ mode: 'auto' }`: derive from the positive
+ *   `Has(T)` and `Where(T, …)` leaves of the view's query. P-3, O-55.
  * - `{ mode: 'legacy' }`: return `[]` — callers map an empty array to
  *   `changedQueries: null`, which causes `commit` to update every mounted
  *   entity every tick (legacy "redraw everything" behaviour).
  * - `{ mode: 'explicit', types }`: return `types` directly.
+ *
+ * Returns null when a view with `update` would have no trigger (O-55 D5):
+ * an empty explicit list, or an auto query with no positive leaf — either
+ * used to fall back to redrawing every tick without saying so.
  */
-function resolveChangedTypes(def: ViewDef): ReadonlyArray<ComponentType<unknown>> {
-  if (def.changedOn !== undefined) {
-    if (def.changedOn.mode === 'explicit') return def.changedOn.types
-    if (def.changedOn.mode === 'legacy') return []
-    // 'auto' — fall through to auto-derive below
+function resolveChangedTypes(def: ViewDef): ReadonlyArray<ComponentType<unknown>> | null {
+  if (def.changedOn?.mode === 'explicit') {
+    return def.changedOn.types.length > 0 || !def.update ? def.changedOn.types : null
   }
-  // changedOn omitted or { mode: 'auto' }
+  if (def.changedOn?.mode === 'legacy') return []
   if (!def.update) return []
-  const collected = collectHasComponents(normalizeQuery(def.query))
-  return Array.from(collected.values())
+  const leaves = positiveLeafTypes(normalizeQuery(def.query))
+  return leaves.length > 0 ? leaves : null
+}
+
+/** The component types of the `Has`/`Where` leaves not under a `Not`. */
+function positiveLeafTypes(node: QueryNode): ComponentType<unknown>[] {
+  const out = collectHasComponents(node)
+  const visit = (n: QueryNode, negated: boolean): void => {
+    if (n.kind === 'where' && !negated) out.set(n.type.name, n.type)
+    else if (n.kind === 'not') visit(n.child, !negated)
+    else if (n.kind === 'and' || n.kind === 'or') for (const c of n.children) visit(c, negated)
+  }
+  visit(node, false)
+  return Array.from(out.values())
 }

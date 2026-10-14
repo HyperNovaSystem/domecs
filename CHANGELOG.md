@@ -83,6 +83,12 @@ All notable changes to DOMECS are documented here. The format is based on
   and over-long number literals and unknown escapes are parse errors. Rules
   run about 4× faster (expressions compile to closures; staging is skipped
   when unneeded). (O-69)
+- `@domecs/dom`: a world can take several `mountDOM`s on distinct slots;
+  `create` sees components added after the entity matched; auto redraw
+  triggers include `Where` leaves. **Behavior change**: a view with `update`
+  but no redraw trigger (an empty `explicit` list, or no positive
+  `Has`/`Where` leaf) is the new `invalid_changed_on` MountError instead of
+  silently redrawing every tick. (O-55)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
