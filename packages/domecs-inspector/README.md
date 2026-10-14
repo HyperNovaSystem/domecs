@@ -29,7 +29,7 @@ world.step(1 / 60)
 
 // Read accumulated faults + timeline for a dev panel.
 for (const entry of inspector.view.entries) {
-  console.log(entry.source, entry.kind, entry.detail)
+  console.log(entry.systemId, entry.kind, entry.detail)
 }
 
 // Filters compose and return immutable snapshot views.

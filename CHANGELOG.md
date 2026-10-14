@@ -43,6 +43,10 @@ All notable changes to DOMECS are documented here. The format is based on
   takes `options` (`priority`, `name`). **Behavior change**: the default
   plugin/system name is now `domecs-scene:compose-transforms:<Local>><World_>`,
   so one instance per component pair can be installed. (O-65)
+- `@domecs/inspector`: a restore no longer duplicates recorded faults;
+  filtered views keep the timeline they were filtered with instead of the
+  live one; pushing into a full buffer is O(1) amortized; the README example
+  reads `entry.systemId`. (O-60)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
