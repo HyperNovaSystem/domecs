@@ -69,6 +69,12 @@ All notable changes to DOMECS are documented here. The format is based on
   and duplicate field names, and defaults that do not fit their kind, instead
   of throwing or dropping them silently. `@domecs/core`: `restore()` throws
   on a snapshot newer than `SNAPSHOT_VERSION`. (O-63)
+- `@domecs/input`: the first pointer move no longer reports a delta from
+  (0, 0); pointer-lock moves report `movementX`/`movementY`; the default
+  text-input selector (`TEXT_INPUT_SELECTOR`, exported) ignores checkboxes,
+  radios, ranges and buttons and covers `select` and `contenteditable=""`.
+  Docs: coordinates are client coordinates, and a key press fires once per
+  `fixed` sub-step. (O-59)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

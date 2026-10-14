@@ -121,8 +121,9 @@ describe('@domecs/input collector', () => {
     world.step(1 / 60)
     expect(world.input.pointer.x).toBe(15)
     expect(world.input.pointer.y).toBe(25)
-    expect(world.input.pointer.delta.x).toBe(15)
-    expect(world.input.pointer.delta.y).toBe(25)
+    // O-59: the first move sets the position; only the second is motion.
+    expect(world.input.pointer.delta.x).toBe(5)
+    expect(world.input.pointer.delta.y).toBe(5)
 
     world.step(1 / 60)
     expect(world.input.pointer.delta.x).toBe(0)

@@ -617,7 +617,9 @@ Applications register custom slots as needed.
 
 `InputSnapshot` is immutable within a tick. Systems read; they do not mutate.
 
-v0.1 pointer coordinates are raw DOM event client coordinates. Target-relative normalization, hit-tested entity enter/leave tracking, and higher-level action mapping are deferred to the next input milestone or app-level plugins.
+v0.1 pointer coordinates are raw DOM event client coordinates, whatever the `pointerTarget`. Target-relative normalization, hit-tested entity enter/leave tracking, and higher-level action mapping are deferred to the next input milestone or app-level plugins. The first move after install sets the position without a delta; under pointer lock the delta is the events' `movementX`/`movementY` (O-59).
+
+`keyDelta` edges are published once per tick (§4.1 step 2). Every `fixed` sub-step of that tick sees the same edges, so a press fires once per sub-step, and a `fixed` system that does not run that tick misses it; edge-triggered input belongs on `tick` systems (O-35, O-59).
 
 Keybinding layer is *not* part of core — it is a plugin that translates `InputSnapshot` to high-level `Action` events.
 

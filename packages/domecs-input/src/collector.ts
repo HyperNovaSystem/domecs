@@ -4,13 +4,22 @@ import { ok } from '@domecs/core'
 export interface InputPluginOptions {
   /** Element receiving keyboard events. Default: document. */
   readonly keyTarget?: Document | HTMLElement
-  /** Element receiving pointer events (clicks/moves are relative to this). Default: document. */
+  /**
+   * Element receiving pointer events. Default: document. Coordinates are the
+   * events' viewport `clientX`/`clientY`, not relative to this element
+   * (SPEC §6); subtract its `getBoundingClientRect()` for local coordinates.
+   */
   readonly pointerTarget?: Document | HTMLElement
   /** Element receiving wheel events. Default: pointerTarget. */
   readonly wheelTarget?: Document | HTMLElement
   /** Should held keys be cleared when the window loses focus? Default: true. */
   readonly clearOnBlur?: boolean
-  /** CSS selector matching tags that should be treated as text inputs (keys pass-through). Default: 'input,textarea,[contenteditable="true"]'. */
+  /**
+   * CSS selector for focused elements that take typing, whose keys pass
+   * through. Default {@link TEXT_INPUT_SELECTOR}: text-like `input`s (not
+   * checkboxes, radios, ranges, buttons, colour or file pickers),
+   * `textarea`, `select` and any `contenteditable` other than `"false"`.
+   */
   readonly textInputSelector?: string
   /** Whether to read gamepads via navigator.getGamepads(). Default: true in browsers that expose it. */
   readonly pollGamepads?: boolean
@@ -34,9 +43,15 @@ interface MutablePointer {
  * are derived from `document`/`navigator` at install time and so are not
  * representable as static constants; they are omitted here.
  */
+/** O-59 (I6): the default {@link InputPluginOptions.textInputSelector}. */
+export const TEXT_INPUT_SELECTOR =
+  'input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button])' +
+  ':not([type=submit]):not([type=reset]):not([type=color]):not([type=file]):not([type=image]),' +
+  'textarea,select,[contenteditable]:not([contenteditable="false"])'
+
 export const DEFAULT_INPUT_OPTIONS = Object.freeze({
   clearOnBlur: true,
-  textInputSelector: 'input,textarea,[contenteditable="true"]',
+  textInputSelector: TEXT_INPUT_SELECTOR,
   preventDefaultKeys: false,
 } as const satisfies Partial<InputPluginOptions>)
 
@@ -149,19 +164,31 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         )
       }
 
+      // O-59 (I6): no delta until a position is known, so the first move
+      // is not measured from (0, 0).
+      let hasPosition = false
       function onPointerMove(ev: Event): void {
         const e = ev as PointerEvent
         const prevX = pointer.x
         const prevY = pointer.y
         pointer.x = e.clientX
         pointer.y = e.clientY
-        pointer.deltaX += pointer.x - prevX
-        pointer.deltaY += pointer.y - prevY
+        if (doc?.pointerLockElement) {
+          // Under pointer lock the position is frozen; the motion is in
+          // movementX/Y.
+          pointer.deltaX += e.movementX ?? 0
+          pointer.deltaY += e.movementY ?? 0
+        } else if (hasPosition) {
+          pointer.deltaX += pointer.x - prevX
+          pointer.deltaY += pointer.y - prevY
+        }
+        hasPosition = true
         pointer.buttons = e.buttons
         wake()
       }
       function onPointerDown(ev: Event): void {
         const e = ev as PointerEvent
+        hasPosition = true
         pointer.x = e.clientX
         pointer.y = e.clientY
         pointer.buttons = e.buttons

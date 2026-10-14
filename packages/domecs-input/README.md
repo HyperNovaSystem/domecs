@@ -56,8 +56,11 @@ The plugin writes an `InputSnapshot` at tick start:
 
 > **`keyDelta` is render-tick-scoped (O-35).** Edges live for exactly one
 > collector publish (one render tick under `startLoop`). A `fixed` system at
-> 4 Hz will miss most presses. Put edge-triggered input on a `tick` system
-> (or read held `keys` when you only need “is down”).
+> 4 Hz will miss most presses, and when one frame runs several `fixed`
+> sub-steps, each of them sees the same edges — one press fires once per
+> sub-step (O-59). Put edge-triggered input on a `tick` system (or read held
+> `keys` when you only need “is down”). A `step(0)` heartbeat publishes the
+> pending edges without consuming them (O-57).
 - `mods` — `ctrl`, `alt`, `shift`, `meta` modifier state.
 - `pointer` — pointer position, buttons, movement delta, wheel delta, and
   reserved `entered` entity ids. The collector currently leaves `entered`
@@ -65,7 +68,13 @@ The plugin writes an `InputSnapshot` at tick start:
 - `gamepads` — current gamepad axes/buttons when available and enabled.
 - `focus` — active element tag and whether it consumes keyboard input.
 
-Pointer coordinates are currently raw browser client coordinates.
+Pointer coordinates are raw browser client coordinates (`clientX`/`clientY`),
+even with an element `pointerTarget`; subtract its `getBoundingClientRect()`
+for local coordinates. The first move after install sets the position without
+a delta; under pointer lock, deltas come from `movementX`/`movementY`. The
+default `textInputSelector` (`TEXT_INPUT_SELECTOR`) counts text-like inputs,
+`textarea`, `select` and `contenteditable` elements as consuming keys, and
+not checkboxes, radios, ranges or buttons.
 
 ## Options
 
