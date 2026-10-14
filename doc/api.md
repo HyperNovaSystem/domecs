@@ -240,12 +240,12 @@ interface World {
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
-  // resources (SPEC §2.11). Same buffer-and-swap discipline as markChanged.
-  // resource() returns undefined only when there is no value and no default;
-  // a default is materialized (validated, stored) on first read. setResource
-  // validates + stores + marks changed; markResourceChanged marks without
-  // replacing (for in-place mutation). Both wake an idle driver.
-  resource<T>(type: ResourceType<T>): T | undefined
+  // resources (SPEC §2.11). Marks land in readers' change windows like
+  // markChanged. getResource() returns undefined only when there is no value
+  // and no default; a default is materialized (validated, stored) on first
+  // read. setResource validates + stores + marks changed; markResourceChanged
+  // marks without replacing (for in-place mutation). Both wake an idle driver.
+  getResource<T>(type: ResourceType<T>): T | undefined
   setResource<T>(type: ResourceType<T>, value: T): void
   markResourceChanged<T>(type: ResourceType<T>): void
 
@@ -278,6 +278,13 @@ interface World {
   // events
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
+  // This tick's delivered events (the view event systems read).
+  readonly events: EventView
+
+  // input — the snapshot @domecs/input publishes at onTickStart; setInput is
+  // how an input plugin (or a test) publishes one.
+  readonly input: InputSnapshot
+  setInput(snap: InputSnapshot): void
 
   // time
   readonly time:  Readonly<TimeState>
@@ -297,8 +304,9 @@ interface World {
   // random
   readonly rand: Rng
 
-  // plugins
-  use(plugin: Plugin, options?: unknown): () => void
+  // plugins — use() returns the disposer, or the install's DomecsError; it
+  // throws for programmer errors such as a duplicate plugin name.
+  use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
 
   // reflection
@@ -306,11 +314,21 @@ interface World {
   // Iterate every live entity carrying `type`, paired with its value. Same
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
   // less ceremony at the call-site (F-10).
-  entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   // Reflect a component's name/transient/defaults/field-schema (#14). Works on
   // any ComponentType without prior registration; enumerate via componentTypes().
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
+  resourceTypes(): ResourceType<unknown>[]
+  describeResource<T>(type: ResourceType<T>): ResourceDescriptor
+  // An event's name and declared schema fields (fieldsSource 'schema' | 'none').
+  describeEvent(type: EventType<unknown>): EventDescriptor
+  // The world manifest (agents: bridge.observe()). Schema: components,
+  // resources, events (EventDescriptors: every type emitted, subscribed to, or
+  // named as an event system's trigger — O-51), systems, plugins,
+  // capabilities, snapshotVersion. Live: entityCount, componentCounts,
+  // archetypes. Cheap enough to poll.
+  describe(): WorldManifest
 
   // snapshots
   // options.pruneEmptyEntities (default false): drop entities whose
@@ -342,6 +360,8 @@ interface World {
     componentRemoved: Signal<{ entity: Entity; type: ComponentType<unknown> }>
     tickStart:       Signal<TimeState>
     tickEnd:         Signal<TimeState>
+    // A system returned a fault with no entity (doc/error-handling.md).
+    faultRaised:     Signal<SystemicFault>
   }
 }
 
@@ -583,11 +603,11 @@ interface EventView {
 **Inter-entity references.** Components carrying foreign-entity ids
 (`tableId: Entity | null`, `customerId: Entity | null`) become dangling on
 despawn. The canonical cleanup pattern uses `signals.entityDespawned`
-(SPEC §2.10 despawn ordering rule) plus `world.entitiesWith`:
+(SPEC §2.10 despawn ordering rule) plus `world.iterEntitiesWith`:
 
 ```ts
 world.signals.entityDespawned.subscribe((dead) => {
-  for (const { id, value } of world.entitiesWith(Table)) {
+  for (const { id, value } of world.iterEntitiesWith(Table)) {
     if (value.customerId === dead) value.customerId = null
     if (value.waiterId === dead)   value.waiterId   = null
   }

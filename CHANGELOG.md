@@ -56,6 +56,10 @@ All notable changes to DOMECS are documented here. The format is based on
   the marks in their window when that is cheaper, and a view's update phase
   visits only changed, created and re-added entities (50k entities, one
   change: 10.6 → 0.03 ms per commit). (O-54)
+- Docs: `doc/api.md`'s World listing matches the shipped interface (removed
+  `resource<T>()`/`entitiesWith`, added the missing members); README and
+  AGENTS name the five published packages and the two unpublished ones
+  (scene, rules); SPEC §8/§10 describe the inspector that ships. (O-71)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

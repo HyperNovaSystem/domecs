@@ -30,6 +30,9 @@ npm install @domecs/core @domecs/dom @domecs/input
 npm install @domecs/persist @domecs/inspector
 ```
 
+`@domecs/scene` and `@domecs/rules` exist in this repo's `packages/` but are
+not on npm yet; do not add them as dependencies of a published app.
+
 Published packages resolve to built ESM under `dist/` (no bundler required for
 Node or import-map hosts). Prefer published packages over cloning engine source
 unless you are changing the engine.

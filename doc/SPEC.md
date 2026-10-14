@@ -413,8 +413,7 @@ world state from outside a tick — input plugins, WebSocket feeds, custom
 drivers — MUST rouse the idle loop by calling `world.requestTick()`. The
 call is a no-op when the realtime driver is not running, when `idle: false`,
 or when already inside a tick. `requestTick` is the *only* supported wake
-path; reaching into engine-private members (such as the deprecated
-`world.__wake` alias, kept for one release cycle only) is not contractual.
+path; reaching into engine-private members is not contractual.
 
 ### Headless mode
 
@@ -742,7 +741,7 @@ This relies on:
 - Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
-The inspector can run an authoritative system in a sandbox and detect violations (PRNG, wall-clock, disallowed trig) by monkey-patching.
+Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `JSON.stringify(snapshot())`.
 
 ---
 
@@ -839,15 +838,17 @@ DOMECS ships no HMR client itself. `replaceFn` is the seam a bundler's HMR glue 
 
 ## 10. Inspector (`@domecs/inspector`)
 
-A plugin.
-When installed, it:
-- Mounts a side panel (default slot `chrome`, user-overridable).
-- Enumerates all `componentTypes()` and renders a per-entity editor.
-- Subscribes to the snapshot ring buffer; exposes a scrubber.
-- Detects determinism violations (wall-clock reads, `Math.random` calls) via monkey-patching in dev builds.
-- Displays archetype set membership per entity, pinpointing composition churn.
+A headless plugin with no DOM dependency: `createInspector(options?)` returns
+`{ plugin, view, clear }`. When installed, it:
+- Records every entity fault (`Faulted` entries) and systemic fault
+  (`signals.faultRaised`) into a bounded ring as `InspectorEntry` records.
+- Optionally (`recordStateChanges`) interleaves spawns, despawns and component
+  adds/removes into a timeline.
+- Exposes a filter-composable `InspectorView` (`bySource`, `byKind`,
+  `byTickRange`, `recoverableOnly`, …) and a serializable `export()`.
 
-The inspector is **not** part of core; production builds omit it.
+UI panels (Studio, custom devtools) are built on this surface; the package
+ships none. It is **not** part of core; production builds can omit it.
 
 ---
 
