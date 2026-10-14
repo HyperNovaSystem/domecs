@@ -1123,9 +1123,10 @@ export function createWorld(options: WorldOptions = {}): World {
         if (sigTickEnd.size > 0) sigTickEnd.emit(time)
       } finally {
         inTick = false
+        // A heartbeat render has read what it painted (O-42), even if a
+        // hook threw (O-53).
+        advanceQueryWindows()
       }
-      // A heartbeat render has read what it painted (O-42).
-      advanceQueryWindows()
       return
     }
     const d = dt ?? 0
@@ -1235,12 +1236,15 @@ export function createWorld(options: WorldOptions = {}): World {
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     } finally {
       inTick = false
+      // SPEC §4 step 8 (O-42): close the tick for change windows. Also when
+      // the tick threw (O-53): a query read before the throw has seen what
+      // it read, so a renderer whose callback threw is not handed the same
+      // marks — and the same throw — every frame after.
+      advanceQueryWindows()
+      lastTickEndSeq = changes.seq
+      pendingCursors.clear()
+      changes.pruneRemoved(removalHorizon())
     }
-    // SPEC §4 step 8 (O-42): close the tick for change windows.
-    advanceQueryWindows()
-    lastTickEndSeq = changes.seq
-    pendingCursors.clear()
-    changes.pruneRemoved(removalHorizon())
   }
 
   /**

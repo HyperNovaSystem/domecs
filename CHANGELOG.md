@@ -6,6 +6,15 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — medium items)
+
+- `@domecs/dom`: a throwing view `create`/`update`/`destroy` no longer jams
+  the renderer. The rest of the commit and every other view still run, the
+  first error is rethrown once the commit is done, and later frames are
+  unaffected; a failed `create` is retried when the entity is marked changed.
+  `teardown()` removes every node before rethrowing. `@domecs/core` closes a
+  tick's change windows even when the tick throws. (O-53)
+
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
 - `@domecs/core`: **behavior change** — change detection no longer resets at

@@ -532,3 +532,26 @@ describe('O-42 review follow-ups', () => {
     expect(marks.some((m) => m[0] === 'changed')).toBe(false)
   })
 })
+
+describe('change windows when a frame throws (O-53)', () => {
+  it('a query read before a render throw does not report the same marks again', () => {
+    const w = createWorld({ headless: true })
+    const q = w.query(OnChanged(Hp))
+    w.use(
+      definePlugin({
+        name: 'cw:throwing-renderer',
+        install: () => ({
+          onRender: () => {
+            if (q.entities.length > 0) throw new Error('render boom')
+          },
+        }),
+      }),
+    )
+    const id = w.spawn([entry(Hp, { hp: 1 })])
+    w.stepOnce()
+    w.markChanged(id, Hp)
+    expect(() => w.stepOnce()).toThrow('render boom')
+    // The renderer read the mark before throwing: the next frame is clean.
+    expect(() => w.stepOnce()).not.toThrow()
+  })
+})

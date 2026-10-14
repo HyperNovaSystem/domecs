@@ -47,6 +47,12 @@ interface ViewState {
   pendingCreate: Map<Entity, EntityView>
   pendingDestroy: Map<Entity, EntityView>
   /**
+   * O-53: entities whose `create` threw. They stay unmounted until they are
+   * marked changed (the view's `changedOn` types) or re-enter the query, so
+   * a failing `create` is not retried — and rethrown — every frame.
+   */
+  failed: Set<Entity>
+  /**
    * O-52: the query has a `Where` filter. Structural onAdd/onRemove ignore
    * `Where`, so membership is reconciled against the filtered
    * `query.entities` at each commit.
@@ -121,6 +127,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       mounted: new Map(),
       pendingCreate: new Map(),
       pendingDestroy: new Map(),
+      failed: new Set(),
       filtered: findKind(node, WHERE_KIND) !== null,
       unsubAdd: () => {},
       unsubRemove: () => {},
@@ -131,6 +138,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     })
     state.unsubRemove = q.onRemove((e) => {
       state.pendingCreate.delete(e.id)
+      state.failed.delete(e.id)
       state.pendingDestroy.set(e.id, e)
     })
     for (const e of q.entities) state.pendingCreate.set(e.id, e)
@@ -142,7 +150,11 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     install() {
       return ok({
         onRender() {
-          for (const state of states) commit(state)
+          // O-53: every view commits even if a callback throws; the first
+          // error is rethrown once the frame's DOM is consistent.
+          const errors: unknown[] = []
+          for (const state of states) commit(state, errors)
+          if (errors.length > 0) throw errors[0]
         },
       })
     },
@@ -171,21 +183,21 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
   return ok({
     teardown() {
       unuse()
+      const errors: unknown[] = []
       for (const state of states) {
         state.unsubAdd()
         state.unsubRemove()
         state.query.dispose()
         for (const q of state.changedQueries ?? []) q.dispose()
-        for (const [, rec] of state.mounted) {
-          state.def.destroy?.(rec.el, rec.view)
-          rec.el.remove()
-        }
+        for (const [, rec] of state.mounted) unmount(state, rec, errors)
         state.mounted.clear()
         state.pendingCreate.clear()
         state.pendingDestroy.clear()
+        state.failed.clear()
       }
       const set = mountedSlots.get(world)
       if (set) for (const k of Object.keys(opts.slots)) set.delete(k)
+      if (errors.length > 0) throw errors[0]
     },
   })
 }
@@ -222,25 +234,71 @@ function reconcileFiltered(state: ViewState): void {
   for (const id of state.pendingCreate.keys()) {
     if (!members.has(id)) state.pendingCreate.delete(id)
   }
+  for (const id of state.failed) {
+    if (!members.has(id)) state.failed.delete(id)
+  }
   for (const [id, view] of members) {
-    if (!state.mounted.has(id) && !state.pendingCreate.has(id)) state.pendingCreate.set(id, view)
+    if (!state.mounted.has(id) && !state.pendingCreate.has(id) && !state.failed.has(id)) {
+      state.pendingCreate.set(id, view)
+    }
   }
   for (const [id, rec] of state.mounted) {
     if (!members.has(id) && !state.pendingDestroy.has(id)) state.pendingDestroy.set(id, rec.view)
   }
 }
 
-function commit(state: ViewState): void {
+/**
+ * Run one view callback. O-53: a throw is collected rather than propagated,
+ * so one bad callback cannot leave the pending maps half-processed and jam
+ * every later commit. Returns whether the callback completed.
+ */
+function guard(errors: unknown[], fn: () => void): boolean {
+  try {
+    fn()
+    return true
+  } catch (e) {
+    errors.push(e)
+    return false
+  }
+}
+
+function unmount(state: ViewState, rec: MountedRecord, errors: unknown[]): void {
+  if (state.def.destroy) guard(errors, () => state.def.destroy!(rec.el, rec.view))
+  rec.el.remove()
+}
+
+function mount(state: ViewState, id: Entity, view: EntityView, errors: unknown[]): boolean {
+  let el: HTMLElement | undefined
+  if (!guard(errors, () => { el = state.def.create(view) })) {
+    state.failed.add(id)
+    return false
+  }
+  state.failed.delete(id)
+  state.slotEl.appendChild(el!)
+  state.mounted.set(id, { el: el!, view })
+  return true
+}
+
+/**
+ * Commit one view. O-53: the pending maps are taken over before any callback
+ * runs, and each callback is isolated by {@link guard}, so a throwing
+ * `create`/`update`/`destroy` affects only its own entity: a failed destroy
+ * still removes the node, a failed update leaves it mounted, and a failed
+ * create leaves the entity unmounted until it is next marked changed.
+ */
+function commit(state: ViewState, errors: unknown[]): void {
   if (state.filtered) reconcileFiltered(state)
-  for (const id of state.pendingDestroy.keys()) {
+  const pendingDestroy = state.pendingDestroy
+  const pendingCreate = state.pendingCreate
+  state.pendingDestroy = new Map()
+  state.pendingCreate = new Map()
+  for (const id of pendingDestroy.keys()) {
     const rec = state.mounted.get(id)
     if (rec) {
-      state.def.destroy?.(rec.el, rec.view)
-      rec.el.remove()
       state.mounted.delete(id)
+      unmount(state, rec, errors)
     }
   }
-  state.pendingDestroy.clear()
 
   // O-16: an entity removed and re-added within one commit window (e.g. a
   // same-tick remove-all/re-add projection) arrives here with its node still
@@ -251,24 +309,20 @@ function commit(state: ViewState): void {
   // outright when create() is the only painter.
   let readded: Set<Entity> | null = null
   let created: Set<Entity> | null = null
-  for (const [id, view] of state.pendingCreate) {
+  for (const [id, view] of pendingCreate) {
     const existing = state.mounted.get(id)
     if (existing) {
       if (state.def.update) {
         existing.view = view
         ;(readded ??= new Set()).add(id)
       } else {
-        state.def.destroy?.(existing.el, existing.view)
-        existing.el.remove()
-        const el = state.def.create(view)
-        state.slotEl.appendChild(el)
-        state.mounted.set(id, { el, view })
+        state.mounted.delete(id)
+        unmount(state, existing, errors)
+        mount(state, id, view, errors)
       }
       continue
     }
-    const el = state.def.create(view)
-    state.slotEl.appendChild(el)
-    state.mounted.set(id, { el, view })
+    if (!mount(state, id, view, errors)) continue
     // O-2 first paint: under change-gated modes (auto/explicit), a newly
     // mounted entity has no OnChanged mark, so the gated update phase would
     // never run for it. Track created ids and merge them into the update
@@ -282,16 +336,29 @@ function commit(state: ViewState): void {
       ;(created ??= new Set()).add(id)
     }
   }
-  state.pendingCreate.clear()
 
-  if (state.def.update && state.mounted.size > 0) {
-    const changed = collectChanged(state.changedQueries)
+  const update = state.def.update
+  const changed = (update && state.mounted.size > 0) || state.failed.size > 0
+    ? collectChanged(state.changedQueries)
+    : null
+  // O-53: retry a failed create once the entity is marked changed — the
+  // change may be what fixes it.
+  if (changed && state.failed.size > 0) {
+    for (const view of state.query.entities) {
+      if (!state.failed.has(view.id) || !changed.has(view.id)) continue
+      if (mount(state, view.id, view, errors) && state.def.update) {
+        ;(created ??= new Set()).add(view.id)
+      }
+    }
+  }
+
+  if (update && state.mounted.size > 0) {
     if (!changed) {
       for (const view of state.query.entities) {
         const rec = state.mounted.get(view.id)
         if (!rec) continue
         rec.view = view
-        state.def.update(rec.el, view)
+        guard(errors, () => update(rec.el, view))
       }
     } else if (changed.size > 0 || readded !== null || created !== null) {
       for (const view of state.query.entities) {
@@ -299,7 +366,7 @@ function commit(state: ViewState): void {
         const rec = state.mounted.get(view.id)
         if (!rec) continue
         rec.view = view
-        state.def.update(rec.el, view)
+        guard(errors, () => update(rec.el, view))
       }
     }
   }

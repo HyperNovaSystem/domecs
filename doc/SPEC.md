@@ -485,7 +485,7 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
      (ctx) => { for (const e of ctx.entities) rescale(e) })
    ```
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
-8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9).
+8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9). The windows close even when a step above throws (O-53): a query read before the throw has seen what it read.
 
 Events emitted in steps 5–6 are buffered for next tick.
 
@@ -568,6 +568,20 @@ full-redraw path already covers new nodes.)
 
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
+
+**A throwing view callback (O-53, normative).** A `create`, `update` or
+`destroy` that throws affects only its own entity. The commit continues with
+the remaining entities and views, and the first error is rethrown from the
+renderer's `onRender` once the commit is done, so it propagates out of
+`step`/`stepOnce` (and `tickEnd` does not fire for that frame). Later frames
+are not affected: a failed `destroy` still removes the node; a failed
+`update` leaves the node mounted and is not retried until the entity is
+marked changed again; a failed `create` leaves the entity unmounted until it
+is marked changed on a redraw trigger (then `create` is retried) or leaves
+and re-enters the view. `MountHandle.teardown()` likewise removes every node
+and then rethrows the first `destroy` error. The tick's change windows close
+even when the frame throws (§4.1 step 8), so the renderer is not handed the
+same marks again.
 
 ### 5.4 Style contract
 
