@@ -60,6 +60,10 @@ All notable changes to DOMECS are documented here. The format is based on
   `resource<T>()`/`entitiesWith`, added the missing members); README and
   AGENTS name the five published packages and the two unpublished ones
   (scene, rules); SPEC §8/§10 describe the inspector that ships. (O-71)
+- Bench: the compare phase runs interleaved trials (`--trials`, default 5)
+  and reports medians and ranges; a win must hold in every trial. The
+  windowed "0.65× (decisive)" claim is withdrawn — a 5-trial run shows no
+  runtime win. (O-72)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

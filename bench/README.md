@@ -39,7 +39,7 @@ Losing is output: claims stay conservative.
 ```bash
 pnpm --filter @domecs/core build
 pnpm bench
-node --expose-gc bench/run.mjs --workload compare --entities 5000 --ticks 100
+node --expose-gc bench/run.mjs --workload compare --entities 5000 --ticks 100 --trials 9
 pnpm bench:write
 ```
 
@@ -60,6 +60,9 @@ pnpm bench:write
 - **Verdict scope:** ratios are computed only from the compare-phase rows
   (identical entity counts by construction) — a standalone `soak` at a
   different `--entities` can never leak into the verdict.
+- **Trials:** the compare phase runs `--trials` (default 5) interleaved
+  trials and reports median p50/p95 and the p95 range per engine; a win must
+  hold in every trial (O-72). `pnpm bench` runs Node with `--expose-gc`.
 - **Snapshot workload:** repeated warmed snapshots (real percentiles), and
   the `deterministic` flag steps the source and the restored twin forward
   together and compares final snapshots and clocks (`elapsed`,
@@ -70,21 +73,31 @@ pnpm bench:write
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).
 
-## Sample compare (Node v22, 2k entities, 40 ticks, warmup 20, gc on, 2026-07-17)
+## Sample compare (Node v24, arm64, 5 trials, 100 ticks, warmup 30, gc on, 2026-10-14)
 
-| Workload | Engine | p50 | p95 | vs DOMECS p95 |
-|----------|--------|-----|-----|---------------|
-| soak | **domecs** | 0.31ms | 0.40ms | 1.0× |
-| soak | koota | 0.32ms | 0.36ms | DOMECS ~1.13× slower |
-| soak | signals | 0.19ms | 0.28ms | DOMECS ~1.46× slower |
-| windowed | **domecs** | 0.033ms | 0.072ms | 1.0× |
-| windowed | koota | 0.063ms | 0.110ms | DOMECS **0.65×** (decisive) |
-| windowed | signals | 0.022ms | 0.048ms | DOMECS ~1.5× slower |
+`pnpm bench -- --workload compare` (soak n=5000, windowed n=2000). Medians of
+5 interleaved trials; the range is the per-trial min–max.
 
-**Decisive runtime wins (≥30% p95):** host- and N-dependent. With warmup and
-GC isolation in place, windowed-vs-Koota measured **0.65× p95** on this host
-(decisive); soak does not win. Treat as **promising on windowed projection,
-not a frozen claim** until multi-machine stability.
+| Workload | Engine | p50 | p95 (median) | p95 range | DOMECS p95 ÷ engine p95 |
+|----------|--------|-----|--------------|-----------|-------------------------|
+| soak | **domecs** | 1.04ms | 1.65ms | 1.43–1.84ms | 1.0× |
+| soak | koota | 1.22ms | 1.36ms | 0.98–1.60ms | 1.22× (trials 1.07–1.45×) |
+| soak | signals | 0.79ms | 0.97ms | 0.76–1.31ms | 1.70× (trials 1.09–2.42×) |
+| windowed | **domecs** | 0.065ms | 0.112ms | 0.097–0.124ms | 1.0× |
+| windowed | koota | 0.038ms | 0.068ms | 0.032–0.074ms | 1.66× (trials 1.35–3.73×) |
+| windowed | signals | 0.021ms | 0.038ms | 0.031–0.050ms | 2.94× (trials 2.48–3.70×) |
+
+**No runtime win.** DOMECS is slower than both baselines on both workloads on
+this host. An earlier single-run sample (2026-07-17) showed windowed at 0.65×
+Koota; across repeated runs that did not reproduce (the 2026-10-13 review
+measured 0.85–2.69× over 15 runs, O-72), so it is withdrawn. A runtime win now
+counts only if it clears the bar (≤0.70×) in **every** trial
+(`compare-summary.decisiveRuntimeWins`; `verdictRange` has the per-trial
+ratios).
+
+The DOMECS rows time a full `world.step()` (scheduler, event flush, change
+windows, `markChanged`); Koota and signals time a bare loop — see
+COMPARISON.md. Ratios are per host and per N.
 
 **Plumbing:** micro-shapes do not show “half the code” vs Koota; product value is the operable stack (action / snapshot / agent), not soak iteration. See COMPARISON.md.
 

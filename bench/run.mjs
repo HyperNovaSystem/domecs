@@ -23,6 +23,7 @@
  *   node bench/run.mjs
  *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
+ *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
  */
 import { pathToFileURL } from 'node:url'
@@ -54,6 +55,9 @@ const fixedStep = 1 / 60
 const writeResults = !!args.write
 const compareN = Math.min(entityCount, 5_000)
 const compareWindowN = Math.min(entityCount, 2_000)
+// O-72: the compare phase runs this many interleaved trials and reports the
+// median and spread; one run per engine was not reproducible.
+const compareTrials = Math.max(1, Number(args.trials ?? 5))
 const gcAvailable = typeof globalThis.gc === 'function'
 
 /** Full GC between workloads when --expose-gc is set (see header). */
@@ -128,13 +132,19 @@ if (workload === 'all' || workload === 'compare') {
     () => runKootaWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
     () => runSignalsWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
   ]
-  const compareRows = []
-  for (const run of compareRunners) {
-    maybeGc()
-    compareRows.push(run())
+  // Trials interleave the engines, so host drift hits each one alike.
+  const trials = []
+  for (let t = 0; t < compareTrials; t++) {
+    const rows = []
+    for (const run of compareRunners) {
+      maybeGc()
+      rows.push(run())
+    }
+    trials.push(rows)
   }
+  const compareRows = trials[0].map((row, i) => aggregateTrials(trials.map((rows) => rows[i])))
   for (const row of compareRows) record({ ...row, phase: 'compare' })
-  record(summarizeComparison(compareRows))
+  record(summarizeComparison(compareRows, trials))
 }
 
 const summary = {
@@ -459,8 +469,28 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
 
 // --- compare --------------------------------------------------------------------
 
-/** Derives the verdict ONLY from the compare-phase rows passed in. */
-function summarizeComparison(compareRows) {
+/** One row per engine/workload: median p50/p95 across trials, with spread. */
+function aggregateTrials(rows) {
+  const med = (xs) => {
+    const s = [...xs].sort((a, b) => a - b)
+    return s[Math.floor((s.length - 1) / 2)]
+  }
+  const p95s = rows.map((r) => r.p95Ms)
+  return {
+    ...rows[0],
+    trials: rows.length,
+    p50Ms: med(rows.map((r) => r.p50Ms)),
+    p95Ms: med(p95s),
+    p95RangeMs: [Math.min(...p95s), Math.max(...p95s)],
+  }
+}
+
+/**
+ * Derives the verdict ONLY from the compare-phase rows passed in: ratios of
+ * median p95s, with the per-trial range. A win must clear the bar in every
+ * trial (O-72).
+ */
+function summarizeComparison(compareRows, trials) {
   const pick = (name) => compareRows.find((r) => r.workload === name)
   const soak = {
     domecs: pick('soak'),
@@ -475,11 +505,24 @@ function summarizeComparison(compareRows) {
   const ratio = (a, b) =>
     a && b && b.p95Ms > 0 ? Number((a.p95Ms / b.p95Ms).toFixed(3)) : null
 
+  const pairs = {
+    soak_domecs_vs_koota_p95: ['soak', 'koota-soak'],
+    soak_domecs_vs_signals_p95: ['soak', 'signals-soak'],
+    windowed_domecs_vs_koota_p95: ['windowed', 'koota-windowed'],
+    windowed_domecs_vs_signals_p95: ['windowed', 'signals-windowed'],
+  }
   const verdict = {
     soak_domecs_vs_koota_p95: ratio(soak.domecs, soak.koota),
     soak_domecs_vs_signals_p95: ratio(soak.domecs, soak.signals),
     windowed_domecs_vs_koota_p95: ratio(windowed.domecs, windowed.koota),
     windowed_domecs_vs_signals_p95: ratio(windowed.domecs, windowed.signals),
+  }
+  const verdictRange = {}
+  for (const [k, [a, b]] of Object.entries(pairs)) {
+    const rs = trials
+      .map((rows) => ratio(rows.find((r) => r.workload === a), rows.find((r) => r.workload === b)))
+      .filter((r) => r != null)
+    verdictRange[k] = rs.length > 0 ? [Math.min(...rs), Math.max(...rs)] : null
   }
 
   // Work-equivalence check: the three windowed harnesses must report the
@@ -491,10 +534,11 @@ function summarizeComparison(compareRows) {
   const windowedWorkEqual =
     domUpdateCounts.length === 3 && domUpdateCounts.every((n) => n === domUpdateCounts[0])
 
-  // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor.
+  // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor — in
+  // every trial, not just the median.
   const wins = []
-  for (const [k, v] of Object.entries(verdict)) {
-    if (v != null && v <= 0.7) wins.push(`${k} (${v}×)`)
+  for (const [k, range] of Object.entries(verdictRange)) {
+    if (range && range[1] <= 0.7) wins.push(`${k} (${range[0]}–${range[1]}×)`)
   }
 
   return {
@@ -503,7 +547,9 @@ function summarizeComparison(compareRows) {
     entities: compareN,
     p50Ms: 0,
     p95Ms: 0,
+    trials: trials.length,
     verdict,
+    verdictRange,
     windowedWorkEqual,
     windowedDomUpdates: domUpdateCounts,
     decisiveRuntimeWins: wins,
@@ -511,7 +557,7 @@ function summarizeComparison(compareRows) {
       (windowedWorkEqual ? '' : 'WARNING: windowed domUpdates differ across engines — timings are not comparing equal work. ') +
       (wins.length > 0
         ? `Decisive runtime win(s): ${wins.join('; ')}`
-        : 'No decisive (≥30% p95) runtime win on this host; check plumbing comparison in bench/COMPARISON.md'),
+        : `No runtime win clearing ≥30% p95 in all ${trials.length} trials on this host; check plumbing comparison in bench/COMPARISON.md`),
   }
 }
 

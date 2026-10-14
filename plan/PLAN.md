@@ -89,8 +89,10 @@ bet. No date-driven milestones — the order is the only ordering.
 - [x] Sample results table in `bench/README.md` (machine-local; not a product claim).
 - [x] Koota + hand-rolled signals baselines (`bench/baselines/*`, `--workload compare`).
 - [x] First compare documented in `bench/COMPARISON.md` + `bench/README.md`.
-  Windowed vs Koota looks promising (sometimes decisive, N-dependent);
-  soak does not win. Claims stay gated on multi-machine stability.
+  Windowed vs Koota looked promising in one run, but did not reproduce
+  across repeated runs (O-72: 0.85–2.69× over 15 runs; 1.35–3.73× over 5
+  trials on 2026-10-14); soak does not win. No runtime win is claimed; the
+  compare phase now reports medians and per-trial ranges.
 - [x] Methodology hardening (2026-07-17): warmup discard, GC isolation under
   `--expose-gc`, compare verdict scoped to same-N rows, cross-engine
   `domUpdates` work-equivalence check, real coalescing pressure in the
