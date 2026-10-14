@@ -11,6 +11,8 @@ export const PACKAGES = [
   ['packages/domecs-input', 'input'],
   ['packages/domecs-inspector', 'inspector'],
   ['packages/domecs-persist', 'persist'],
+  ['packages/domecs-rules', 'rules'],
+  ['packages/domecs-scene', 'scene'],
 ]
 
 export const OUT_DIR = join(ROOT, 'doc', 'api-surface')

@@ -6,3 +6,4 @@ export { load, loadIfPresent, pruneTransientOnlyEntities, save, type LoadOptions
 export { migrate, BUILTIN_MIGRATIONS, withBuiltinMigrations, type Migration, type MigrationFailedError, type MigrationMap, } from './migrate.js';
 export { createLocalStorageStorage, createMemoryStorage, type Storage } from './storage.js';
 export { createSnapshotHistory, diffSnapshots, type SnapshotHistory, type SnapshotHistoryOptions, type SnapshotDiff, } from './history.js';
+export { registerComponentTypes, serializeComponentType, type ComponentFieldData, type ComponentTypeData, type SchemaProblem, } from './schema.js';

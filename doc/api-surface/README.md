@@ -1,7 +1,7 @@
 # API surface snapshot
 
 These `*.d.ts` files are the **committed public-API contract** for each `@domecs/*` package, one per
-package (`core`, `dom`, `input`, `inspector`, `persist`).
+package (`core`, `dom`, `input`, `inspector`, `persist`, `rules`, `scene`).
 
 - **Generated, not hand-written.** They are produced from each package's freshly-built
   `dist/index.d.ts` by `scripts/api-surface.mjs`. Do not edit them by hand.
