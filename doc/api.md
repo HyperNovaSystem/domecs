@@ -344,7 +344,8 @@ interface World {
   // state is wiped; an invalid snapshot throws and leaves the world
   // untouched. Component values are not re-validated — the live path
   // validates only at Component.create(). world.rand is rewound in place, so
-  // captured references follow the restore (O-46).
+  // captured references follow the restore (O-46). A snapshot whose version
+  // is newer than SNAPSHOT_VERSION throws (O-63); migrate older ones first.
   restore(snap: WorldSnapshot): void
 
   // signals

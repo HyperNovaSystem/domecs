@@ -90,6 +90,12 @@ export function serializeComponentType(
  *   later) occurrence.
  * - A field whose `kind` isn't a known `FieldKind` skips just that field;
  *   the type is still registered with its remaining valid fields.
+ * - Malformed input — `data` not an array, an entry without a string
+ *   `name` or a `fields` array, a field without a string `name` — skips
+ *   that entry or field (O-63).
+ * - A field named `__proto__`, or repeating an earlier field's name, is
+ *   skipped; a `default` that does not fit the field's kind (or enum
+ *   `options`) is dropped, keeping the field.
  */
 export function registerComponentTypes(
   data: ComponentTypeData[],
@@ -99,10 +105,20 @@ export function registerComponentTypes(
   const problems: SchemaProblem[] = []
   const seen = new Set<string>()
 
+  // O-63 (P5): `data` comes from documents, so its shape is checked too —
+  // "never throws" has to hold for malformed input, not just bad kinds.
+  if (!Array.isArray(data)) {
+    problems.push({ path: 'componentTypes', message: 'expected an array of component types' })
+    return { types, problems }
+  }
   for (let i = 0; i < data.length; i++) {
-    const entry = data[i]!
+    const entry = data[i] as ComponentTypeData | null | undefined
     const path = `componentTypes[${i}]`
 
+    if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || entry.name === '') {
+      problems.push({ path, message: 'expected an object with a non-empty string "name"' })
+      continue
+    }
     if (reserved.has(entry.name)) {
       problems.push({
         path,
@@ -114,15 +130,34 @@ export function registerComponentTypes(
       problems.push({ path, message: 'duplicate component type name' })
       continue
     }
+    if (!Array.isArray(entry.fields)) {
+      problems.push({ path: `${path}.fields`, message: 'expected an array of fields' })
+      continue
+    }
     seen.add(entry.name)
 
-    const fields: Record<string, FieldSchema> = {}
-    const defaults: Record<string, unknown> = {}
+    // Null-prototype maps: a field named like an Object.prototype member is
+    // stored as data, never resolved through the prototype.
+    const fields: Record<string, FieldSchema> = Object.create(null)
+    const defaults: Record<string, unknown> = Object.create(null)
     for (let j = 0; j < entry.fields.length; j++) {
-      const field = entry.fields[j]!
+      const field = entry.fields[j] as ComponentFieldData | null | undefined
+      const fieldPath = `${path}.fields[${j}]`
+      if (!field || typeof field !== 'object' || typeof field.name !== 'string' || field.name === '') {
+        problems.push({ path: fieldPath, message: 'expected an object with a non-empty string "name"' })
+        continue
+      }
+      if (field.name === '__proto__') {
+        problems.push({ path: `${fieldPath}.name`, message: 'field name "__proto__" is not allowed' })
+        continue
+      }
+      if (Object.hasOwn(fields, field.name)) {
+        problems.push({ path: `${fieldPath}.name`, message: `duplicate field name "${field.name}"` })
+        continue
+      }
       if (!FIELD_KINDS.has(field.kind)) {
         problems.push({
-          path: `componentTypes[${i}].fields[${j}].kind`,
+          path: `${fieldPath}.kind`,
           message: `unrecognized field kind "${String(field.kind)}"`,
         })
         continue
@@ -137,17 +172,51 @@ export function registerComponentTypes(
         ...(field.readonly !== undefined ? { readonly: field.readonly } : {}),
       }
       fields[field.name] = fieldSchema
-      if (field.default !== undefined) defaults[field.name] = field.default
+      if (field.default !== undefined) {
+        const mismatch = defaultMismatch(fieldSchema, field.default)
+        if (mismatch) {
+          // The field stays; only the default is dropped.
+          problems.push({ path: `${fieldPath}.default`, message: mismatch })
+        } else {
+          defaults[field.name] = field.default
+        }
+      }
     }
 
     types.push(
       defineComponent(entry.name, {
-        schema: { fields },
-        defaults,
+        schema: { fields: { ...fields } },
+        defaults: { ...defaults },
         transient: entry.transient ?? false,
       }),
     )
   }
 
   return { types, problems }
+}
+
+/**
+ * O-63 (P5): why `value` cannot be the default of a field of this schema,
+ * or null when it can.
+ */
+function defaultMismatch(schema: FieldSchema, value: unknown): string | null {
+  switch (schema.kind) {
+    case 'number':
+      return typeof value === 'number' ? null : `default for a number field must be a number, got ${typeof value}`
+    case 'string':
+      return typeof value === 'string' ? null : `default for a string field must be a string, got ${typeof value}`
+    case 'boolean':
+      return typeof value === 'boolean' ? null : `default for a boolean field must be a boolean, got ${typeof value}`
+    case 'enum':
+      if (schema.options && !schema.options.includes(value as string | number)) {
+        return `default ${JSON.stringify(value)} is not one of the enum options`
+      }
+      return typeof value === 'string' || typeof value === 'number'
+        ? null
+        : `default for an enum field must be a string or number, got ${typeof value}`
+    case 'object':
+      return value !== null && typeof value === 'object' ? null : 'default for an object field must be an object'
+    case 'unknown':
+      return null
+  }
 }

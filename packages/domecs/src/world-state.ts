@@ -299,6 +299,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  */
 function validateEnvelope(s: WorldSnapshot): void {
   if (!isRecord(s)) throw invalid('envelope', 'an object', s)
+  // O-63 (P3): a snapshot from a newer engine cannot be read; migrate older
+  // ones with @domecs/persist's migrate() (SPEC §7.3).
+  if (s.version !== undefined) {
+    if (!isNonNegativeInt(s.version)) throw invalid('version', 'an integer >= 0', s.version)
+    if (s.version > SNAPSHOT_VERSION) {
+      throw new Error(
+        `domecs: restore: snapshot version ${s.version} is newer than this engine supports (${SNAPSHOT_VERSION})`,
+      )
+    }
+  }
   const seed: unknown = s.seed
   if (
     !Array.isArray(seed) ||

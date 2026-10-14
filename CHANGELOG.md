@@ -64,6 +64,11 @@ All notable changes to DOMECS are documented here. The format is based on
   and reports medians and ranges; a win must hold in every trial. The
   windowed "0.65× (decisive)" claim is withdrawn — a 5-trial run shows no
   runtime win. (O-72)
+- `@domecs/persist`: a migration step must produce exactly the next version;
+  `registerComponentTypes` reports malformed entries and fields, `__proto__`
+  and duplicate field names, and defaults that do not fit their kind, instead
+  of throwing or dropping them silently. `@domecs/core`: `restore()` throws
+  on a snapshot newer than `SNAPSHOT_VERSION`. (O-63)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

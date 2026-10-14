@@ -96,12 +96,16 @@ export function migrate(
     }
     if (!r.ok) return r
     const next = r.value
-    if (next.version <= cur.version) {
+    // O-63 (P3): each step is exactly N → N+1 (SPEC §7.3).
+    if (next.version !== cur.version + 1) {
       return err({
         kind: 'migration_failed',
         from: cur.version,
         to: cur.version + 1,
-        reason: `migration did not advance snapshot version (still ${next.version})`,
+        reason:
+          next.version <= cur.version
+            ? `migration did not advance snapshot version (still ${next.version})`
+            : `migration from version ${cur.version} must produce version ${cur.version + 1}, got ${next.version}`,
         recoverable: false,
         retryable: false,
       })
