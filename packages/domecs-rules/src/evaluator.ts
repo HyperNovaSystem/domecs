@@ -185,3 +185,91 @@ function evaluateCall(name: FunctionName, args: AstNode[], env: EvalEnv): number
       return env.rand.uniform()
   }
 }
+
+/** A compiled expression: {@link evaluate} for one AST, without the walk. */
+export type CompiledExpression = (env: EvalEnv) => number | string | boolean
+
+/**
+ * O-69 (R12): turn `ast` into nested closures once, so a rule evaluated for
+ * every entity every tick does not re-dispatch on node kinds. Same results,
+ * errors and short-circuiting as {@link evaluate}; no code is generated.
+ */
+export function compileExpression(ast: AstNode): CompiledExpression {
+  switch (ast.kind) {
+    case 'number':
+    case 'string':
+    case 'boolean': {
+      const value = ast.value
+      return () => value
+    }
+    case 'identifier':
+      return ast.name === 'dt' ? (env) => env.dt : (env) => env.time
+    case 'field': {
+      const { component, field } = ast
+      return (env) => {
+        const value = env.resolveField(component, field)
+        if (value === undefined) {
+          throw new RuleEvalError(`Field "${component}.${field}" is not available on this entity`)
+        }
+        return value
+      }
+    }
+    case 'unary': {
+      const operand = compileExpression(ast.operand)
+      if (ast.op === '!') return (env) => !toBoolean(operand(env))
+      return (env) => -expectNumber(operand(env), 'unary "-"')
+    }
+    case 'logical': {
+      const left = compileExpression(ast.left)
+      const right = compileExpression(ast.right)
+      return ast.op === '&&'
+        ? (env) => toBoolean(left(env)) && toBoolean(right(env))
+        : (env) => toBoolean(left(env)) || toBoolean(right(env))
+    }
+    case 'ternary': {
+      const cond = compileExpression(ast.cond)
+      const then = compileExpression(ast.then)
+      const otherwise = compileExpression(ast.else)
+      return (env) => (toBoolean(cond(env)) ? then(env) : otherwise(env))
+    }
+    case 'binary': {
+      const left = compileExpression(ast.left)
+      const right = compileExpression(ast.right)
+      const op = ast.op
+      if (op === '==') return (env) => left(env) === right(env)
+      if (op === '!=') return (env) => left(env) !== right(env)
+      const ctx = `"${op}"`
+      const num = (f: CompiledExpression, env: EvalEnv): number => expectNumber(f(env), ctx)
+      switch (op) {
+        case '+': return (env) => { const a = num(left, env); return a + num(right, env) }
+        case '-': return (env) => { const a = num(left, env); return a - num(right, env) }
+        case '*': return (env) => { const a = num(left, env); return a * num(right, env) }
+        case '/': return (env) => { const a = num(left, env); return a / num(right, env) }
+        case '%': return (env) => { const a = num(left, env); return a % num(right, env) }
+        case '<': return (env) => { const a = num(left, env); return a < num(right, env) }
+        case '<=': return (env) => { const a = num(left, env); return a <= num(right, env) }
+        case '>': return (env) => { const a = num(left, env); return a > num(right, env) }
+        case '>=': return (env) => { const a = num(left, env); return a >= num(right, env) }
+      }
+      return left
+    }
+    case 'call': {
+      const args = ast.args.map(compileExpression)
+      const n = (i: number, env: EvalEnv, ctx: string): number => expectNumber(args[i]!(env), ctx)
+      switch (ast.name) {
+        case 'min': return (env) => { const a = n(0, env, 'min()'); return Math.min(a, n(1, env, 'min()')) }
+        case 'max': return (env) => { const a = n(0, env, 'max()'); return Math.max(a, n(1, env, 'max()')) }
+        case 'clamp': return (env) => {
+          const v = n(0, env, 'clamp()')
+          const lo = n(1, env, 'clamp()')
+          return Math.min(Math.max(v, lo), n(2, env, 'clamp()'))
+        }
+        case 'abs': return (env) => Math.abs(n(0, env, 'abs()'))
+        case 'sin': return (env) => Math.sin(n(0, env, 'sin()'))
+        case 'cos': return (env) => Math.cos(n(0, env, 'cos()'))
+        case 'floor': return (env) => Math.floor(n(0, env, 'floor()'))
+        case 'random': return (env) => env.rand.uniform()
+      }
+    }
+  }
+}

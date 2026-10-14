@@ -77,6 +77,12 @@ All notable changes to DOMECS are documented here. The format is based on
   radios, ranges and buttons and covers `select` and `contenteditable=""`.
   Docs: coordinates are client coordinates, and a key press fires once per
   `fixed` sub-step. (O-59)
+- `@domecs/rules`: `RuleDef.priority`; equal-priority rules run in `defs`
+  order. An unknown `schedule` or non-finite `priority` is a compile error, a
+  repeated rule name is reported instead of silently replacing the first,
+  and over-long number literals and unknown escapes are parse errors. Rules
+  run about 4× faster (expressions compile to closures; staging is skipped
+  when unneeded). (O-69)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

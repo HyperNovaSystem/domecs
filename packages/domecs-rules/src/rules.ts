@@ -1,7 +1,7 @@
-import type { ComponentType, SystemFault, SystemHandle, World } from '@domecs/core'
+import type { ComponentType, EntityView, SystemFault, SystemHandle, World } from '@domecs/core'
 import { walkFieldRefs, type AstNode } from './ast.js'
 import { parseExpression } from './parser.js'
-import { evaluate, RuleEvalError, type EvalEnv } from './evaluator.js'
+import { compileExpression, RuleEvalError, type CompiledExpression, type EvalEnv } from './evaluator.js'
 import { inferKind } from './typecheck.js'
 
 /**
@@ -19,6 +19,11 @@ export interface RuleActionDef {
 export interface RuleDef {
   name: string
   schedule: 'tick' | 'fixed'
+  /**
+   * System priority (lower runs first; default 0). Rules of equal priority
+   * run in the order of the `defs` array last passed to `update()` (O-69).
+   */
+  priority?: number
   enabled?: boolean
   query: string[]
   when?: string
@@ -53,13 +58,17 @@ export interface CompiledRule {
 
 interface CompiledAction {
   component: ComponentType<any>
+  /** The component name as the rule spells it (what `resolveField` sees). */
+  componentName: string
   field: string
   ast: AstNode
+  run: CompiledExpression
 }
 
 interface CompiledRuleInternal extends CompiledRule {
   queryTypes: ComponentType<any>[]
   whenAst: AstNode | undefined
+  when: CompiledExpression | undefined
   actions: CompiledAction[]
   /** Every component name referenced anywhere in this rule (query + when +
    *  actions), resolved once at compile time — reused at eval time by
@@ -96,6 +105,19 @@ export function compileRule(
 ): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] } {
   const errors: RuleError[] = []
   const componentsByName = new Map<string, ComponentType<any>>()
+
+  // O-69 (R7): a bad schedule or priority is a compile error, not a throw
+  // from world.system().
+  if (def.schedule !== 'tick' && def.schedule !== 'fixed') {
+    errors.push({
+      rule: def.name,
+      position: -1,
+      message: `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick" or "fixed")`,
+    })
+  }
+  if (def.priority !== undefined && !Number.isFinite(def.priority)) {
+    errors.push({ rule: def.name, position: -1, message: 'priority must be a finite number' })
+  }
 
   function resolveAndTrack(name: string, pos: number, context: string): ComponentType<any> | undefined {
     const cached = componentsByName.get(name)
@@ -161,7 +183,13 @@ export function compileRule(
       resolveAndTrack(component, pos, `referenced in action "${action.set}" expr`)
     })
     if (targetType) {
-      compiledActions.push({ component: targetType, field: fieldName, ast: parsed.ast })
+      compiledActions.push({
+        component: targetType,
+        componentName: compName,
+        field: fieldName,
+        ast: parsed.ast,
+        run: compileExpression(parsed.ast),
+      })
     }
   }
 
@@ -180,6 +208,7 @@ export function compileRule(
     def,
     queryTypes,
     whenAst,
+    when: whenAst ? compileExpression(whenAst) : undefined,
     actions: compiledActions,
     componentsByName,
   }
@@ -194,29 +223,44 @@ export function compileRule(
  * `Infinity` as `null`.
  */
 function checkWrite(action: CompiledAction, current: Record<string, unknown>, value: unknown): void {
-  const target = `${action.component.name}.${action.field}`
+  // Messages are built only on failure: this runs for every write.
+  const target = (): string => `${action.component.name}.${action.field}`
   if (!Object.hasOwn(current, action.field)) {
-    throw new RuleEvalError(`Cannot set ${target}: the component has no such field`)
+    throw new RuleEvalError(`Cannot set ${target()}: the component has no such field`)
   }
   const prior = current[action.field]
   const before = typeof prior
   if (prior !== null && prior !== undefined && typeof value !== before) {
-    throw new RuleEvalError(`Cannot set ${target}: expected a ${before}, got ${typeof value}`)
+    throw new RuleEvalError(`Cannot set ${target()}: expected a ${before}, got ${typeof value}`)
   }
   if (typeof value === 'number' && !Number.isFinite(value)) {
-    throw new RuleEvalError(`Cannot set ${target}: ${value} is not a finite number`)
+    throw new RuleEvalError(`Cannot set ${target()}: ${value} is not a finite number`)
   }
 }
 
 /** Register a single compiled rule as a `world.system(...)`. */
 function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHandle {
-  const { def, queryTypes, whenAst, actions, componentsByName } = rule
+  const { def, queryTypes, when, actions, componentsByName } = rule
+  // Keyed by the rule's own names, as reads through resolveField are.
+  const actionKeys = actions.map((a) => `${a.componentName}.${a.field}`)
+  // O-69 (R12): staging lookups are needed only when an action reads a
+  // field an earlier action wrote, and commit dedupe only when two actions
+  // write the same field. Both are known now, so the common case skips them.
+  const readsStaged = actions.some((a, i) => {
+    let hit = false
+    walkFieldRefs(a.ast, (c, f) => {
+      if (actionKeys.indexOf(`${c}.${f}`) < i && actionKeys.indexOf(`${c}.${f}`) >= 0) hit = true
+    })
+    return hit
+  })
+  const uniqueTargets = new Set(actionKeys).size === actionKeys.length
 
   return world.system(
     `rule:${def.name}`,
     {
       schedule: def.schedule,
       query: queryTypes,
+      priority: def.priority ?? 0,
       enabled: () => def.enabled !== false,
     },
     (ctx) => {
@@ -231,60 +275,86 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
       // so it shows in `Faulted` instead of vanishing. Any other error is a
       // bug and propagates.
       const faults: SystemFault<RuleFault>[] = []
-      for (const entity of ctx.entities) {
+      // O-69 (R12): one environment and scratch state per run, reset per
+      // entity, instead of fresh closures, maps and arrays for each one.
+      // O-68 (R3): writes are staged per "Component.field" and committed
+      // only when every action succeeded. Reads see staged values, so
+      // actions still apply in order (`hp = 100; hp = hp - 1` → 99).
+      const staged = new Map<string, number | string | boolean>()
+      const targets: Array<Record<string, unknown>> = []
+      const values: Array<number | string | boolean> = []
+      const committed = new Set<string>()
+      let entity!: EntityView
+      const env: EvalEnv = {
+        dt,
+        time,
+        rand: { uniform: () => ctx.rand.uniform() },
+        resolveField(component, field) {
+          if (staged.size > 0) {
+            const pending = staged.get(component + '.' + field)
+            if (pending !== undefined) return pending
+          }
+          const value = componentOf(component)
+          if (value === undefined) return undefined
+          // O-67: own properties only — never the prototype chain.
+          return Object.hasOwn(value, field) ? (value[field] as number | string | boolean) : undefined
+        },
+      }
+      // The entity's component: from its query view when the query holds
+      // it, else looked up.
+      function componentOf(name: string): Record<string, unknown> | undefined {
+        if (name !== 'id') {
+          const v = (entity as unknown as Record<string, unknown>)[name]
+          if (v !== undefined) return v as Record<string, unknown>
+        }
+        const type = componentsByName.get(name)
+        return type ? (world.getComponent(entity.id, type) as Record<string, unknown> | undefined) : undefined
+      }
+
+      for (const view of ctx.entities) {
+        entity = view
+        if (readsStaged) staged.clear()
         // One bad entity (e.g. a query match missing a field referenced by
         // `when`/an action) must never stop the rest of the query from
         // being processed this tick — see evaluator.ts's RuleEvalError doc.
         try {
-          // O-68 (R3): writes are staged per "Component.field" and committed
-          // only when every action succeeded. Reads see staged values, so
-          // actions still apply in order (`hp = 100; hp = hp - 1` → 99).
-          const staged = new Map<string, number | string | boolean>()
-          const env: EvalEnv = {
-            dt,
-            time,
-            rand: { uniform: () => ctx.rand.uniform() },
-            resolveField(component, field) {
-              const pending = staged.get(`${component}.${field}`)
-              if (pending !== undefined) return pending
-              const type = componentsByName.get(component)
-              if (!type) return undefined
-              const value = world.getComponent(entity.id, type) as
-                | Record<string, number | string | boolean>
-                | undefined
-              if (value === undefined) return undefined
-              // O-67: own properties only — never the prototype chain.
-              return Object.hasOwn(value, field) ? value[field] : undefined
-            },
-          }
-
-          if (whenAst && !evaluate(whenAst, env)) continue
+          if (when && !when(env)) continue
 
           // O-68 (R3): evaluate and check every action, in order, before
           // writing any, so a failing action leaves the entity untouched.
-          const writes: Array<{ target: Record<string, unknown>; action: CompiledAction; value: unknown }> = []
-          for (const action of actions) {
-            const result = evaluate(action.ast, env)
-            const current = world.getComponent(entity.id, action.component) as
-              | Record<string, unknown>
-              | undefined
+          for (let i = 0; i < actions.length; i++) {
+            const action = actions[i]!
+            const result = action.run(env)
+            const current = componentOf(action.component.name)
             // Atomic: a missing target component fails the whole entity.
             if (current === undefined) {
               throw new RuleEvalError(`Cannot set ${action.component.name}.${action.field}: the entity has no ${action.component.name}`)
             }
             checkWrite(action, current, result)
-            writes.push({ target: current, action, value: result })
-            staged.set(`${action.component.name}.${action.field}`, result)
+            targets[i] = current
+            values[i] = result
+            if (readsStaged) staged.set(actionKeys[i]!, result)
           }
           // Commit the final value of each field once; R9: an unchanged
           // value is not a change.
-          const committed = new Set<string>()
-          for (let i = writes.length - 1; i >= 0; i--) {
-            const { target, action } = writes[i]!
-            const key = `${action.component.name}.${action.field}`
+          if (uniqueTargets) {
+            for (let i = 0; i < actions.length; i++) {
+              const target = targets[i]!
+              const field = actions[i]!.field
+              if (Object.is(target[field], values[i])) continue
+              target[field] = values[i]
+              world.markChanged(entity.id, actions[i]!.component)
+            }
+            continue
+          }
+          committed.clear()
+          for (let i = actions.length - 1; i >= 0; i--) {
+            const action = actions[i]!
+            const key = actionKeys[i]!
             if (committed.has(key)) continue
             committed.add(key)
-            const value = staged.get(key)
+            const target = targets[i]!
+            const value = values[i]
             if (Object.is(target[action.field], value)) continue
             target[action.field] = value
             world.markChanged(entity.id, action.component)
@@ -312,9 +382,13 @@ export interface RulesHandle {
    * whose rule name is no longer present in `defs`, or is present but now
    * fails to compile.
    *
+   * Rules are registered in `defs` order, so equal-priority rules run in
+   * that order (O-69). A def that repeats an earlier def's name is not
+   * installed and is reported under that name.
+   *
    * @returns a `Map<string, RuleError[]>` keyed by rule name for every def
-   * that failed to compile. Compiled-clean rules are absent from the map —
-   * never present with an empty array.
+   * that failed to compile or repeated a name. Rules without problems are
+   * absent from the map — never present with an empty array.
    */
   update(defs: RuleDef[]): Map<string, RuleError[]>
   /** Remove every currently-installed rule system. */
@@ -334,6 +408,13 @@ export function installRules(
     const newNames = new Set<string>()
 
     for (const def of newDefs) {
+      // O-69 (R8): a repeated name would silently replace the earlier rule.
+      if (newNames.has(def.name)) {
+        const list = errorsByName.get(def.name) ?? []
+        list.push({ rule: def.name, position: -1, message: `Duplicate rule name "${def.name}"; only the first is installed` })
+        errorsByName.set(def.name, list)
+        continue
+      }
       newNames.add(def.name)
 
       // Always drop any previous registration for this name before
