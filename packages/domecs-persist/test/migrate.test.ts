@@ -106,3 +106,16 @@ describe('@domecs/persist — migrate', () => {
     }
   })
 })
+
+describe('withBuiltinMigrations (O-73)', () => {
+  it('returns the built-ins for no user steps, and lets user steps win on a key', async () => {
+    const { withBuiltinMigrations } = await import('../src/migrate.js')
+    expect(withBuiltinMigrations()).toBe(BUILTIN_MIGRATIONS)
+    expect(withBuiltinMigrations(new Map())).toBe(BUILTIN_MIGRATIONS)
+    const mine: Migration = (s) => ok({ ...s, version: s.version + 1, tick: 99 })
+    const merged = withBuiltinMigrations(new Map([[1, mine], [7, mine]]))
+    expect(merged.get(1)).toBe(mine)
+    expect(merged.get(7)).toBe(mine)
+    expect(BUILTIN_MIGRATIONS.get(1)).not.toBe(mine) // built-ins untouched
+  })
+})

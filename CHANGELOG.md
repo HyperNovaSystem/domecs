@@ -89,6 +89,11 @@ All notable changes to DOMECS are documented here. The format is based on
   but no redraw trigger (an empty `explicit` list, or no positive
   `Has`/`Where` leaf) is the new `invalid_changed_on` MountError instead of
   silently redrawing every tick. (O-55)
+- Packaging: `@domecs/*` packages peer-depend on `@domecs/core` (`^1.0.0` on
+  publish) instead of depending on an exact version; `src` ships so source
+  maps resolve; `engines.node >=18`. CI tests Node 20/22/24 and the
+  cold-install gate. The API-surface snapshot covers every declaration file.
+  (O-73)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

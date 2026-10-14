@@ -15,6 +15,12 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    # O-73 (X8): every Node line the packages claim (engines >=18 is
+    # exercised from 20, the oldest maintained LTS).
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
@@ -23,7 +29,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -59,3 +65,11 @@ jobs:
 
       - name: Release validation
         run: pnpm test:release
+
+      # Packs the packages and installs the tarballs into a fresh project —
+      # the payload `pnpm publish` would ship (O-73). Once per run is enough.
+      - name: Cold install from packed tarballs
+        if: matrix.node-version == 22
+        run: pnpm test:cold-install
+        env:
+          RUN_COLD_INSTALL: '1'

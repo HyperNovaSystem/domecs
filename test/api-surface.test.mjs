@@ -2,9 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { PACKAGES, OUT_DIR, ROOT, normalize } from '../scripts/api-surface.mjs'
+import { PACKAGES, OUT_DIR, ROOT, surfaceOf } from '../scripts/api-surface.mjs'
 
-test('committed API surface matches the freshly-built dist barrel (no-drift gate)', () => {
+test('committed API surface matches the freshly-built dist declarations (no-drift gate)', () => {
   for (const [dir, name] of PACKAGES) {
     const distPath = join(ROOT, dir, 'dist', 'index.d.ts')
     assert.ok(existsSync(distPath), `dist not built for "${name}" — run \`pnpm -r build\` first`)
@@ -14,7 +14,7 @@ test('committed API surface matches the freshly-built dist barrel (no-drift gate
 
     assert.equal(
       readFileSync(snapPath, 'utf8'),
-      normalize(readFileSync(distPath, 'utf8')),
+      surfaceOf(dir),
       `API-surface drift in "${name}": regenerate with \`pnpm api:surface\` and commit doc/api-surface/`,
     )
   }

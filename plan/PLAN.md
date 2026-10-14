@@ -201,6 +201,21 @@ WS-1–WS-4 or a real application hits them. Expected early pulls:
 
 Everything else waits for a real collision.
 
+**Pulled by DOMECS Studio (record, 2026-10-14).** Studio — the in-house
+editor — pulled three engine surfaces that this plan did not schedule:
+
+- **`@domecs/scene`** — `Parent` hierarchy, `despawnTree`, transform
+  composition (M4). In the repo, not yet published.
+- **`@domecs/rules`** — a safe expression language and data-defined rules
+  installed as systems (M6). In the repo, not yet published.
+- **Persist component-schema I/O** — `serializeComponentType` /
+  `registerComponentTypes` in `@domecs/persist`, for user-authored component
+  types in documents.
+
+They follow the same rules as everything else here: hardened by the
+2026-10-13 review (FINDINGS O-61–O-69), published only with an engine
+release (O-70), and grown only when a real application needs more.
+
 ## 6. Cadence
 
 - Engine releases: demand-driven corrective 1.0.x from WS-2 and §5 pulls.

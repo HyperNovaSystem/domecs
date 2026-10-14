@@ -1,9 +1,6 @@
 /**
  * Plantroom agent session — bridge, branch compare, proposals, historian scrub.
  */
-import { pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   createPlantWorld,
   resolveCommand,
@@ -15,11 +12,9 @@ import {
   Historian,
 } from './model.mjs'
 import { createCheckpointRing, compareBranches } from './checkpoints.mjs'
+import { core } from './core.mjs'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const { createAgentBridge } = await import(
-  pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href
-)
+const { createAgentBridge } = core
 
 const eventMap = {
   SetPump,
