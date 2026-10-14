@@ -104,26 +104,40 @@ describe('O-68: actions are atomic', () => {
     expect(w.getComponent(id, Health)!.hp).toBe(10)
   })
 
-  it('every action reads the pre-rule values, so a swap works', () => {
+  it('actions apply in order: later actions read earlier writes', () => {
     const w = createWorld({ headless: true })
-    const id = w.spawn([entry(Vel, { x: 1, y: 2 })])
+    const id = w.spawn([entry(Health, { hp: 10 })])
     installRules(
       w,
       [
-        {
-          name: 'swap',
-          schedule: 'tick',
-          query: ['RhVel'],
-          actions: [
-            { set: 'RhVel.x', expr: 'RhVel.y' },
-            { set: 'RhVel.y', expr: 'RhVel.x' },
-          ],
-        },
+        rule([
+          { set: 'RhHealth.hp', expr: '100' },
+          { set: 'RhHealth.hp', expr: 'RhHealth.hp - 1' },
+        ]),
       ],
       resolve,
     )
     w.stepOnce()
-    expect(w.getComponent(id, Vel)).toEqual({ x: 2, y: 1 })
+    expect(w.getComponent(id, Health)!.hp).toBe(99)
+  })
+
+  it('a field set back to its value by a later action does not mark', () => {
+    const w = createWorld({ headless: true })
+    w.spawn([entry(Health, { hp: 10 })])
+    let fired = 0
+    w.system('watch', { schedule: 'reactive', reactsTo: OnChanged(Health) }, () => void fired++)
+    installRules(
+      w,
+      [
+        rule([
+          { set: 'RhHealth.hp', expr: '5' },
+          { set: 'RhHealth.hp', expr: 'RhHealth.hp + 5' },
+        ]),
+      ],
+      resolve,
+    )
+    for (let i = 0; i < 3; i++) w.stepOnce()
+    expect(fired).toBe(0)
   })
 })
 
