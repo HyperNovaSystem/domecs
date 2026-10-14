@@ -11,8 +11,7 @@ export interface EvalEnv {
    * component is not registered/known, when the entity currently being
    * evaluated does not have that component, or when the component instance
    * has no such field. `evaluate` treats any of those uniformly: it throws
-   * a {@link RuleEvalError} (see the class doc for the documented
-   * skip-this-entity contract callers must implement).
+   * a {@link RuleEvalError} (see the class doc for how rules.ts handles it).
    */
   resolveField(component: string, field: string): number | string | boolean | undefined
   /** Current tick delta-time in seconds (schedule-dependent — see rules.ts). */
@@ -33,12 +32,12 @@ export interface EvalEnv {
  *
  * **Documented contract (per M6 spec):** this is a per-entity-per-tick
  * condition, not a systemic one. `evaluate` itself does not know about
- * entities or ticks — it just throws. The caller (`compileRule` /
- * `installRules` in rules.ts) is responsible for catching `RuleEvalError`
- * (and any other error `evaluate` might throw) **per entity**, treating it
- * as "this entity does not satisfy `when`" (skip-this-entity), and
- * continuing on to the next entity in the query. One bad entity must never
- * stop the rest of the query from being processed that tick.
+ * entities or ticks — it just throws. The caller (`installRules` in
+ * rules.ts) catches `RuleEvalError` **per entity**, skips that entity for
+ * the tick, reports it as a `rule_eval_failed` fault on the entity (O-68),
+ * and continues with the next entity in the query. One bad entity must
+ * never stop the rest of the query from being processed that tick. Any
+ * other error is a bug and propagates.
  */
 export class RuleEvalError extends Error {
   constructor(message: string) {

@@ -16,7 +16,7 @@ DOMECS (M6).
   `@domecs/core` component types and installs it as a `world.system(...)`.
 
 See inline doc comments in `src/evaluator.ts` and `src/rules.ts` for the
-documented behavior around missing fields (skip-this-entity) and determinism
+documented behavior around missing fields (skip and fault the entity) and determinism
 (`random()` is wired to the per-tick `ctx.rand.uniform()`, never
 `Math.random`).
 
@@ -31,5 +31,12 @@ own fields only, and `__proto__`, `constructor` and `prototype` are rejected
 as field names at compile time. A write that does not change the value does
 not mark the component changed.
 
-Runtime errors still skip the entity silently; reporting them as faults is
-tracked as O-68 in `plan/FINDINGS.md`.
+Errors are reported, not swallowed. Type errors that would fail on every
+entity are compile errors: a string or boolean in arithmetic, a comparison
+or a function, or an action whose result kind differs from its target
+field's (kinds come from the component's `defaults`; fields without a
+default are not checked). At run time, a rule that cannot run on an entity —
+a field it reads is missing, or a write is rejected — skips that entity and
+attaches a fault to it: `Faulted` gets an entry with kind `rule_eval_failed`,
+source `rule:<name>` and `detail: { rule, message }` (the `RuleFault` type).
+Any other error is a bug and propagates out of the step.

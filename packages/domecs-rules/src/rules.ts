@@ -1,7 +1,8 @@
-import type { ComponentType, SystemHandle, World } from '@domecs/core'
+import type { ComponentType, SystemFault, SystemHandle, World } from '@domecs/core'
 import { walkFieldRefs, type AstNode } from './ast.js'
 import { parseExpression } from './parser.js'
 import { evaluate, RuleEvalError, type EvalEnv } from './evaluator.js'
+import { inferKind, type StaticKind } from './typecheck.js'
 
 /**
  * O-67: field names a rule may never read or write. Reads are own-property
@@ -31,6 +32,18 @@ export interface RuleError {
    *  an action's `set` target — see compileRule doc for the exact rule). */
   position: number
   message: string
+}
+
+/**
+ * The error a rule reports, as an entity fault (`Faulted`, source
+ * `rule:<name>`), when it cannot run on that entity: a field it reads is
+ * missing, or an action's write is rejected (O-68). The entity is skipped
+ * for that tick and nothing is written.
+ */
+export interface RuleFault {
+  readonly kind: 'rule_eval_failed'
+  readonly rule: string
+  readonly message: string
 }
 
 /** Opaque compiled-rule handle. Internal shape lives in CompiledRuleInternal below. */
@@ -69,6 +82,11 @@ interface CompiledRuleInternal extends CompiledRule {
  *   bare name with no token position of its own — `query[i]` entries and an
  *   action's `set` target's component name (the left side of the dot in
  *   `"Component.field"`, which is a raw string, not something parsed).
+ * - Type errors certain before the rule runs are `RuleError`s at the
+ *   offending node's position (O-68): a string or boolean where arithmetic,
+ *   a comparison or a function needs a number, or an action whose result
+ *   kind differs from its target field's. A field's kind comes from its
+ *   component's defaults; a field without a usable default is not checked.
  * - If there are ANY errors, returns `{ rule: null, errors }` — never a
  *   partially-compiled rule.
  */
@@ -149,6 +167,40 @@ export function compileRule(
 
   if (errors.length > 0) return { rule: null, errors }
 
+  // O-68 (R4): reject type errors that would fail on every entity — a
+  // non-number in arithmetic, or a write of the wrong kind to a field whose
+  // default fixes its kind. Fields without a usable default are unknown.
+  const defaultsByName = new Map<string, Record<string, unknown> | null>()
+  const fieldKind = (component: string, field: string): StaticKind => {
+    let defaults = defaultsByName.get(component)
+    if (defaults === undefined) {
+      try {
+        defaults = componentsByName.get(component)!.create() as Record<string, unknown>
+      } catch {
+        defaults = null // a validate hook rejected the bare defaults
+      }
+      defaultsByName.set(component, defaults)
+    }
+    if (!defaults || !Object.hasOwn(defaults, field)) return 'unknown'
+    const t = typeof defaults[field]
+    return t === 'number' || t === 'string' || t === 'boolean' ? t : 'unknown'
+  }
+  const report = (position: number, message: string): void => {
+    errors.push({ rule: def.name, position, message })
+  }
+  if (whenAst) inferKind(whenAst, fieldKind, report)
+  for (const action of compiledActions) {
+    const kind = inferKind(action.ast, fieldKind, report)
+    const target = fieldKind(action.component.name, action.field)
+    if (kind !== 'unknown' && target !== 'unknown' && kind !== target) {
+      report(
+        action.ast.pos,
+        `Cannot set ${action.component.name}.${action.field}: expected a ${target}, got ${kind}`,
+      )
+    }
+  }
+  if (errors.length > 0) return { rule: null, errors }
+
   const rule: CompiledRuleInternal = {
     def,
     queryTypes,
@@ -199,11 +251,15 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
       const dt = def.schedule === 'fixed' ? ctx.time.fixedStep : ctx.time.scaledDelta
       const time = ctx.time.elapsed
 
+      // O-68 (R4): a rule that cannot run on an entity (a missing field, a
+      // rejected write) skips that entity and reports it as a fault on it,
+      // so it shows in `Faulted` instead of vanishing. Any other error is a
+      // bug and propagates.
+      const faults: SystemFault<RuleFault>[] = []
       for (const entity of ctx.entities) {
         // One bad entity (e.g. a query match missing a field referenced by
         // `when`/an action) must never stop the rest of the query from
         // being processed this tick — see evaluator.ts's RuleEvalError doc.
-        // Documented choice: skip-this-entity, not propagate/crash.
         try {
           // O-68 (R3): writes are staged per "Component.field" and committed
           // only when every action succeeded. Reads see staged values, so
@@ -258,10 +314,16 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
             target[action.field] = value
             world.markChanged(entity.id, action.component)
           }
-        } catch {
-          continue
+        } catch (e) {
+          if (!(e instanceof RuleEvalError)) throw e
+          faults.push({
+            entity: entity.id,
+            error: { kind: 'rule_eval_failed', rule: def.name, message: e.message },
+            recoverable: true,
+          })
         }
       }
+      if (faults.length > 0) return { errors: faults }
     },
   )
 }

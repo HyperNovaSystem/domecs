@@ -26,6 +26,13 @@ All notable changes to DOMECS are documented here. The format is based on
 - `@domecs/scene`: `despawnTree` terminates on a cyclic `Parent` graph and is
   linear (a 4k-child star took ~800 ms); `composeTransforms` no longer
   overflows the stack on deep chains. (O-64)
+- `@domecs/rules`: **behavior change** — rule errors are reported instead of
+  swallowed. An entity a rule cannot run on is still skipped, and now gets a
+  `Faulted` entry (`rule_eval_failed`, source `rule:<name>`; the `RuleFault`
+  type is exported); any other error propagates out of the step.
+  `compileRule` rejects type errors certain at compile time — a string or
+  boolean in arithmetic, a comparison or a function, or a write of the wrong
+  kind to a field whose default fixes it. (O-68)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
