@@ -57,6 +57,10 @@ function xoshiroStep(s: [number, number, number, number]): number {
   return result
 }
 
+// Each Rng's mutable state, so restore can rewind a generator in place
+// (O-46): handles captured as `const rng = world.rand` stay on the timeline.
+const states = new WeakMap<Rng, [number, number, number, number]>()
+
 export function createRng(initial: number | RngState): Rng {
   const state = seedToState(initial)
 
@@ -99,9 +103,22 @@ export function createRng(initial: number | RngState): Rng {
       return createRng(derived)
     },
   }
+  states.set(api, state)
   return api
 }
 
 export function restoreRng(state: RngState): Rng {
   return createRng(state)
+}
+
+/**
+ * Set `rng`'s state to `state` in place, as `restoreRng(state)` would start.
+ * Returns false when `rng` was not made by {@link createRng}.
+ */
+export function rewindRng(rng: Rng, state: RngState): boolean {
+  const s = states.get(rng)
+  if (!s) return false
+  const next = seedToState(state)
+  for (let i = 0; i < 4; i++) s[i] = next[i]!
+  return true
 }

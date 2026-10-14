@@ -44,7 +44,10 @@ export function defineComponent<T>(
     __validate: validate,
     __schema: options.schema,
     create(value?: Partial<T>): T {
-      const merged = { ...(defaults ?? {}), ...(value ?? {}) } as T
+      // O-44: each entity gets its own copy of nested default arrays and
+      // objects; `{...defaults}` alone shared one instance across entities.
+      // Caller-supplied values are taken as given (O-34).
+      const merged = { ...cloneDefaults(defaults), ...(value ?? {}) } as T
       if (validate) {
         const verdict = validate(merged)
         if (verdict !== true) {
@@ -55,6 +58,46 @@ export function defineComponent<T>(
     },
   }
   return shape as unknown as ComponentType<T, string>
+}
+
+/**
+ * Copy `defaults` per entity: arrays and plain objects (null-prototype ones
+ * included) are cloned recursively with their own enumerable string and
+ * symbol keys, cycles preserved; anything else (class instances, Maps,
+ * functions) is kept by reference, since it cannot be copied without losing
+ * its identity.
+ */
+function cloneDefaults<T>(defaults: Partial<T> | undefined): Partial<T> {
+  if (defaults === undefined) return {}
+  return clonePlain(defaults, new Map()) as Partial<T>
+}
+
+function clonePlain(value: unknown, seen: Map<object, unknown>): unknown {
+  if (value === null || typeof value !== 'object') return value
+  const done = seen.get(value)
+  if (done !== undefined) return done
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    seen.set(value, out)
+    for (const v of value) out.push(clonePlain(v, seen))
+    return out
+  }
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return value
+  const out = Object.create(proto) as Record<PropertyKey, unknown>
+  seen.set(value, out)
+  for (const k of Reflect.ownKeys(value)) {
+    if (!Object.prototype.propertyIsEnumerable.call(value, k)) continue
+    // defineProperty, so an own `__proto__` key (JSON.parse makes them)
+    // stays a plain key.
+    Object.defineProperty(out, k, {
+      value: clonePlain((value as Record<PropertyKey, unknown>)[k], seen),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+  }
+  return out
 }
 
 export function internal<T>(type: ComponentType<T>): InternalComponentType<T> {

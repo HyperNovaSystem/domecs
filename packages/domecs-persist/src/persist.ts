@@ -57,11 +57,12 @@ export function save(
       ...opts.meta,
     },
   }
+  // A snapshot that will not serialize fails the same way every time (O-62).
   let serialized: string | undefined
   try {
     serialized = JSON.stringify(snap)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'save', cause: normalizeCause(cause), retryable: true })
+    return err({ kind: 'persist_io', op: 'save', cause: normalizeCause(cause), retryable: false })
   }
   if (serialized === undefined) {
     return err({
@@ -70,7 +71,7 @@ export function save(
       cause: normalizeCause(
         new Error('JSON.stringify returned undefined (snapshot root was a function or symbol)'),
       ),
-      retryable: true,
+      retryable: false,
     })
   }
   return storage.write(slot, serialized)
@@ -139,18 +140,20 @@ function applyLoadedBytes(
   bytes: string,
   opts: LoadOptions,
 ): Result<void, DomecsError> {
+  // The bytes were read; every failure from here on is in the payload and
+  // repeats on retry (O-62), so none is reported as retryable.
   let parsed: unknown
   try {
     parsed = JSON.parse(bytes)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: false })
   }
   if (!isWorldSnapshot(parsed)) {
     return err({
       kind: 'persist_io',
       op: 'load',
       cause: normalizeCause(new Error(`slot "${slot}" does not contain a WorldSnapshot`)),
-      retryable: true,
+      retryable: false,
     })
   }
   const target = opts.targetVersion ?? SNAPSHOT_VERSION
@@ -162,7 +165,7 @@ function applyLoadedBytes(
   try {
     world.restore(migrated.value)
   } catch (cause) {
-    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
+    return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: false })
   }
   return ok(undefined)
 }

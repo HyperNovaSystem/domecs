@@ -81,6 +81,17 @@ export function createSnapshotHistory(
     }
   }
 
+  function moveTo(target: number): void {
+    const from = cursor
+    cursor = target
+    try {
+      world.restore(stack[target]!)
+    } catch (cause) {
+      cursor = from
+      throw cause
+    }
+  }
+
   return {
     push(): void {
       // Drop any orphaned redo branch, then append.
@@ -89,16 +100,17 @@ export function createSnapshotHistory(
       cursor = stack.length - 1
       trim()
     },
+    // O-62: a restore that throws puts the cursor back, so it stays on the
+    // checkpoint the world is still showing. The cursor moves first so code
+    // running inside the restore (query hooks) sees the new position.
     undo(): boolean {
       if (cursor <= 0) return false
-      cursor--
-      world.restore(stack[cursor]!)
+      moveTo(cursor - 1)
       return true
     },
     redo(): boolean {
       if (cursor >= stack.length - 1) return false
-      cursor++
-      world.restore(stack[cursor]!)
+      moveTo(cursor + 1)
       return true
     },
     canUndo: () => cursor > 0,
@@ -120,18 +132,20 @@ export function createSnapshotHistory(
       return JSON.stringify(envelope)
     },
     load(json: string): Result<void, DomecsError> {
+      // Every failure here is in the payload itself and repeats on retry
+      // (O-62), so none is reported as retryable.
       let parsed: unknown
       try {
         parsed = JSON.parse(json)
       } catch (cause) {
-        return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
+        return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: false })
       }
       if (!isHistoryEnvelope(parsed)) {
         return err({
           kind: 'persist_io',
           op: 'load',
           cause: normalizeCause(new Error('payload is not a snapshot-history envelope')),
-          retryable: true,
+          retryable: false,
         })
       }
       const nextStack = parsed.snapshots.slice()
@@ -141,14 +155,14 @@ export function createSnapshotHistory(
           kind: 'persist_io',
           op: 'load',
           cause: normalizeCause(new Error(`history cursor ${nextCursor} out of range`)),
-          retryable: true,
+          retryable: false,
         })
       }
       if (nextCursor >= 0) {
         try {
           world.restore(nextStack[nextCursor]!)
         } catch (cause) {
-          return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: true })
+          return err({ kind: 'persist_io', op: 'load', cause: normalizeCause(cause), retryable: false })
         }
       }
       stack = nextStack

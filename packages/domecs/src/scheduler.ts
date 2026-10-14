@@ -134,12 +134,21 @@ export interface CompiledSystem {
   fixedDivisor: number
   /** for once: has it already run? */
   ranOnce: boolean
+  /** Monotonic tie-break for equal priorities; never reused (O-43). */
   registrationIndex: number
+  /** Set by remove(); a phase already iterating skips it (O-43). */
+  removed: boolean
 }
 
 export interface Scheduler {
   register(name: string, def: SystemDef, fn: System): SystemHandle
-  systemsByMode(mode: SystemSchedule): CompiledSystem[]
+  /**
+   * The systems of one schedule in run order. The array is never mutated:
+   * register/remove swap in a new one, so a phase iterating it is not
+   * disturbed by systems added or removed mid-phase (O-43). Callers skip
+   * entries whose `removed` flag is set.
+   */
+  systemsByMode(mode: SystemSchedule): readonly CompiledSystem[]
   /** The live SystemHandle for a registered system by name, or undefined. */
   getHandle(name: string): SystemHandle | undefined
   /** Remove a system by handle (no-op if already removed). */
@@ -159,7 +168,7 @@ export function createScheduler(
   // name -> live handle, so getHandle(name) hands back the SAME object whose
   // enabled/disable() drive scheduling. Last registration wins on a name clash.
   const handlesByName = new Map<string, SystemHandle>()
-  const byMode = new Map<SystemSchedule, CompiledSystem[]>([
+  const byMode = new Map<SystemSchedule, readonly CompiledSystem[]>([
     ['tick', []],
     ['fixed', []],
     ['event', []],
@@ -168,9 +177,22 @@ export function createScheduler(
   ])
   let nextId = 0
 
-  function sortMode(mode: SystemSchedule): void {
-    const arr = byMode.get(mode)!
-    arr.sort(comparator)
+  // Copy-on-write: a phase loop holds the array it started with, so adding
+  // or removing a system mid-phase neither skips nor repeats one (O-43).
+  function addToMode(s: CompiledSystem): void {
+    byMode.set(s.schedule, [...byMode.get(s.schedule)!, s].sort(comparator))
+  }
+
+  function removeFromMode(s: CompiledSystem): void {
+    const arr = byMode.get(s.schedule)!
+    if (arr.includes(s)) byMode.set(s.schedule, arr.filter((x) => x !== s))
+  }
+
+  function drop(s: CompiledSystem): void {
+    s.removed = true
+    const idx = systems.indexOf(s)
+    if (idx >= 0) systems.splice(idx, 1)
+    removeFromMode(s)
   }
 
   return {
@@ -216,8 +238,9 @@ export function createScheduler(
         fixedDivisor = rounded
       }
 
+      const id = nextId++
       const compiled: CompiledSystem = {
-        id: nextId++,
+        id,
         name,
         def,
         fn,
@@ -227,14 +250,14 @@ export function createScheduler(
         state: def.state,
         fixedDivisor,
         ranOnce: false,
-        registrationIndex: systems.length,
+        registrationIndex: id,
+        removed: false,
       }
       if (def.query) compiled.query = makeQuery(def.query)
       if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo)
 
       systems.push(compiled)
-      byMode.get(schedule)!.push(compiled)
-      sortMode(schedule)
+      addToMode(compiled)
 
       const handle: SystemHandle = {
         name,
@@ -252,11 +275,7 @@ export function createScheduler(
           compiled.enabled = false
         },
         remove() {
-          const idx = systems.indexOf(compiled)
-          if (idx >= 0) systems.splice(idx, 1)
-          const arr = byMode.get(schedule)!
-          const j = arr.indexOf(compiled)
-          if (j >= 0) arr.splice(j, 1)
+          drop(compiled)
           // Only drop the name mapping if it still points at THIS handle — a
           // later registration under the same name must not be evicted.
           if (handlesByName.get(name) === handle) handlesByName.delete(name)
@@ -271,7 +290,7 @@ export function createScheduler(
       return handle
     },
 
-    systemsByMode(mode): CompiledSystem[] {
+    systemsByMode(mode): readonly CompiledSystem[] {
       return byMode.get(mode) ?? []
     },
 
@@ -280,11 +299,7 @@ export function createScheduler(
     },
 
     remove(s): void {
-      const idx = systems.indexOf(s)
-      if (idx >= 0) systems.splice(idx, 1)
-      const arr = byMode.get(s.schedule)!
-      const j = arr.indexOf(s)
-      if (j >= 0) arr.splice(j, 1)
+      drop(s)
     },
 
     applyPendingReplacements(): void {

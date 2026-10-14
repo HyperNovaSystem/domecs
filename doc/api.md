@@ -40,6 +40,8 @@ function defineComponent<T>(
 ): ComponentType<T, string>
 
 interface ComponentOptions<T> {
+  // Copied per entity: arrays and plain objects are cloned on each create()
+  // (O-44); other objects (class instances, Maps) are shared by reference.
   defaults?:  Partial<T>
   transient?: boolean        // excluded from snapshots; default false
   // Called after defaults are merged by ComponentType.create() and
@@ -316,10 +318,13 @@ interface World {
   snapshot(options?: SnapshotOptions): WorldSnapshot
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
-  // Incoming values for *registered* resource types run their validate hook
-  // BEFORE any state is wiped (mirrors setResource); an invalid value throws
-  // and leaves the world untouched. Component values are not re-validated —
-  // the live path validates only at Component.create().
+  // The envelope shape (seed, tick, nextId, every entity record's id and
+  // components bag — O-41) and incoming values for *registered* resource
+  // types (their validate hook, mirroring setResource) are checked BEFORE any
+  // state is wiped; an invalid snapshot throws and leaves the world
+  // untouched. Component values are not re-validated — the live path
+  // validates only at Component.create(). world.rand is rewound in place, so
+  // captured references follow the restore (O-46).
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -1074,6 +1079,7 @@ interface SnapshotHistory {
   push():   void                              // snapshot world, append as new current checkpoint
   undo():   boolean                           // restore previous; false at oldest
   redo():   boolean                           // restore next; false at newest
+                                              // (a restore that throws puts the cursor back)
   canUndo(): boolean
   canRedo(): boolean
   clear():  void
