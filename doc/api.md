@@ -225,6 +225,7 @@ interface World {
   // entities
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
+  isAlive(entity: Entity): boolean          // spawned and not despawned (O-61)
   has(entity: Entity, type: ComponentType<unknown>): boolean
 
   // components
@@ -1063,6 +1064,8 @@ interface LoadOptions {
 // Plugin: strips entities with an empty serializable component bag from every
 // world.snapshot() envelope via onSnapshot — the declarative way to get
 // pruneEmptyEntities on the persisted save() path. Install once per world.
+// Runs on every snapshot(), history included; an entity others refer to by
+// id (a scene Parent group) needs a persistent component of its own (O-61).
 function pruneTransientOnlyEntities(): Plugin
 ```
 

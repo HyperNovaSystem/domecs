@@ -179,6 +179,8 @@ export interface World {
    */
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
+  /** Whether `entity` was spawned and has not been despawned (O-61). */
+  isAlive(entity: Entity): boolean
   has(entity: Entity, type: ComponentType<unknown>): boolean
   addComponent<T>(entity: Entity, type: ComponentType<T>, value: T): void
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
@@ -1512,6 +1514,10 @@ export function createWorld(options: WorldOptions = {}): World {
       viewCache.delete(entity)
       sigEntityDespawned.emit(entity)
       wakeDriver()
+    },
+
+    isAlive(entity: Entity): boolean {
+      return alive.has(entity)
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {

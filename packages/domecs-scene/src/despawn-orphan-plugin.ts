@@ -1,5 +1,5 @@
 import { definePlugin, type Plugin } from '@domecs/core'
-import { Parent } from './hierarchy.js'
+import { Parent, cascading } from './hierarchy.js'
 
 /**
  * Orphan policy for a **plain** `world.despawn()` call: whenever any entity
@@ -21,6 +21,8 @@ export function installHierarchy(): Plugin {
     name: 'domecs-scene:hierarchy',
     install(world) {
       const unsubscribe = world.signals.entityDespawned.subscribe((despawnedId) => {
+        // O-64: despawnTree removes the whole subtree; skip the scan for it.
+        if (cascading.get(world)?.has(despawnedId)) return
         try {
           for (const { id, value } of world.iterEntitiesWith(Parent)) {
             if (value.entity !== despawnedId) continue

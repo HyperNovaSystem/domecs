@@ -166,3 +166,17 @@ it('rejects querying with distinct ComponentType objects sharing a name', () => 
   w.spawn([entry(PositionA, { x: 1, y: 2 })])
   expect(() => w.query(Has(PositionB)).entities).toThrow(/share the name/)
 })
+
+describe('world.isAlive (O-61)', () => {
+  it('is true from spawn until despawn, false for ids never spawned, and follows restore', () => {
+    const w = createWorld({ headless: true })
+    const a = w.spawn()
+    expect(w.isAlive(a)).toBe(true)
+    expect(w.isAlive(a + 1000)).toBe(false)
+    const snap = w.snapshot()
+    w.despawn(a)
+    expect(w.isAlive(a)).toBe(false)
+    w.restore(snap)
+    expect(w.isAlive(a)).toBe(true)
+  })
+})

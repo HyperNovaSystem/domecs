@@ -65,7 +65,10 @@ else if (!boot.value) { /* first run */ }
   empty. `load()` uses this internally.
 - `pruneTransientOnlyEntities()` — plugin; install once to strip
   transient-only / bare entities from every saved envelope (the persisted-path
-  equivalent of core's `snapshot({ pruneEmptyEntities: true })`).
+  equivalent of core's `snapshot({ pruneEmptyEntities: true })`). It hooks
+  every `world.snapshot()`, so history snapshots are pruned too, and an undo
+  despawns those entities. Entities other entities point at (a scene `Parent`
+  group, a target id) need a persistent component of their own.
 - `createSnapshotHistory(world, opts?)` — bounded undo/redo ring over
   snapshots: `push` / `undo` / `redo` / `canUndo` / `canRedo` / `clear`, with
   redo-branch truncation, a `limit` ring, and `toJSON` / `load` for export.

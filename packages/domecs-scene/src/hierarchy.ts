@@ -15,6 +15,7 @@ export const Parent = defineComponent<{ entity: Entity | null }>('Parent', {
  *
  * Rejects with `{ ok: false, reason }` — leaving every component untouched —
  * when:
+ * - `parent` is not alive — despawned or never spawned (O-61), or
  * - `parent === child` (an entity cannot be its own parent), or
  * - `parent` is a descendant of `child` (parenting `child` under `parent`
  *   would close a cycle: walk `parent`'s own ancestor chain via the `Parent`
@@ -30,6 +31,9 @@ export function setParent(
   parent: Entity | null,
 ): { ok: true } | { ok: false; reason: string } {
   if (parent !== null) {
+    if (!world.isAlive(parent)) {
+      return { ok: false, reason: `setParent: parent entity ${parent} is not alive` }
+    }
     if (parent === child) {
       return { ok: false, reason: `setParent: entity ${child} cannot be its own parent` }
     }
@@ -116,6 +120,13 @@ export function rootsOf(world: World): Entity[] {
 }
 
 /**
+ * Entities a {@link despawnTree} call is removing, per world, so the
+ * despawn-orphan plugin skips them instead of scanning every `Parent` for
+ * each one (O-64).
+ */
+export const cascading = new WeakMap<World, ReadonlySet<Entity>>()
+
+/**
  * Despawn `entity` and every descendant. Degenerates to a plain despawn for
  * a childless entity. Descendants are despawned before their ancestors (a
  * reversed pre-order walk), which matters beyond correctness-of-removal: it
@@ -123,16 +134,39 @@ export function rootsOf(world: World): Entity[] {
  * still-live child of an entity this call is deliberately removing — by the
  * time an ancestor's despawn fires, every one of its descendants in this
  * subtree is already gone.
+ *
+ * Linear in the number of `Parent` holders: children are indexed in one pass
+ * rather than looked up per node (O-64). Terminates over a cyclic `Parent`
+ * graph — each entity is visited once.
  */
 export function despawnTree(world: World, entity: Entity): void {
+  const children = new Map<Entity, Entity[]>()
+  for (const { id, value } of world.iterEntitiesWith(Parent)) {
+    if (value.entity === null) continue
+    const list = children.get(value.entity)
+    if (list) list.push(id)
+    else children.set(value.entity, [id])
+  }
   const preOrder: Entity[] = []
+  const visited = new Set<Entity>()
   const stack: Entity[] = [entity]
   while (stack.length > 0) {
     const e = stack.pop()!
+    if (visited.has(e)) continue
+    visited.add(e)
     preOrder.push(e)
-    for (const child of childrenOf(world, e)) stack.push(child)
+    for (const child of children.get(e) ?? []) stack.push(child)
   }
-  for (let i = preOrder.length - 1; i >= 0; i--) {
-    world.despawn(preOrder[i]!)
+  const outer = cascading.get(world)
+  cascading.set(world, visited)
+  try {
+    for (let i = preOrder.length - 1; i >= 0; i--) {
+      const e = preOrder[i]!
+      // A despawn subscriber may already have removed a descendant.
+      if (e === entity || world.isAlive(e)) world.despawn(e)
+    }
+  } finally {
+    if (outer) cascading.set(world, outer)
+    else cascading.delete(world)
   }
 }

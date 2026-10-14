@@ -18,6 +18,14 @@ All notable changes to DOMECS are documented here. The format is based on
   pointer/wheel deltas; they reach the next tick's systems. `@domecs/core`:
   plugin `onTickStart`/`onRender`/`onTickEnd` receive a second argument,
   `TickInfo` (`{ heartbeat: boolean }`, exported). (O-57)
+- `@domecs/scene`: `setParent` rejects a parent that is not alive. The README
+  gives group entities a persistent component, since snapshot pruning drops
+  bare entities and orphans their children; persist's
+  `pruneTransientOnlyEntities` docs say it applies to history snapshots too.
+  `@domecs/core`: new `world.isAlive(entity)`. (O-61)
+- `@domecs/scene`: `despawnTree` terminates on a cyclic `Parent` graph and is
+  linear (a 4k-child star took ~800 ms); `composeTransforms` no longer
+  overflows the stack on deep chains. (O-64)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
