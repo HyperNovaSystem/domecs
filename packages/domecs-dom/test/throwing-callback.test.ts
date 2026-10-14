@@ -147,3 +147,59 @@ describe('mountDOM — change-gated commit (O-54)', () => {
     expect(updated).toEqual([])
   })
 })
+
+describe('mountDOM — review regressions (O-53, O-54)', () => {
+  const RP = defineComponent<{ ok: boolean }>('RvRP', { defaults: { ok: false } })
+  const VP = defineComponent<{ x: number }>('RvVP', { defaults: { x: 0 } })
+  const VLabel = defineComponent<{ text: string }>('RvVLabel', { defaults: { text: '' } })
+
+  for (const mode of ['create-only', 'legacy', 'auto+update', 'explicit-create-only'] as const) {
+    it(`retries a failed create after markChanged (${mode})`, () => {
+      const w = createWorld({ headless: true })
+      const stage = document.createElement('div')
+      const def: Record<string, unknown> = {
+        slot: 'stage',
+        query: Has(RP),
+        create: (e: EntityView) => {
+          if (!(e as unknown as { RvRP: { ok: boolean } }).RvRP.ok) throw new Error('bad')
+          return document.createElement('div')
+        },
+      }
+      if (mode === 'legacy') { def.changedOn = { mode: 'legacy' }; def.update = () => {} }
+      if (mode === 'auto+update') def.update = () => {}
+      if (mode === 'explicit-create-only') def.changedOn = { mode: 'explicit', types: [RP] }
+      const r = mountDOM(w, { slots: { stage }, views: [def as unknown as ViewDef] })
+      if (!isOk(r)) throw new Error('mount failed')
+      const e = w.spawn([entry(RP, { ok: false })])
+      expect(() => w.stepOnce()).toThrow('bad')
+      expect(() => w.stepOnce()).not.toThrow() // no retry without a change
+      w.getComponent(e, RP)!.ok = true
+      w.markChanged(e, RP)
+      w.stepOnce()
+      expect(stage.children).toHaveLength(1)
+    })
+  }
+
+  it('first paint after restoring into a fresh world sees every component', () => {
+    const w1 = createWorld({ headless: true })
+    w1.spawn([entry(VP, { x: 1 }), entry(VLabel, { text: 'hi' })])
+    const snap = w1.snapshot()
+    const w2 = createWorld({ headless: true })
+    const stage = document.createElement('div')
+    const r = mountDOM(w2, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage',
+        query: Has(VP),
+        create: () => document.createElement('div'),
+        update: (el, e) => {
+          el.textContent = (e as unknown as { RvVLabel?: { text: string } }).RvVLabel?.text ?? 'MISSING'
+        },
+      })],
+    })
+    if (!isOk(r)) throw new Error('mount failed')
+    w2.restore(snap)
+    w2.stepOnce()
+    expect(stage.textContent).toBe('hi')
+  })
+})

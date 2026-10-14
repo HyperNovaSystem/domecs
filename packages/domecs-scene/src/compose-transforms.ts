@@ -1,4 +1,4 @@
-import { definePlugin, type ComponentType, type Entity, type Plugin } from '@domecs/core'
+import { OnRemoved, definePlugin, type ComponentType, type Entity, type Plugin } from '@domecs/core'
 import { Parent } from './hierarchy.js'
 
 export interface ComposeTransformsOptions {
@@ -31,10 +31,10 @@ export interface ComposeTransformsOptions {
  * composed with `parentWorld = null` for that tick rather than looping
  * forever.
  *
- * `World_` is written and marked changed only when a field's value moved,
- * so change-gated readers are not woken every tick; an entity that loses
- * `Local` loses the `World_` this plugin added. Disposing the plugin removes
- * its system (O-65).
+ * `World_` is written and marked changed only when a field's value moved
+ * (a field holding an object always counts as moved), so change-gated
+ * readers are not woken every tick; an entity that loses `Local` loses
+ * `World_`. Disposing the plugin removes its systems (O-65).
  */
 export function composeTransforms<T>(
   Local: ComponentType<T>,
@@ -47,21 +47,26 @@ export function composeTransforms<T>(
   return definePlugin({
     name,
     install(world) {
-      // Entities whose World_ this plugin added; it is removed again when
-      // they lose Local (O-65).
-      const owned = new Set<Entity>()
+      // O-65: World_ is derived from Local, so an entity that loses Local
+      // loses World_. A system-owned OnRemoved window survives snapshots,
+      // unlike a set kept in this closure.
+      const cleanup = world.system(
+        `${name}:cleanup`,
+        { schedule: 'tick', query: OnRemoved(Local), priority: options.priority ?? 0 },
+        (ctx) => {
+          for (const { id } of ctx.entities) {
+            if (world.isAlive(id) && !world.has(id, Local) && world.has(id, World_)) {
+              world.removeComponent(id, World_)
+            }
+          }
+        },
+      )
       const handle = world.system(
         name,
         { schedule: 'tick', query: [Local], priority: options.priority ?? 0 },
         (ctx) => {
           const localSet = new Set<Entity>()
           for (const e of ctx.entities) localSet.add(e.id)
-
-          for (const id of owned) {
-            if (localSet.has(id)) continue
-            owned.delete(id)
-            if (world.isAlive(id) && world.has(id, World_)) world.removeComponent(id, World_)
-          }
 
           const computed = new Map<Entity, T>()
 
@@ -71,7 +76,6 @@ export function composeTransforms<T>(
             const existing = world.getComponent(id, World_)
             if (existing === undefined) {
               world.addComponent(id, World_, worldValue)
-              owned.add(id)
             } else if (!sameFields(existing, worldValue)) {
               // O-65: only a value that moved is marked, so change-gated
               // views of World_ do not repaint every tick.
@@ -105,18 +109,25 @@ export function composeTransforms<T>(
       return {
         teardown() {
           handle.remove()
+          cleanup.remove()
         },
       }
     },
   })
 }
 
-/** Whether every own field of `next` already holds the same value in `prev`. */
+/**
+ * Whether every own field of `next` already holds the same primitive value
+ * in `prev`. A field holding an object counts as changed — it may have been
+ * mutated in place, which comparing references cannot see.
+ */
 function sameFields(prev: unknown, next: unknown): boolean {
   const a = prev as Record<string, unknown>
   const b = next as Record<string, unknown>
   for (const key of Object.keys(b)) {
-    if (!Object.is(a[key], b[key])) return false
+    const v = b[key]
+    if ((typeof v === 'object' && v !== null) || typeof v === 'function') return false
+    if (!Object.is(a[key], v)) return false
   }
   return true
 }

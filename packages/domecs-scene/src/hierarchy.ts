@@ -126,6 +126,9 @@ export function rootsOf(world: World): Entity[] {
  */
 export const cascading = new WeakMap<World, ReadonlySet<Entity>>()
 
+/** Worlds with the despawn-orphan plugin installed (see despawnTree). */
+export const orphanPolicy = new WeakSet<World>()
+
 /**
  * Despawn `entity` and every descendant. Degenerates to a plain despawn for
  * a childless entity. Descendants are despawned before their ancestors (a
@@ -168,5 +171,15 @@ export function despawnTree(world: World, entity: Entity): void {
   } finally {
     if (outer) cascading.set(world, outer)
     else cascading.delete(world)
+  }
+  // The plugin skipped the subtree's despawns; one pass catches a live
+  // entity that a despawn subscriber parented under it meanwhile (O-64).
+  if (orphanPolicy.has(world)) {
+    for (const { id, value } of world.iterEntitiesWith(Parent)) {
+      if (value.entity !== null && visited.has(value.entity)) {
+        value.entity = null
+        world.markChanged(id, Parent)
+      }
+    }
   }
 }

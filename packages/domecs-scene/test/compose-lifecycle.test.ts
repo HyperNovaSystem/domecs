@@ -28,17 +28,38 @@ describe('composeTransforms — marking and lifecycle (O-65)', () => {
     expect(w.getComponent(b, WorldX)!.x).toBe(2)
   })
 
-  it('removes the World_ it added when the entity loses Local, not one the user added', () => {
+  it('removes World_ when the entity loses Local, the same after a restore', () => {
+    const mk = () => {
+      const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+      w.use(composeTransforms(Local, WorldX, add))
+      return w
+    }
+    const live = mk()
+    const e = live.spawn([entry(Local, { x: 1 })])
+    live.stepOnce()
+    const restored = mk()
+    restored.restore(live.snapshot())
+    for (const w of [live, restored]) {
+      w.removeComponent(e, Local)
+      w.stepOnce()
+      expect(w.has(e, WorldX)).toBe(false)
+    }
+    expect(JSON.stringify(restored.snapshot())).toEqual(JSON.stringify(live.snapshot()))
+  })
+
+  it('marks a World_ whose fields hold objects every time (in-place changes are invisible)', () => {
+    const L = defineComponent<{ p: { x: number } }>('ClLn', { defaults: { p: { x: 0 } } })
+    const W = defineComponent<{ p: { x: number } }>('ClWn', { defaults: { p: { x: 0 } } })
     const w = createWorld({ headless: true })
-    w.use(composeTransforms(Local, WorldX, add))
-    const mine = w.spawn([entry(Local, { x: 1 })])
-    const users = w.spawn([entry(Local, { x: 1 }), entry(WorldX, { x: 0 })])
+    w.use(composeTransforms(L, W, (pw, l) => ({ p: pw ? { x: pw.p.x + l.p.x } : l.p })))
+    const e = w.spawn([entry(L, { p: { x: 1 } })])
     w.stepOnce()
-    w.removeComponent(mine, Local)
-    w.removeComponent(users, Local)
+    const q = w.query(OnChanged(W))
+    expect(q.entities.map((v) => v.id)).toEqual([])
+    w.getComponent(e, L)!.p.x = 5
+    w.markChanged(e, L)
     w.stepOnce()
-    expect(w.has(mine, WorldX)).toBe(false)
-    expect(w.has(users, WorldX)).toBe(true)
+    expect(q.entities.map((v) => v.id)).toEqual([e])
   })
 
   it('two component pairs coexist, and disposal stops the system', () => {

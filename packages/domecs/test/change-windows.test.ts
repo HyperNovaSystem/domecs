@@ -606,3 +606,27 @@ describe('change reads visit only the marks in the window (O-54)', () => {
     expect(q.entities).toEqual([])
   })
 })
+
+describe('mark-log reads keep structural membership (O-54 review)', () => {
+  const A = defineComponent<{ v: number }>('CwStA', { defaults: { v: 0 } })
+  const T = defineComponent<{ v: number }>('CwStT', { defaults: { v: 0 }, transient: true })
+
+  it('a restored mark for a stripped transient component does not match', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const seen: Array<{ id: Entity; hasT: boolean }> = []
+    w.system('s', { schedule: 'tick', query: And(OnChanged(A), OnChanged(T)) }, (ctx) => {
+      for (const e of ctx.entities) seen.push({ id: e.id, hasT: 'CwStT' in e })
+    })
+    const e = w.spawn([entry(A, { v: 1 }), entry(T, { v: 1 })])
+    w.step(1 / 60)
+    w.markChanged(e, A)
+    w.markChanged(e, T)
+    w.restore(w.snapshot()) // T is transient: stripped, but its mark is carried
+    // Enough members that the mark-log path is taken.
+    for (let i = 0; i < 8; i++) w.spawn([entry(A, { v: 1 }), entry(T, { v: 1 })])
+    seen.length = 0
+    w.step(1 / 60)
+    expect(seen.every((s) => s.hasT)).toBe(true)
+    expect(seen.map((s) => s.id)).not.toContain(e)
+  })
+})

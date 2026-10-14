@@ -54,6 +54,12 @@ interface ViewState {
    */
   failed: Set<Entity>
   /**
+   * O-53: the queries that trigger a failed create's retry — the redraw
+   * triggers, or for a view without them (create-only, `legacy`) `OnChanged`
+   * of its `Has` leaves. Created on the first failure.
+   */
+  retryQueries: QueryResult[] | null
+  /**
    * O-52: the query has a `Where` filter. Structural onAdd/onRemove ignore
    * `Where`, so membership is reconciled against the filtered
    * `query.entities` at each commit.
@@ -130,6 +136,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       pendingCreate: new Map(),
       pendingDestroy: new Map(),
       failed: new Set(),
+      retryQueries: null,
       filtered: findKind(node, WHERE_KIND) !== null,
       unsubAdd: () => {},
       unsubRemove: () => {},
@@ -191,6 +198,9 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
         state.unsubRemove()
         state.query.dispose()
         for (const q of state.changedQueries ?? []) q.dispose()
+        if (state.retryQueries !== state.changedQueries) {
+          for (const q of state.retryQueries ?? []) q.dispose()
+        }
         for (const [, rec] of state.mounted) unmount(state, rec, errors)
         state.mounted.clear()
         state.pendingCreate.clear()
@@ -273,6 +283,7 @@ function mount(state: ViewState, id: Entity, view: EntityView, errors: unknown[]
   let el: HTMLElement | undefined
   if (!guard(errors, () => { el = state.def.create(view) })) {
     state.failed.add(id)
+    ensureRetryQueries(state)
     return false
   }
   state.failed.delete(id)
@@ -324,6 +335,8 @@ function commit(state: ViewState, errors: unknown[]): void {
       }
       continue
     }
+    // A callback earlier in this commit may have despawned it.
+    if (!state.world.isAlive(id)) continue
     if (!mount(state, id, view, errors)) continue
     // O-2 first paint: under change-gated modes (auto/explicit), a newly
     // mounted entity has no OnChanged mark, so the gated update phase would
@@ -340,16 +353,17 @@ function commit(state: ViewState, errors: unknown[]): void {
   }
 
   const update = state.def.update
-  const changed = (update && state.mounted.size > 0) || state.failed.size > 0
-    ? collectChanged(state.changedQueries)
-    : null
+  const changed = update && state.mounted.size > 0 ? collectChanged(state.changedQueries) : null
   // O-53: retry a failed create once the entity is marked changed — the
   // change may be what fixes it.
-  if (changed && state.failed.size > 0) {
+  if (state.failed.size > 0 && state.retryQueries) {
+    const marked = state.retryQueries === state.changedQueries && changed
+      ? changed
+      : collectChanged(state.retryQueries)!
     for (const id of Array.from(state.failed).sort(ascending)) {
-      const view = changed.get(id)
+      const view = marked.get(id)
       if (!view) continue
-      if (mount(state, id, view, errors) && update) (created ??= new Set()).add(id)
+      if (mount(state, id, view, errors) && update && changed) (created ??= new Set()).add(id)
     }
   }
 
@@ -370,7 +384,8 @@ function commit(state: ViewState, errors: unknown[]): void {
       for (const id of Array.from(ids).sort(ascending)) {
         const rec = state.mounted.get(id)
         if (!rec) continue
-        const view = changed.get(id) ?? currentView(state.world, id)
+        const view = changed.get(id) ?? state.world.getView(id)
+        if (!view) continue // despawned during this commit
         rec.view = view
         guard(errors, () => update(rec.el, view))
       }
@@ -383,13 +398,21 @@ function ascending(a: Entity, b: Entity): number {
 }
 
 /**
- * A commit-time view of `entity` with every component it holds now (O-2:
- * a created entity's first paint sees components added after it matched).
+ * O-53: start watching for the changes that retry a failed create. Reading
+ * the new queries once opens their windows now, so only marks made after
+ * the failure trigger a retry.
  */
-function currentView(world: World, entity: Entity): EntityView {
-  const view: Record<string, unknown> = { id: entity }
-  for (const type of world.archetype(entity)) view[type.name] = world.getComponent(entity, type)
-  return view as EntityView
+function ensureRetryQueries(state: ViewState): void {
+  if (state.retryQueries) return
+  if (state.changedQueries) {
+    state.retryQueries = state.changedQueries
+    return
+  }
+  const types = state.def.changedOn?.mode === 'explicit'
+    ? state.def.changedOn.types
+    : Array.from(collectHasComponents(normalizeQuery(state.def.query)).values())
+  state.retryQueries = types.map((c) => state.world.query(OnChanged(c)))
+  collectChanged(state.retryQueries)
 }
 
 /** Entities marked changed on a redraw trigger, with their current views. */

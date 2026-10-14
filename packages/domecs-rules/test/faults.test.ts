@@ -63,26 +63,44 @@ describe('rules — runtime failures become entity faults', () => {
 })
 
 describe('rules — compile-time type errors', () => {
-  it('rejects arithmetic on a field whose default is a string', () => {
-    const r = compileRule(rule({ actions: [{ set: 'FtHp.hp', expr: 'FtName.value + 1' }] }), resolve)
+  it('rejects a literal of the wrong kind in arithmetic', () => {
+    const r = compileRule(rule({ actions: [{ set: 'FtHp.hp', expr: 'FtHp.hp + "1"' }] }), resolve)
     expect(r.rule).toBeNull()
     expect(r.errors).toEqual([
-      { rule: 'r', position: 0, message: 'Expected a number for "+", got string' },
+      { rule: 'r', position: 10, message: 'Expected a number for "+", got string' },
     ])
-  })
-
-  it('rejects a write of the wrong kind to a field with a default', () => {
-    const r = compileRule(rule({ actions: [{ set: 'FtHp.hp', expr: 'FtHp.hp > 1' }] }), resolve)
-    expect(r.errors[0]?.message).toBe('Cannot set FtHp.hp: expected a number, got boolean')
     const r2 = compileRule(rule({ when: '-"a" > 0', actions: [] }), resolve)
     expect(r2.errors[0]).toMatchObject({ position: 1, message: 'Expected a number for unary "-", got string' })
+    const r3 = compileRule(rule({ when: '(1 < 2) * 3 > 0', actions: [] }), resolve)
+    expect(r3.errors[0]?.message).toBe('Expected a number for "*", got boolean')
   })
 
-  it('accepts what it cannot know: fields without defaults, mixed ternaries, ==', () => {
-    for (const expr of ['FtLoose.v', 'FtHp.hp > 1 ? 1 : 2', 'FtLoose.v + 1']) {
+  it('accepts what may run fine: fields of any default, short-circuited and branch code, ==', () => {
+    const ok = [
+      'FtName.value + 1', // a field's kind is not fixed by its default
+      'FtLoose.v',
+      'FtHp.hp > 1 ? 1 : 2',
+      'FtName.value == "num" || FtName.value + 1 > 0',
+      'FtHp.hp > 0 ? FtHp.hp : "x" + 1',
+    ]
+    for (const expr of ok) {
       expect(compileRule(rule({ actions: [{ set: 'FtHp.hp', expr }] }), resolve).errors).toEqual([])
     }
     expect(compileRule(rule({ when: 'FtName.value == 3', actions: [] }), resolve).errors).toEqual([])
-    expect(compileRule(rule({ actions: [{ set: 'FtLoose.v', expr: '"s"' }] }), resolve).errors).toEqual([])
+    expect(compileRule(rule({ actions: [{ set: 'FtHp.hp', expr: '"s"' }] }), resolve).errors).toEqual([])
+  })
+})
+
+describe('rules — values errors cannot print (O-68 review)', () => {
+  it('a BigInt field faults the entity instead of crashing the step', () => {
+    const Bag = defineComponent<{ o: unknown }>('FtBag', { defaults: { o: null } })
+    types.set(Bag.name, Bag)
+    const w = createWorld({ headless: true })
+    installRules(w, [rule({ actions: [{ set: 'FtHp.hp', expr: 'FtHp.hp + FtBag.o' }] })], resolve)
+    const bad = w.spawn([entry(Hp, { hp: 1 }), entry(Bag, { o: 5n })])
+    const good = w.spawn([entry(Hp, { hp: 1 }), entry(Bag, { o: 2 })])
+    expect(() => w.stepOnce()).not.toThrow()
+    expect(w.getComponent(good, Hp)!.hp).toBe(3)
+    expect(w.getComponent(bad, Faulted)!.faults[0]!.kind).toBe('rule_eval_failed')
   })
 })

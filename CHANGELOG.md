@@ -15,7 +15,8 @@ All notable changes to DOMECS are documented here. The format is based on
   `teardown()` removes every node before rethrowing. `@domecs/core` closes a
   tick's change windows even when the tick throws. (O-53)
 - `@domecs/input`: a `step(0)` heartbeat no longer eats key presses and
-  pointer/wheel deltas; they reach the next tick's systems. `@domecs/core`:
+  pointer/wheel deltas; they reach the next full tick, once (a heartbeat's
+  snapshot carries held keys and position but no edges). `@domecs/core`:
   plugin `onTickStart`/`onRender`/`onTickEnd` receive a second argument,
   `TickInfo` (`{ heartbeat: boolean }`, exported). (O-57)
 - `@domecs/scene`: `setParent` rejects a parent that is not alive. The README
@@ -31,15 +32,15 @@ All notable changes to DOMECS are documented here. The format is based on
   `Faulted` entry (`rule_eval_failed`, source `rule:<name>`; the `RuleFault`
   type is exported); any other error propagates out of the step.
   `compileRule` rejects type errors certain at compile time — a string or
-  boolean in arithmetic, a comparison or a function, or a write of the wrong
-  kind to a field whose default fixes it. (O-68)
+  boolean literal (or operator result) where arithmetic, a comparison or a
+  function needs a number, outside short-circuited or branch code. (O-68)
 - `@domecs/core`: `Not(Where(T, p))` matches entities that lack `T` or whose
   `T` fails `p` (it behaved as `Not(Has(T))`); `Not` over `OnAdded`/
   `OnChanged`/`OnRemoved`/`OnChangedResource` likewise negates per entity.
   (O-74)
 - `@domecs/scene`: `composeTransforms` marks `World_` changed only when a
-  value moved (change-gated views repainted every tick), removes the `World_`
-  it added when an entity loses `Local`, removes its system on disposal, and
+  value moved (change-gated views repainted every tick), removes `World_`
+  when an entity loses `Local`, removes its systems on disposal, and
   takes `options` (`priority`, `name`). **Behavior change**: the default
   plugin/system name is now `domecs-scene:compose-transforms:<Local>><World_>`,
   so one instance per component pair can be installed. (O-65)
@@ -55,7 +56,8 @@ All notable changes to DOMECS are documented here. The format is based on
   changed, not the number of entities: `OnAdded`/`OnChanged` queries read
   the marks in their window when that is cheaper, and a view's update phase
   visits only changed, created and re-added entities (50k entities, one
-  change: 10.6 → 0.03 ms per commit). (O-54)
+  change: 10.6 → 0.03 ms per commit). New `world.getView(entity)` returns
+  the entity's current view (the object queries hand out). (O-54)
 - Docs: `doc/api.md`'s World listing matches the shipped interface (removed
   `resource<T>()`/`entitiesWith`, added the missing members); README and
   AGENTS name the five published packages and the two unpublished ones

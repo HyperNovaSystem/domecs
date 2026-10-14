@@ -59,8 +59,8 @@ The plugin writes an `InputSnapshot` at tick start:
 > 4 Hz will miss most presses, and when one frame runs several `fixed`
 > sub-steps, each of them sees the same edges — one press fires once per
 > sub-step (O-59). Put edge-triggered input on a `tick` system (or read held
-> `keys` when you only need “is down”). A `step(0)` heartbeat publishes the
-> pending edges without consuming them (O-57).
+> `keys` when you only need “is down”). A `step(0)` heartbeat publishes no
+> edges or deltas and keeps them for the next full tick (O-57).
 - `mods` — `ctrl`, `alt`, `shift`, `meta` modifier state.
 - `pointer` — pointer position, buttons, movement delta, wheel delta, and
   reserved `entered` entity ids. The collector currently leaves `entered`

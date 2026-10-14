@@ -73,8 +73,8 @@ despawnTree(world, root) // despawns root AND child
   `'tick'` system deriving `WorldT` from `Local` down the `Parent` hierarchy,
   always composing a parent before its children regardless of query/spawn
   order, at any chain depth. `WorldT` is marked changed only when a value
-  moved; an entity that loses `Local` loses the `WorldT` the plugin added;
-  disposing the plugin removes the system. `options.priority` places the
+  moved (a field holding an object always counts as moved); an entity that
+  loses `Local` loses `WorldT`; disposing the plugin removes its systems. `options.priority` places the
   system (default 0 — run what moves `Local` before it and what reads
   `WorldT` after it); `options.name` overrides the default
   `domecs-scene:compose-transforms:<Local>><WorldT>`, so one instance per

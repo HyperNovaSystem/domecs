@@ -195,7 +195,7 @@ unconstrained `EntityView` shape.
 
 **Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `OnAdded` / `OnRemoved` / `OnChanged` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
-Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries. A query that every match must satisfy through one `OnAdded(T)`/`OnChanged(T)` leaf (the leaf itself, or a child of an `And`) reads the marks of `T` in its window rather than every holder of `T`, when they are fewer than a quarter of its structural members (O-54) — an idle or lightly changed frame costs what changed, not the world's size.
+Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries. A query that every match must satisfy through one `OnAdded(T)`/`OnChanged(T)` leaf (the leaf itself, or a child of an `And`) reads the marks of `T` in its window rather than every holder of `T` when the window holds at most a quarter as many marks as the query has structural members (O-54) — an idle or lightly changed frame costs what changed, not the world's size.
 
 ### 2.5 System
 
@@ -446,7 +446,7 @@ An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, n
 1. Leave `time.tick`, `time.elapsed`, and every system's change window unchanged.
 2. Set `time.delta = 0` and `time.scaledDelta = 0`.
 3. Skip steps 3–6 entirely — no `fixed`, `tick`, `event`, or `reactive` systems run.
-4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots. The plugin hooks receive `{ heartbeat: true }` as their second argument (`TickInfo`, O-57); a plugin that hands systems one-tick data MUST NOT consume it on a heartbeat. `@domecs/input` publishes the pending key edges and pointer/wheel deltas on a heartbeat and keeps them for the next tick's systems.
+4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots. The plugin hooks receive `{ heartbeat: true }` as their second argument (`TickInfo`, O-57); a plugin that hands systems one-tick data MUST NOT consume it on a heartbeat. `@domecs/input` keeps the pending key edges and pointer/wheel deltas for the next tick: a heartbeat's snapshot has current held keys, position and buttons but no edges or deltas, so each edge is seen by exactly one full tick.
 
 A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Marks made before a heartbeat stay unseen by systems until their next run. A live query read during the heartbeat's render (a renderer's change gate) has seen what it read: its window advances at the end of the heartbeat (§2.9), so a heartbeat paints between-tick marks once and the next tick does not repaint them.
 
@@ -484,7 +484,7 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
      (ctx) => { for (const e of ctx.entities) rescale(e) })
    ```
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
-8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9). The windows close even when a step above throws (O-53): a query read before the throw has seen what it read.
+8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9). These windows advance even when a step above throws (O-53): a query read before the throw has seen what it read. The rest of the tick's bookkeeping (pruning, restored cursors) happens only when the tick completes.
 
 Events emitted in steps 5–6 are buffered for next tick.
 
@@ -576,8 +576,9 @@ renderer's `onRender` once the commit is done, so it propagates out of
 are not affected: a failed `destroy` still removes the node; a failed
 `update` leaves the node mounted and is not retried until the entity is
 marked changed again; a failed `create` leaves the entity unmounted until it
-is marked changed on a redraw trigger (then `create` is retried) or leaves
-and re-enters the view. `MountHandle.teardown()` likewise removes every node
+is marked changed on a redraw trigger — for a view without them (no `update`,
+or `legacy`), on a component of one of its query's `Has` leaves — when
+`create` is retried, or until it leaves and re-enters the view. `MountHandle.teardown()` likewise removes every node
 and then rethrows the first `destroy` error. The tick's change windows close
 even when the frame throws (§4.1 step 8), so the renderer is not handed the
 same marks again.

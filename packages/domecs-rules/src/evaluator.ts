@@ -52,9 +52,27 @@ function toBoolean(value: number | string | boolean): boolean {
 
 function expectNumber(value: number | string | boolean, context: string): number {
   if (typeof value !== 'number') {
-    throw new RuleEvalError(`Expected a number for ${context}, got ${typeof value} (${JSON.stringify(value)})`)
+    throw new RuleEvalError(`Expected a number for ${context}, got ${typeof value} (${describeValue(value)})`)
   }
   return value
+}
+
+/**
+ * A short rendering of a value for an error message that cannot itself
+ * throw — component fields may hold BigInts, symbols or cyclic objects.
+ */
+function describeValue(value: unknown): string {
+  try {
+    const json = JSON.stringify(value)
+    if (json !== undefined) return json
+  } catch {
+    // fall through
+  }
+  try {
+    return String(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
 }
 
 /**

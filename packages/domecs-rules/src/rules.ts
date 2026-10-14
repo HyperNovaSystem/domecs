@@ -2,7 +2,7 @@ import type { ComponentType, SystemFault, SystemHandle, World } from '@domecs/co
 import { walkFieldRefs, type AstNode } from './ast.js'
 import { parseExpression } from './parser.js'
 import { evaluate, RuleEvalError, type EvalEnv } from './evaluator.js'
-import { inferKind, type StaticKind } from './typecheck.js'
+import { inferKind } from './typecheck.js'
 
 /**
  * O-67: field names a rule may never read or write. Reads are own-property
@@ -83,10 +83,10 @@ interface CompiledRuleInternal extends CompiledRule {
  *   action's `set` target's component name (the left side of the dot in
  *   `"Component.field"`, which is a raw string, not something parsed).
  * - Type errors certain before the rule runs are `RuleError`s at the
- *   offending node's position (O-68): a string or boolean where arithmetic,
- *   a comparison or a function needs a number, or an action whose result
- *   kind differs from its target field's. A field's kind comes from its
- *   component's defaults; a field without a usable default is not checked.
+ *   offending node's position (O-68): a string or boolean literal, or an
+ *   operator result of that kind, where arithmetic, a comparison or a
+ *   function needs a number — outside the right side of `&&`/`||` and
+ *   ternary branches, which may not run. Field kinds are not inferred.
  * - If there are ANY errors, returns `{ rule: null, errors }` — never a
  *   partially-compiled rule.
  */
@@ -167,38 +167,13 @@ export function compileRule(
 
   if (errors.length > 0) return { rule: null, errors }
 
-  // O-68 (R4): reject type errors that would fail on every entity — a
-  // non-number in arithmetic, or a write of the wrong kind to a field whose
-  // default fixes its kind. Fields without a usable default are unknown.
-  const defaultsByName = new Map<string, Record<string, unknown> | null>()
-  const fieldKind = (component: string, field: string): StaticKind => {
-    let defaults = defaultsByName.get(component)
-    if (defaults === undefined) {
-      try {
-        defaults = componentsByName.get(component)!.create() as Record<string, unknown>
-      } catch {
-        defaults = null // a validate hook rejected the bare defaults
-      }
-      defaultsByName.set(component, defaults)
-    }
-    if (!defaults || !Object.hasOwn(defaults, field)) return 'unknown'
-    const t = typeof defaults[field]
-    return t === 'number' || t === 'string' || t === 'boolean' ? t : 'unknown'
-  }
+  // O-68 (R4): reject type errors certain before the rule runs (see
+  // typecheck.ts). Field kinds are not inferred: defaults do not fix them.
   const report = (position: number, message: string): void => {
     errors.push({ rule: def.name, position, message })
   }
-  if (whenAst) inferKind(whenAst, fieldKind, report)
-  for (const action of compiledActions) {
-    const kind = inferKind(action.ast, fieldKind, report)
-    const target = fieldKind(action.component.name, action.field)
-    if (kind !== 'unknown' && target !== 'unknown' && kind !== target) {
-      report(
-        action.ast.pos,
-        `Cannot set ${action.component.name}.${action.field}: expected a ${target}, got ${kind}`,
-      )
-    }
-  }
+  if (whenAst) inferKind(whenAst, report)
+  for (const action of compiledActions) inferKind(action.ast, report)
   if (errors.length > 0) return { rule: null, errors }
 
   const rule: CompiledRuleInternal = {

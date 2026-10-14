@@ -32,10 +32,11 @@ as field names at compile time. A write that does not change the value does
 not mark the component changed.
 
 Errors are reported, not swallowed. Type errors that would fail on every
-entity are compile errors: a string or boolean in arithmetic, a comparison
-or a function, or an action whose result kind differs from its target
-field's (kinds come from the component's `defaults`; fields without a
-default are not checked). At run time, a rule that cannot run on an entity —
+evaluation are compile errors: a string or boolean literal (or an operator
+producing one) where arithmetic, a comparison or a function needs a number,
+outside code that may not run (the right side of `&&`/`||`, ternary
+branches). Field kinds are not checked at compile time — a component's
+defaults do not fix them. At run time, a rule that cannot run on an entity —
 a field it reads is missing, or a write is rejected — skips that entity and
 attaches a fault to it: `Faulted` gets an entry with kind `rule_eval_failed`,
 source `rule:<name>` and `detail: { rule, message }` (the `RuleFault` type).

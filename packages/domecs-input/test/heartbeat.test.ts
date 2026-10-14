@@ -25,9 +25,11 @@ describe('@domecs/input — heartbeat keeps edges (O-57)', () => {
     document.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, bubbles: true }))
 
     world.step(0)
-    // The heartbeat publishes the pending state (a renderer may show it)...
+    // The heartbeat publishes held state but no edges, so a tickStart
+    // hotkey cannot see the press twice...
     expect(world.input.keys.has('KeyJ')).toBe(true)
-    expect(world.input.keyDelta.pressed.has('KeyJ')).toBe(true)
+    expect(world.input.keyDelta.pressed.size).toBe(0)
+    expect(world.input.pointer.wheel).toBe(0)
     world.step(0)
 
     world.step(1 / 60)

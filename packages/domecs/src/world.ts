@@ -187,6 +187,12 @@ export interface World {
   despawn(entity: Entity): void
   /** Whether `entity` was spawned and has not been despawned (O-61). */
   isAlive(entity: Entity): boolean
+  /**
+   * The entity's current view — `{ id, [ComponentName]: value }` for every
+   * component it holds, the same object queries hand out — or undefined if
+   * it is not alive (O-54).
+   */
+  getView(entity: Entity): EntityView | undefined
   has(entity: Entity, type: ComponentType<unknown>): boolean
   addComponent<T>(entity: Entity, type: ComponentType<T>, value: T): void
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
@@ -1289,10 +1295,10 @@ export function createWorld(options: WorldOptions = {}): World {
       // it read, so a renderer whose callback threw is not handed the same
       // marks — and the same throw — every frame after.
       advanceQueryWindows()
-      lastTickEndSeq = changes.seq
-      pendingCursors.clear()
-      changes.pruneRemoved(removalHorizon())
     }
+    lastTickEndSeq = changes.seq
+    pendingCursors.clear()
+    changes.pruneRemoved(removalHorizon())
   }
 
   /**
@@ -1391,7 +1397,8 @@ export function createWorld(options: WorldOptions = {}): World {
     // O-54: a query every match of which carries an added/changed mark of
     // one type takes its candidates from that type's marks in the window,
     // not from every structural member.
-    const driver = removedNames ? null : requiredMark(node)
+    // Hook-only queries (observe) never read a window: no log for them.
+    const driver = removedNames || !readsChanges ? null : requiredMark(node)
     const unwatch = driver ? changes.watchMarks(driver.kind, driver.name) : null
     // Call inside the read's window (hasRemoved implies needsEntityFilter).
     const collectCandidates = (): readonly Entity[] => {
@@ -1402,8 +1409,9 @@ export function createWorld(options: WorldOptions = {}): World {
           driver.kind, driver.name, winFrom, winTo, q.structuralMembers.size >> 2,
         )
         if (marked) {
-          // A restored mark may name a component the entity no longer has.
-          const held = marked.filter((e) => hasType(e, driver.name))
+          // Only structural members are candidates, as on the scan path: a
+          // restored mark may name a component the entity no longer has.
+          const held = marked.filter((e) => q.structuralMembers.has(e))
           return held.length > 1 ? held.sort(byId) : held
         }
       }
@@ -1578,6 +1586,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
     isAlive(entity: Entity): boolean {
       return alive.has(entity)
+    },
+
+    getView(entity: Entity): EntityView | undefined {
+      return alive.has(entity) ? makeView(entity) : undefined
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {

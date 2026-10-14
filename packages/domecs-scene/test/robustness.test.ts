@@ -53,6 +53,24 @@ describe('hierarchy at scale and over corrupted graphs (O-64)', () => {
     expect(world.getComponent(c, Parent)!.entity).toBeNull()
   })
 
+  it('despawnTree orphans an entity a despawn subscriber parented under the subtree', () => {
+    const w = createWorld({ headless: true })
+    w.use(installHierarchy())
+    const root = w.spawn()
+    const kid = w.spawn([entry(Parent, { entity: root })])
+    const other = w.spawn([entry(Parent, { entity: null })])
+    let done = false
+    w.signals.entityDespawned.subscribe((id) => {
+      if (id !== kid || done) return
+      done = true
+      w.getComponent(other, Parent)!.entity = root
+      w.markChanged(other, Parent)
+    })
+    despawnTree(w, root)
+    expect(w.isAlive(other)).toBe(true)
+    expect(w.getComponent(other, Parent)!.entity).toBeNull()
+  })
+
   it('composeTransforms handles a 50k-deep chain without overflowing the stack', () => {
     const world = createWorld({ headless: true })
     const r = world.use(composeTransforms(Local, WorldX, (pw, l) => ({ x: (pw?.x ?? 0) + l.x })))

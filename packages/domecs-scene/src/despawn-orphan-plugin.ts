@@ -1,5 +1,5 @@
 import { definePlugin, type Plugin } from '@domecs/core'
-import { Parent, cascading } from './hierarchy.js'
+import { Parent, cascading, orphanPolicy } from './hierarchy.js'
 
 /**
  * Orphan policy for a **plain** `world.despawn()` call: whenever any entity
@@ -35,9 +35,11 @@ export function installHierarchy(): Plugin {
           // must not break the despawn/tick that triggered it).
         }
       })
+      orphanPolicy.add(world)
       return {
         teardown() {
           unsubscribe()
+          orphanPolicy.delete(world)
         },
       }
     },

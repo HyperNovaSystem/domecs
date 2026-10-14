@@ -261,17 +261,19 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
 
       /**
        * @param consume false on a heartbeat (O-57): no system runs, so the
-       *   edges and deltas are published but kept for the next real tick.
+       *   edges and deltas are kept for the next real tick and the heartbeat
+       *   publishes none — a `tickStart` hotkey must not see a press twice.
+       *   Held keys, position and buttons are current either way.
        */
       function build(consume: boolean): InputSnapshot {
-        const pressed = new Set(pressedNext)
-        const released = new Set(releasedNext)
+        const pressed = consume ? new Set(pressedNext) : new Set<string>()
+        const released = consume ? new Set(releasedNext) : new Set<string>()
         const pSnap: PointerSnapshot = {
           x: pointer.x,
           y: pointer.y,
           buttons: pointer.buttons,
-          delta: { x: pointer.deltaX, y: pointer.deltaY },
-          wheel: pointer.wheel,
+          delta: consume ? { x: pointer.deltaX, y: pointer.deltaY } : { x: 0, y: 0 },
+          wheel: consume ? pointer.wheel : 0,
           entered: pointer.entered.slice(),
         }
         if (consume) {

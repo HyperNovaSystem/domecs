@@ -226,6 +226,9 @@ interface World {
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
   isAlive(entity: Entity): boolean          // spawned and not despawned (O-61)
+  // The entity's current view ({ id, [ComponentName]: value }, the object
+  // queries hand out), or undefined when it is not alive.
+  getView(entity: Entity): EntityView | undefined
   has(entity: Entity, type: ComponentType<unknown>): boolean
 
   // components
