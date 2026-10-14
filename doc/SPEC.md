@@ -134,7 +134,7 @@ A query is a composable predicate over component presence and values. Queries ar
 
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
-- `Not(node)` — true when `node` is false. Unary.
+- `Not(node)` — true when `node` is false. Unary. Evaluated per entity (O-74): `Not(Where(T, p))` matches an entity that lacks `T` or whose `T` fails `p`, and `Not(OnAdded(T))` an entity whose `T` was not added in the window (or that lacks `T`); candidate selection by archetype MUST NOT drop such entities.
 - `And(...nodes)` — true when every child is true. N-ary.
 - `Or(...nodes)` — true when any child is true. N-ary.
 

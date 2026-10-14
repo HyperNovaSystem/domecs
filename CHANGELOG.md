@@ -33,6 +33,10 @@ All notable changes to DOMECS are documented here. The format is based on
   `compileRule` rejects type errors certain at compile time — a string or
   boolean in arithmetic, a comparison or a function, or a write of the wrong
   kind to a field whose default fixes it. (O-68)
+- `@domecs/core`: `Not(Where(T, p))` matches entities that lack `T` or whose
+  `T` fails `p` (it behaved as `Not(Has(T))`); `Not` over `OnAdded`/
+  `OnChanged`/`OnRemoved`/`OnChangedResource` likewise negates per entity.
+  (O-74)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

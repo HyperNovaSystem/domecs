@@ -106,6 +106,12 @@ const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
 ])
 const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
 
+// O-74: three-valued archetype match (see matchArchetype in createWorld).
+type ArchMatch = 0 | 1 | 2
+const ARCH_NO: ArchMatch = 0
+const ARCH_MAYBE: ArchMatch = 1
+const ARCH_YES: ArchMatch = 2
+
 // The manifest is a plain-data handoff: clone FieldSchema values so no
 // consumer holds references into the live component/event schema metadata
 // (mutating a manifest must never corrupt reflection world-wide).
@@ -685,20 +691,56 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
+  /**
+   * Whether an archetype with `types` can hold entities matching `node`:
+   * the candidate filter for every query. `evalEntity` settles the
+   * per-entity nodes (`Where`, change filters) for the candidates.
+   */
   function evalStructural(node: QueryNode, types: Set<string>): boolean {
+    return matchArchetype(node, types) !== ARCH_NO
+  }
+
+  /**
+   * O-74: three-valued archetype match — every entity of the archetype
+   * matches (YES), none does (NO), or it depends on per-entity state such
+   * as a `Where` predicate or a change window (MAYBE). Negation keeps MAYBE,
+   * so `Not(Where(T, p))` keeps `T` holders as candidates and matches those
+   * whose `T` fails `p`, as `evalEntity` does — a two-valued match read
+   * `Where` as `Has` and dropped them.
+   */
+  function matchArchetype(node: QueryNode, types: Set<string>): ArchMatch {
     switch (node.kind) {
-      case 'has': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'not': return !evalStructural(node.child, types)
-      case 'or': return node.children.some((c) => evalStructural(c, types))
-      case 'and': return node.children.every((c) => evalStructural(c, types))
-      case 'added': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'changed': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'removed': return true
-      case 'where': requireRegisteredType(node.type); return types.has(node.type.name)
+      case 'has': requireRegisteredType(node.type); return types.has(node.type.name) ? ARCH_YES : ARCH_NO
+      case 'not': return (ARCH_YES - matchArchetype(node.child, types)) as ArchMatch
+      case 'or': {
+        let m: ArchMatch = ARCH_NO
+        for (const c of node.children) {
+          const r = matchArchetype(c, types)
+          if (r > m) m = r
+          if (m === ARCH_YES) break
+        }
+        return m
+      }
+      case 'and': {
+        let m: ArchMatch = ARCH_YES
+        for (const c of node.children) {
+          const r = matchArchetype(c, types)
+          if (r < m) m = r
+          if (m === ARCH_NO) break
+        }
+        return m
+      }
+      case 'added':
+      case 'changed':
+      case 'where':
+        requireRegisteredType(node.type)
+        return types.has(node.type.name) ? ARCH_MAYBE : ARCH_NO
+      // A removed component is no longer in any archetype.
+      case 'removed': return ARCH_MAYBE
       // Structurally neutral: a resource gate does not constrain which entities
       // match (it is a per-tick gate evaluated in evalEntity), so it must not
       // prune the And() it sits inside. See ChangedResource (#16).
-      case 'changedResource': return true
+      case 'changedResource': return ARCH_MAYBE
     }
   }
 
