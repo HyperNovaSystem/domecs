@@ -1,6 +1,17 @@
 import { definePlugin, type ComponentType, type Entity, type Plugin } from '@domecs/core'
 import { Parent } from './hierarchy.js'
 
+export interface ComposeTransformsOptions {
+  /** Plugin and system name. Default `domecs-scene:compose-transforms:<Local>><World_>`. */
+  readonly name?: string
+  /**
+   * System priority (lower runs first; default 0). Systems that move
+   * `Local` should run before it and readers of `World_` after it, or they
+   * see last tick's values.
+   */
+  readonly priority?: number
+}
+
 /**
  * Plugin factory: installs a `'tick'` system that keeps a `World_` component
  * derived from a `Local` component, composed down the `Parent` hierarchy so a
@@ -19,41 +30,57 @@ import { Parent } from './hierarchy.js'
  * corrupted into a cycle, the entity where the walk meets the cycle is
  * composed with `parentWorld = null` for that tick rather than looping
  * forever.
+ *
+ * `World_` is written and marked changed only when a field's value moved,
+ * so change-gated readers are not woken every tick; an entity that loses
+ * `Local` loses the `World_` this plugin added. Disposing the plugin removes
+ * its system (O-65).
  */
 export function composeTransforms<T>(
   Local: ComponentType<T>,
   World_: ComponentType<T>,
   compose: (parentWorld: T | null, local: T) => T,
+  options: ComposeTransformsOptions = {},
 ): Plugin {
+  // O-65: named per component pair, so two instances can coexist.
+  const name = options.name ?? `domecs-scene:compose-transforms:${Local.name}>${World_.name}`
   return definePlugin({
-    name: 'domecs-scene:compose-transforms',
+    name,
     install(world) {
-      world.system(
-        'domecs-scene:compose-transforms',
-        { schedule: 'tick', query: [Local] },
+      // Entities whose World_ this plugin added; it is removed again when
+      // they lose Local (O-65).
+      const owned = new Set<Entity>()
+      const handle = world.system(
+        name,
+        { schedule: 'tick', query: [Local], priority: options.priority ?? 0 },
         (ctx) => {
           const localSet = new Set<Entity>()
           for (const e of ctx.entities) localSet.add(e.id)
+
+          for (const id of owned) {
+            if (localSet.has(id)) continue
+            owned.delete(id)
+            if (world.isAlive(id) && world.has(id, World_)) world.removeComponent(id, World_)
+          }
 
           const computed = new Map<Entity, T>()
 
           function write(id: Entity, parentWorld: T | null): T {
             const local = world.getComponent(id, Local)!
             const worldValue = compose(parentWorld, local)
-            if (world.has(id, World_)) {
-              const existing = world.getComponent(id, World_) as unknown as Record<
-                string,
-                unknown
-              >
-              Object.assign(existing, worldValue as unknown as Record<string, unknown>)
-              world.markChanged(id, World_)
-            } else {
+            const existing = world.getComponent(id, World_)
+            if (existing === undefined) {
               world.addComponent(id, World_, worldValue)
+              owned.add(id)
+            } else if (!sameFields(existing, worldValue)) {
+              // O-65: only a value that moved is marked, so change-gated
+              // views of World_ do not repaint every tick.
+              Object.assign(existing as object, worldValue)
+              world.markChanged(id, World_)
             }
             computed.set(id, worldValue)
             return worldValue
           }
-
           // O-64: walk up to the nearest resolved ancestor, then compose back
           // down — a loop, not recursion, so chain depth is unbounded.
           function resolve(start: Entity): void {
@@ -75,7 +102,21 @@ export function composeTransforms<T>(
           for (const id of localSet) resolve(id)
         },
       )
-      return {}
+      return {
+        teardown() {
+          handle.remove()
+        },
+      }
     },
   })
+}
+
+/** Whether every own field of `next` already holds the same value in `prev`. */
+function sameFields(prev: unknown, next: unknown): boolean {
+  const a = prev as Record<string, unknown>
+  const b = next as Record<string, unknown>
+  for (const key of Object.keys(b)) {
+    if (!Object.is(a[key], b[key])) return false
+  }
+  return true
 }

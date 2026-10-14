@@ -37,6 +37,12 @@ All notable changes to DOMECS are documented here. The format is based on
   `T` fails `p` (it behaved as `Not(Has(T))`); `Not` over `OnAdded`/
   `OnChanged`/`OnRemoved`/`OnChangedResource` likewise negates per entity.
   (O-74)
+- `@domecs/scene`: `composeTransforms` marks `World_` changed only when a
+  value moved (change-gated views repainted every tick), removes the `World_`
+  it added when an entity loses `Local`, removes its system on disposal, and
+  takes `options` (`priority`, `name`). **Behavior change**: the default
+  plugin/system name is now `domecs-scene:compose-transforms:<Local>><World_>`,
+  so one instance per component pair can be installed. (O-65)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

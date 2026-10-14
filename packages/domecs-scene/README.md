@@ -54,8 +54,9 @@ despawnTree(world, root) // despawns root AND child
   and cycles (parenting an ancestor under its own descendant). A parent with
   no persistent component is dropped by snapshot pruning — give groups one
   (see Quick start).
-- `childrenOf(world, entity)` — direct children, recomputed every call (no
-  cache: `WorldSignals` has no per-component "changed" event).
+- `childrenOf(world, entity)` — direct children in ascending id order,
+  recomputed every call (no cache: `WorldSignals` has no per-component
+  "changed" event).
 - `ancestorsOf(world, entity)` — `[parent, grandparent, ..., root]`, not
   including `entity` itself; terminates even over a corrupted/cyclic
   `Parent` graph.
@@ -68,10 +69,16 @@ despawnTree(world, root) // despawns root AND child
   any live children of the despawned entity to `null` (root). Does **not**
   fire for `despawnTree`'s own cascade (descendants are already gone by the
   time an ancestor's despawn signal reaches this handler).
-- `composeTransforms(Local, WorldT, compose)` — `Plugin`; installs a `'tick'`
-  system deriving `WorldT` from `Local` down the `Parent` hierarchy, always
-  composing a parent before its children regardless of query/spawn order,
-  at any chain depth.
+- `composeTransforms(Local, WorldT, compose, options?)` — `Plugin`; installs a
+  `'tick'` system deriving `WorldT` from `Local` down the `Parent` hierarchy,
+  always composing a parent before its children regardless of query/spawn
+  order, at any chain depth. `WorldT` is marked changed only when a value
+  moved; an entity that loses `Local` loses the `WorldT` the plugin added;
+  disposing the plugin removes the system. `options.priority` places the
+  system (default 0 — run what moves `Local` before it and what reads
+  `WorldT` after it); `options.name` overrides the default
+  `domecs-scene:compose-transforms:<Local>><WorldT>`, so one instance per
+  component pair can be installed.
   `compose(parentWorld, local)` receives `parentWorld = null` at hierarchy
   roots and whenever the direct `Parent` target does not itself carry
   `Local`.
