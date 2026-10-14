@@ -20,8 +20,9 @@ documented behavior around missing fields (skip-this-entity) and determinism
 (`random()` is wired to the per-tick `ctx.rand.uniform()`, never
 `Math.random`).
 
-Writes are checked and atomic. For each entity, every action is evaluated
-against the pre-rule values before any is written; if one fails, the entity is
+Writes are checked and atomic. For each entity, actions are evaluated in
+order — a later action reads the value an earlier one set — against staged
+writes, which are committed only when every action succeeded; if one fails, the entity is
 skipped and nothing is written — including when an action's target component
 is missing from the entity. A write must target an existing field of the same
 kind (number, string or boolean; a field holding `null` or `undefined` takes

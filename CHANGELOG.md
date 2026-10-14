@@ -24,7 +24,7 @@ All notable changes to DOMECS are documented here. The format is based on
   `__proto__`/`constructor`/`prototype` are rejected at compile time; a write
   must target an existing field of the same kind (a `null`/`undefined` field
   takes any) with a finite number, and every target component must exist, or
-  the entity is skipped; every action is evaluated before any is written; writes
+  the entity is skipped; actions apply in order but commit only if all succeed; writes
   that do not change the value do not mark. (O-67, O-68, O-69)
 
 ### Fixed (2026-10-13 engine review — kernel hardening, O-41–O-50, O-62)

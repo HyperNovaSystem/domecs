@@ -205,11 +205,17 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
         // being processed this tick — see evaluator.ts's RuleEvalError doc.
         // Documented choice: skip-this-entity, not propagate/crash.
         try {
+          // O-68 (R3): writes are staged per "Component.field" and committed
+          // only when every action succeeded. Reads see staged values, so
+          // actions still apply in order (`hp = 100; hp = hp - 1` → 99).
+          const staged = new Map<string, number | string | boolean>()
           const env: EvalEnv = {
             dt,
             time,
             rand: { uniform: () => ctx.rand.uniform() },
             resolveField(component, field) {
+              const pending = staged.get(`${component}.${field}`)
+              if (pending !== undefined) return pending
               const type = componentsByName.get(component)
               if (!type) return undefined
               const value = world.getComponent(entity.id, type) as
@@ -223,9 +229,8 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
 
           if (whenAst && !evaluate(whenAst, env)) continue
 
-          // O-68 (R3): evaluate and check every action before writing any,
-          // so a failing action leaves the entity untouched and every
-          // expression reads the pre-rule values.
+          // O-68 (R3): evaluate and check every action, in order, before
+          // writing any, so a failing action leaves the entity untouched.
           const writes: Array<{ target: Record<string, unknown>; action: CompiledAction; value: unknown }> = []
           for (const action of actions) {
             const result = evaluate(action.ast, env)
@@ -238,9 +243,17 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
             }
             checkWrite(action, current, result)
             writes.push({ target: current, action, value: result })
+            staged.set(`${action.component.name}.${action.field}`, result)
           }
-          for (const { target, action, value } of writes) {
-            // R9: an unchanged value is not a change.
+          // Commit the final value of each field once; R9: an unchanged
+          // value is not a change.
+          const committed = new Set<string>()
+          for (let i = writes.length - 1; i >= 0; i--) {
+            const { target, action } = writes[i]!
+            const key = `${action.component.name}.${action.field}`
+            if (committed.has(key)) continue
+            committed.add(key)
+            const value = staged.get(key)
             if (Object.is(target[action.field], value)) continue
             target[action.field] = value
             world.markChanged(entity.id, action.component)
