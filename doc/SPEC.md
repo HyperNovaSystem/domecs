@@ -195,7 +195,7 @@ unconstrained `EntityView` shape.
 
 **Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `OnAdded` / `OnRemoved` / `OnChanged` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
-Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries.
+Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries. A query that every match must satisfy through one `OnAdded(T)`/`OnChanged(T)` leaf (the leaf itself, or a child of an `And`) reads the marks of `T` in its window rather than every holder of `T`, when they are fewer than a quarter of its structural members (O-54) — an idle or lightly changed frame costs what changed, not the world's size.
 
 ### 2.5 System
 

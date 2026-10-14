@@ -51,6 +51,11 @@ All notable changes to DOMECS are documented here. The format is based on
   system's trigger types from registration, and each entry is the type's
   `describeEvent()` descriptor with its schema fields, so agents can
   discover commands before anything emits them. (O-51)
+- `@domecs/core`, `@domecs/dom`: a change-gated read or commit costs what
+  changed, not the number of entities: `OnAdded`/`OnChanged` queries read
+  the marks in their window when that is cheaper, and a view's update phase
+  visits only changed, created and re-added entities (50k entities, one
+  change: 10.6 → 0.03 ms per commit). (O-54)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

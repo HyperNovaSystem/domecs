@@ -1388,8 +1388,25 @@ export function createWorld(options: WorldOptions = {}): World {
 
     const needsEntityFilter = hasTickFilter
     const removedNames = hasRemoved ? collectRemovedTypeNames(node) : null
+    // O-54: a query every match of which carries an added/changed mark of
+    // one type takes its candidates from that type's marks in the window,
+    // not from every structural member.
+    const driver = removedNames ? null : requiredMark(node)
+    const unwatch = driver ? changes.watchMarks(driver.kind, driver.name) : null
     // Call inside the read's window (hasRemoved implies needsEntityFilter).
     const collectCandidates = (): readonly Entity[] => {
+      if (driver) {
+        // Worth it only when the window is small next to the membership:
+        // the marks then need a sort the members do not.
+        const marked = changes.markedInWindow(
+          driver.kind, driver.name, winFrom, winTo, q.structuralMembers.size >> 2,
+        )
+        if (marked) {
+          // A restored mark may name a component the entity no longer has.
+          const held = marked.filter((e) => hasType(e, driver.name))
+          return held.length > 1 ? held.sort(byId) : held
+        }
+      }
       if (!removedNames) return q.structuralMembers.ordered()
       // Removed: include entities removed within the read's window, which
       // may no longer sit in any structurally matching archetype. Re-sorted
@@ -1468,6 +1485,7 @@ export function createWorld(options: WorldOptions = {}): World {
       dispose() {
         if (disposed) return
         disposed = true
+        unwatch?.()
         const idx = queries.indexOf(q)
         if (idx >= 0) queries.splice(idx, 1)
         q.matchingArchetypes.clear()
@@ -2033,6 +2051,21 @@ export function createWorld(options: WorldOptions = {}): World {
   )
 
   return world
+}
+
+/**
+ * O-54: an `OnAdded`/`OnChanged` leaf that every match of `node` must
+ * satisfy — `node` itself, or such a leaf of an `And` — or null.
+ */
+function requiredMark(node: QueryNode): { kind: 'added' | 'changed'; name: string } | null {
+  if (node.kind === 'added' || node.kind === 'changed') return { kind: node.kind, name: node.type.name }
+  if (node.kind === 'and') {
+    for (const c of node.children) {
+      const r = requiredMark(c)
+      if (r) return r
+    }
+  }
+  return null
 }
 
 function collectRemovedTypeNames(node: QueryNode, out: Set<string> = new Set()): Set<string> {

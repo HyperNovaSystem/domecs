@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { defineEvent } from '../src/events.js'
 import { definePlugin } from '../src/plugin.js'
-import { OnAdded, OnChanged, OnChangedResource, OnRemoved } from '../src/query.js'
+import { And, Has, OnAdded, OnChanged, OnChangedResource, OnRemoved } from '../src/query.js'
 import { defineResource } from '../src/resource.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
 import { entry, type Entity } from '../src/types.js'
@@ -553,5 +553,56 @@ describe('change windows when a frame throws (O-53)', () => {
     expect(() => w.stepOnce()).toThrow('render boom')
     // The renderer read the mark before throwing: the next frame is clean.
     expect(() => w.stepOnce()).not.toThrow()
+  })
+})
+
+describe('change reads visit only the marks in the window (O-54)', () => {
+  it('reports each changed holder once, in id order, across log compaction', () => {
+    const w = createWorld({ headless: true })
+    const ids: Entity[] = []
+    for (let i = 0; i < 50; i++) ids.push(w.spawn([entry(Hp, { hp: i })]))
+    const q = w.query(OnChanged(Hp))
+    w.stepOnce()
+    expect(q.entities).toEqual([])
+    // Many re-marks of a few entities force the per-type log to compact.
+    for (let round = 0; round < 100; round++) {
+      for (const id of [ids[40]!, ids[3]!, ids[17]!]) w.markChanged(id, Hp)
+    }
+    expect(q.entities.map((e) => e.id)).toEqual([ids[3], ids[17], ids[40]])
+    w.stepOnce()
+    expect(q.entities).toEqual([])
+  })
+
+  it('drops an entity that lost the component or was despawned after its mark', () => {
+    const w = createWorld({ headless: true })
+    const a = w.spawn([entry(Hp, { hp: 1 })])
+    const b = w.spawn([entry(Hp, { hp: 1 })])
+    const c = w.spawn([entry(Hp, { hp: 1 })])
+    const q = w.query(And(Has(Glyph), OnChanged(Hp)))
+    const all = w.query(OnChanged(Hp))
+    w.stepOnce()
+    w.addComponent(c, Glyph, { ch: 'c' })
+    for (const id of [a, b, c]) w.markChanged(id, Hp)
+    w.removeComponent(a, Hp)
+    w.despawn(b)
+    expect(all.entities.map((e) => e.id)).toEqual([c])
+    expect(q.entities.map((e) => e.id)).toEqual([c])
+  })
+
+  it('a restored mark for a component the entity lacks is not reported', () => {
+    const w = createWorld({ headless: true })
+    const id = w.spawn([entry(Hp, { hp: 1 })])
+    const q = w.query(OnChanged(Hp))
+    w.system('reader', { schedule: 'tick', query: OnChanged(Hp) }, () => {})
+    w.stepOnce()
+    w.markChanged(id, Hp)
+    const snap = w.snapshot()
+    const bag = snap.entities.find((e) => e.id === id)!
+    const stripped = {
+      ...snap,
+      entities: snap.entities.map((e) => (e === bag ? { ...e, components: {} } : e)),
+    }
+    w.restore(stripped)
+    expect(q.entities).toEqual([])
   })
 })

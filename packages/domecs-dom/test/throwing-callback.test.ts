@@ -118,3 +118,32 @@ describe('mountDOM — throwing view callbacks (O-53)', () => {
     expect(stage.children).toHaveLength(0)
   })
 })
+
+// O-54: a change-gated commit repaints only what changed, in id order.
+describe('mountDOM — change-gated commit (O-54)', () => {
+  it('updates only marked entities, in ascending id order', () => {
+    document.body.innerHTML = ''
+    const stage = document.createElement('div')
+    const world = createWorld({ headless: true })
+    const updated: number[] = []
+    const r = mountDOM(world, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage',
+        query: Has(Sprite),
+        create: () => document.createElement('span'),
+        update: (_el, e) => { updated.push(e.id) },
+      })],
+    })
+    if (!isOk(r)) throw new Error('mount failed')
+    const ids = [0, 1, 2, 3, 4].map(() => world.spawn([entry(Sprite, { glyph: '.' })]))
+    world.stepOnce()
+    updated.length = 0
+    for (const id of [ids[4]!, ids[1]!]) world.markChanged(id, Sprite)
+    world.stepOnce()
+    expect(updated).toEqual([ids[1], ids[4]])
+    updated.length = 0
+    world.stepOnce()
+    expect(updated).toEqual([])
+  })
+})

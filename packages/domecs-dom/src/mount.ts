@@ -39,6 +39,7 @@ interface MountedRecord {
 }
 
 interface ViewState {
+  world: World
   def: ViewDef
   slotEl: HTMLElement
   query: QueryResult
@@ -118,6 +119,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     const q = world.query(def.query)
     const changedTypes = resolveChangedTypes(def)
     const state: ViewState = {
+      world,
       def,
       slotEl,
       query: q,
@@ -344,11 +346,10 @@ function commit(state: ViewState, errors: unknown[]): void {
   // O-53: retry a failed create once the entity is marked changed — the
   // change may be what fixes it.
   if (changed && state.failed.size > 0) {
-    for (const view of state.query.entities) {
-      if (!state.failed.has(view.id) || !changed.has(view.id)) continue
-      if (mount(state, view.id, view, errors) && state.def.update) {
-        ;(created ??= new Set()).add(view.id)
-      }
+    for (const id of Array.from(state.failed).sort(ascending)) {
+      const view = changed.get(id)
+      if (!view) continue
+      if (mount(state, id, view, errors) && update) (created ??= new Set()).add(id)
     }
   }
 
@@ -361,10 +362,15 @@ function commit(state: ViewState, errors: unknown[]): void {
         guard(errors, () => update(rec.el, view))
       }
     } else if (changed.size > 0 || readded !== null || created !== null) {
-      for (const view of state.query.entities) {
-        if (!changed.has(view.id) && !readded?.has(view.id) && !created?.has(view.id)) continue
-        const rec = state.mounted.get(view.id)
+      // O-54: visit only the entities to repaint, in id order, rather than
+      // every member of the view.
+      const ids = new Set<Entity>(changed.keys())
+      for (const id of readded ?? []) ids.add(id)
+      for (const id of created ?? []) ids.add(id)
+      for (const id of Array.from(ids).sort(ascending)) {
+        const rec = state.mounted.get(id)
         if (!rec) continue
+        const view = changed.get(id) ?? currentView(state.world, id)
         rec.view = view
         guard(errors, () => update(rec.el, view))
       }
@@ -372,11 +378,26 @@ function commit(state: ViewState, errors: unknown[]): void {
   }
 }
 
-function collectChanged(changedQueries: QueryResult[] | null): Set<Entity> | null {
+function ascending(a: Entity, b: Entity): number {
+  return a - b
+}
+
+/**
+ * A commit-time view of `entity` with every component it holds now (O-2:
+ * a created entity's first paint sees components added after it matched).
+ */
+function currentView(world: World, entity: Entity): EntityView {
+  const view: Record<string, unknown> = { id: entity }
+  for (const type of world.archetype(entity)) view[type.name] = world.getComponent(entity, type)
+  return view as EntityView
+}
+
+/** Entities marked changed on a redraw trigger, with their current views. */
+function collectChanged(changedQueries: QueryResult[] | null): Map<Entity, EntityView> | null {
   if (!changedQueries) return null
-  const out = new Set<Entity>()
+  const out = new Map<Entity, EntityView>()
   for (const q of changedQueries) {
-    for (const e of q.entities) out.add(e.id)
+    for (const e of q.entities) out.set(e.id, e)
   }
   return out
 }

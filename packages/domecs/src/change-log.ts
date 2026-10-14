@@ -57,6 +57,18 @@ export function createChangeLog() {
     removed: new Map(),
   }
   const resourceStamps = new Map<string, number>()
+  // O-54: added/changed marks per type in stamp order, so a window read
+  // visits the marks in the window instead of every holder of the type.
+  // Entries a later mark or `forget` superseded stay until compaction.
+  // Parallel arrays (stamp, entity) so a mark allocates nothing. A log is
+  // kept only while some query reads it (`readers`), so marks of types no
+  // such query watches cost nothing extra.
+  interface MarkLog { st: number[]; en: Entity[]; readers: number }
+  let watchedLogs = 0
+  const marksLog: Record<'added' | 'changed', Map<string, MarkLog>> = {
+    added: new Map(),
+    changed: new Map(),
+  }
   // Removal marks in stamp order, for pruning from the front.
   let removedLog: Array<readonly [number, string, Entity]> = []
   let removedHead = 0
@@ -68,7 +80,31 @@ export function createChangeLog() {
       stamps[kind].set(name, m)
     }
     m.set(entity, stamp)
-    if (kind === 'removed') removedLog.push([stamp, name, entity])
+    if (kind === 'removed') {
+      removedLog.push([stamp, name, entity])
+      return
+    }
+    if (watchedLogs === 0) return
+    const log = marksLog[kind].get(name)
+    if (!log) return
+    log.st.push(stamp)
+    log.en.push(entity)
+    // Rebuild from the live stamps once stale entries dominate: amortized
+    // O(1) per mark, memory proportional to the live marks.
+    if (log.st.length > 64 && log.st.length > 2 * m.size) {
+      // Keeping the current entries keeps stamp order: no sort needed.
+      const st: number[] = []
+      const en: Entity[] = []
+      for (let i = 0; i < log.st.length; i++) {
+        const e = log.en[i]!
+        if (m.get(e) === log.st[i]) {
+          st.push(log.st[i]!)
+          en.push(e)
+        }
+      }
+      log.st = st
+      log.en = en
+    }
   }
 
   function mark(kind: MarkKind, name: string, entity: Entity): void {
@@ -122,6 +158,78 @@ export function createChangeLog() {
   }
 
 
+  /**
+   * Entities with a current `kind` mark for `name` stamped in `(from, to]`,
+   * in stamp order (O-54). Visits only the marks in the window. Returns
+   * null when no log is kept for them ({@link watchMarks}) or the window
+   * holds more than `limit` log entries, so the caller can scan its members
+   * instead.
+   */
+  function markedInWindow(
+    kind: 'added' | 'changed',
+    name: string,
+    from: number,
+    to: number,
+    limit: number,
+  ): Entity[] | null {
+    const log = marksLog[kind].get(name)
+    const live = stamps[kind].get(name)
+    if (!log) return null
+    if (!live) return []
+    const st = log.st
+    const lo = upperBound(st, from)
+    const hi = upperBound(st, to)
+    if (hi - lo > limit) return null
+    const out: Entity[] = []
+    for (let i = lo; i < hi; i++) {
+      const entity = log.en[i]!
+      if (live.get(entity) === st[i]) out.push(entity)
+    }
+    return out
+  }
+
+  /**
+   * Start (or join) keeping the stamp-ordered log of `kind` marks for
+   * `name`, built from the current marks. Returns the release function.
+   */
+  function watchMarks(kind: 'added' | 'changed', name: string): () => void {
+    let log = marksLog[kind].get(name)
+    if (!log) {
+      log = buildLog(kind, name)
+      marksLog[kind].set(name, log)
+      watchedLogs++
+    }
+    log.readers++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const current = marksLog[kind].get(name)
+      if (current && --current.readers === 0) {
+        marksLog[kind].delete(name)
+        watchedLogs--
+      }
+    }
+  }
+
+  function buildLog(kind: 'added' | 'changed', name: string): MarkLog {
+    const pairs = Array.from(stamps[kind].get(name) ?? [], ([e, st]) => [st, e] as const)
+    pairs.sort((a, b) => a[0] - b[0])
+    return { st: pairs.map((p) => p[0]), en: pairs.map((p) => p[1]), readers: 0 }
+  }
+
+  /** Index of the first stamp in ascending `st` greater than `x`. */
+  function upperBound(st: readonly number[], x: number): number {
+    let lo = 0
+    let hi = st.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (st[mid]! <= x) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
   /** Drop removal marks every `OnRemoved` reader has seen (stamp <= horizon). */
   function pruneRemoved(horizon: number): void {
     while (removedHead < removedLog.length && removedLog[removedHead]![0] <= horizon) {
@@ -144,6 +252,12 @@ export function createChangeLog() {
     stamps.changed.clear()
     stamps.removed.clear()
     resourceStamps.clear()
+    for (const logs of [marksLog.added, marksLog.changed]) {
+      for (const log of logs.values()) {
+        log.st = []
+        log.en = []
+      }
+    }
     removedLog = []
     removedHead = 0
   }
@@ -236,6 +350,8 @@ export function createChangeLog() {
     stamps: stamps as Readonly<Record<MarkKind, ReadonlyMap<string, ReadonlyMap<Entity, number>>>>,
     resourceChanged,
     removedInWindow,
+    markedInWindow,
+    watchMarks,
     pruneRemoved,
     clear,
     encode,
