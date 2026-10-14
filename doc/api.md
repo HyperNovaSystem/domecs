@@ -253,7 +253,9 @@ interface World {
   // like the fault consolidator (CONSOLIDATE_FAULTS_NAME).
   getSystem(name: string): SystemHandle | undefined
 
-  // queries
+  // queries — every form iterates in ascending entity id (query().entities,
+  // system ctx.entities, reactive deltas, listEntities, selectViews,
+  // countEntities, iterEntitiesWith; Where predicates too — SPEC §8)
   query(def: QueryDef): QueryResult
   // Leak-free one-shot selectors: evaluate the current world without
   // registering a live query (nothing to dispose). Accept Has/Not/And/Or/Where;
@@ -645,10 +647,22 @@ interface WorldSnapshot {
   readonly version:  number
   readonly seed:     readonly [number, number, number, number]
   readonly tick:     number
+  // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
+  // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
+  // the live cadence (O-40). Absent in older snapshots → clock starts at 0.
+  readonly scaledTime?: number
+  // Fixed steps due but not yet run (a tickStart hook paused after time
+  // advanced); omitted when 0. restore() keeps them owed (O-40).
+  readonly fixedBacklog?: number
+  // The fixedStep the backlog is counted in; present with it. A world
+  // restored with another fixedStep re-counts the owed time in its own steps.
+  readonly fixedStep?: number
   readonly entities: ReadonlyArray<{
     id:         Entity
     components: Record<string, unknown>
   }>
+  // Entity-id cursor; restore() resumes id assignment from it (O-38).
+  readonly nextId?: number
   // name → deep-cloned value. Omitted entirely when no resource has a value.
   // restore() clears live resources first, so an absent map falls back to
   // resource defaults. (v2+)

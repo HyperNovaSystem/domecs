@@ -21,6 +21,29 @@ export interface WorldSnapshot {
   readonly version: number
   readonly seed: readonly [number, number, number, number]
   readonly tick: number
+  /**
+   * Cumulative unquantized scaled time in seconds — the drift-free total
+   * that drives the fixed-step scheduler (SPEC §2.7). Restore resumes it and
+   * re-derives `time.elapsed`, the fixed-step count, and the accumulator from
+   * it, so a restored world's `fixed` systems keep the live world's cadence
+   * (O-40). Optional: snapshots from older builds lack it, and restore starts
+   * the clock at zero.
+   */
+  readonly scaledTime?: number
+  /**
+   * Fixed steps due under `scaledTime` that had not run yet (O-40). Omitted
+   * when 0 — the normal case after a completed tick. Positive when a
+   * `tickStart` hook paused the world after time advanced (the live world
+   * runs them on resume), or when the snapshot was taken inside the
+   * fixed-step loop. Restore keeps them owed.
+   */
+  readonly fixedBacklog?: number
+  /**
+   * The `fixedStep` that `fixedBacklog` is counted in; present with it. A
+   * world restored with another `fixedStep` re-counts the owed time in its
+   * own steps instead of owing the same number of differently sized ones.
+   */
+  readonly fixedStep?: number
   readonly entities: ReadonlyArray<{
     readonly id: Entity
     readonly components: Record<string, unknown>

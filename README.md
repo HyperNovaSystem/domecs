@@ -334,7 +334,10 @@ A tick proceeds in this order, every time:
 5. Run `event` systems for any events emitted in steps 3–4
 6. Renderer diffs and commits to DOM
 
-Same inputs → same state.
+Same inputs → same state. Queries iterate in ascending entity id, and a
+snapshot carries the clock, so `restore(snapshot())` taken between ticks
+continues where the live world was. Pending events and other runtime state
+outside the snapshot are not carried; SPEC §7.1 lists them.
 Replay, trainers, and time-travel debugging all become tractable.
 
 ---

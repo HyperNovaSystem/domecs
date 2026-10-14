@@ -139,14 +139,24 @@ export interface EventBus {
    */
   knownTypes(): EventType<unknown>[]
   /**
-   * Drop all pending (undelivered) events. Called by `world.restore()`:
-   * events queued before a restore belong to the abandoned timeline and
-   * must not fire into the first tick after it (SPEC §7.1). The current
+   * Set all pending (undelivered) events aside and start an empty queue,
+   * returning the set-aside events. Called by `world.restore()`: events
+   * queued before a restore belong to the abandoned timeline and must not
+   * fire into the first tick after it (SPEC §7.1). The current
    * (already-flushed) view is left alone — it is replaced wholesale at the
    * next flush.
    */
-  clear(): void
+  takePending(): PendingEvents
+  /**
+   * Make `taken` the pending queue again, dropping anything emitted since
+   * {@link takePending}. `world.restore()` calls it when the restore throws,
+   * so a failed restore leaves the pending events as they were.
+   */
+  putBackPending(taken: PendingEvents): void
 }
+
+/** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
+export type PendingEvents = Map<symbol, unknown[]>
 
 /**
  * Optional sink invoked when a direct `on()` subscriber throws during
@@ -250,8 +260,13 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     knownTypes(): EventType<unknown>[] {
       return Array.from(typeByTag.values())
     },
-    clear(): void {
+    takePending(): PendingEvents {
+      const taken = pending
       pending = new Map()
+      return taken
+    },
+    putBackPending(taken: PendingEvents): void {
+      pending = taken
     },
   }
 }

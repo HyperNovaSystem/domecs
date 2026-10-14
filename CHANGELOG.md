@@ -6,6 +6,37 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — restore continuity, O-40)
+
+- `@domecs/core`: snapshots carry the simulation clock (`WorldSnapshot.scaledTime`,
+  plus `fixedBacklog` and its `fixedStep` when fixed steps are owed) and
+  `restore()` resumes it —
+  `time.elapsed`, the fixed-step accumulator, and the fixed-step phase continue
+  from the snapshot instead of restarting at 0, so `fixed` systems (including
+  divisor-rate ones) fire on the live world's frames after a load, an undo, or
+  an `AgentBridge.reset()` to a mid-run baseline. Older snapshots without the
+  fields restore with the clock at 0, as before. `SNAPSHOT_VERSION` stays 2
+  (optional fields, like `nextId`). `time.fixedAccumulator` is now kept current
+  on a tick where a `tickStart` hook paused the world.
+- `@domecs/core`: `restore()` validates the envelope the `onRestore` hooks
+  produce (resource values and the clock fields) before it touches world
+  state, and a failed restore — invalid envelope or throwing hook — now leaves
+  the pending events as they were instead of discarding them. `scaledTime:
+  null` is rejected rather than read as a pre-O-40 envelope.
+- `@domecs/core`: **behavior change** — query iteration is now ascending entity
+  id everywhere (`query().entities`, system `ctx.entities`, reactive deltas,
+  `listEntities`, `selectViews`, `countEntities`, `iterEntitiesWith`), and
+  `Where` predicates are evaluated in that order. SPEC §8 used to specify
+  "archetype order, then entity id", which neither the live path (join order)
+  nor restore (rebuilt by id) delivered consistently, so per-entity `rand`
+  draws and other order-dependent logic diverged after a restore; archetype
+  creation order cannot be restored, so §8 now specifies ascending id. Code
+  that relied on join order will see a different order.
+- Bench: the snapshot workload's `deterministic` flag now steps a sub-rate
+  `fixed` system with frame times that are not fixed-step multiples and compares
+  the twins' clocks, so it actually catches a lost accumulator (it reported
+  `true` against the old engine).
+
 ### Fixed (2026-07-17 review tranche — see `plan/FINDINGS.CLAUDE.md`)
 
 - `@domecs/dom`: O-2 first paint is now driven from the update phase with a
