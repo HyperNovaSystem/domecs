@@ -138,6 +138,21 @@ export interface CompiledSystem {
   registrationIndex: number
   /** Set by remove(); a phase already iterating skips it (O-43). */
   removed: boolean
+  /**
+   * O-42 change window: the change-log stamp this system has seen through.
+   * A run reports marks in `(seenThrough, runStart]`; when it ends,
+   * `seenThrough` moves to the stamp at that point, so the system's own
+   * writes are not reported back to it.
+   */
+  seenThrough: number
+  /** The change-log stamp when the current run started. */
+  runStart: number
+  /** True while the system's function is executing. */
+  running: boolean
+  /** Its query or reactsTo has a change-detection node (snapshot cursor). */
+  watchesChanges: boolean
+  /** Its query or reactsTo has an `OnRemoved` node (removal-mark pruning). */
+  watchesRemoved: boolean
 }
 
 export interface Scheduler {
@@ -149,6 +164,8 @@ export interface Scheduler {
    * entries whose `removed` flag is set.
    */
   systemsByMode(mode: SystemSchedule): readonly CompiledSystem[]
+  /** Every registered system, in registration order. */
+  all(): readonly CompiledSystem[]
   /** The live SystemHandle for a registered system by name, or undefined. */
   getHandle(name: string): SystemHandle | undefined
   /** Remove a system by handle (no-op if already removed). */
@@ -160,9 +177,24 @@ function comparator(a: CompiledSystem, b: CompiledSystem): number {
   return a.priority - b.priority || a.registrationIndex - b.registrationIndex
 }
 
+const CHANGE_KINDS: ReadonlySet<QueryNode['kind']> = new Set([
+  'added',
+  'removed',
+  'changed',
+  'changedResource',
+])
+const REMOVED_KIND: ReadonlySet<QueryNode['kind']> = new Set(['removed'])
+
+/**
+ * @param makeQuery builds a live query owned by `owner`: its change window
+ *   is the system's (O-42).
+ * @param initialSeen the change-log stamp a newly registered system's
+ *   window starts after.
+ */
 export function createScheduler(
-  makeQuery: (def: QueryDef) => QueryResult,
+  makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult,
   fixedStep: number,
+  initialSeen: (name: string) => number,
 ): Scheduler {
   const systems: CompiledSystem[] = []
   // name -> live handle, so getHandle(name) hands back the SAME object whose
@@ -208,12 +240,6 @@ export function createScheduler(
           )
         }
         const rNode = normalize(def.reactsTo) as QueryNode
-        const CHANGE_KINDS = new Set<QueryNode['kind']>([
-          'added',
-          'removed',
-          'changed',
-          'changedResource',
-        ])
         if (!treeHas(rNode, CHANGE_KINDS)) {
           throw new Error(
             `domecs: reactive system "${name}" reactsTo query must contain at least one change-detection node (Added/Removed/Changed/ChangedResource). ` +
@@ -239,6 +265,9 @@ export function createScheduler(
       }
 
       const id = nextId++
+      const nodes = [def.query, def.schedule === 'reactive' ? def.reactsTo : undefined]
+        .filter((d): d is QueryDef => d !== undefined)
+        .map((d) => normalize(d) as QueryNode)
       const compiled: CompiledSystem = {
         id,
         name,
@@ -252,9 +281,14 @@ export function createScheduler(
         ranOnce: false,
         registrationIndex: id,
         removed: false,
+        seenThrough: initialSeen(name),
+        runStart: 0,
+        running: false,
+        watchesChanges: nodes.some((n) => treeHas(n, CHANGE_KINDS)),
+        watchesRemoved: nodes.some((n) => treeHas(n, REMOVED_KIND)),
       }
-      if (def.query) compiled.query = makeQuery(def.query)
-      if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo)
+      if (def.query) compiled.query = makeQuery(def.query, compiled)
+      if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo, compiled)
 
       systems.push(compiled)
       addToMode(compiled)
@@ -292,6 +326,10 @@ export function createScheduler(
 
     systemsByMode(mode): readonly CompiledSystem[] {
       return byMode.get(mode) ?? []
+    },
+
+    all(): readonly CompiledSystem[] {
+      return systems
     },
 
     getHandle(name): SystemHandle | undefined {

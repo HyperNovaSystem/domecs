@@ -35,6 +35,13 @@ export function defineComponent<T>(
   options: ComponentOptions<T> = {},
 ): ComponentType<T, string> {
   const defaults = options.defaults
+  // Defaults with no nested object need no per-entity copy beyond the spread.
+  const flatDefaults =
+    defaults === undefined ||
+    Reflect.ownKeys(defaults).every((k) => {
+      const v = (defaults as Record<PropertyKey, unknown>)[k]
+      return v === null || typeof v !== 'object'
+    })
   const validate = options.validate
   const shape = {
     name,
@@ -47,7 +54,8 @@ export function defineComponent<T>(
       // O-44: each entity gets its own copy of nested default arrays and
       // objects; `{...defaults}` alone shared one instance across entities.
       // Caller-supplied values are taken as given (O-34).
-      const merged = { ...cloneDefaults(defaults), ...(value ?? {}) } as T
+      const base = flatDefaults ? defaults : cloneDefaults(defaults)
+      const merged = { ...base, ...(value ?? {}) } as T
       if (validate) {
         const verdict = validate(merged)
         if (verdict !== true) {
