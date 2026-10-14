@@ -1,6 +1,6 @@
 {
   "name": "@domecs/rules",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DOMECS rules: a small, safe, data-defined expression language and rule interpreter (M6).",
   "private": false,
   "license": "MIT",

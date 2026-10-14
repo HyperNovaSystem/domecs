@@ -88,12 +88,11 @@ It is trying to be the best runtime where the **model is the product**.
 
 ## Status
 
-**v1.0.0 — API-stable.** Five `@domecs/*` packages are published at 1.0.0
-(core, dom, input, persist, inspector). Two more live in this repo and are not
-on npm yet: `@domecs/scene` (parent/child hierarchy) and `@domecs/rules`
-(data-defined rules).
+**v1.1.0 — API-stable.** Seven `@domecs/*` packages are published at 1.1.0:
+core, dom, input, persist, inspector, plus `@domecs/scene` (parent/child
+hierarchy) and `@domecs/rules` (data-defined rules), new in 1.1.0.
 Semver is honored; the product contract is still hardening via corrective
-`1.0.x` releases (first-hour traps, benchmarks, agent surface). See
+releases (first-hour traps, benchmarks, agent surface). See
 [`plan/PLAN.md`](plan/PLAN.md) for governing direction and kill gates.
 
 ---
@@ -305,8 +304,8 @@ A higher-level `createPersistence` facade (IndexedDB adapter, autosave) is plann
 │  @domecs/input    Keyboard/pointer snapshot │
 │  @domecs/persist  Snapshot save/load        │
 │  @domecs/inspector  Fault/timeline recorder │
-│  @domecs/scene    Hierarchy (unpublished)   │
-│  @domecs/rules    Data rules (unpublished)  │
+│  @domecs/scene    Parent/child hierarchy    │
+│  @domecs/rules    Data-defined rules        │
 ├─────────────────────────────────────────────┤
 │  Browser — DOM, CSS, Storage, Pointer API   │
 └─────────────────────────────────────────────┘

@@ -5,7 +5,7 @@ Browser input collector plugin for DOMECS.
 `@domecs/input` listens to keyboard, pointer, wheel, focus, and gamepad state and
 publishes a per-tick `InputSnapshot` to `world.input`.
 
-> Status: v1.0 — **API-stable** (semver honored; product contract hardening via 1.0.x).
+> Status: v1.x — **API-stable** (semver honored; product contract still hardening).
 
 ## Install
 

@@ -40,7 +40,7 @@ specification; the repository's root `README.md` is the pitch.
 
 ## Stability
 
-v1.0 — **API-stable**. All five `@domecs/*` packages are at `1.0.0`. Semver is
-honored; the product contract continues to harden via corrective `1.0.x`
+v1.1 — **API-stable**. All seven `@domecs/*` packages are at `1.1.0`. Semver
+is honored; the product contract continues to harden via corrective
 releases. See `../CHANGELOG.md` and governing direction in
 `../plan/PLAN.md`.

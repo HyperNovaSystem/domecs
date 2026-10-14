@@ -1,6 +1,6 @@
 # DOMECS — Specification v1.0
 
-**Status:** v1.0 — final/authoritative. Code has shipped: all five `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`) are published at 1.0.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 1.1.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -20,14 +20,16 @@
 
 ## 1. Packages and layering
 
-Shipped at 1.0.0:
+Shipped (1.0.0; `scene` and `rules` since 1.1.0):
 
 ```
 @domecs/core           — core: World, entities, components, queries, systems, events, time
 @domecs/dom            — DOM renderer: views, mounting, diffing
 @domecs/input          — input collector: keyboard, pointer, touch, gamepad
-@domecs/persist        — snapshot save/load over a Storage interface, migrations
-@domecs/inspector      — devtools panel, entity browser, time-travel scrubber
+@domecs/persist        — snapshot save/load over a Storage interface, migrations, schema I/O
+@domecs/inspector      — headless fault/timeline recorder (see §10)
+@domecs/scene          — Parent component, hierarchy queries, transform composition
+@domecs/rules          — data-defined expression language and rule interpreter
 ```
 
 Planned (do not exist yet):
@@ -43,9 +45,11 @@ Planned (do not exist yet):
 @domecs/core
  ├── @domecs/input        (depends: core)
  ├── @domecs/dom          (depends: core)
- │    ├── @domecs/sprites (planned; depends: core, dom)
- │    └── @domecs/inspector (depends: core, dom; uses core reflection)
+ │    └── @domecs/sprites (planned; depends: core, dom)
+ ├── @domecs/inspector    (depends: core; uses core reflection)
  ├── @domecs/persist      (depends: core)
+ ├── @domecs/scene        (depends: core)
+ ├── @domecs/rules        (depends: core)
  └── @domecs/worker       (planned; depends: core)
 ```
 

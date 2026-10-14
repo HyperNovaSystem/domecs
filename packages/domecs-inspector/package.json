@@ -1,6 +1,6 @@
 {
   "name": "@domecs/inspector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DOMECS inspector: headless fault/state observation surface for dev tools (BETTER_ERRORS Phase 3).",
   "private": false,
   "license": "MIT",

@@ -27,11 +27,11 @@ Install:
 ```bash
 npm install @domecs/core @domecs/dom @domecs/input
 # optional
-npm install @domecs/persist @domecs/inspector
+npm install @domecs/persist @domecs/inspector @domecs/scene @domecs/rules
 ```
 
-`@domecs/scene` and `@domecs/rules` exist in this repo's `packages/` but are
-not on npm yet; do not add them as dependencies of a published app.
+`@domecs/scene` and `@domecs/rules` are on npm from 1.1.0; an app that uses
+them needs `@domecs/core` 1.1.0 or later.
 
 Published packages resolve to built ESM under `dist/` (no bundler required for
 Node or import-map hosts). Prefer published packages over cloning engine source
