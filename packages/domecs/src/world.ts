@@ -36,7 +36,7 @@ import {
 } from './faulted.js'
 import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
-import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
+import { createPluginRegistry, type Capability, type Plugin, type TickInfo } from './plugin.js'
 import { normalizeCause, toJsonValue, type Result } from './result.js'
 import { createRng, type Rng, type RngState } from './rng.js'
 import {
@@ -85,6 +85,10 @@ import {
 
 // Reactive delta nodes a one-shot selector cannot evaluate, and the `where`
 // kind that forces per-entity predicate filtering. Shared, allocation-free.
+// O-57: the frame kind handed to plugin tick hooks.
+const HEARTBEAT: TickInfo = Object.freeze({ heartbeat: true })
+const FULL_TICK: TickInfo = Object.freeze({ heartbeat: false })
+
 const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'added',
   'changed',
@@ -1116,10 +1120,10 @@ export function createWorld(options: WorldOptions = {}): World {
       time.scaledDelta = 0
       inTick = true
       try {
-        plugins.callTickStart(world)
+        plugins.callTickStart(world, HEARTBEAT)
         if (sigTickStart.size > 0) sigTickStart.emit(time)
-        plugins.callRender(world)
-        plugins.callTickEnd(world)
+        plugins.callRender(world, HEARTBEAT)
+        plugins.callTickEnd(world, HEARTBEAT)
         if (sigTickEnd.size > 0) sigTickEnd.emit(time)
       } finally {
         inTick = false
@@ -1160,7 +1164,7 @@ export function createWorld(options: WorldOptions = {}): World {
     inTick = true
     try {
       // SPEC §9.4 — plugin onTickStart fires at step 0.
-      plugins.callTickStart(world)
+      plugins.callTickStart(world, FULL_TICK)
 
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
       const eventView = bus.flush()
@@ -1229,10 +1233,10 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
-      plugins.callRender(world)
+      plugins.callRender(world, FULL_TICK)
 
       // SPEC §9.4 — plugin onTickEnd fires at step 8.
-      plugins.callTickEnd(world)
+      plugins.callTickEnd(world, FULL_TICK)
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     } finally {
       inTick = false

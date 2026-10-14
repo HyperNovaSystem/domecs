@@ -232,11 +232,13 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         return out
       }
 
-      function build(): InputSnapshot {
+      /**
+       * @param consume false on a heartbeat (O-57): no system runs, so the
+       *   edges and deltas are published but kept for the next real tick.
+       */
+      function build(consume: boolean): InputSnapshot {
         const pressed = new Set(pressedNext)
         const released = new Set(releasedNext)
-        pressedNext.clear()
-        releasedNext.clear()
         const pSnap: PointerSnapshot = {
           x: pointer.x,
           y: pointer.y,
@@ -245,9 +247,13 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
           wheel: pointer.wheel,
           entered: pointer.entered.slice(),
         }
-        pointer.deltaX = 0
-        pointer.deltaY = 0
-        pointer.wheel = 0
+        if (consume) {
+          pressedNext.clear()
+          releasedNext.clear()
+          pointer.deltaX = 0
+          pointer.deltaY = 0
+          pointer.wheel = 0
+        }
         return {
           keys: new Set(held),
           keyDelta: { pressed, released },
@@ -259,8 +265,8 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       }
 
       return ok({
-        onTickStart() {
-          world.setInput(build())
+        onTickStart(_world, info) {
+          world.setInput(build(!info.heartbeat))
         },
         teardown() {
           keyTarget?.removeEventListener('keydown', onKeyDown)

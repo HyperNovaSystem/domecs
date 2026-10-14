@@ -14,6 +14,10 @@ All notable changes to DOMECS are documented here. The format is based on
   unaffected; a failed `create` is retried when the entity is marked changed.
   `teardown()` removes every node before rethrowing. `@domecs/core` closes a
   tick's change windows even when the tick throws. (O-53)
+- `@domecs/input`: a `step(0)` heartbeat no longer eats key presses and
+  pointer/wheel deltas; they reach the next tick's systems. `@domecs/core`:
+  plugin `onTickStart`/`onRender`/`onTickEnd` receive a second argument,
+  `TickInfo` (`{ heartbeat: boolean }`, exported). (O-57)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

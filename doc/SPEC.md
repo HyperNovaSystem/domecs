@@ -447,7 +447,7 @@ An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, n
 1. Leave `time.tick`, `time.elapsed`, and every system's change window unchanged.
 2. Set `time.delta = 0` and `time.scaledDelta = 0`.
 3. Skip steps 3–6 entirely — no `fixed`, `tick`, `event`, or `reactive` systems run.
-4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots.
+4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots. The plugin hooks receive `{ heartbeat: true }` as their second argument (`TickInfo`, O-57); a plugin that hands systems one-tick data MUST NOT consume it on a heartbeat. `@domecs/input` publishes the pending key edges and pointer/wheel deltas on a heartbeat and keeps them for the next tick's systems.
 
 A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Marks made before a heartbeat stay unseen by systems until their next run. A live query read during the heartbeat's render (a renderer's change gate) has seen what it read: its window advances at the end of the heartbeat (§2.9), so a heartbeat paints between-tick marks once and the next tick does not repaint them.
 
@@ -814,6 +814,8 @@ Example:
 | `onRender`    | After step 7 commits                  |
 | `onSnapshot`  | Before persist writes                 |
 | `onRestore`   | After snapshot loads, before resume   |
+
+`onTickStart`, `onRender` and `onTickEnd` are called as `(world, info)`, where `info: TickInfo` is `{ heartbeat: boolean }` — `true` on a `step(dt <= 0)` heartbeat (§4.0, O-57).
 
 Plugins registered without any hooks fall back to the degenerate `(world) => teardown?` form.
 

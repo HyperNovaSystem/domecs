@@ -14,7 +14,7 @@ export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js
 export type { System, SystemContext, SystemDef, TickSystemDef, FixedSystemDef, EventSystemDef, OnceSystemDef, ReactiveSystemDef, SystemHandle, SystemSchedule, } from './scheduler.js';
 export type { Signal } from './signals.js';
 export { definePlugin } from './plugin.js';
-export type { Plugin, PluginSpec, PluginHandle, Capability } from './plugin.js';
+export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js';
 export { SNAPSHOT_VERSION } from './snapshot.js';
 export type { SnapshotOptions, WorldSnapshot } from './snapshot.js';
 export type { ChangesSnapshot } from './change-log.js';

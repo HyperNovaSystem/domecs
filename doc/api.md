@@ -712,11 +712,15 @@ interface Plugin<O = void> {
   install(world: World, options: O): Result<PluginHandle | void, DomecsError>
 }
 
+// O-57: heartbeat is true on a step(dt <= 0) heartbeat (SPEC §4.0): hooks
+// and render run, no system does — publish one-tick data, don't consume it.
+interface TickInfo { readonly heartbeat: boolean }
+
 interface PluginHandle {
   teardown?:    () => void
-  onTickStart?: (world: World) => void
-  onTickEnd?:   (world: World) => void
-  onRender?:    (world: World) => void
+  onTickStart?: (world: World, info: TickInfo) => void
+  onTickEnd?:   (world: World, info: TickInfo) => void
+  onRender?:    (world: World, info: TickInfo) => void
   onSnapshot?:  (snap: WorldSnapshot) => WorldSnapshot
   onRestore?:   (snap: WorldSnapshot) => WorldSnapshot
 }
