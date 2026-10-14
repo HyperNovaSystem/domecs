@@ -47,6 +47,10 @@ All notable changes to DOMECS are documented here. The format is based on
   filtered views keep the timeline they were filtered with instead of the
   live one; pushing into a full buffer is O(1) amortized; the README example
   reads `entry.systemId`. (O-60)
+- `@domecs/core`: `describe().events` (and `bridge.observe()`) list an event
+  system's trigger types from registration, and each entry is the type's
+  `describeEvent()` descriptor with its schema fields, so agents can
+  discover commands before anything emits them. (O-51)
 
 ### Changed (2026-10-13 engine review — change windows, O-42)
 

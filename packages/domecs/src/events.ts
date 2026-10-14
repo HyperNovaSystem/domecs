@@ -133,11 +133,14 @@ export interface EventBus {
    */
   pendingEvents(): EmittedEvent[]
   /**
-   * Every event type this bus has observed — emitted or subscribed to — in
-   * first-seen order. Powers `world.describe().events`. Note: an event type
-   * defined but never used in this world is unknowable and will not appear.
+   * Every event type this bus has observed — emitted, subscribed to, or
+   * {@link note}d — in first-seen order. Powers `world.describe().events`.
+   * Note: an event type defined but never used in this world is unknowable
+   * and will not appear.
    */
   knownTypes(): EventType<unknown>[]
+  /** Record `type` as known without emitting or subscribing (O-51). */
+  note(type: EventType<unknown>): void
   /**
    * Set all pending (undelivered) events aside and start an empty queue,
    * returning the set-aside events. Called by `world.restore()`: events
@@ -259,6 +262,10 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     knownTypes(): EventType<unknown>[] {
       return Array.from(typeByTag.values())
+    },
+    note(type: EventType<unknown>): void {
+      const key = type[eventTag]
+      if (!typeByTag.has(key)) typeByTag.set(key, type)
     },
     takePending(): PendingEvents {
       const taken = pending

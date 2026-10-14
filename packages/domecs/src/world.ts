@@ -1700,7 +1700,7 @@ export function createWorld(options: WorldOptions = {}): World {
     describe(): WorldManifest {
       const componentDescs = world.componentTypes().map((t) => world.describeComponent(t))
       const resourceDescs = world.resourceTypes().map((t) => world.describeResource(t))
-      const events = bus.knownTypes().map((t) => ({ name: t.name }))
+      const events = bus.knownTypes().map((t) => world.describeEvent(t))
 
       const modes: SystemSchedule[] = ['tick', 'fixed', 'event', 'once', 'reactive']
       const systems = modes.flatMap((mode) =>
@@ -1839,6 +1839,10 @@ export function createWorld(options: WorldOptions = {}): World {
     // SystemDef is safe because the overload constraints enforce valid variants.
     system(name: string, def: SystemDef | (Omit<SystemDef, 'query'> & { query: QueryDef }), fn: System): SystemHandle {
       const handle = scheduler.register(name, def as SystemDef, fn)
+      // O-51: an event system's triggers are commands the world accepts —
+      // list them in describe() before anything emits them.
+      const sdef = def as SystemDef
+      if (sdef.schedule === 'event') for (const t of sdef.triggers ?? []) bus.note(t)
       wakeDriver()
       return handle
     },
