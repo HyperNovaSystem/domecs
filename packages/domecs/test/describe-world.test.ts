@@ -100,3 +100,19 @@ describe('world.describe — composed manifest (§6)', () => {
     expect(w.describe().entityCount).toBe(0)
   })
 })
+
+describe('world.describe — commands are discoverable (O-51)', () => {
+  it('lists an event system trigger with its schema before anything emits it', () => {
+    const Move = defineEvent<{ dx: number }>('DwMove', {
+      schema: { fields: { dx: { kind: 'number', min: -1, max: 1 } } },
+    })
+    const w = createWorld({ headless: true })
+    w.system('move', { schedule: 'event', triggers: [Move] }, () => {})
+    const entry = w.describe().events.find((e) => e.name === 'DwMove')
+    expect(entry).toEqual({
+      name: 'DwMove',
+      fields: { dx: { kind: 'number', min: -1, max: 1 } },
+      fieldsSource: 'schema',
+    })
+  })
+})

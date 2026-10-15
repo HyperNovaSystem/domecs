@@ -89,8 +89,10 @@ bet. No date-driven milestones — the order is the only ordering.
 - [x] Sample results table in `bench/README.md` (machine-local; not a product claim).
 - [x] Koota + hand-rolled signals baselines (`bench/baselines/*`, `--workload compare`).
 - [x] First compare documented in `bench/COMPARISON.md` + `bench/README.md`.
-  Windowed vs Koota looks promising (sometimes decisive, N-dependent);
-  soak does not win. Claims stay gated on multi-machine stability.
+  Windowed vs Koota looked promising in one run, but did not reproduce
+  across repeated runs (O-72: 0.85–2.69× over 15 runs; 1.35–3.73× over 5
+  trials on 2026-10-14); soak does not win. No runtime win is claimed; the
+  compare phase now reports medians and per-trial ranges.
 - [x] Methodology hardening (2026-07-17): warmup discard, GC isolation under
   `--expose-gc`, compare verdict scoped to same-N rows, cross-engine
   `domUpdates` work-equivalence check, real coalescing pressure in the
@@ -198,6 +200,21 @@ WS-1–WS-4 or a real application hits them. Expected early pulls:
   it.
 
 Everything else waits for a real collision.
+
+**Pulled by DOMECS Studio (record, 2026-10-14).** Studio — the in-house
+editor — pulled three engine surfaces that this plan did not schedule:
+
+- **`@domecs/scene`** — `Parent` hierarchy, `despawnTree`, transform
+  composition (M4). In the repo, not yet published.
+- **`@domecs/rules`** — a safe expression language and data-defined rules
+  installed as systems (M6). In the repo, not yet published.
+- **Persist component-schema I/O** — `serializeComponentType` /
+  `registerComponentTypes` in `@domecs/persist`, for user-authored component
+  types in documents.
+
+They follow the same rules as everything else here: hardened by the
+2026-10-13 review (FINDINGS O-61–O-69), published only with an engine
+release (O-70), and grown only when a real application needs more.
 
 ## 6. Cadence
 

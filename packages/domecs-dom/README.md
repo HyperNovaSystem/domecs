@@ -65,7 +65,8 @@ const mounted = mountDOM(world, {
 })
 
 if (!mounted.ok) {
-  // e.g. { kind: 'slot_already_mounted' | 'unregistered_slot' | 'plugin_install_failed' | 'invalid_view_query' }
+  // e.g. { kind: 'slot_already_mounted' | 'unregistered_slot' | 'plugin_install_failed'
+  //            | 'invalid_view_query' | 'invalid_changed_on' }
   console.error('mountDOM failed:', mounted.error)
 } else {
   const mount = mounted.value
@@ -81,6 +82,7 @@ if (!mounted.ok) {
 
 - `defineView(def)` declares a DOM view.
 - `mountDOM(world, { slots, views })` claims named DOM slots for one world.
+  A world can take several mounts, each on its own slots.
 - Each view has a `query`; matching entities get mounted into the view's slot.
   A `Where` filter is honored: entities mount when they start passing it and
   unmount when they stop (checked at each render commit). Temporal nodes
@@ -89,8 +91,10 @@ if (!mounted.ok) {
 - `create(entity)` returns the element for a matching entity.
 - `update(el, entity)` runs during render commits. It runs once when a node
   is first created (first paint, O-2 — so static entities render without a
-  mark), then is gated on `OnChanged(T)` for every `Has(T)` leaf in the
-  view's `query`. Pass `changedOn: { mode: 'explicit', types: [Position] }`
+  mark), then is gated on `OnChanged(T)` for every `Has(T)` and `Where(T, …)`
+  leaf in the view's `query` (not under `Not`); a view with `update` and no
+  such leaf, or an empty explicit list, is rejected with
+  `invalid_changed_on`. Pass `changedOn: { mode: 'explicit', types: [Position] }`
   to narrow the gate, or `changedOn: { mode: 'legacy' }` to redraw every
   tick (e.g. for time-driven animations).
 - `destroy(el, entity)` is called before an element is removed.

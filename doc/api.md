@@ -225,6 +225,10 @@ interface World {
   // entities
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
+  isAlive(entity: Entity): boolean          // spawned and not despawned (O-61)
+  // The entity's current view ({ id, [ComponentName]: value }, the object
+  // queries hand out), or undefined when it is not alive.
+  getView(entity: Entity): EntityView | undefined
   has(entity: Entity, type: ComponentType<unknown>): boolean
 
   // components
@@ -239,12 +243,12 @@ interface World {
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
 
-  // resources (SPEC §2.11). Same buffer-and-swap discipline as markChanged.
-  // resource() returns undefined only when there is no value and no default;
-  // a default is materialized (validated, stored) on first read. setResource
-  // validates + stores + marks changed; markResourceChanged marks without
-  // replacing (for in-place mutation). Both wake an idle driver.
-  resource<T>(type: ResourceType<T>): T | undefined
+  // resources (SPEC §2.11). Marks land in readers' change windows like
+  // markChanged. getResource() returns undefined only when there is no value
+  // and no default; a default is materialized (validated, stored) on first
+  // read. setResource validates + stores + marks changed; markResourceChanged
+  // marks without replacing (for in-place mutation). Both wake an idle driver.
+  getResource<T>(type: ResourceType<T>): T | undefined
   setResource<T>(type: ResourceType<T>, value: T): void
   markResourceChanged<T>(type: ResourceType<T>): void
 
@@ -277,6 +281,13 @@ interface World {
   // events
   emit<T>(type: EventType<T>, payload: T): void
   on<T>(type: EventType<T>, fn: (e: T) => void): () => void
+  // This tick's delivered events (the view event systems read).
+  readonly events: EventView
+
+  // input — the snapshot @domecs/input publishes at onTickStart; setInput is
+  // how an input plugin (or a test) publishes one.
+  readonly input: InputSnapshot
+  setInput(snap: InputSnapshot): void
 
   // time
   readonly time:  Readonly<TimeState>
@@ -296,8 +307,9 @@ interface World {
   // random
   readonly rand: Rng
 
-  // plugins
-  use(plugin: Plugin, options?: unknown): () => void
+  // plugins — use() returns the disposer, or the install's DomecsError; it
+  // throws for programmer errors such as a duplicate plugin name.
+  use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
 
   // reflection
@@ -305,11 +317,21 @@ interface World {
   // Iterate every live entity carrying `type`, paired with its value. Same
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
   // less ceremony at the call-site (F-10).
-  entitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   archetype(entity: Entity): ComponentType<unknown>[]
   // Reflect a component's name/transient/defaults/field-schema (#14). Works on
   // any ComponentType without prior registration; enumerate via componentTypes().
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
+  resourceTypes(): ResourceType<unknown>[]
+  describeResource<T>(type: ResourceType<T>): ResourceDescriptor
+  // An event's name and declared schema fields (fieldsSource 'schema' | 'none').
+  describeEvent(type: EventType<unknown>): EventDescriptor
+  // The world manifest (agents: bridge.observe()). Schema: components,
+  // resources, events (EventDescriptors: every type emitted, subscribed to, or
+  // named as an event system's trigger — O-51), systems, plugins,
+  // capabilities, snapshotVersion. Live: entityCount, componentCounts,
+  // archetypes. Cheap enough to poll.
+  describe(): WorldManifest
 
   // snapshots
   // options.pruneEmptyEntities (default false): drop entities whose
@@ -325,7 +347,8 @@ interface World {
   // state is wiped; an invalid snapshot throws and leaves the world
   // untouched. Component values are not re-validated — the live path
   // validates only at Component.create(). world.rand is rewound in place, so
-  // captured references follow the restore (O-46).
+  // captured references follow the restore (O-46). A snapshot whose version
+  // is newer than SNAPSHOT_VERSION throws (O-63); migrate older ones first.
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -341,6 +364,8 @@ interface World {
     componentRemoved: Signal<{ entity: Entity; type: ComponentType<unknown> }>
     tickStart:       Signal<TimeState>
     tickEnd:         Signal<TimeState>
+    // A system returned a fault with no entity (doc/error-handling.md).
+    faultRaised:     Signal<SystemicFault>
   }
 }
 
@@ -582,11 +607,11 @@ interface EventView {
 **Inter-entity references.** Components carrying foreign-entity ids
 (`tableId: Entity | null`, `customerId: Entity | null`) become dangling on
 despawn. The canonical cleanup pattern uses `signals.entityDespawned`
-(SPEC §2.10 despawn ordering rule) plus `world.entitiesWith`:
+(SPEC §2.10 despawn ordering rule) plus `world.iterEntitiesWith`:
 
 ```ts
 world.signals.entityDespawned.subscribe((dead) => {
-  for (const { id, value } of world.entitiesWith(Table)) {
+  for (const { id, value } of world.iterEntitiesWith(Table)) {
     if (value.customerId === dead) value.customerId = null
     if (value.waiterId === dead)   value.waiterId   = null
   }
@@ -712,11 +737,15 @@ interface Plugin<O = void> {
   install(world: World, options: O): Result<PluginHandle | void, DomecsError>
 }
 
+// O-57: heartbeat is true on a step(dt <= 0) heartbeat (SPEC §4.0): hooks
+// and render run, no system does — publish one-tick data, don't consume it.
+interface TickInfo { readonly heartbeat: boolean }
+
 interface PluginHandle {
   teardown?:    () => void
-  onTickStart?: (world: World) => void
-  onTickEnd?:   (world: World) => void
-  onRender?:    (world: World) => void
+  onTickStart?: (world: World, info: TickInfo) => void
+  onTickEnd?:   (world: World, info: TickInfo) => void
+  onRender?:    (world: World, info: TickInfo) => void
   onSnapshot?:  (snap: WorldSnapshot) => WorldSnapshot
   onRestore?:   (snap: WorldSnapshot) => WorldSnapshot
 }
@@ -921,7 +950,16 @@ assert.equal(opts.clearOnBlur, true)        // untouched default survives
 ## `@domecs/dom`
 
 ```ts
-function mountDOM(world: World, options: MountOptions): MountHandle
+// Returns a Result. A world can take several mounts on distinct slots
+// (O-55); a slot already mounted is err slot_already_mounted.
+function mountDOM(world: World, options: MountOptions): Result<MountHandle, MountError>
+
+type MountError =
+  | { kind: 'slot_already_mounted'; slot: string }
+  | { kind: 'unregistered_slot'; slot: string }
+  | { kind: 'plugin_install_failed'; reason: string }
+  | { kind: 'invalid_view_query'; slot: string; reason: string }   // temporal node in a view query (O-52)
+  | { kind: 'invalid_changed_on'; slot: string; reason: string }   // update with no redraw trigger (O-55)
 
 interface MountOptions {
   readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
@@ -938,19 +976,22 @@ interface MountHandle {
 // `changedOn` semantics (SPEC §5.3 update-gating rule, P-3) — a
 // discriminated union, NOT an array:
 //   - omitted (default) or `{ mode: 'auto' }`: redraws are gated by
-//     `OnChanged(T)` for every `Has(T)` leaf in `query`. A view over
-//     `[Position, Velocity]` auto-redraws when either component is marked
-//     changed.
+//     `OnChanged(T)` for every `Has(T)` and `Where(T, …)` leaf in `query`
+//     not under a `Not`. A view over `[Position, Velocity]` auto-redraws
+//     when either component is marked changed. A view with `update` and no
+//     such leaf is err invalid_changed_on (O-55).
 //   - `{ mode: 'legacy' }`: "redraw every tick". Useful for time-driven
 //     animations where the view depends on `time.elapsed` rather than
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
-//     those component types. Overrides the auto-derive.
+//     those component types. Overrides the auto-derive. An empty list with
+//     `update` is err invalid_changed_on.
 //
 // First paint (O-2): under `auto`/`explicit`, `update` also runs once for
 // each newly created node in the commit that mounts it (fresh commit-time
 // view; exactly one update even if the entity was also marked changed that
-// window). Later commits stay change-gated.
+// window). Later commits stay change-gated. `create` gets the entity as it
+// is at the commit, with components added since it matched (O-55).
 type ChangedOn =
   | { readonly mode: 'auto' }
   | { readonly mode: 'legacy' }
@@ -1059,6 +1100,8 @@ interface LoadOptions {
 // Plugin: strips entities with an empty serializable component bag from every
 // world.snapshot() envelope via onSnapshot — the declarative way to get
 // pruneEmptyEntities on the persisted save() path. Install once per world.
+// Runs on every snapshot(), history included; an entity others refer to by
+// id (a scene Parent group) needs a persistent component of its own (O-61).
 function pruneTransientOnlyEntities(): Plugin
 ```
 

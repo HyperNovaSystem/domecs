@@ -1,3 +1,4 @@
+import type { EventDescriptor } from './events.js'
 import type { SystemSchedule } from './scheduler.js'
 import type { ComponentDescriptor, ResourceDescriptor } from './types.js'
 
@@ -23,7 +24,11 @@ export interface WorldManifest {
   // schema surface — composed from the describe* family
   readonly components: ComponentDescriptor[]
   readonly resources: ResourceDescriptor[]
-  readonly events: { readonly name: string }[]
+  /**
+   * Event types this world has seen emitted, subscribed to, or named as an
+   * event system's trigger, with their declared schema fields (O-51).
+   */
+  readonly events: EventDescriptor[]
   readonly systems: {
     readonly name: string
     readonly schedule: SystemSchedule

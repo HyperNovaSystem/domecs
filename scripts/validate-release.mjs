@@ -15,6 +15,8 @@ const runtimePackages = [
   { name: '@domecs/input', dir: 'packages/domecs-input' },
   { name: '@domecs/inspector', dir: 'packages/domecs-inspector' },
   { name: '@domecs/persist', dir: 'packages/domecs-persist' },
+  { name: '@domecs/rules', dir: 'packages/domecs-rules' },
+  { name: '@domecs/scene', dir: 'packages/domecs-scene' },
 ]
 
 const packageAliases = new Map([
@@ -27,6 +29,8 @@ const packageAliases = new Map([
   // inspector/persist never had unscoped legacy names — scoped only.
   ['@domecs/inspector', '@domecs/inspector'],
   ['@domecs/persist', '@domecs/persist'],
+  ['@domecs/rules', '@domecs/rules'],
+  ['@domecs/scene', '@domecs/scene'],
 ])
 
 const dependencySections = [
@@ -37,7 +41,7 @@ const dependencySections = [
 ]
 
 const orgAppCandidates = [
-  '../fleet_app',
+  '../fleet',
   '../harbor_game',
   '../lighthouse_novel',
   '../studio',

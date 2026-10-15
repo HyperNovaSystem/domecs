@@ -134,7 +134,7 @@ A query is a composable predicate over component presence and values. Queries ar
 
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
-- `Not(node)` — true when `node` is false. Unary.
+- `Not(node)` — true when `node` is false. Unary. Evaluated per entity (O-74): `Not(Where(T, p))` matches an entity that lacks `T` or whose `T` fails `p`, and `Not(OnAdded(T))` an entity whose `T` was not added in the window (or that lacks `T`); candidate selection by archetype MUST NOT drop such entities.
 - `And(...nodes)` — true when every child is true. N-ary.
 - `Or(...nodes)` — true when any child is true. N-ary.
 
@@ -195,7 +195,7 @@ unconstrained `EntityView` shape.
 
 **Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `OnAdded` / `OnRemoved` / `OnChanged` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
-Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries.
+Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries. A query that every match must satisfy through one `OnAdded(T)`/`OnChanged(T)` leaf (the leaf itself, or a child of an `And`) reads the marks of `T` in its window rather than every holder of `T` when the window holds at most a quarter as many marks as the query has structural members (O-54) — an idle or lightly changed frame costs what changed, not the world's size.
 
 ### 2.5 System
 
@@ -413,8 +413,7 @@ world state from outside a tick — input plugins, WebSocket feeds, custom
 drivers — MUST rouse the idle loop by calling `world.requestTick()`. The
 call is a no-op when the realtime driver is not running, when `idle: false`,
 or when already inside a tick. `requestTick` is the *only* supported wake
-path; reaching into engine-private members (such as the deprecated
-`world.__wake` alias, kept for one release cycle only) is not contractual.
+path; reaching into engine-private members is not contractual.
 
 ### Headless mode
 
@@ -447,7 +446,7 @@ An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, n
 1. Leave `time.tick`, `time.elapsed`, and every system's change window unchanged.
 2. Set `time.delta = 0` and `time.scaledDelta = 0`.
 3. Skip steps 3–6 entirely — no `fixed`, `tick`, `event`, or `reactive` systems run.
-4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots.
+4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots. The plugin hooks receive `{ heartbeat: true }` as their second argument (`TickInfo`, O-57); a plugin that hands systems one-tick data MUST NOT consume it on a heartbeat. `@domecs/input` keeps the pending key edges and pointer/wheel deltas for the next tick: a heartbeat's snapshot has current held keys, position and buttons but no edges or deltas, so each edge is seen by exactly one full tick.
 
 A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Marks made before a heartbeat stay unseen by systems until their next run. A live query read during the heartbeat's render (a renderer's change gate) has seen what it read: its window advances at the end of the heartbeat (§2.9), so a heartbeat paints between-tick marks once and the next tick does not repaint them.
 
@@ -485,7 +484,7 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
      (ctx) => { for (const e of ctx.entities) rescale(e) })
    ```
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
-8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9).
+8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9). These windows advance even when a step above throws (O-53): a query read before the throw has seen what it read. The rest of the tick's bookkeeping (pruning, restored cursors) happens only when the tick completes.
 
 Events emitted in steps 5–6 are buffered for next tick.
 
@@ -545,8 +544,11 @@ by a per-view set of *redraw triggers*:
 (`{ mode: 'auto' } | { mode: 'legacy' } | { mode: 'explicit'; types: [...] }`):
 
 1. If `ViewDef.changedOn` is **omitted** (default) or `{ mode: 'auto' }`,
-   the renderer derives the set from every `Has(T)` leaf in the view's
-   `query` — explicitly negated branches (`Not(...)`) are excluded. A view
+   the renderer derives the set from every `Has(T)` and `Where(T, …)` leaf
+   in the view's `query` — explicitly negated branches (`Not(...)`) are
+   excluded. A view with `update` whose query has no such leaf, or with an
+   empty `explicit` list, is rejected with the `invalid_changed_on`
+   MountError rather than silently redrawing every tick (O-55). A view
    over `[Position, Velocity]` thus auto-redraws when either component is
    marked changed.
 2. If `ViewDef.changedOn` is **`{ mode: 'legacy' }`**, the renderer falls
@@ -568,6 +570,24 @@ full-redraw path already covers new nodes.)
 
 `onAdd` (initial mount) and `onRemove` (final unmount) are not subject to
 this gate; `create` and `destroy` always fire regardless of `changedOn`.
+`create` receives the entity's commit-time view, including components added
+after it matched in the same window (O-55); `destroy` receives the last view
+the renderer held for it.
+
+**A throwing view callback (O-53, normative).** A `create`, `update` or
+`destroy` that throws affects only its own entity. The commit continues with
+the remaining entities and views, and the first error is rethrown from the
+renderer's `onRender` once the commit is done, so it propagates out of
+`step`/`stepOnce` (and `tickEnd` does not fire for that frame). Later frames
+are not affected: a failed `destroy` still removes the node; a failed
+`update` leaves the node mounted and is not retried until the entity is
+marked changed again; a failed `create` leaves the entity unmounted until it
+is marked changed on a redraw trigger — for a view without them (no `update`,
+or `legacy`), on a component of one of its query's `Has` leaves — when
+`create` is retried, or until it leaves and re-enters the view. `MountHandle.teardown()` likewise removes every node
+and then rethrows the first `destroy` error. The tick's change windows close
+even when the frame throws (§4.1 step 8), so the renderer is not handed the
+same marks again.
 
 ### 5.4 Style contract
 
@@ -591,7 +611,7 @@ Slots are named roots, registered at `mountDOM(world, { slots: {...} })` time. S
 
 Applications register custom slots as needed.
 
-**Slot-collision policy (normative).** Slot *mounting* (via `mountDOM({ slots: {...} })`) is exclusive: attempting to mount a second root to an already-mounted slot name **throws** at `mountDOM` call time. View *registration*, by contrast, is additive: any number of views from any number of plugins may target the same slot name, and the renderer **appends** elements into that slot in registration order. This is the same rule as §5.1's entity→zero-or-more-views — multiple views per slot are already legal; §5.6 makes it explicit that cross-plugin overlap is not a conflict. Ordering within a slot is registration order; plugins that care about z-order should stack layers via named sub-slots (e.g., `chrome:menu`, `chrome:toasts`) rather than racing against each other on a shared slot.
+**Slot-collision policy (normative).** Slot *mounting* (via `mountDOM({ slots: {...} })`) is exclusive: attempting to mount a second root to an already-mounted slot name returns `err({ kind: 'slot_already_mounted', slot })` from `mountDOM`. A world may take any number of mounts on distinct slots (O-55). View *registration*, by contrast, is additive: any number of views from any number of plugins may target the same slot name, and the renderer **appends** elements into that slot in registration order. This is the same rule as §5.1's entity→zero-or-more-views — multiple views per slot are already legal; §5.6 makes it explicit that cross-plugin overlap is not a conflict. Ordering within a slot is registration order; plugins that care about z-order should stack layers via named sub-slots (e.g., `chrome:menu`, `chrome:toasts`) rather than racing against each other on a shared slot.
 
 ---
 
@@ -604,7 +624,9 @@ Applications register custom slots as needed.
 
 `InputSnapshot` is immutable within a tick. Systems read; they do not mutate.
 
-v0.1 pointer coordinates are raw DOM event client coordinates. Target-relative normalization, hit-tested entity enter/leave tracking, and higher-level action mapping are deferred to the next input milestone or app-level plugins.
+v0.1 pointer coordinates are raw DOM event client coordinates, whatever the `pointerTarget`. Target-relative normalization, hit-tested entity enter/leave tracking, and higher-level action mapping are deferred to the next input milestone or app-level plugins. The first move after install sets the position without a delta; under pointer lock the delta is the events' `movementX`/`movementY` (O-59).
+
+`keyDelta` edges are published once per tick (§4.1 step 2). Every `fixed` sub-step of that tick sees the same edges, so a press fires once per sub-step, and a `fixed` system that does not run that tick misses it; edge-triggered input belongs on `tick` systems (O-35, O-59).
 
 Keybinding layer is *not* part of core — it is a plugin that translates `InputSnapshot` to high-level `Action` events.
 
@@ -705,7 +727,7 @@ createPersistence(world, {
 Migrations are per-component, not per-world.
 The codec system allows one component schema to evolve without forcing monolithic world-level migration.
 
-**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a non-advancing step, or a snapshot newer than the target. `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
+**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a step that does not produce exactly version N+1, or a snapshot newer than the target (O-63). `world.restore()` itself throws on a snapshot whose `version` is newer than the engine's `SNAPSHOT_VERSION`; older snapshots should go through `migrate()` (as `load()` does). `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
 
 ### 7.4 Ring buffer (time-travel)
 
@@ -728,7 +750,7 @@ This relies on:
 - Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
-The inspector can run an authoritative system in a sandbox and detect violations (PRNG, wall-clock, disallowed trig) by monkey-patching.
+Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `JSON.stringify(snapshot())`.
 
 ---
 
@@ -801,6 +823,8 @@ Example:
 | `onSnapshot`  | Before persist writes                 |
 | `onRestore`   | After snapshot loads, before resume   |
 
+`onTickStart`, `onRender` and `onTickEnd` are called as `(world, info)`, where `info: TickInfo` is `{ heartbeat: boolean }` — `true` on a `step(dt <= 0)` heartbeat (§4.0, O-57).
+
 Plugins registered without any hooks fall back to the degenerate `(world) => teardown?` form.
 
 ### 9.5 Hot-swap (dev only)
@@ -823,15 +847,17 @@ DOMECS ships no HMR client itself. `replaceFn` is the seam a bundler's HMR glue 
 
 ## 10. Inspector (`@domecs/inspector`)
 
-A plugin.
-When installed, it:
-- Mounts a side panel (default slot `chrome`, user-overridable).
-- Enumerates all `componentTypes()` and renders a per-entity editor.
-- Subscribes to the snapshot ring buffer; exposes a scrubber.
-- Detects determinism violations (wall-clock reads, `Math.random` calls) via monkey-patching in dev builds.
-- Displays archetype set membership per entity, pinpointing composition churn.
+A headless plugin with no DOM dependency: `createInspector(options?)` returns
+`{ plugin, view, clear }`. When installed, it:
+- Records every entity fault (`Faulted` entries) and systemic fault
+  (`signals.faultRaised`) into a bounded ring as `InspectorEntry` records.
+- Optionally (`recordStateChanges`) interleaves spawns, despawns and component
+  adds/removes into a timeline.
+- Exposes a filter-composable `InspectorView` (`bySource`, `byKind`,
+  `byTickRange`, `recoverableOnly`, …) and a serializable `export()`.
 
-The inspector is **not** part of core; production builds omit it.
+UI panels (Studio, custom devtools) are built on this surface; the package
+ships none. It is **not** part of core; production builds can omit it.
 
 ---
 

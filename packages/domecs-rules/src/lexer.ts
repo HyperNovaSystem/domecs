@@ -58,7 +58,10 @@ export function tokenize(source: string): Token[] {
         i++
         while (i < n && isDigit(source[i]!)) i++
       }
-      tokens.push({ type: 'number', value: source.slice(start, i), pos: start })
+      const text = source.slice(start, i)
+      // O-69 (R11): a literal too large for a double would be Infinity.
+      if (!Number.isFinite(Number(text))) throw new LexError('Number literal out of range', start)
+      tokens.push({ type: 'number', value: text, pos: start })
       continue
     }
 
@@ -85,7 +88,10 @@ export function tokenize(source: string): Token[] {
             '"': '"',
             "'": "'",
           }
-          value += escapes[next] ?? next
+          const escaped = escapes[next]
+          // O-69 (R11): an unknown escape is an error, not a dropped backslash.
+          if (escaped === undefined) throw new LexError(`Unknown escape "\\${next}"`, i)
+          value += escaped
           i += 2
           continue
         }

@@ -20,11 +20,21 @@ export interface Plugin<O = void> {
   install(world: World, options: O): Result<PluginHandle | void, DomecsError>
 }
 
+/**
+ * What kind of frame a plugin tick hook runs in (O-57). On a heartbeat
+ * (`step(dt)` with `dt <= 0`, SPEC §4.0) hooks and render run but no system
+ * does, so a plugin that hands systems one-tick data — input edges, deltas —
+ * should publish without consuming it.
+ */
+export interface TickInfo {
+  readonly heartbeat: boolean
+}
+
 export interface PluginHandle {
   teardown?(): void
-  onTickStart?(world: World): void
-  onTickEnd?(world: World): void
-  onRender?(world: World): void
+  onTickStart?(world: World, info: TickInfo): void
+  onTickEnd?(world: World, info: TickInfo): void
+  onRender?(world: World, info: TickInfo): void
   /** Typed snapshot hook (TYPE_EVAL §3.2b — subsumed by BETTER_ERRORS Phase 1). */
   onSnapshot?(snap: WorldSnapshot): WorldSnapshot
   onRestore?(snap: WorldSnapshot): WorldSnapshot
@@ -93,9 +103,9 @@ export interface PluginRegistry {
   use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
   list(): ReadonlyArray<InstalledPlugin>
-  callTickStart(world: World): void
-  callTickEnd(world: World): void
-  callRender(world: World): void
+  callTickStart(world: World, info: TickInfo): void
+  callTickEnd(world: World, info: TickInfo): void
+  callRender(world: World, info: TickInfo): void
   teardownAll(): void
 }
 
@@ -196,16 +206,16 @@ export function createPluginRegistry(world: World): PluginRegistry {
     return getOrCreateCapability(name) as unknown as Capability<K>
   }
 
-  function callTickStart(w: World): void {
-    for (const e of order) if (e.handle?.onTickStart) e.handle.onTickStart(w)
+  function callTickStart(w: World, info: TickInfo): void {
+    for (const e of order) if (e.handle?.onTickStart) e.handle.onTickStart(w, info)
   }
 
-  function callTickEnd(w: World): void {
-    for (const e of order) if (e.handle?.onTickEnd) e.handle.onTickEnd(w)
+  function callTickEnd(w: World, info: TickInfo): void {
+    for (const e of order) if (e.handle?.onTickEnd) e.handle.onTickEnd(w, info)
   }
 
-  function callRender(w: World): void {
-    for (const e of order) if (e.handle?.onRender) e.handle.onRender(w)
+  function callRender(w: World, info: TickInfo): void {
+    for (const e of order) if (e.handle?.onRender) e.handle.onRender(w, info)
   }
 
   function teardownAll(): void {

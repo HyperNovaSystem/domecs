@@ -88,7 +88,10 @@ It is trying to be the best runtime where the **model is the product**.
 
 ## Status
 
-**v1.0.0 — API-stable.** All five `@domecs/*` packages are published at 1.0.0.
+**v1.0.0 — API-stable.** Five `@domecs/*` packages are published at 1.0.0
+(core, dom, input, persist, inspector). Two more live in this repo and are not
+on npm yet: `@domecs/scene` (parent/child hierarchy) and `@domecs/rules`
+(data-defined rules).
 Semver is honored; the product contract is still hardening via corrective
 `1.0.x` releases (first-hour traps, benchmarks, agent surface). See
 [`plan/PLAN.md`](plan/PLAN.md) for governing direction and kill gates.
@@ -138,8 +141,12 @@ Optional packages:
 
 ```bash
 npm install @domecs/persist     # snapshot save/load + migrations
-npm install @domecs/inspector   # in-browser entity/component debugger
+npm install @domecs/inspector   # headless fault + timeline recorder for devtools
 ```
+
+`@domecs/scene` (Parent hierarchy, transform composition) and `@domecs/rules`
+(a safe expression language for data-defined rules) are in `packages/` and
+not yet published.
 
 Published packages resolve to built ESM under `dist/` (no bundler required for
 Node or import-map browser hosts). This repository itself is a `pnpm` workspace;
@@ -295,8 +302,11 @@ A higher-level `createPersistence` facade (IndexedDB adapter, autosave) is plann
 │                   action() · describe()     │
 ├─────────────────────────────────────────────┤
 │  @domecs/dom      Retained DOM renderer     │
+│  @domecs/input    Keyboard/pointer snapshot │
 │  @domecs/persist  Snapshot save/load        │
-│  @domecs/inspector  Devtools panel          │
+│  @domecs/inspector  Fault/timeline recorder │
+│  @domecs/scene    Hierarchy (unpublished)   │
+│  @domecs/rules    Data rules (unpublished)  │
 ├─────────────────────────────────────────────┤
 │  Browser — DOM, CSS, Storage, Pointer API   │
 └─────────────────────────────────────────────┘
@@ -312,7 +322,7 @@ A higher-level `createPersistence` facade (IndexedDB adapter, autosave) is plann
 | **System**    | Function over a query result, run on a schedule.                           |
 | **Query**     | Cached set of entities matching a component signature.                     |
 | **Event**     | Typed message buffered this tick, delivered next tick.                     |
-| **Plugin**    | `(world) => teardown?` — adds systems, components, or services.            |
+| **Plugin**    | `definePlugin({ name, install })` — adds systems, hooks, or services.      |
 
 ### Scheduling modes
 

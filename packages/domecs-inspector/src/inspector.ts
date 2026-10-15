@@ -56,8 +56,9 @@ export interface TimelineEvent {
 
 /**
  * A point-in-time, serializable copy of an {@link InspectorView}: the fault
- * buckets and the timeline as plain arrays. Unlike the live view (whose arrays
- * mutate as the world runs), a snapshot is safe to hand to an agent or persist.
+ * buckets and the timeline as plain arrays. Unlike the live view (whose
+ * getters return the current contents on each read), a snapshot is safe to
+ * hand to an agent or persist.
  */
 export interface InspectorSnapshot {
   readonly entries: InspectorEntry[]
@@ -68,9 +69,12 @@ export interface InspectorSnapshot {
 
 /**
  * Immutable, filter-composable view of the inspector's recorded entries.
- * Filters return a fresh view sharing the same buffer snapshot — the
- * underlying ring buffer keeps growing in the background but a captured
- * view stays stable.
+ * Filters return a fresh view over a copy of the entries and the timeline
+ * taken when filtering — the ring buffers keep changing in the background,
+ * but a filtered view stays stable (O-60). Restoring a snapshot does not
+ * record its faults again when an entry with the same entity, source, kind,
+ * tick, component and detail is already recorded; a fault raised again by
+ * a later tick is recorded again.
  */
 export interface InspectorView {
   readonly entries: readonly InspectorEntry[]
@@ -127,24 +131,39 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
   const timelineSize = opts.timelineBufferSize ?? bufferSize
   const recordStateChanges = opts.recordStateChanges ?? false
 
-  const entries: InspectorEntry[] = []
-  const timeline: TimelineEvent[] = []
+  const entries = createRing<InspectorEntry>(bufferSize, (e) => {
+    if (e.entity === undefined) return
+    const key = faultKey(e.entity, e.systemId, e.kind, e.tick, e.component, e.detail)
+    const n = keys.get(key) ?? 0
+    if (n <= 1) keys.delete(key)
+    else keys.set(key, n - 1)
+  })
+  const timeline = createRing<TimelineEvent>(timelineSize)
   // Dedupes across onAdd / onChange — the consolidator preserves entry
   // identity so a WeakSet keyed on `FaultEntry` survives reordering and
-  // shrinkage of the underlying `Faulted.faults` buffer.
+  // shrinkage of the underlying `Faulted.faults` buffer. A restore builds
+  // new objects for the same faults (O-60 N2): while a restore is applied,
+  // a fault whose content — entity, source, kind, tick, component, detail —
+  // is already recorded is skipped. Outside a restore, identity alone
+  // decides, so the same fault raised again (a replayed episode, several
+  // fixed sub-steps) is recorded each time. Keys are counted per recorded
+  // entry and leave with it when the ring drops it.
   const seen = new WeakSet<FaultEntry>()
+  const keys = new Map<string, number>()
+  let restoring = false
 
   function pushEntry(e: InspectorEntry): void {
     entries.push(e)
-    if (entries.length > bufferSize) entries.shift()
   }
   function pushTimeline(t: TimelineEvent): void {
     timeline.push(t)
-    if (timeline.length > timelineSize) timeline.shift()
   }
   function ingestFault(entity: Entity, f: FaultEntry, wallclock: number): void {
     if (seen.has(f)) return
     seen.add(f)
+    const key = faultKey(entity, f.source, f.kind, f.tick, f.component, f.detail)
+    if (restoring && keys.has(key)) return
+    keys.set(key, (keys.get(key) ?? 0) + 1)
     const entry: InspectorEntry = {
       kind: f.kind,
       systemId: f.source,
@@ -260,6 +279,15 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
       }
 
       return ok({
+        // A restore re-adds every restored Faulted buffer as new objects;
+        // the window lasts until the next frame starts.
+        onRestore(snap) {
+          restoring = true
+          return snap
+        },
+        onTickStart() {
+          restoring = false
+        },
         teardown() {
           for (const off of unsubs) off()
         },
@@ -267,15 +295,58 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
     },
   }
 
-  const view = buildView(() => entries, () => timeline)
+  const view = buildView(entries.read, timeline.read)
 
   return {
     plugin,
     view,
     clear() {
-      entries.length = 0
-      timeline.length = 0
+      entries.clear()
+      timeline.clear()
+      keys.clear()
     },
+  }
+}
+
+function faultKey(
+  entity: Entity,
+  source: SystemId,
+  kind: string,
+  tick: number,
+  component: ComponentId | undefined,
+  detail: JsonValue | undefined,
+): string {
+  return JSON.stringify([entity, source, kind, tick, component ?? null, detail ?? null])
+}
+
+/**
+ * Bounded FIFO with O(1) amortized push (O-60 N3: `Array.shift()` per push
+ * was O(n)). `read()` returns the live contents as an array, rebuilt only
+ * after a change.
+ */
+function createRing<T>(capacity: number, onEvict?: (item: T) => void) {
+  let items: T[] = []
+  let head = 0
+  let cache: T[] | null = null
+  return {
+    push(item: T): void {
+      items.push(item)
+      if (items.length - head > capacity) {
+        onEvict?.(items[head]!)
+        head++
+        if (head > capacity) {
+          items = items.slice(head)
+          head = 0
+        }
+      }
+      cache = null
+    },
+    clear(): void {
+      items = []
+      head = 0
+      cache = null
+    },
+    read: (): readonly T[] => (cache ??= items.slice(head)),
   }
 }
 
@@ -351,8 +422,10 @@ function makeView(
 
 function leafView(
   snapshot: readonly InspectorEntry[],
-  timelineSnapshot: readonly TimelineEvent[],
+  timeline: readonly TimelineEvent[],
 ): InspectorView {
+  // O-60 N3: a filtered view keeps the timeline as it was when filtered.
+  const timelineSnapshot = [...timeline]
   return makeView(
     () => snapshot,
     () => timelineSnapshot,

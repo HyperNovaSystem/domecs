@@ -11,8 +11,7 @@ export interface EvalEnv {
    * component is not registered/known, when the entity currently being
    * evaluated does not have that component, or when the component instance
    * has no such field. `evaluate` treats any of those uniformly: it throws
-   * a {@link RuleEvalError} (see the class doc for the documented
-   * skip-this-entity contract callers must implement).
+   * a {@link RuleEvalError} (see the class doc for how rules.ts handles it).
    */
   resolveField(component: string, field: string): number | string | boolean | undefined
   /** Current tick delta-time in seconds (schedule-dependent — see rules.ts). */
@@ -33,12 +32,12 @@ export interface EvalEnv {
  *
  * **Documented contract (per M6 spec):** this is a per-entity-per-tick
  * condition, not a systemic one. `evaluate` itself does not know about
- * entities or ticks — it just throws. The caller (`compileRule` /
- * `installRules` in rules.ts) is responsible for catching `RuleEvalError`
- * (and any other error `evaluate` might throw) **per entity**, treating it
- * as "this entity does not satisfy `when`" (skip-this-entity), and
- * continuing on to the next entity in the query. One bad entity must never
- * stop the rest of the query from being processed that tick.
+ * entities or ticks — it just throws. The caller (`installRules` in
+ * rules.ts) catches `RuleEvalError` **per entity**, skips that entity for
+ * the tick, reports it as a `rule_eval_failed` fault on the entity (O-68),
+ * and continues with the next entity in the query. One bad entity must
+ * never stop the rest of the query from being processed that tick. Any
+ * other error is a bug and propagates.
  */
 export class RuleEvalError extends Error {
   constructor(message: string) {
@@ -53,9 +52,27 @@ function toBoolean(value: number | string | boolean): boolean {
 
 function expectNumber(value: number | string | boolean, context: string): number {
   if (typeof value !== 'number') {
-    throw new RuleEvalError(`Expected a number for ${context}, got ${typeof value} (${JSON.stringify(value)})`)
+    throw new RuleEvalError(`Expected a number for ${context}, got ${typeof value} (${describeValue(value)})`)
   }
   return value
+}
+
+/**
+ * A short rendering of a value for an error message that cannot itself
+ * throw — component fields may hold BigInts, symbols or cyclic objects.
+ */
+function describeValue(value: unknown): string {
+  try {
+    const json = JSON.stringify(value)
+    if (json !== undefined) return json
+  } catch {
+    // fall through
+  }
+  try {
+    return String(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
 }
 
 /**
@@ -166,5 +183,93 @@ function evaluateCall(name: FunctionName, args: AstNode[], env: EvalEnv): number
       return Math.floor(expectNumber(evaluate(args[0]!, env), 'floor()'))
     case 'random':
       return env.rand.uniform()
+  }
+}
+
+/** A compiled expression: {@link evaluate} for one AST, without the walk. */
+export type CompiledExpression = (env: EvalEnv) => number | string | boolean
+
+/**
+ * O-69 (R12): turn `ast` into nested closures once, so a rule evaluated for
+ * every entity every tick does not re-dispatch on node kinds. Same results,
+ * errors and short-circuiting as {@link evaluate}; no code is generated.
+ */
+export function compileExpression(ast: AstNode): CompiledExpression {
+  switch (ast.kind) {
+    case 'number':
+    case 'string':
+    case 'boolean': {
+      const value = ast.value
+      return () => value
+    }
+    case 'identifier':
+      return ast.name === 'dt' ? (env) => env.dt : (env) => env.time
+    case 'field': {
+      const { component, field } = ast
+      return (env) => {
+        const value = env.resolveField(component, field)
+        if (value === undefined) {
+          throw new RuleEvalError(`Field "${component}.${field}" is not available on this entity`)
+        }
+        return value
+      }
+    }
+    case 'unary': {
+      const operand = compileExpression(ast.operand)
+      if (ast.op === '!') return (env) => !toBoolean(operand(env))
+      return (env) => -expectNumber(operand(env), 'unary "-"')
+    }
+    case 'logical': {
+      const left = compileExpression(ast.left)
+      const right = compileExpression(ast.right)
+      return ast.op === '&&'
+        ? (env) => toBoolean(left(env)) && toBoolean(right(env))
+        : (env) => toBoolean(left(env)) || toBoolean(right(env))
+    }
+    case 'ternary': {
+      const cond = compileExpression(ast.cond)
+      const then = compileExpression(ast.then)
+      const otherwise = compileExpression(ast.else)
+      return (env) => (toBoolean(cond(env)) ? then(env) : otherwise(env))
+    }
+    case 'binary': {
+      const left = compileExpression(ast.left)
+      const right = compileExpression(ast.right)
+      const op = ast.op
+      if (op === '==') return (env) => left(env) === right(env)
+      if (op === '!=') return (env) => left(env) !== right(env)
+      const ctx = `"${op}"`
+      const num = (f: CompiledExpression, env: EvalEnv): number => expectNumber(f(env), ctx)
+      switch (op) {
+        case '+': return (env) => { const a = num(left, env); return a + num(right, env) }
+        case '-': return (env) => { const a = num(left, env); return a - num(right, env) }
+        case '*': return (env) => { const a = num(left, env); return a * num(right, env) }
+        case '/': return (env) => { const a = num(left, env); return a / num(right, env) }
+        case '%': return (env) => { const a = num(left, env); return a % num(right, env) }
+        case '<': return (env) => { const a = num(left, env); return a < num(right, env) }
+        case '<=': return (env) => { const a = num(left, env); return a <= num(right, env) }
+        case '>': return (env) => { const a = num(left, env); return a > num(right, env) }
+        case '>=': return (env) => { const a = num(left, env); return a >= num(right, env) }
+      }
+      return left
+    }
+    case 'call': {
+      const args = ast.args.map(compileExpression)
+      const n = (i: number, env: EvalEnv, ctx: string): number => expectNumber(args[i]!(env), ctx)
+      switch (ast.name) {
+        case 'min': return (env) => { const a = n(0, env, 'min()'); return Math.min(a, n(1, env, 'min()')) }
+        case 'max': return (env) => { const a = n(0, env, 'max()'); return Math.max(a, n(1, env, 'max()')) }
+        case 'clamp': return (env) => {
+          const v = n(0, env, 'clamp()')
+          const lo = n(1, env, 'clamp()')
+          return Math.min(Math.max(v, lo), n(2, env, 'clamp()'))
+        }
+        case 'abs': return (env) => Math.abs(n(0, env, 'abs()'))
+        case 'sin': return (env) => Math.sin(n(0, env, 'sin()'))
+        case 'cos': return (env) => Math.cos(n(0, env, 'cos()'))
+        case 'floor': return (env) => Math.floor(n(0, env, 'floor()'))
+        case 'random': return (env) => env.rand.uniform()
+      }
+    }
   }
 }

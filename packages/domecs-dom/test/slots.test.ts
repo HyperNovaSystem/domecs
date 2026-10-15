@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Has, createWorld, defineComponent, entry, isOk, isErr, type QueryResult } from '@domecs/core'
+import { Has, Not, Where, createWorld, defineComponent, entry, isOk, isErr, type QueryResult } from '@domecs/core'
 import { defineView, mountDOM } from '../src/index.js'
 
 const Tag = defineComponent<{}>('Tag')
@@ -105,18 +105,55 @@ describe('mountDOM — slot policy (SPEC §5.6)', () => {
     handle.teardown()
   })
 
-  it('returns err on plugin_install_failed when renderer plugin already installed', () => {
-    // Mount once to install the renderer plugin under this plugin name
+  it('mounts a second renderer on other slots of the same world (O-55 D7)', () => {
     const world = createWorld({ headless: true })
-    const r1 = mountDOM(world, { slots: { stage }, views: [] })
-    expect(isOk(r1)).toBe(true)
-    // The renderer plugin is now registered; calling mountDOM again on the
-    // same world would re-install the same plugin name, causing a throw from
-    // world.use — which mountDOM should catch and return as err.
-    const r2 = mountDOM(world, { slots: { hud }, views: [] })
-    expect(isErr(r2)).toBe(true)
-    if (isErr(r2)) expect(r2.error.kind).toBe('plugin_install_failed')
+    const Mark = defineComponent<{ n: number }>('SlMark', { defaults: { n: 0 } })
+    const r1 = mountDOM(world, {
+      slots: { stage },
+      views: [defineView({ slot: 'stage', query: Has(Mark), create: () => document.createElement('i') })],
+    })
+    const r2 = mountDOM(world, {
+      slots: { hud },
+      views: [defineView({ slot: 'hud', query: Has(Mark), create: () => document.createElement('b') })],
+    })
+    expect(isOk(r1) && isOk(r2)).toBe(true)
+    world.spawn([entry(Mark, { n: 1 })])
+    world.stepOnce()
+    expect(stage.children).toHaveLength(1)
+    expect(hud.children).toHaveLength(1)
+    if (isOk(r2)) r2.value.teardown()
     if (isOk(r1)) r1.value.teardown()
+    expect(stage.children).toHaveLength(0)
+  })
+
+  it('rejects a view with update but no redraw trigger (O-55 D5)', () => {
+    const world = createWorld({ headless: true })
+    const Mark = defineComponent<{ n: number }>('SlMark2', { defaults: { n: 0 } })
+    const explicitEmpty = mountDOM(world, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage', query: Has(Mark), changedOn: { mode: 'explicit', types: [] },
+        create: () => document.createElement('i'), update: () => {},
+      })],
+    })
+    expect(isErr(explicitEmpty) && explicitEmpty.error.kind).toBe('invalid_changed_on')
+    const noLeaf = mountDOM(world, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage', query: Not(Has(Mark)),
+        create: () => document.createElement('i'), update: () => {},
+      })],
+    })
+    expect(isErr(noLeaf) && noLeaf.error.kind).toBe('invalid_changed_on')
+    // A Where leaf is a trigger.
+    const where = mountDOM(world, {
+      slots: { stage },
+      views: [defineView({
+        slot: 'stage', query: Where(Mark, (m) => m.n > 0),
+        create: () => document.createElement('i'), update: () => {},
+      })],
+    })
+    expect(isOk(where)).toBe(true)
   })
 })
 

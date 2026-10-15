@@ -1,9 +1,7 @@
 /**
  * Headless Plantroom model — loads built @domecs/core and shared domain.
  */
-import { pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { core } from './core.mjs'
 import {
   buildPlant,
   makeProposal,
@@ -11,8 +9,6 @@ import {
   proposalResetAndStart,
 } from './buildPlant.js'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const core = await import(pathToFileURL(join(root, 'packages/domecs/dist/index.js')).href)
 
 const plant = buildPlant(core)
 

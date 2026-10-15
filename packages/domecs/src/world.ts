@@ -36,7 +36,7 @@ import {
 } from './faulted.js'
 import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
-import { createPluginRegistry, type Capability, type Plugin } from './plugin.js'
+import { createPluginRegistry, type Capability, type Plugin, type TickInfo } from './plugin.js'
 import { normalizeCause, toJsonValue, type Result } from './result.js'
 import { createRng, type Rng, type RngState } from './rng.js'
 import {
@@ -85,6 +85,10 @@ import {
 
 // Reactive delta nodes a one-shot selector cannot evaluate, and the `where`
 // kind that forces per-entity predicate filtering. Shared, allocation-free.
+// O-57: the frame kind handed to plugin tick hooks.
+const HEARTBEAT: TickInfo = Object.freeze({ heartbeat: true })
+const FULL_TICK: TickInfo = Object.freeze({ heartbeat: false })
+
 const oneshotReactiveKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'added',
   'changed',
@@ -101,6 +105,12 @@ const tickFilterKinds: ReadonlySet<QueryNode['kind']> = new Set([
   'changedResource',
 ])
 const changedResourceKind: ReadonlySet<QueryNode['kind']> = new Set(['changedResource'])
+
+// O-74: three-valued archetype match (see matchArchetype in createWorld).
+type ArchMatch = 0 | 1 | 2
+const ARCH_NO: ArchMatch = 0
+const ARCH_MAYBE: ArchMatch = 1
+const ARCH_YES: ArchMatch = 2
 
 // The manifest is a plain-data handoff: clone FieldSchema values so no
 // consumer holds references into the live component/event schema metadata
@@ -175,6 +185,14 @@ export interface World {
    */
   spawn(components?: ComponentBag): Entity
   despawn(entity: Entity): void
+  /** Whether `entity` was spawned and has not been despawned (O-61). */
+  isAlive(entity: Entity): boolean
+  /**
+   * The entity's current view — `{ id, [ComponentName]: value }` for every
+   * component it holds, the same object queries hand out — or undefined if
+   * it is not alive (O-54).
+   */
+  getView(entity: Entity): EntityView | undefined
   has(entity: Entity, type: ComponentType<unknown>): boolean
   addComponent<T>(entity: Entity, type: ComponentType<T>, value: T): void
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
@@ -679,20 +697,56 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
+  /**
+   * Whether an archetype with `types` can hold entities matching `node`:
+   * the candidate filter for every query. `evalEntity` settles the
+   * per-entity nodes (`Where`, change filters) for the candidates.
+   */
   function evalStructural(node: QueryNode, types: Set<string>): boolean {
+    return matchArchetype(node, types) !== ARCH_NO
+  }
+
+  /**
+   * O-74: three-valued archetype match — every entity of the archetype
+   * matches (YES), none does (NO), or it depends on per-entity state such
+   * as a `Where` predicate or a change window (MAYBE). Negation keeps MAYBE,
+   * so `Not(Where(T, p))` keeps `T` holders as candidates and matches those
+   * whose `T` fails `p`, as `evalEntity` does — a two-valued match read
+   * `Where` as `Has` and dropped them.
+   */
+  function matchArchetype(node: QueryNode, types: Set<string>): ArchMatch {
     switch (node.kind) {
-      case 'has': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'not': return !evalStructural(node.child, types)
-      case 'or': return node.children.some((c) => evalStructural(c, types))
-      case 'and': return node.children.every((c) => evalStructural(c, types))
-      case 'added': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'changed': requireRegisteredType(node.type); return types.has(node.type.name)
-      case 'removed': return true
-      case 'where': requireRegisteredType(node.type); return types.has(node.type.name)
+      case 'has': requireRegisteredType(node.type); return types.has(node.type.name) ? ARCH_YES : ARCH_NO
+      case 'not': return (ARCH_YES - matchArchetype(node.child, types)) as ArchMatch
+      case 'or': {
+        let m: ArchMatch = ARCH_NO
+        for (const c of node.children) {
+          const r = matchArchetype(c, types)
+          if (r > m) m = r
+          if (m === ARCH_YES) break
+        }
+        return m
+      }
+      case 'and': {
+        let m: ArchMatch = ARCH_YES
+        for (const c of node.children) {
+          const r = matchArchetype(c, types)
+          if (r < m) m = r
+          if (m === ARCH_NO) break
+        }
+        return m
+      }
+      case 'added':
+      case 'changed':
+      case 'where':
+        requireRegisteredType(node.type)
+        return types.has(node.type.name) ? ARCH_MAYBE : ARCH_NO
+      // A removed component is no longer in any archetype.
+      case 'removed': return ARCH_MAYBE
       // Structurally neutral: a resource gate does not constrain which entities
       // match (it is a per-tick gate evaluated in evalEntity), so it must not
       // prune the And() it sits inside. See ChangedResource (#16).
-      case 'changedResource': return true
+      case 'changedResource': return ARCH_MAYBE
     }
   }
 
@@ -1116,16 +1170,17 @@ export function createWorld(options: WorldOptions = {}): World {
       time.scaledDelta = 0
       inTick = true
       try {
-        plugins.callTickStart(world)
+        plugins.callTickStart(world, HEARTBEAT)
         if (sigTickStart.size > 0) sigTickStart.emit(time)
-        plugins.callRender(world)
-        plugins.callTickEnd(world)
+        plugins.callRender(world, HEARTBEAT)
+        plugins.callTickEnd(world, HEARTBEAT)
         if (sigTickEnd.size > 0) sigTickEnd.emit(time)
       } finally {
         inTick = false
+        // A heartbeat render has read what it painted (O-42), even if a
+        // hook threw (O-53).
+        advanceQueryWindows()
       }
-      // A heartbeat render has read what it painted (O-42).
-      advanceQueryWindows()
       return
     }
     const d = dt ?? 0
@@ -1159,7 +1214,7 @@ export function createWorld(options: WorldOptions = {}): World {
     inTick = true
     try {
       // SPEC §9.4 — plugin onTickStart fires at step 0.
-      plugins.callTickStart(world)
+      plugins.callTickStart(world, FULL_TICK)
 
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
       const eventView = bus.flush()
@@ -1228,16 +1283,19 @@ export function createWorld(options: WorldOptions = {}): World {
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
-      plugins.callRender(world)
+      plugins.callRender(world, FULL_TICK)
 
       // SPEC §9.4 — plugin onTickEnd fires at step 8.
-      plugins.callTickEnd(world)
+      plugins.callTickEnd(world, FULL_TICK)
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     } finally {
       inTick = false
+      // SPEC §4 step 8 (O-42): close the tick for change windows. Also when
+      // the tick threw (O-53): a query read before the throw has seen what
+      // it read, so a renderer whose callback threw is not handed the same
+      // marks — and the same throw — every frame after.
+      advanceQueryWindows()
     }
-    // SPEC §4 step 8 (O-42): close the tick for change windows.
-    advanceQueryWindows()
     lastTickEndSeq = changes.seq
     pendingCursors.clear()
     changes.pruneRemoved(removalHorizon())
@@ -1336,8 +1394,27 @@ export function createWorld(options: WorldOptions = {}): World {
 
     const needsEntityFilter = hasTickFilter
     const removedNames = hasRemoved ? collectRemovedTypeNames(node) : null
+    // O-54: a query every match of which carries an added/changed mark of
+    // one type takes its candidates from that type's marks in the window,
+    // not from every structural member.
+    // Hook-only queries (observe) never read a window: no log for them.
+    const driver = removedNames || !readsChanges ? null : requiredMark(node)
+    const unwatch = driver ? changes.watchMarks(driver.kind, driver.name) : null
     // Call inside the read's window (hasRemoved implies needsEntityFilter).
     const collectCandidates = (): readonly Entity[] => {
+      if (driver) {
+        // Worth it only when the window is small next to the membership:
+        // the marks then need a sort the members do not.
+        const marked = changes.markedInWindow(
+          driver.kind, driver.name, winFrom, winTo, q.structuralMembers.size >> 2,
+        )
+        if (marked) {
+          // Only structural members are candidates, as on the scan path: a
+          // restored mark may name a component the entity no longer has.
+          const held = marked.filter((e) => q.structuralMembers.has(e))
+          return held.length > 1 ? held.sort(byId) : held
+        }
+      }
       if (!removedNames) return q.structuralMembers.ordered()
       // Removed: include entities removed within the read's window, which
       // may no longer sit in any structurally matching archetype. Re-sorted
@@ -1416,6 +1493,7 @@ export function createWorld(options: WorldOptions = {}): World {
       dispose() {
         if (disposed) return
         disposed = true
+        unwatch?.()
         const idx = queries.indexOf(q)
         if (idx >= 0) queries.splice(idx, 1)
         q.matchingArchetypes.clear()
@@ -1504,6 +1582,14 @@ export function createWorld(options: WorldOptions = {}): World {
       viewCache.delete(entity)
       sigEntityDespawned.emit(entity)
       wakeDriver()
+    },
+
+    isAlive(entity: Entity): boolean {
+      return alive.has(entity)
+    },
+
+    getView(entity: Entity): EntityView | undefined {
+      return alive.has(entity) ? makeView(entity) : undefined
     },
 
     has(entity: Entity, type: ComponentType<unknown>): boolean {
@@ -1644,7 +1730,7 @@ export function createWorld(options: WorldOptions = {}): World {
     describe(): WorldManifest {
       const componentDescs = world.componentTypes().map((t) => world.describeComponent(t))
       const resourceDescs = world.resourceTypes().map((t) => world.describeResource(t))
-      const events = bus.knownTypes().map((t) => ({ name: t.name }))
+      const events = bus.knownTypes().map((t) => world.describeEvent(t))
 
       const modes: SystemSchedule[] = ['tick', 'fixed', 'event', 'once', 'reactive']
       const systems = modes.flatMap((mode) =>
@@ -1783,6 +1869,10 @@ export function createWorld(options: WorldOptions = {}): World {
     // SystemDef is safe because the overload constraints enforce valid variants.
     system(name: string, def: SystemDef | (Omit<SystemDef, 'query'> & { query: QueryDef }), fn: System): SystemHandle {
       const handle = scheduler.register(name, def as SystemDef, fn)
+      // O-51: an event system's triggers are commands the world accepts —
+      // list them in describe() before anything emits them.
+      const sdef = def as SystemDef
+      if (sdef.schedule === 'event') for (const t of sdef.triggers ?? []) bus.note(t)
       wakeDriver()
       return handle
     },
@@ -1973,6 +2063,21 @@ export function createWorld(options: WorldOptions = {}): World {
   )
 
   return world
+}
+
+/**
+ * O-54: an `OnAdded`/`OnChanged` leaf that every match of `node` must
+ * satisfy — `node` itself, or such a leaf of an `And` — or null.
+ */
+function requiredMark(node: QueryNode): { kind: 'added' | 'changed'; name: string } | null {
+  if (node.kind === 'added' || node.kind === 'changed') return { kind: node.kind, name: node.type.name }
+  if (node.kind === 'and') {
+    for (const c of node.children) {
+      const r = requiredMark(c)
+      if (r) return r
+    }
+  }
+  return null
 }
 
 function collectRemovedTypeNames(node: QueryNode, out: Set<string> = new Set()): Set<string> {

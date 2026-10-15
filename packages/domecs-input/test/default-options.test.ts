@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_INPUT_OPTIONS } from '../src/index.js'
+import { DEFAULT_INPUT_OPTIONS, TEXT_INPUT_SELECTOR } from '../src/index.js'
 
 describe('DEFAULT_INPUT_OPTIONS', () => {
   it('exposes the static input defaults', () => {
     expect(DEFAULT_INPUT_OPTIONS).toEqual({
       clearOnBlur: true,
-      textInputSelector: 'input,textarea,[contenteditable="true"]',
+      textInputSelector: TEXT_INPUT_SELECTOR,
       preventDefaultKeys: false,
     })
   })

@@ -178,6 +178,12 @@ function applyLoadedBytes(
  * transient-only entities (their components are excluded at snapshot time) and
  * bare `spawn()` entities never reach disk. Install once per world. Entities
  * that still carry any persistent component are untouched.
+ *
+ * The hook runs on every `world.snapshot()`, not just `save()`: a
+ * `createSnapshotHistory` undo restores a snapshot without the pruned
+ * entities, so they are despawned. An entity that others refer to by id —
+ * an `@domecs/scene` `Parent` group, say — needs a persistent component of
+ * its own, or its references dangle (O-61).
  */
 export function pruneTransientOnlyEntities(): Plugin {
   return definePlugin({

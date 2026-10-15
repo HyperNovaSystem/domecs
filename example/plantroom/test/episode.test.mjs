@@ -4,12 +4,16 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
 function ensureCoreBuilt() {
+  // Staged outside the repo (release validation) the installed package is
+  // used instead; there is nothing to build.
+  if (!existsSync(path.join(root, 'packages/domecs/package.json'))) return
   const build = spawnSync(
     process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
     ['--filter', '@domecs/core', 'build'],

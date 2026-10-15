@@ -6,6 +6,95 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — medium items)
+
+- `@domecs/dom`: a throwing view `create`/`update`/`destroy` no longer jams
+  the renderer. The rest of the commit and every other view still run, the
+  first error is rethrown once the commit is done, and later frames are
+  unaffected; a failed `create` is retried when the entity is marked changed.
+  `teardown()` removes every node before rethrowing. `@domecs/core` closes a
+  tick's change windows even when the tick throws. (O-53)
+- `@domecs/input`: a `step(0)` heartbeat no longer eats key presses and
+  pointer/wheel deltas; they reach the next full tick, once (a heartbeat's
+  snapshot carries held keys and position but no edges). `@domecs/core`:
+  plugin `onTickStart`/`onRender`/`onTickEnd` receive a second argument,
+  `TickInfo` (`{ heartbeat: boolean }`, exported). (O-57)
+- `@domecs/scene`: `setParent` rejects a parent that is not alive. The README
+  gives group entities a persistent component, since snapshot pruning drops
+  bare entities and orphans their children; persist's
+  `pruneTransientOnlyEntities` docs say it applies to history snapshots too.
+  `@domecs/core`: new `world.isAlive(entity)`. (O-61)
+- `@domecs/scene`: `despawnTree` terminates on a cyclic `Parent` graph and is
+  linear (a 4k-child star took ~800 ms); `composeTransforms` no longer
+  overflows the stack on deep chains. (O-64)
+- `@domecs/rules`: **behavior change** — rule errors are reported instead of
+  swallowed. An entity a rule cannot run on is still skipped, and now gets a
+  `Faulted` entry (`rule_eval_failed`, source `rule:<name>`; the `RuleFault`
+  type is exported); any other error propagates out of the step.
+  `compileRule` rejects type errors certain at compile time — a string or
+  boolean literal (or operator result) where arithmetic, a comparison or a
+  function needs a number, outside short-circuited or branch code. (O-68)
+- `@domecs/core`: `Not(Where(T, p))` matches entities that lack `T` or whose
+  `T` fails `p` (it behaved as `Not(Has(T))`); `Not` over `OnAdded`/
+  `OnChanged`/`OnRemoved`/`OnChangedResource` likewise negates per entity.
+  (O-74)
+- `@domecs/scene`: `composeTransforms` marks `World_` changed only when a
+  value moved (change-gated views repainted every tick), removes `World_`
+  when an entity loses `Local`, removes its systems on disposal, and
+  takes `options` (`priority`, `name`). **Behavior change**: the default
+  plugin/system name is now `domecs-scene:compose-transforms:<Local>><World_>`,
+  so one instance per component pair can be installed. (O-65)
+- `@domecs/inspector`: a restore no longer duplicates recorded faults;
+  filtered views keep the timeline they were filtered with instead of the
+  live one; pushing into a full buffer is O(1) amortized; the README example
+  reads `entry.systemId`. (O-60)
+- `@domecs/core`: `describe().events` (and `bridge.observe()`) list an event
+  system's trigger types from registration, and each entry is the type's
+  `describeEvent()` descriptor with its schema fields, so agents can
+  discover commands before anything emits them. (O-51)
+- `@domecs/core`, `@domecs/dom`: a change-gated read or commit costs what
+  changed, not the number of entities: `OnAdded`/`OnChanged` queries read
+  the marks in their window when that is cheaper, and a view's update phase
+  visits only changed, created and re-added entities (50k entities, one
+  change: 10.6 → 0.03 ms per commit). New `world.getView(entity)` returns
+  the entity's current view (the object queries hand out). (O-54)
+- Docs: `doc/api.md`'s World listing matches the shipped interface (removed
+  `resource<T>()`/`entitiesWith`, added the missing members); README and
+  AGENTS name the five published packages and the two unpublished ones
+  (scene, rules); SPEC §8/§10 describe the inspector that ships. (O-71)
+- Bench: the compare phase runs interleaved trials (`--trials`, default 5)
+  and reports medians and ranges; a win must hold in every trial. The
+  windowed "0.65× (decisive)" claim is withdrawn — a 5-trial run shows no
+  runtime win. (O-72)
+- `@domecs/persist`: a migration step must produce exactly the next version;
+  `registerComponentTypes` reports malformed entries and fields, `__proto__`
+  and duplicate field names, and defaults that do not fit their kind, instead
+  of throwing or dropping them silently. `@domecs/core`: `restore()` throws
+  on a snapshot newer than `SNAPSHOT_VERSION`. (O-63)
+- `@domecs/input`: the first pointer move no longer reports a delta from
+  (0, 0); pointer-lock moves report `movementX`/`movementY`; the default
+  text-input selector (`TEXT_INPUT_SELECTOR`, exported) ignores checkboxes,
+  radios, ranges and buttons and covers `select` and `contenteditable=""`.
+  Docs: coordinates are client coordinates, and a key press fires once per
+  `fixed` sub-step. (O-59)
+- `@domecs/rules`: `RuleDef.priority`; equal-priority rules run in `defs`
+  order. An unknown `schedule` or non-finite `priority` is a compile error, a
+  repeated rule name is reported instead of silently replacing the first,
+  and over-long number literals and unknown escapes are parse errors. Rules
+  run about 4× faster (expressions compile to closures; staging is skipped
+  when unneeded). (O-69)
+- `@domecs/dom`: a world can take several `mountDOM`s on distinct slots;
+  `create` sees components added after the entity matched; auto redraw
+  triggers include `Where` leaves. **Behavior change**: a view with `update`
+  but no redraw trigger (an empty `explicit` list, or no positive
+  `Has`/`Where` leaf) is the new `invalid_changed_on` MountError instead of
+  silently redrawing every tick. (O-55)
+- Packaging: `@domecs/*` packages peer-depend on `@domecs/core` (`^1.0.0` on
+  publish) instead of depending on an exact version; `src` ships so source
+  maps resolve; `engines.node >=18`. CI tests Node 20/22/24 and the
+  cold-install gate. The API-surface snapshot covers every declaration file.
+  (O-73)
+
 ### Changed (2026-10-13 engine review — change windows, O-42)
 
 - `@domecs/core`: **behavior change** — change detection no longer resets at
