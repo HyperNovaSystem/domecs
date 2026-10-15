@@ -497,6 +497,8 @@ interface View<T> {
 A view is **bound to one or more component types**.
 The renderer registry maps component types to views.
 
+**View membership (O-52, normative).** A view's query defines a standing set: an entity is mounted while it is in the query's result (`query.entities`, which applies `Where` predicates) and unmounted when it leaves, reconciled at each render commit. Temporal nodes (`OnAdded`, `OnRemoved`, `OnChanged`, `OnChangedResource`) are not valid in a view query; `mountDOM` returns `invalid_view_query`. Change-gated redraws use `changedOn`.
+
 - Sprite view: one element on the `stage` slot.
 - Nameplate view: one element on the `overlay` slot.
 - Tooltip view: one element on the `portal` slot, created on hover event, destroyed on leave.

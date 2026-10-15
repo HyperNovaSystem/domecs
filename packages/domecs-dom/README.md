@@ -65,7 +65,7 @@ const mounted = mountDOM(world, {
 })
 
 if (!mounted.ok) {
-  // e.g. { kind: 'slot_already_mounted' | 'unregistered_slot' | 'plugin_install_failed' }
+  // e.g. { kind: 'slot_already_mounted' | 'unregistered_slot' | 'plugin_install_failed' | 'invalid_view_query' }
   console.error('mountDOM failed:', mounted.error)
 } else {
   const mount = mounted.value
@@ -82,6 +82,10 @@ if (!mounted.ok) {
 - `defineView(def)` declares a DOM view.
 - `mountDOM(world, { slots, views })` claims named DOM slots for one world.
 - Each view has a `query`; matching entities get mounted into the view's slot.
+  A `Where` filter is honored: entities mount when they start passing it and
+  unmount when they stop (checked at each render commit). Temporal nodes
+  (`OnAdded`/`OnRemoved`/`OnChanged`/`OnChangedResource`) are rejected with
+  `invalid_view_query` — use `changedOn` for change-gated redraws.
 - `create(entity)` returns the element for a matching entity.
 - `update(el, entity)` runs during render commits. It runs once when a node
   is first created (first paint, O-2 — so static entities render without a

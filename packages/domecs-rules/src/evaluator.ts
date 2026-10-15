@@ -24,11 +24,12 @@ export interface EvalEnv {
 }
 
 /**
- * Thrown by `evaluate` when it cannot produce a value — currently only for
+ * Thrown by `evaluate` when it cannot produce a value — for
  * an unresolvable `Component.field` reference (missing component or missing
  * field on the entity being evaluated), and for a value of the wrong type
  * reaching an operator/function that requires a specific type (e.g. `+` on
- * a boolean).
+ * a boolean). rules.ts also throws it for a write it rejects (O-67: missing
+ * target component or field, a kind mismatch, a non-finite number).
  *
  * **Documented contract (per M6 spec):** this is a per-entity-per-tick
  * condition, not a systemic one. `evaluate` itself does not know about

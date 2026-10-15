@@ -91,6 +91,14 @@ Defaults:
 - `pollGamepads`: `true` when `navigator.getGamepads` exists
 - `preventDefaultKeys`: `false`
 
+Key presses made while an element matching `textInputSelector` has focus pass
+through to it; releases are always processed, so a key pressed in the game and
+released in a text field does not stay held. With `clearOnBlur` (the default),
+held keys and pointer buttons are released when the window loses focus, and —
+with an element `keyTarget` — when focus leaves that element. `pointercancel`
+and `lostpointercapture` clear pointer buttons. Teardown resets `world.input`
+to an empty snapshot.
+
 When no browser globals exist, the default DOM targets are absent. The plugin is
 still safe to import and install; it registers no event listeners, does not poll
 gamepads, and publishes empty snapshots on each tick.
