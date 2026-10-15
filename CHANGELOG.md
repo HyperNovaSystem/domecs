@@ -6,6 +6,28 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed (2026-10-13 engine review — change windows, O-42)
+
+- `@domecs/core`: **behavior change** — change detection no longer resets at
+  tick boundaries. A system's `OnChanged`/`OnAdded`/`OnRemoved`/
+  `OnChangedResource` filters report every mark since that system's previous
+  run ended (never its own writes); any other live query reports every mark
+  since the last tick it was read. Marks made by a system that runs later in
+  the tick, in render or `tickEnd`, or between ticks are no longer lost to
+  systems that ran earlier — they are seen at their next run. A disabled or
+  paused system sees what changed while it was off; a sub-rate `fixed` system
+  sees the marks from the frames it skipped. A heartbeat render paints
+  between-tick marks once. Also fixes the inspector missing faults appended
+  after its observer ran (O-60 N1) and heartbeat repaints (O-55 D6).
+- `@domecs/core`: snapshots carry the marks a system has not seen yet and each
+  system's position (`WorldSnapshot.changes`, optional; `SNAPSHOT_VERSION`
+  stays 2; the `ChangesSnapshot` type is exported). `restore()` re-issues them,
+  so a restored world's change-detection filters report what the live world's
+  would — including marks from mutations made between ticks.
+- `@domecs/core`: `observe()` hands `onChange` the reactive delta itself.
+- `@domecs/core`: component types whose `defaults` hold no nested object skip
+  the per-entity copy (O-44 fast path).
+
 ### Fixed (2026-10-13 engine review — package high-severity items, O-52, O-56, O-58, O-66–O-68)
 
 - `@domecs/dom`: a view whose query has a `Where` filter mounts exactly the

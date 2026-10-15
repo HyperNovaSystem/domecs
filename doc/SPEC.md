@@ -123,14 +123,14 @@ A query is a composable predicate over component presence and values. Queries ar
 **Component shortcuts** carry a single `ComponentType` and produce a leaf node:
 
 - `Has(T)` — component type present on the entity.
-- `OnChanged(T)` — `markChanged(e, T)` was called in the previous tick.
-- `OnAdded(T)` — component type was added in the previous tick.
-- `OnRemoved(T)` — component type was removed in the previous tick.
+- `OnChanged(T)` — `markChanged(e, T)` was called within the reader's change window (§2.9).
+- `OnAdded(T)` — component type was added within the reader's change window.
+- `OnRemoved(T)` — component type was removed within the reader's change window.
 - `Where(T, predicate)` — component is present and `predicate(value)` is true.
 
 **Resource change-detection node** carries a single `ResourceType` (see §2.11) and produces a leaf node:
 
-- `OnChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) in the previous tick. Structurally neutral: it matches *every* entity on a change tick and *no* entity otherwise, so `And(Has(T), OnChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `OnChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
+- `OnChangedResource(R)` — the world-level resource `R` was changed (via `setResource`/`markResourceChanged`) within the reader's change window. Structurally neutral: it matches *every* entity when `R` changed in the window and *no* entity otherwise, so `And(Has(T), OnChangedResource(R))` yields the `T` entities only on ticks where `R` changed, while a bare `OnChangedResource(R)` is a world-level edge that a reactive system can react to even in an empty world (see §4 step 6). It is a change-detection node for the `reactsTo` contract.
 
 **Predicate combinators** carry one or more child `QueryNode`s and compose them:
 
@@ -195,7 +195,7 @@ unconstrained `EntityView` shape.
 
 **Complexity (normative).**  `Has` / `Not` / `And` / `Or` / `OnAdded` / `OnRemoved` / `OnChanged` are satisfied by the archetype cache in O(matching-entities) amortized — the cache tracks set membership, so iteration dominates.  `Where(T, predicate)` is **not** indexed: it runs the predicate against each entity in the matching archetype set every tick, at O(matching-archetype-entities) per tick regardless of how selective the predicate is.  Users who need value-based filtering in hot paths should model the filterable state as a **tag component** (e.g., `Dead`, `Burning`, `Selected`) and add it to the query via `Has` / `Not`, so archetype caching applies.  Reach for `Where` only when the predicate is cheap *and* the matching archetype set is small, or when the query runs off the hot path.
 
-Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`) apply only within a tick and are reset at the start of the next tick (step 0 of the tick order; see §4).
+Change-detection filters (`OnChanged`, `OnAdded`, `OnRemoved`, `OnChangedResource`) report the marks in their reader's change window (§2.9). Nothing is reset at tick boundaries.
 
 ### 2.5 System
 
@@ -290,13 +290,18 @@ Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all function
 
 Post-v0.1 diagnostics may warn about mutation-without-mark or mark-without-mutation patterns through a plugin or inspector surface, but those warnings must not change `OnChanged(T)` semantics. Missed marks remain caller bugs; extra defensive marks remain legal.
 
-**Invariant (I-2 — explicit marks).**  `OnChanged(T)` returns exactly the set of entities for which `markChanged(e, T)` was called in the previous tick (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; future diagnostics may help find them, but the core does not paper over them.
+**Invariant (I-2 — explicit marks).**  `OnChanged(T)` returns exactly the set of entities for which `markChanged(e, T)` was called within the reader's change window (after filtering by the query's component set).  It is a faithful report of marks, not a detector of mutations.  Missed marks are a caller bug; future diagnostics may help find them, but the core does not paper over them.
 
 This contract applies uniformly to vanilla, any post-v0.1 framework adapter, and the Worker boundary: an adapter that auto-marks (e.g., via a reactivity framework's own proxy) must still produce `markChanged` calls the core can see — adapters do not get a private fast path.
 
-**Buffer-and-swap rule (normative).** `markChanged`, `addComponent`, `removeComponent`, and `despawn` may be called *outside* a running system — between `step()` calls, from signal handlers, from input callbacks, from plugin lifecycle hooks. Such between-tick writes MUST be captured into a *pending* set distinct from the live tick set, and promoted into the live set at step 0 of the next tick. This is symmetric with the event buffer (§2.6): both sources land in pending storage between ticks and are made visible at the start of the next tick.
+**Change windows (O-42, normative).** Every mark — `markChanged`, a component add or removal, `despawn`, `setResource`/`markResourceChanged` — is recorded in one order, whenever it is made: inside a system, in a plugin hook or signal handler, during render or `tickEnd`, or between `step()` calls. A change-detection filter reports the marks in its reader's *change window*:
 
-The implementation maintains an `inTick` flag for the duration of steps 1–8: writes during a tick land in the live set (visible to step 6 reactive systems within the same tick); writes outside a tick land in the pending set (visible to next tick's step 6). Step 0 first clears the live set, then drains pending into it. As a corollary, a between-tick `markChanged` call and a step-3-system `markChanged` call are observationally indistinguishable to a reactive system one tick later — only the timing of the surrounding `step()` call separates them.
+- **A system's `query` and `reactsTo`:** every mark since the system's previous run ended, up to the moment this run starts. Marks made while the system runs — its own writes and anything they trigger synchronously — fall after the window and are not reported back to it. A system that does not run (disabled, a `tick`/`fixed` system while paused, a sub-rate `fixed` system between its steps, an `event` system with no matching event) keeps accumulating and sees everything at its next run. A reactive system whose `reactsTo` is checked and comes up empty counts as having run. A newly registered system's window starts at the end of the last completed tick.
+- **Any other live query** (`world.query(...)` read by a plugin hook, a renderer, or user code): every mark since the last tick in which it was read, up to the read. At the end of each tick and each heartbeat (§4.0) its window advances to the point of its last read, so a mark made after that read — later in the tick, in a `tickEnd` handler, or between ticks — is reported at its next read. Reads within one tick are cumulative. A new query's window starts at the end of the last completed tick.
+
+No mark is lost to ordering: a system that runs earlier in a tick than the writer sees the mark at its next run, and a reactive re-trigger (§4.1 step 6) is the same rule. Marks made between ticks are ordinary marks; no separate buffer is needed.
+
+**Retention.** Added and changed marks are dropped when their component is removed. Removal marks outlive the entity and are kept until every reader with an `OnRemoved` filter has seen them — a live query with `OnRemoved` that is never read again keeps them, so dispose queries you no longer read. Snapshots carry the marks a system has not seen yet (§7.1).
 
 ### 2.10 Signals
 
@@ -345,7 +350,7 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 
 **Default materialization (normative).** `defineResource` accepts `default?: T | (() => T)` and `validate?`. A function default is a **per-world factory** called lazily the first time `resource(R)` is read on a world that has not set the value; a non-function default is **deep-cloned per world** (so two worlds never share a mutable default object). `resource(R)` returns `undefined` only when there is no value and no default. `setResource` and a materialized default both run `validate`; a `string` return is thrown as a validation error.
 
-**Change tracking (normative).** Resource changes participate in the same buffer-and-swap discipline as component marks (§2.9): `setResource` and `markResourceChanged` record the resource name into the live tick set when called inside a tick, or the pending set when called between ticks, promoted at step 0. `OnChangedResource(R)` (§2.4) reports exactly the resources changed in the previous tick. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
+**Change tracking (normative).** Resource changes are marks like component marks (§2.9): `setResource` and `markResourceChanged` record the change whenever they are called, and `OnChangedResource(R)` (§2.4) reports it within each reader's change window. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
 
 **Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
 
@@ -390,6 +395,14 @@ explicit `world.startLoop()`, or a call to `world.requestTick()`.
 no tick), so the restored state is painted without moving the world past
 the checkpoint (O-48).
 
+**Unseen marks and idle (O-42, normative).** After a frame the loop also
+stays awake while a mark is waiting for a reader that will act on it: an
+enabled reactive system whose `reactsTo` would fire, or a live non-system
+query that was read during the last tick (a renderer's change gate) and
+would report something. A deferred reactive re-trigger (§4.1 step 6) and a
+mark made during render or `tickEnd` therefore get their next frame. Marks
+no such reader would report do not keep the loop awake.
+
 **A throwing frame (O-45, normative).** If a step run by the driver throws,
 the driver still schedules its next frame (subject to the idle rule) before
 the error propagates out of the `requestAnimationFrame` callback, where the
@@ -431,12 +444,12 @@ Roguelike default.
 
 An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, not a tick. The implementation MUST:
 
-1. Leave `time.tick`, `time.elapsed`, and all change-detection buffers (live and pending) unchanged.
+1. Leave `time.tick`, `time.elapsed`, and every system's change window unchanged.
 2. Set `time.delta = 0` and `time.scaledDelta = 0`.
 3. Skip steps 3–6 entirely — no `fixed`, `tick`, `event`, or `reactive` systems run.
 4. Still fire plugin `onTickStart`, `onRender`, `onTickEnd`, and the `tickStart`/`tickEnd` signals, in the same order as a normal tick, so UIs can paint initial state and input plugins can republish input snapshots.
 
-A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Change-detection buffers marked via external `markChanged` calls *before* a heartbeat are preserved and promoted normally by the next positive `step(dt)`.
+A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Marks made before a heartbeat stay unseen by systems until their next run. A live query read during the heartbeat's render (a renderer's change gate) has seen what it read: its window advances at the end of the heartbeat (§2.9), so a heartbeat paints between-tick marks once and the next tick does not repaint them.
 
 **Legacy carve-out.** A no-argument `step()` call (`dt === undefined`) is *not* a heartbeat — it advances a tick with `time.delta = 0` for backwards compatibility with turn-based exemplars. Turn-based callers should use `turn(event, payload)` (which invokes `step()` internally) rather than passing literal zero. Code that wants explicit "do nothing now but keep the UI alive" behavior MUST pass `0` explicitly.
 
@@ -444,13 +457,13 @@ A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the w
 
 For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
 
-0. **Reset per-tick state.** Clear the live Added/Removed/Changed sets, then drain pending between-tick writes into them (per §2.9 buffer-and-swap rule). After this step, the live sets contain exactly the structural changes / `markChanged` calls that occurred since the previous tick's step 0, regardless of whether they came from systems or external callers.
+0. **Begin the tick.** No change-detection state is reset: each reader's change window (§2.9) carries every mark it has not seen, whether it came from a system, a hook, or an external caller.
 1. **Flush event buffer from last tick.** Events become readable by event systems.
 2. **Collect input.** `InputCollector` snapshots keyboard, pointer, touch, gamepad, focus into `InputSnapshot`.
 3. **Run `fixed` systems.** Zero or more steps to catch the accumulator up to scaled time.
 4. **Run `tick` systems.** In priority order.
 5. **Run `event` systems.** For events buffered in step 1. Events emitted during 3–4 were buffered for *next* tick.
-6. **Run `reactive` systems.** For queries that changed in steps 3–5. Debouncing rule (normative): multiple component mutations within one tick that hit the same reactive system's `reactsTo` query **coalesce into one invocation** with a combined delta (the union of added/removed/changed entity sets observed across steps 3–5). A reactive system sees each entity at most once per tick. If a reactive system's execution mutates state that would re-trigger a reactive system earlier in priority order within this same step 6, the re-trigger is **deferred to the next tick's step 6** — the tick does not iterate to a fixed point. This matches the event-buffering rule in §2.6.
+6. **Run `reactive` systems.** In priority order, each fires when its `reactsTo` has entities in its change window (§2.9). Debouncing rule (normative): all marks in the window that hit the same `reactsTo` **coalesce into one invocation** with a combined delta. A reactive system sees each entity at most once per invocation. If a reactive system's execution mutates state that would re-trigger a reactive system earlier in priority order within this same step 6, the re-trigger is **deferred to the next tick's step 6** — the mark falls in the earlier system's next window; the tick does not iterate to a fixed point. This matches the event-buffering rule in §2.6.
 
    **`ctx.entities` for reactive systems (normative).** When a reactive system supplies only `reactsTo` (no explicit `query`), its `ctx.entities` MUST be the `reactsTo` change delta for the tick — the same set that triggered the invocation — not the empty array. When an explicit `query` is also supplied it takes precedence and `ctx.entities` reflects that query; authors who want both the trigger and a broader/narrower view use the explicit `query` for iteration and the change itself as the trigger.
 
@@ -472,7 +485,7 @@ For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):
      (ctx) => { for (const e of ctx.entities) rescale(e) })
    ```
 7. **Renderer diff and commit.** Views are diffed; DOM mutations batched.
-8. **Increment `time.tick`.** Commit change-detection sets for next tick's step 0.
+8. **Close the tick.** Plugin `onTickEnd` and `tickEnd` handlers run; then every live query that is not a system's advances its change window to its last read (§2.9).
 
 Events emitted in steps 5–6 are buffered for next tick.
 
@@ -612,6 +625,7 @@ interface WorldSnapshot {
   entities:   { id: number; components: Record<string, unknown> }[]
   nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
+  changes?:   ChangesSnapshot                    // marks a system has not seen (O-42); see below
   meta?:      Record<string, unknown>
 }
 ```
@@ -622,17 +636,20 @@ interface WorldSnapshot {
 
 **Clock continuity (O-40, normative).** `snapshot()` records the cumulative unquantized scaled time (§2.7's drift-free total) as `scaledTime`, plus `fixedBacklog` — fixed steps that time made due but that have not run — when it is non-zero. The backlog is normally 0 after a completed tick; it is positive when a `tickStart` hook paused the world after time advanced (the live world runs those steps once resumed) or when the snapshot is taken inside the fixed-step loop. `restore()` resumes the total and re-derives `time.elapsed`, the fixed-step count (steps due, less the backlog), and `time.fixedAccumulator` with the same expressions the tick uses, so a restored world's `fixed` systems — including divisor-rate ones — fire on the live world's frames, and `time.elapsed` continues instead of restarting at 0. The count is derived against the *restoring* world's `fixedStep`: a world restored with a different `fixedStep` neither bursts through catch-up steps nor stalls. A backlog is recorded with the `fixedStep` it is counted in; restored under another step, the fixed time the live world had run is re-counted in the restoring world's steps, so the time still owed carries over (to within one step) rather than the number of steps. The fields are optional — snapshots from older builds lack them and restore starts the clock at 0.
 
+**Unseen change marks (O-42, normative).** A mark a system has not seen yet (§2.9) is part of the live world's future: that system reports it at its next run. `snapshot()` records such marks as `changes: { marks, seen }` — `marks` in the order they were made (`[kind, componentName, entityId]` for `added`/`changed`/`removed`, `["resource", name]`), and `seen[systemName]`, how many of them that system had already seen; a system missing from `seen` had seen them all. Only systems whose `query` or `reactsTo` has a change-detection node are recorded. `restore()` re-issues the marks, after every mark the restoring world has issued, and positions each system with that name accordingly — including one registered after the restore and before the next tick ends. Systems not in `seen`, and every other live query, start having seen all of them. The field is omitted when every system has seen every mark; a snapshot without it restores with no marks (the pre-O-42 behavior).
+
+The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. A snapshot taken while a system is running records that system's position before the run.
+
 **Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
 
-**What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, and query iteration order (§8, ascending entity id). State outside the envelope is not carried:
+**What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, query iteration order (§8, ascending entity id), and the change marks systems have not seen (O-42). State outside the envelope is not carried:
 
 - Events still pending in the bus — emitted during the last tick (delivered at the next tick's step 1) or between ticks. Restore discards them (the pending-events rule below).
-- Change marks from mutations made between ticks (e.g. a spawn or `action()` side effect after the last `step`) — restore clears them, so the restored world's next tick does not see them.
 - `time.scale` and pause state — host controls; restore leaves the restoring world's own.
 - System `state` and closure variables — keep durable state in components or resources.
 - `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick.
 
-Continuation is therefore exact when the snapshot is taken between ticks with no undelivered events and no out-of-tick mutations since the last `step`. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
+Continuation is therefore exact when the snapshot is taken between ticks with no undelivered events. Change marks systems have not seen — including marks from out-of-tick mutations — are carried (`changes`, above); marks a non-system query has not read yet are not. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 

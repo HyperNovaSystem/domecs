@@ -1,4 +1,5 @@
 import { internal } from './component.js'
+import type { ChangeCursor, ChangeLog } from './change-log.js'
 import { restoreRng, rewindRng, type Rng } from './rng.js'
 import {
   cloneSerializable,
@@ -30,6 +31,20 @@ export interface CompiledQuery {
   node: QueryNode
   hasTickFilter: boolean
   hasRemoved: boolean
+  /** Has a change-detection node (OnAdded/OnChanged/OnRemoved/OnChangedResource). */
+  temporal: boolean
+  /**
+   * O-42: the system whose `query`/`reactsTo` this is — its change window
+   * is the system's. Null for any other live query, whose window runs from
+   * `seenThrough` to the read and advances at tick end to `readThrough`.
+   */
+  owner: { seenThrough: number; runStart: number; running: boolean } | null
+  seenThrough: number
+  readThrough: number
+  /** `time.tick` of its last read; -1 if never read (idle-driver check). */
+  lastReadTick: number
+  /** Whether a read now would report anything, without counting as one. */
+  peekUnread: () => boolean
   matchingArchetypes: Set<ArchetypeBucket>
   structuralMembers: SortedIdSet
   onAddFns: Set<(v: EntityView) => void>
@@ -54,12 +69,14 @@ export interface WorldStateCtx {
   typeRegistry: Map<string, ComponentType<unknown>>
   archetypes: Map<string, ArchetypeBucket>
   entityArchetype: Map<Entity, ArchetypeBucket>
-  tickAdded: Map<string, Set<Entity>>
-  tickRemoved: Map<string, Set<Entity>>
-  tickChanged: Map<string, Set<Entity>>
-  pendingAdded: Map<string, Set<Entity>>
-  pendingRemoved: Map<string, Set<Entity>>
-  pendingChanged: Map<string, Set<Entity>>
+  changes: ChangeLog
+  /** Cursors of the systems that read change-detection filters (O-42). */
+  changeCursors(): ChangeCursor[]
+  /**
+   * Restore re-issued the snapshot's marks as stamps `base+1 … base+count`;
+   * move every reader's window to match `seen` (O-42).
+   */
+  resumeChangeWindows(base: number, count: number, seen: Readonly<Record<string, number>>): void
   viewCache: Map<Entity, EntityView>
   queries: CompiledQuery[]
   time: TimeState
@@ -101,6 +118,8 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
   // when the snapshot is taken inside the fixed-step loop.
   const fixedBacklog =
     fixedStepsDue(ctx.clock.totalScaledSeconds, ctx.time.fixedStep) - ctx.clock.fixedStepsFired
+  // O-42: marks a system has not seen yet, so restore can re-issue them.
+  const changes = ctx.changes.encode(ctx.changeCursors())
   return {
     version: SNAPSHOT_VERSION,
     seed: ctx.getRand().seed(),
@@ -110,6 +129,7 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     entities,
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
+    ...(changes !== undefined ? { changes } : {}),
   }
 }
 
@@ -134,12 +154,7 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   ctx.stores.clear()
   ctx.archetypes.clear()
   ctx.entityArchetype.clear()
-  ctx.tickAdded.clear()
-  ctx.tickRemoved.clear()
-  ctx.tickChanged.clear()
-  ctx.pendingAdded.clear()
-  ctx.pendingRemoved.clear()
-  ctx.pendingChanged.clear()
+  ctx.changes.clear()
   // #16: resource values are part of the snapshot; clear then rehydrate.
   // The registry (type identity) persists like `typeRegistry`.
   ctx.resources.clearForRestore()
@@ -198,6 +213,12 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   // #16: rehydrate resources by name (v1 snapshots have no `resources`,
   // leaving the world's resource set empty — defaults re-materialize lazily).
   if (s.resources) ctx.resources.restoreValues(s.resources)
+
+  // O-42: re-issue the marks systems had not seen, after every stamp this
+  // world has issued, and move each reader's window to match. A snapshot
+  // without `changes` leaves no marks: every reader has seen everything.
+  const { base, count } = ctx.changes.decode(s.changes)
+  ctx.resumeChangeWindows(base, count, s.changes?.seen ?? {})
 }
 
 /** The clock fields of a snapshot, validated, with absent fields defaulted. */
@@ -293,6 +314,7 @@ function validateEnvelope(s: WorldSnapshot): void {
   if (s.resources !== undefined && !isRecord(s.resources)) {
     throw invalid('resources', 'an object', s.resources)
   }
+  if (s.changes !== undefined) validateChanges(s.changes)
   const entities: unknown = s.entities
   if (!Array.isArray(entities)) throw invalid('entities', 'an array', entities)
   const seen = new Set<number>()
@@ -305,6 +327,32 @@ function validateEnvelope(s: WorldSnapshot): void {
       throw invalid(`entities[${i}].components`, 'an object', rec.components)
     }
   })
+}
+
+const ENTITY_MARK_KINDS = new Set(['added', 'changed', 'removed'])
+
+/** O-42: the `changes` field restore re-issues. */
+function validateChanges(c: unknown): void {
+  if (!isRecord(c)) throw invalid('changes', 'an object', c)
+  const marks: unknown = c.marks
+  if (!Array.isArray(marks)) throw invalid('changes.marks', 'an array', marks)
+  marks.forEach((m: unknown, i) => {
+    const ok =
+      Array.isArray(m) &&
+      typeof m[1] === 'string' &&
+      ((m[0] === 'resource' && m.length === 2) ||
+        (ENTITY_MARK_KINDS.has(m[0]) && m.length === 3 && isNonNegativeInt(m[2])))
+    if (!ok) {
+      throw invalid(`changes.marks[${i}]`, '[kind, name, id] or ["resource", name]', m)
+    }
+  })
+  const seen: unknown = c.seen
+  if (!isRecord(seen)) throw invalid('changes.seen', 'an object', seen)
+  for (const [name, n] of Object.entries(seen)) {
+    if (!isNonNegativeInt(n) || n > marks.length) {
+      throw invalid(`changes.seen[${JSON.stringify(name)}]`, `an integer 0..${marks.length}`, n)
+    }
+  }
 }
 
 /**

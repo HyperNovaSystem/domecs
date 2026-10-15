@@ -176,10 +176,10 @@ export function Where<T>(
   }
 }
 /**
- * Tick-gate that is true on ticks where the world resource `resource` changed
- *. Structurally neutral — it constrains *when* a query matches,
- * not *which* entities. Bare `OnChangedResource(R)` matches the whole world on
- * change ticks; compose with `And(Has(X), OnChangedResource(R))` to scope the
+ * Gate that is true when the world resource `resource` changed within the
+ * reader's change window (SPEC §2.9). Structurally neutral — it constrains
+ * *when* a query matches, not *which* entities. Bare `OnChangedResource(R)`
+ * matches the whole world then; compose with `And(Has(X), OnChangedResource(R))` to scope the
  * reaction to `X` entities. Reactive only: rejected by the one-shot selectors.
  */
 export function OnChangedResource<T>(resource: ResourceType<T>): TemporalQueryNode {

@@ -1,3 +1,4 @@
+import type { ChangesSnapshot } from './change-log.js'
 import type { Entity } from './types.js'
 
 // v2 added the optional `resources` field. The persist layer's
@@ -63,6 +64,13 @@ export interface WorldSnapshot {
    * deep-cloned at snapshot time, like component values.
    */
   readonly resources?: Record<string, unknown>
+  /**
+   * Change marks some system had not seen yet, with each such system's
+   * position (O-42, SPEC §2.9). Restore re-issues them, so a restored
+   * world's change-detection filters report what the live world's would.
+   * Omitted when every system has seen every mark.
+   */
+  readonly changes?: ChangesSnapshot
   readonly meta?: Record<string, unknown>
 }
 

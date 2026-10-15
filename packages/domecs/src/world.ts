@@ -1,4 +1,5 @@
 import { internal } from './component.js'
+import { createChangeLog, type MarkKind } from './change-log.js'
 import { createRafDriver } from './driver.js'
 import { createResourceState } from './world-resources.js'
 import {
@@ -186,12 +187,12 @@ export interface World {
    * is the live singleton — mutating it mutates the resource.
    */
   getResource<T>(type: ResourceType<T>): T | undefined
-  /** Replace a resource's value, validate it, and mark it changed this tick. */
+  /** Replace a resource's value, validate it, and mark it changed. */
   setResource<T>(type: ResourceType<T>, value: T): void
   /**
    * Flag a resource as changed without replacing its value — for in-place
-   * edits (`world.getResource(Cfg)!.v = 2`). Fires `OnChangedResource(type)` gates
-   * on the next tick (or the current one, if called inside a tick).
+   * edits (`world.getResource(Cfg)!.v = 2`). `OnChangedResource(type)` gates
+   * report it within each reader's change window (SPEC §2.9).
    */
   markResourceChanged<T>(type: ResourceType<T>): void
   emit<T>(type: EventType<T>, payload: T): void
@@ -525,22 +526,38 @@ export function createWorld(options: WorldOptions = {}): World {
   const archetypes = new Map<string, ArchetypeBucket>()
   const entityArchetype = new Map<Entity, ArchetypeBucket>()
 
-  // per-tick change sets (live during the current tick).
-  const tickAdded = new Map<string, Set<Entity>>()
-  const tickRemoved = new Map<string, Set<Entity>>()
-  const tickChanged = new Map<string, Set<Entity>>()
-  // Pending change sets for mutations made outside any tick.
-  // SPEC §2.5 / F-2: between-tick markChanged calls land here, then are
-  // promoted into the per-tick maps at step 0 of the next tick — symmetric
-  // with the §2.6 event buffer-and-swap.
-  const pendingAdded = new Map<string, Set<Entity>>()
-  const pendingRemoved = new Map<string, Set<Entity>>()
-  const pendingChanged = new Map<string, Set<Entity>>()
+  // O-42: every add/change/remove mark is stamped into one change log;
+  // change-detection filters report the marks in their reader's window
+  // (SPEC §2.9). Nothing is reset at tick boundaries.
+  const changes = createChangeLog()
+  // The stamp at the end of the last completed tick: where a new reader's
+  // window starts.
+  let lastTickEndSeq = 0
+  // Snapshot cursors for systems registered after the restore that carried
+  // them, by cursor key (see cursorKey); dropped at the next tick end.
+  const pendingCursors = new Map<string, number>()
   let inTick = false
 
-  // World-singleton resources (#16) — registry, materialized values and the
-  // tick/pending change-set pair live in the extracted resource-state module.
-  const resourceState = createResourceState(() => inTick)
+  // The change window the query being read reports (O-42), set around each
+  // read of a change-detection query and restored after — reads nest when
+  // a Where predicate reads another query.
+  let winFrom = 0
+  let winTo = 0
+  const savedWindows: number[] = []
+  const addedStamps = changes.stamps.added
+  const changedStamps = changes.stamps.changed
+  const removedStamps = changes.stamps.removed
+
+  function inWindow(m: ReadonlyMap<string, ReadonlyMap<Entity, number>>, name: string, entity: Entity): boolean {
+    const byEntity = m.get(name)
+    if (byEntity === undefined) return false
+    const stamp = byEntity.get(entity)
+    return stamp !== undefined && stamp > winFrom && stamp <= winTo
+  }
+
+  // World-singleton resources (#16) — registry and materialized values live
+  // in the extracted resource-state module; changes go to the change log.
+  const resourceState = createResourceState((name) => changes.markResource(name))
 
   // queries
   const queries: CompiledQuery[] = []
@@ -567,12 +584,34 @@ export function createWorld(options: WorldOptions = {}): World {
     typeRegistry,
     archetypes,
     entityArchetype,
-    tickAdded,
-    tickRemoved,
-    tickChanged,
-    pendingAdded,
-    pendingRemoved,
-    pendingChanged,
+    changes,
+    changeCursors: () => {
+      const keys = cursorKeys()
+      return scheduler
+        .all()
+        .filter(readsChanges)
+        .map((sys) => ({
+          name: keys.get(sys)!,
+          seenThrough: sys.seenThrough,
+          readsRemovals: sys.watchesRemoved,
+        }))
+    },
+    resumeChangeWindows: (base, count, seen) => {
+      const end = base + count
+      const keys = cursorKeys()
+      for (const sys of scheduler.all()) {
+        const n = seen[keys.get(sys)!]
+        sys.seenThrough = n === undefined ? end : base + n
+      }
+      pendingCursors.clear()
+      for (const [name, n] of Object.entries(seen)) pendingCursors.set(name, base + n)
+      for (const q of queries) {
+        if (q.owner) continue
+        q.seenThrough = end
+        q.readThrough = end
+      }
+      lastTickEndSeq = end
+    },
     viewCache,
     queries,
     time,
@@ -663,19 +702,20 @@ export function createWorld(options: WorldOptions = {}): World {
       case 'not': return !evalEntity(node.child, entity)
       case 'or': return node.children.some((c) => evalEntity(c, entity))
       case 'and': return node.children.every((c) => evalEntity(c, entity))
-      case 'added': return (tickAdded.get(node.type.name)?.has(entity)) ?? false
-      case 'changed': return (tickChanged.get(node.type.name)?.has(entity)) ?? false
-      case 'removed': return (tickRemoved.get(node.type.name)?.has(entity)) ?? false
+      case 'added': return inWindow(addedStamps, node.type.name, entity)
+      case 'changed': return inWindow(changedStamps, node.type.name, entity)
+      case 'removed': return inWindow(removedStamps, node.type.name, entity)
       case 'where': {
         const v = stores.get(node.type.name)?.get(entity)
         if (v === undefined) return false
         return node.predicate(v)
       }
-      // Entity-independent: true for every candidate on ticks where the
-      // resource changed, false otherwise — so an entity-scoped query like
-      // And(Has(X), OnChangedResource(R)) yields the X entities only on change
-      // ticks. See ChangedResource (#16).
-      case 'changedResource': return resourceState.changedThisTick(node.resource.name)
+      // Entity-independent: true for every candidate when the resource
+      // changed in the reader's window, false otherwise — so an entity-scoped
+      // query like And(Has(X), OnChangedResource(R)) yields the X entities
+      // only then. See ChangedResource (#16).
+      case 'changedResource':
+        return changes.resourceChanged(node.resource.name, { from: winFrom, to: winTo })
     }
   }
 
@@ -761,34 +801,38 @@ export function createWorld(options: WorldOptions = {}): World {
     return fresh
   }
 
-  function recordChange(
-    tickMap: Map<string, Set<Entity>>,
-    pendingMap: Map<string, Set<Entity>>,
-    name: string,
-    entity: Entity,
-  ): void {
-    const target = inTick ? tickMap : pendingMap
-    let s = target.get(name)
-    if (!s) {
-      s = new Set()
-      target.set(name, s)
-    }
-    s.add(entity)
+  function record(kind: MarkKind, name: string, entity: Entity): void {
+    changes.mark(kind, name, entity)
   }
 
-  function drainInto(
-    src: Map<string, Set<Entity>>,
-    dst: Map<string, Set<Entity>>,
-  ): void {
-    for (const [name, set] of src) {
-      let d = dst.get(name)
-      if (!d) {
-        d = new Set()
-        dst.set(name, d)
-      }
-      for (const e of set) d.add(e)
+  /**
+   * O-42: a system's snapshot cursor key — its name, or `name#k` for the
+   * k-th (from 0) live system sharing that name, in registration order.
+   */
+  function cursorKeys(): Map<CompiledSystem, string> {
+    const seen = new Map<string, number>()
+    const out = new Map<CompiledSystem, string>()
+    for (const sys of scheduler.all()) {
+      const k = seen.get(sys.name) ?? 0
+      seen.set(sys.name, k + 1)
+      out.set(sys, k === 0 ? sys.name : `${sys.name}#${k}`)
     }
-    src.clear()
+    return out
+  }
+
+  /** The key a system registered now under `name` gets (see cursorKeys). */
+  function nextCursorKey(name: string): string {
+    let k = 0
+    for (const sys of scheduler.all()) if (sys.name === name) k++
+    return k === 0 ? name : `${name}#${k}`
+  }
+
+  /**
+   * A system that reads change-detection filters and can still run: a
+   * `once` system that has run never reads them again (O-42).
+   */
+  function readsChanges(sys: CompiledSystem): boolean {
+    return sys.watchesChanges && !(sys.schedule === 'once' && sys.ranOnce)
   }
 
   function storeFor<T>(type: ComponentType<T>): Map<Entity, T> {
@@ -845,20 +889,37 @@ export function createWorld(options: WorldOptions = {}): World {
     return false
   }
 
-  function hasPendingComponentWork(): boolean {
-    return pendingAdded.size > 0 || pendingRemoved.size > 0 || pendingChanged.size > 0
+  /**
+   * O-42: marks someone will act on — an enabled reactive system whose
+   * `reactsTo` would fire, or a non-system query read in the last tick (a
+   * renderer) with unread marks. They keep an idle driver awake; marks no
+   * reader cares about do not.
+   */
+  function hasUnseenWork(): boolean {
+    for (const s of scheduler.systemsByMode('reactive')) {
+      if (!s.reactsTo || s.seenThrough >= changes.seq || !isEnabled(s)) continue
+      if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) return true
+    }
+    for (const q of queries) {
+      if (q.owner || !q.temporal || q.seenThrough >= changes.seq) continue
+      if (q.lastReadTick < time.tick) continue
+      if (q.peekUnread()) return true
+    }
+    return false
   }
 
-  // #16: only consulted when a reactive system's reactsTo yielded zero members
-  // this tick. Fires iff the reactsTo is purely resource-gated (no structural
-  // Has dependency) and one of its ChangedResource targets changed this tick.
+  // #16: only consulted when a reactive system's reactsTo yielded zero
+  // members. Fires iff the reactsTo is purely resource-gated (no structural
+  // Has dependency) and one of its ChangedResource targets changed in the
+  // system's change window (O-42).
   function reactiveResourceFallback(s: CompiledSystem): boolean {
     if (s.def.schedule !== 'reactive' || !s.def.reactsTo) return false
     const node = normalize(s.def.reactsTo)
     if (!treeHas(node, changedResourceKind)) return false
     if (collectHasComponents(node).size > 0) return false
+    const w = { from: s.seenThrough, to: changes.seq }
     for (const name of collectChangedResourceNames(node)) {
-      if (resourceState.changedThisTick(name)) return true
+      if (changes.resourceChanged(name, w)) return true
     }
     return false
   }
@@ -897,7 +958,7 @@ export function createWorld(options: WorldOptions = {}): World {
   function shouldKeepDriverAwake(): boolean {
     if (!idle) return true
     if (hasFrameSystems()) return true
-    if (hasPendingComponentWork()) return true
+    if (hasUnseenWork()) return true
     if (bus.hasPending()) return true
     return false
   }
@@ -922,6 +983,20 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   function runSystem(s: CompiledSystem, view: EventView): void {
+    // O-42: this run's change window is (seenThrough, runStart]. Whatever is
+    // marked while it runs — its own writes included — is after the window,
+    // and seenThrough moves past it when the run ends.
+    s.runStart = changes.seq
+    s.running = true
+    try {
+      runSystemBody(s, view)
+    } finally {
+      s.running = false
+      s.seenThrough = changes.seq
+    }
+  }
+
+  function runSystemBody(s: CompiledSystem, view: EventView): void {
     const ctx: SystemContext = {
       // Explicit `query` wins; otherwise a reactive system's `reactsTo` delta
       // is delivered as ctx.entities (SPEC: reactive systems see the query
@@ -1014,7 +1089,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // same `faults` array reference (matches the ECS direct-access
       // contract used elsewhere — e.g. `e.Position.x += dx`).
       ;(existing.faults as FaultEntry[]).push(entry)
-      recordChange(tickChanged, pendingChanged, Faulted.name, entity)
+      record('changed', Faulted.name, entity)
       wakeDriver()
     } else {
       world.addComponent(entity, Faulted, { faults: [entry] })
@@ -1049,22 +1124,16 @@ export function createWorld(options: WorldOptions = {}): World {
       } finally {
         inTick = false
       }
+      // A heartbeat render has read what it painted (O-42).
+      advanceQueryWindows()
       return
     }
     const d = dt ?? 0
 
     scheduler.applyPendingReplacements()
 
-    // SPEC §4 step 0 — reset per-tick change-detection, then promote
-    // any between-tick (pending) marks into the live sets (F-2).
-    tickAdded.clear()
-    tickRemoved.clear()
-    tickChanged.clear()
-    drainInto(pendingAdded, tickAdded)
-    drainInto(pendingRemoved, tickRemoved)
-    drainInto(pendingChanged, tickChanged)
-    // #16: same buffer-and-swap for resource-change marks.
-    resourceState.promoteChanges()
+    // SPEC §4 step 0. O-42: no change state is reset — readers' windows
+    // carry every mark they have not seen.
 
     const scaledDt = d * time.scale
     // F-3: accumulate unquantized scaled time, then derive ms-quantized
@@ -1144,16 +1213,18 @@ export function createWorld(options: WorldOptions = {}): World {
       // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
       for (const s of scheduler.systemsByMode('reactive')) {
         if (!isEnabled(s) || !s.reactsTo) continue
-        if (s.reactsTo.size > 0) {
-          runSystem(s, eventView)
-          continue
-        }
         // #16: a reactsTo with no structural entity dependency (no Has leaf)
-        // still fires when one of its ChangedResource targets changed this
-        // tick — supports world-level resource reactions in entity-empty
-        // worlds where the structural member count is zero. Entity-scoped
-        // reactsTo (any Has leaf) is governed by `size` above only.
-        if (reactiveResourceFallback(s)) runSystem(s, eventView)
+        // still fires when one of its ChangedResource targets changed —
+        // supports world-level resource reactions in entity-empty worlds
+        // where the structural member count is zero. Entity-scoped reactsTo
+        // (any Has leaf) is governed by `size` only.
+        if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) {
+          runSystem(s, eventView)
+        } else {
+          // O-42: checked and empty counts as a run — the window is spent,
+          // so a stale mark cannot fire it later when structure changes.
+          s.seenThrough = changes.seq
+        }
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
@@ -1165,6 +1236,195 @@ export function createWorld(options: WorldOptions = {}): World {
     } finally {
       inTick = false
     }
+    // SPEC §4 step 8 (O-42): close the tick for change windows.
+    advanceQueryWindows()
+    lastTickEndSeq = changes.seq
+    pendingCursors.clear()
+    changes.pruneRemoved(removalHorizon())
+  }
+
+  /**
+   * O-42: a query that is not a system's advances its window, at the end of
+   * each tick or heartbeat, to the point of its last read — marks made after
+   * that read are reported at its next one.
+   */
+  function advanceQueryWindows(): void {
+    for (const q of queries) {
+      if (q.owner || !q.temporal) continue
+      if (q.readThrough > q.seenThrough) q.seenThrough = q.readThrough
+    }
+  }
+
+  /** Removal marks at or below this stamp have been seen by every reader. */
+  function removalHorizon(): number {
+    let h = changes.seq
+    for (const sys of scheduler.all()) {
+      if (sys.watchesRemoved && readsChanges(sys) && sys.seenThrough < h) h = sys.seenThrough
+    }
+    for (const q of queries) {
+      if (!q.owner && q.temporal && q.hasRemoved && q.seenThrough < h) h = q.seenThrough
+    }
+    return h
+  }
+
+  /**
+   * O-42: enter the change window a read of `q` reports, saving the
+   * current one for {@link leaveWindow}.
+   */
+  function enterWindowOf(q: CompiledQuery): void {
+    const prevFrom = winFrom
+    const prevTo = winTo
+    if (q.owner) {
+      const o = q.owner
+      winFrom = o.seenThrough
+      winTo = o.running ? o.runStart : changes.seq
+    } else {
+      if (q.temporal) {
+        q.readThrough = changes.seq
+        q.lastReadTick = time.tick
+      }
+      winFrom = q.seenThrough
+      winTo = changes.seq
+    }
+    savedWindows.push(prevFrom, prevTo)
+  }
+
+  function leaveWindow(): void {
+    winTo = savedWindows.pop()!
+    winFrom = savedWindows.pop()!
+  }
+
+  /**
+   * @param readsChanges false for a query only its onAdd/onRemove hooks use
+   *   (observe): it is not a change reader, so it never holds back pruning.
+   */
+  function createQuery(
+    def: QueryDef,
+    owner: CompiledSystem | null,
+    readsChanges = true,
+  ): QueryResult {
+    const node = normalize(def)
+    const hasTickFilter = treeHas(node, tickFilterKinds)
+    const hasRemoved = treeHas(node, new Set<QueryNode['kind']>(['removed']))
+    const temporal = readsChanges && treeHas(node, oneshotReactiveKinds)
+    // O-42: a new reader's window starts at the end of the last tick.
+    const start = owner ? 0 : lastTickEndSeq
+    const q: CompiledQuery = {
+      id: nextQueryId++,
+      node,
+      hasTickFilter,
+      hasRemoved,
+      temporal,
+      owner,
+      seenThrough: start,
+      readThrough: start,
+      lastReadTick: -1,
+      peekUnread: () => false,
+      matchingArchetypes: new Set(),
+      structuralMembers: new SortedIdSet(),
+      onAddFns: new Set(),
+      onRemoveFns: new Set(),
+    }
+    queries.push(q)
+    // seed against all existing archetypes
+    for (const arch of archetypes.values()) {
+      evaluateQueryAgainstArchetype(q, arch)
+      if (q.matchingArchetypes.has(arch)) {
+        for (const e of arch.entities) q.structuralMembers.add(e)
+      }
+    }
+
+    const needsEntityFilter = hasTickFilter
+    const removedNames = hasRemoved ? collectRemovedTypeNames(node) : null
+    // Call inside the read's window (hasRemoved implies needsEntityFilter).
+    const collectCandidates = (): readonly Entity[] => {
+      if (!removedNames) return q.structuralMembers.ordered()
+      // Removed: include entities removed within the read's window, which
+      // may no longer sit in any structurally matching archetype. Re-sorted
+      // so the union keeps ascending id order (SPEC §8, O-40).
+      const removed = changes.removedInWindow(removedNames, winFrom, winTo)
+      if (removed.length === 0) return q.structuralMembers.ordered()
+      const set = new Set<Entity>(q.structuralMembers)
+      for (const e of removed) set.add(e)
+      return Array.from(set).sort(byId)
+    }
+    // O-42: whether a read now would report anything, without counting as
+    // a read (idle-driver check).
+    q.peekUnread = () => {
+      if (disposed) return false
+      const prevFrom = winFrom
+      const prevTo = winTo
+      winFrom = q.seenThrough
+      winTo = changes.seq
+      try {
+        for (const e of collectCandidates()) if (evalEntity(node, e)) return true
+        return false
+      } finally {
+        winFrom = prevFrom
+        winTo = prevTo
+      }
+    }
+
+    let disposed = false
+    const result: QueryResult = {
+      get entities() {
+        if (disposed) return []
+        // Indexed over the length read up front: membership changes made
+        // by a Where predicate mid-loop do not leak into this result.
+        const out: EntityView[] = []
+        if (needsEntityFilter) enterWindowOf(q)
+        try {
+          const candidates = collectCandidates()
+          const n = candidates.length
+          for (let i = 0; i < n; i++) {
+            const e = candidates[i]!
+            if (needsEntityFilter && !evalEntity(node, e)) continue
+            out.push(makeView(e))
+          }
+        } finally {
+          if (needsEntityFilter) leaveWindow()
+        }
+        return out
+      },
+      get size() {
+        if (disposed) return 0
+        if (!needsEntityFilter && !hasRemoved) return q.structuralMembers.size
+        let count = 0
+        if (needsEntityFilter) enterWindowOf(q)
+        try {
+          const candidates = collectCandidates()
+          const n = candidates.length
+          for (let i = 0; i < n; i++) {
+            if (needsEntityFilter && !evalEntity(node, candidates[i]!)) continue
+            count++
+          }
+        } finally {
+          if (needsEntityFilter) leaveWindow()
+        }
+        return count
+      },
+      onAdd(fn) {
+        if (disposed) return () => {}
+        q.onAddFns.add(fn)
+        return () => q.onAddFns.delete(fn)
+      },
+      onRemove(fn) {
+        if (disposed) return () => {}
+        q.onRemoveFns.add(fn)
+        return () => q.onRemoveFns.delete(fn)
+      },
+      dispose() {
+        if (disposed) return
+        disposed = true
+        const idx = queries.indexOf(q)
+        if (idx >= 0) queries.splice(idx, 1)
+        q.matchingArchetypes.clear()
+        q.structuralMembers.clear()
+        q.onAddFns.clear()
+        q.onRemoveFns.clear()
+      },
+    }
+    return result
   }
 
   const world: World = {
@@ -1224,7 +1484,7 @@ export function createWorld(options: WorldOptions = {}): World {
           }
         }
         for (const name of arch.types) {
-          recordChange(tickRemoved, pendingRemoved, name, entity)
+          record('removed', name, entity)
           stores.get(name)?.delete(entity)
         }
         // fire onRemove hooks for queries this entity was in
@@ -1261,7 +1521,7 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       const merged = type.create(value as Partial<T>)
       store.set(entity, merged)
-      recordChange(tickAdded, pendingAdded, type.name, entity)
+      record('added', type.name, entity)
       const nextTypes = currentTypes(entity)
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
@@ -1276,7 +1536,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // SPEC §2.10: componentRemoved fires before the store drops the value.
       sigComponentRemoved.emit({ entity, type })
       s.delete(entity)
-      recordChange(tickRemoved, pendingRemoved, type.name, entity)
+      record('removed', type.name, entity)
       const nextTypes = currentTypes(entity)
       nextTypes.delete(type.name)
       moveEntity(entity, nextTypes)
@@ -1292,8 +1552,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
     markChanged<T>(entity: Entity, type: ComponentType<T>): void {
       // register type into registry even if caller only marks
-      storeFor(type)
-      recordChange(tickChanged, pendingChanged, type.name, entity)
+      const store = storeFor(type)
+      // A mark on a component the entity lacks can never match OnChanged;
+      // recording it would only leave a stamp nothing removes (O-42).
+      if (store.has(entity)) record('changed', type.name, entity)
       wakeDriver()
     },
 
@@ -1426,93 +1688,9 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     query(def: QueryDef): QueryResult {
-      const node = normalize(def)
-      const hasTickFilter = treeHas(node, tickFilterKinds)
-      const hasRemoved = treeHas(node, new Set<QueryNode['kind']>(['removed']))
-      const q: CompiledQuery = {
-        id: nextQueryId++,
-        node,
-        hasTickFilter,
-        hasRemoved,
-        matchingArchetypes: new Set(),
-        structuralMembers: new SortedIdSet(),
-        onAddFns: new Set(),
-        onRemoveFns: new Set(),
-      }
-      queries.push(q)
-      // seed against all existing archetypes
-      for (const arch of archetypes.values()) {
-        evaluateQueryAgainstArchetype(q, arch)
-        if (q.matchingArchetypes.has(arch)) {
-          for (const e of arch.entities) q.structuralMembers.add(e)
-        }
-      }
-
-      const needsEntityFilter = hasTickFilter
-      const collectCandidates = (): readonly Entity[] => {
-        if (!hasRemoved) return q.structuralMembers.ordered()
-        // Removed: include entities that were removed this tick, which may
-        // no longer sit in any structurally matching archetype. Re-sorted so
-        // the union keeps ascending id order (SPEC §8, O-40).
-        const set = new Set<Entity>(q.structuralMembers)
-        for (const name of collectRemovedTypeNames(node)) {
-          const s = tickRemoved.get(name)
-          if (s) for (const e of s) set.add(e)
-        }
-        return Array.from(set).sort(byId)
-      }
-
-      let disposed = false
-      const result: QueryResult = {
-        get entities() {
-          if (disposed) return []
-          // Indexed over the length read up front: membership changes made
-          // by a Where predicate mid-loop do not leak into this result.
-          const candidates = collectCandidates()
-          const n = candidates.length
-          const out: EntityView[] = []
-          for (let i = 0; i < n; i++) {
-            const e = candidates[i]!
-            if (needsEntityFilter && !evalEntity(node, e)) continue
-            out.push(makeView(e))
-          }
-          return out
-        },
-        get size() {
-          if (disposed) return 0
-          if (!needsEntityFilter && !hasRemoved) return q.structuralMembers.size
-          const candidates = collectCandidates()
-          const n = candidates.length
-          let count = 0
-          for (let i = 0; i < n; i++) {
-            if (needsEntityFilter && !evalEntity(node, candidates[i]!)) continue
-            count++
-          }
-          return count
-        },
-        onAdd(fn) {
-          if (disposed) return () => {}
-          q.onAddFns.add(fn)
-          return () => q.onAddFns.delete(fn)
-        },
-        onRemove(fn) {
-          if (disposed) return () => {}
-          q.onRemoveFns.add(fn)
-          return () => q.onRemoveFns.delete(fn)
-        },
-        dispose() {
-          if (disposed) return
-          disposed = true
-          const idx = queries.indexOf(q)
-          if (idx >= 0) queries.splice(idx, 1)
-          q.matchingArchetypes.clear()
-          q.structuralMembers.clear()
-          q.onAddFns.clear()
-          q.onRemoveFns.clear()
-        },
-      }
-      return result
+      return createQuery(def, null)
     },
+
 
     countEntities(def: QueryDef): number {
       const { node, needsEntityFilter } = oneshotNode(def)
@@ -1534,7 +1712,7 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     observe(def: QueryDef, hooks: QueryHooks): () => void {
-      const q = world.query(def)
+      const q = createQuery(def, null, false)
       const unsubscribers: Array<() => void> = []
       if (hooks.onAdd) unsubscribers.push(q.onAdd(hooks.onAdd))
       if (hooks.onRemove) unsubscribers.push(q.onRemove(hooks.onRemove))
@@ -1544,8 +1722,9 @@ export function createWorld(options: WorldOptions = {}): World {
         changeHandle = world.system(
           `__observe_${nextObserverId++}`,
           { schedule: 'reactive', reactsTo: node },
-          () => {
-            for (const entity of q.entities) hooks.onChange!(entity)
+          // The reactive system's own delta: the marks in its window (O-42).
+          (ctx) => {
+            for (const entity of ctx.entities) hooks.onChange!(entity)
           },
         )
       }
@@ -1756,7 +1935,11 @@ export function createWorld(options: WorldOptions = {}): World {
     },
   }
 
-  scheduler = createScheduler(world.query.bind(world), fixedStep)
+  scheduler = createScheduler(
+    (def, owner) => createQuery(def, owner),
+    fixedStep,
+    (name) => pendingCursors.get(nextCursorKey(name)) ?? lastTickEndSeq,
+  )
   plugins = createPluginRegistry(world)
 
   // Register the built-in end-of-tick fault consolidator (BETTER_ERRORS

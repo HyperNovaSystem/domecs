@@ -7,18 +7,14 @@ import type { ResourceDescriptor, ResourceType } from './types.js'
  *
  * `values` holds materialized values by name; `registry` guards against two
  * ResourceType objects colliding on a name (mirrors typeRegistry).
- * Resource-change tracking mirrors the component change sets: in-tick marks
- * land in `tickChanged`, between-tick marks buffer in `pendingChanged` and
- * are promoted at step 0 of the next tick (symmetric with
- * tickChanged/pendingChanged on the component side).
+ * Resource changes are stamped into the world's change log through
+ * `recordChange`, like component marks (O-42, SPEC §2.9).
  */
 export type ResourceState = ReturnType<typeof createResourceState>
 
-export function createResourceState(isInTick: () => boolean) {
+export function createResourceState(recordChange: (name: string) => void) {
   const values = new Map<string, unknown>()
   const registry = new Map<string, ResourceType<unknown>>()
-  const tickChanged = new Set<string>()
-  const pendingChanged = new Set<string>()
 
   function require(type: ResourceType<unknown>): InternalResourceType<unknown> {
     const existing = registry.get(type.name)
@@ -41,21 +37,6 @@ export function createResourceState(isInTick: () => boolean) {
     if (verdict !== true) {
       throw new Error(`domecs: invalid resource "${name}": ${verdict}`)
     }
-  }
-
-  function recordChange(name: string): void {
-    ;(isInTick() ? tickChanged : pendingChanged).add(name)
-  }
-
-  /** Step 0 buffer-and-swap: promote between-tick marks into the live set. */
-  function promoteChanges(): void {
-    tickChanged.clear()
-    for (const name of pendingChanged) tickChanged.add(name)
-    pendingChanged.clear()
-  }
-
-  function changedThisTick(name: string): boolean {
-    return tickChanged.has(name)
   }
 
   function get<T>(type: ResourceType<T>): T | undefined {
@@ -123,8 +104,6 @@ export function createResourceState(isInTick: () => boolean) {
   // `registry` (type identity) persists like typeRegistry.
   function clearForRestore(): void {
     values.clear()
-    tickChanged.clear()
-    pendingChanged.clear()
   }
 
   function restoreValues(snapResources: Record<string, unknown>): void {
@@ -139,8 +118,6 @@ export function createResourceState(isInTick: () => boolean) {
     markChanged,
     types,
     describe,
-    promoteChanges,
-    changedThisTick,
     snapshotValues,
     validateSnapshot,
     clearForRestore,

@@ -231,9 +231,10 @@ interface World {
   addComponent<T>(entity: Entity, type: ComponentType<T>, value: T): void
   removeComponent(entity: Entity, type: ComponentType<unknown>): void
   getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined
-  // May be called inside or outside a running system. Between-tick calls are
-  // buffered and promoted into the live change-detection set at the next
-  // step()'s step 0 — symmetric with event buffering. See SPEC §2.9.
+  // May be called inside or outside a running system. Each change-detection
+  // reader reports the mark in its change window: a system at its next run
+  // (never its own writes back to itself), any other live query at its next
+  // read. See SPEC §2.9 (O-42).
   // v1.0 has no proxy-backed dev diagnostics surface: no WorldOptions.dev and
   // no world.diag. Missed marks are caller bugs; future tooling may warn.
   markChanged<T>(entity: Entity, type: ComponentType<T>): void
@@ -423,7 +424,8 @@ type System = (ctx: SystemContext) => void
 interface SystemContext {
   // For `tick`/`fixed`/`once` systems: the `query` result. For `reactive`
   // systems with only `reactsTo` and no explicit `query`: the `reactsTo`
-  // change delta for this tick (an explicit `query` takes precedence). Empty
+  // change delta — marks since the system last ran (an explicit `query`
+  // takes precedence). Empty
   // when neither is declared.
   entities: EntityView[]
   time:     TimeState
@@ -505,9 +507,9 @@ function OnRemoved<T>(t: ComponentType<T>): TemporalQueryNode
 function Where<T>(t: ComponentType<T>, p: (v: T) => boolean): QueryNode
 
 // Resource change-detection node (SPEC §2.11): fires when resource R changed
-// in the previous tick. Structurally neutral — matches every entity on a
-// change tick, none otherwise — so And(Has(T), OnChangedResource(R)) yields the
-// T entities only on R-change ticks; a bare OnChangedResource(R) is a
+// within the reader's change window (SPEC §2.9). Structurally neutral —
+// matches every entity then, none otherwise — so And(Has(T),
+// OnChangedResource(R)) yields the T entities only when R changed; a bare OnChangedResource(R) is a
 // world-level edge a reactive system reacts to even in an empty world.
 // Counts as a change-detection node for the reactsTo contract (SPEC §4 step 6).
 function OnChangedResource<T>(r: ResourceType<T>): TemporalQueryNode
@@ -672,7 +674,20 @@ interface WorldSnapshot {
   // restore() clears live resources first, so an absent map falls back to
   // resource defaults. (v2+)
   readonly resources?: Record<string, unknown>
+  // Change marks some system had not seen yet, in the order they were made,
+  // and how many of them each such system had seen (O-42). restore()
+  // re-issues them so those systems report them at their next run. Omitted
+  // when every system has seen every mark.
+  readonly changes?: ChangesSnapshot
   readonly meta?: Record<string, unknown>
+}
+
+interface ChangesSnapshot {
+  readonly marks: ReadonlyArray<
+    | readonly ['added' | 'changed' | 'removed', string, Entity]  // kind, component, entity
+    | readonly ['resource', string]                               // resource name
+  >
+  readonly seen: Readonly<Record<string, number>>  // system name → marks already seen
 }
 
 interface SnapshotOptions {
