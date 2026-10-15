@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * Cold-install smoke (PLAN WS-2): pack runtime packages with pnpm (rewrites
- * workspace:* deps and applies publishConfig), install into an empty temp
- * directory, and import/run a minimal createWorld + createAgentBridge episode
- * using only packed tarballs (no workspace source).
+ * Cold-install smoke (PLAN WS-2): install every `@domecs/*` package into an
+ * empty temp directory and run a minimal episode that touches each one, using
+ * only what a consumer would get (no workspace source).
+ *
+ * By default the packages are packed with pnpm (which rewrites `workspace:`
+ * ranges and applies publishConfig) — the exact payload `pnpm publish` would
+ * ship. With `--registry [version]` they are installed from npm instead
+ * (default: the workspace version), to check a release after publishing.
  *
  * Usage (from repo root, after dependencies installed):
  *   node scripts/cold-install.mjs
+ *   node scripts/cold-install.mjs --registry          # this version, from npm
+ *   node scripts/cold-install.mjs --registry 2.0.0
  *   pnpm cold-install
  */
 import { spawnSync } from 'node:child_process'
@@ -18,8 +24,20 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packs = [
   { name: '@domecs/core', dir: 'packages/domecs' },
+  { name: '@domecs/dom', dir: 'packages/domecs-dom' },
+  { name: '@domecs/input', dir: 'packages/domecs-input' },
   { name: '@domecs/persist', dir: 'packages/domecs-persist' },
+  { name: '@domecs/inspector', dir: 'packages/domecs-inspector' },
+  { name: '@domecs/scene', dir: 'packages/domecs-scene' },
+  { name: '@domecs/rules', dir: 'packages/domecs-rules' },
 ]
+
+const registryAt = process.argv.indexOf('--registry')
+const fromRegistry = registryAt !== -1
+const registryVersion =
+  fromRegistry && process.argv[registryAt + 1] && !process.argv[registryAt + 1].startsWith('-')
+    ? process.argv[registryAt + 1]
+    : JSON.parse(fs.readFileSync(path.join(root, 'packages/domecs/package.json'), 'utf8')).version
 
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, {
@@ -34,49 +52,38 @@ function run(cmd, args, opts = {}) {
   return r.stdout
 }
 
-console.error('[cold-install] build packages…')
-run('pnpm', ['-r', '--filter', '@domecs/core', '--filter', '@domecs/persist', 'build'], {
-  cwd: root,
-})
-
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-cold-'))
 console.error(`[cold-install] stage: ${stage}`)
 
-// Install core first (file: tarball), then persist which depends on @domecs/core@1.0.0.
-// Pointing both at local tarballs avoids hitting the registry for the workspace twin.
-const tarballByName = {}
-for (const p of packs) {
-  const pkgDir = path.join(root, p.dir)
-  console.error(`[cold-install] pnpm pack ${p.name}…`)
-  // pnpm pack rewrites workspace:* → version and applies publishConfig → dist.
-  // Discover the tarball on disk instead of parsing stdout — paths containing
-  // spaces (the Windows temp-dir default) would truncate a token-based match.
-  const before = new Set(fs.readdirSync(stage).filter((f) => f.endsWith('.tgz')))
-  run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
-  const created = fs.readdirSync(stage).filter((f) => f.endsWith('.tgz') && !before.has(f))
-  if (created.length !== 1) {
-    throw new Error(`expected exactly one new tarball for ${p.name}, saw: ${created.join(', ') || '(none)'}`)
+const dependencies = {}
+if (fromRegistry) {
+  console.error(`[cold-install] installing @domecs/*@${registryVersion} from the registry`)
+  for (const p of packs) dependencies[p.name] = registryVersion
+} else {
+  console.error('[cold-install] build packages…')
+  run('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: root })
+  // Every package is pointed at its local tarball, so the peer dependency on
+  // @domecs/core resolves to the packed core rather than the registry's.
+  for (const p of packs) {
+    const pkgDir = path.join(root, p.dir)
+    console.error(`[cold-install] pnpm pack ${p.name}…`)
+    // pnpm pack rewrites workspace: ranges and applies publishConfig → dist.
+    // Discover the tarball on disk instead of parsing stdout — paths containing
+    // spaces (the Windows temp-dir default) would truncate a token-based match.
+    const before = new Set(fs.readdirSync(stage).filter((f) => f.endsWith('.tgz')))
+    run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
+    const created = fs.readdirSync(stage).filter((f) => f.endsWith('.tgz') && !before.has(f))
+    if (created.length !== 1) {
+      throw new Error(`expected exactly one new tarball for ${p.name}, saw: ${created.join(', ') || '(none)'}`)
+    }
+    dependencies[p.name] = `file:${path.join(stage, created[0])}`
+    console.error(`[cold-install]   → ${created[0]}`)
   }
-  const tgzPath = path.join(stage, created[0])
-  tarballByName[p.name] = tgzPath
-  console.error(`[cold-install]   → ${created[0]}`)
 }
 
 fs.writeFileSync(
   path.join(stage, 'package.json'),
-  JSON.stringify(
-    {
-      name: 'domecs-cold-install',
-      private: true,
-      type: 'module',
-      dependencies: {
-        '@domecs/core': `file:${tarballByName['@domecs/core']}`,
-        '@domecs/persist': `file:${tarballByName['@domecs/persist']}`,
-      },
-    },
-    null,
-    2,
-  ),
+  JSON.stringify({ name: 'domecs-cold-install', private: true, type: 'module', dependencies }, null, 2),
 )
 
 console.error('[cold-install] npm install…')
@@ -103,6 +110,28 @@ const s = save(world, storage, 's')
 if (!s.ok) throw new Error('save')
 const boot = loadIfPresent(createWorld({ headless: true }), storage, 'missing')
 if (!boot.ok || boot.value !== false) throw new Error('loadIfPresent missing')
+
+// The other packages: each must import headless and do one real thing.
+import { Parent, setParent, childrenOf } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+import { mountDOM } from '@domecs/dom'
+import { createInputPlugin } from '@domecs/input'
+import { createInspector } from '@domecs/inspector'
+for (const [name, fn] of Object.entries({ mountDOM, createInputPlugin, createInspector })) {
+  if (typeof fn !== 'function') throw new Error(name)
+}
+const w2 = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const parent = w2.spawn([entry(C, { n: 1 })])
+const child = w2.spawn([entry(C, { n: 2 })])
+if (!setParent(w2, child, parent).ok || childrenOf(w2, parent)[0] !== child) throw new Error('scene')
+if (w2.getComponent(child, Parent).entity !== parent) throw new Error('scene Parent')
+const rules = installRules(w2, [
+  { name: 'double', schedule: 'tick', query: ['Cold'], actions: [{ set: 'Cold.n', expr: 'Cold.n * 2' }] },
+], (n) => (n === 'Cold' ? C : undefined))
+w2.step(1 / 60)
+if (w2.getComponent(child, C).n !== 4) throw new Error('rules')
+rules.uninstall()
+
 console.log(JSON.stringify({ ok: true, tick: obs.tick, entityCount: obs.entityCount }))
 `
 

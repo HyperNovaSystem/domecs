@@ -1,6 +1,6 @@
 {
   "name": "@domecs/scene",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "DOMECS scene: parent-child entity hierarchy, ancestor/descendant queries, tree despawn, and transform composition (M4).",
   "private": false,
   "license": "MIT",

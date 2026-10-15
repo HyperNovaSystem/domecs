@@ -121,9 +121,9 @@ A DOMECS application should be a Vite app with scripts like:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@domecs/core": "^1.0.0",
-    "@domecs/dom": "^1.0.0",
-    "@domecs/input": "^1.0.0"
+    "@domecs/core": "^2.0.0",
+    "@domecs/dom": "^2.0.0",
+    "@domecs/input": "^2.0.0"
   },
   "devDependencies": {
     "vite": "^5.4.0",
@@ -174,6 +174,23 @@ The script builds all packages first, then runs:
 ```bash
 pnpm -r --filter './packages/*' publish --access public
 ```
+
+Release checklist (all seven packages share one version):
+
+1. Bump every `packages/*/package.json` to the new version and move
+   CHANGELOG `[Unreleased]` under it. Siblings peer-depend on
+   `@domecs/core` with `workspace:^`, so they publish requiring
+   `^<new version>` of core.
+2. On a clean `main`: `pnpm -r test`, `pnpm api:check`, `pnpm doctest:check`,
+   `pnpm cold-install`, and `pnpm release:validate` (needs the sibling app
+   repos).
+3. `npm whoami` (log in with `npm login` if needed), then
+   `pnpm run publish:npm`. pnpm skips a package whose version is already on
+   npm.
+4. `pnpm cold-install:registry` installs the new version from npm and runs
+   the same probe.
+5. Tag `v<version>`, push the tag, and create the GitHub release from
+   `doc/release-notes/v<version>.md`.
 
 
 ## Official template
