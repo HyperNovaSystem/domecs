@@ -7,7 +7,7 @@ DOMECS is an ECS-first framework for DOM-heavy browser apps and games. This
 package is intentionally renderer-agnostic; pair it with `@domecs/dom` for DOM
 views and `@domecs/input` for browser input collection.
 
-> Status: v1.x — **API-stable** (semver honored; product contract still hardening).
+> Status: v2.x — **API-stable** (semver honored; product contract still hardening).
 
 ## Install
 

@@ -12,7 +12,7 @@
  * Usage (from repo root, after dependencies installed):
  *   node scripts/cold-install.mjs
  *   node scripts/cold-install.mjs --registry          # this version, from npm
- *   node scripts/cold-install.mjs --registry 1.1.0
+ *   node scripts/cold-install.mjs --registry 2.0.0
  *   pnpm cold-install
  */
 import { spawnSync } from 'node:child_process'

@@ -121,9 +121,9 @@ A DOMECS application should be a Vite app with scripts like:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@domecs/core": "^1.1.0",
-    "@domecs/dom": "^1.1.0",
-    "@domecs/input": "^1.1.0"
+    "@domecs/core": "^2.0.0",
+    "@domecs/dom": "^2.0.0",
+    "@domecs/input": "^2.0.0"
   },
   "devDependencies": {
     "vite": "^5.4.0",

@@ -1,6 +1,6 @@
 # DOMECS — Specification v1.0
 
-**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 1.1.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 2.0.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -20,7 +20,7 @@
 
 ## 1. Packages and layering
 
-Shipped (1.0.0; `scene` and `rules` since 1.1.0):
+Shipped (1.0.0; `scene` and `rules` since 2.0.0):
 
 ```
 @domecs/core           — core: World, entities, components, queries, systems, events, time

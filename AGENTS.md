@@ -30,8 +30,8 @@ npm install @domecs/core @domecs/dom @domecs/input
 npm install @domecs/persist @domecs/inspector @domecs/scene @domecs/rules
 ```
 
-`@domecs/scene` and `@domecs/rules` are on npm from 1.1.0; an app that uses
-them needs `@domecs/core` 1.1.0 or later.
+`@domecs/scene` and `@domecs/rules` are on npm from 2.0.0; all `@domecs/*`
+packages in an app must share the same major version.
 
 Published packages resolve to built ESM under `dist/` (no bundler required for
 Node or import-map hosts). Prefer published packages over cloning engine source

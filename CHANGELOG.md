@@ -6,16 +6,18 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-## [1.1.0] — 2026-10-14
+## [2.0.0] — 2026-10-15
 
-All seven `@domecs/*` packages move to 1.1.0, and `@domecs/scene` and
+All seven `@domecs/*` packages move to 2.0.0, and `@domecs/scene` and
 `@domecs/rules` are published for the first time. This release carries every
-fix from the 2026-10-13 engine review and the 2026-07-17 review tranche.
+fix from the 2026-10-13 engine review and the 2026-07-17 review tranche. It is
+a major release because several of those fixes change behavior an app could
+rely on (below), and the `system_threw` variant left the `DomecsError` union.
 
 Upgrading from 1.0.0:
 
 - Upgrade the packages together. `dom`, `input`, `persist`, `inspector`,
-  `scene` and `rules` now peer-depend on `@domecs/core` `^1.1.0`, so install
+  `scene` and `rules` now peer-depend on `@domecs/core` `^2.0.0`, so install
   `@domecs/core` yourself (most apps already do).
 - Read the entries marked **behavior change** below. The ones most likely to
   touch an app: query iteration is ascending entity id (O-40); component
@@ -108,7 +110,7 @@ Upgrading from 1.0.0:
   but no redraw trigger (an empty `explicit` list, or no positive
   `Has`/`Where` leaf) is the new `invalid_changed_on` MountError instead of
   silently redrawing every tick. (O-55)
-- Packaging: `@domecs/*` packages peer-depend on `@domecs/core` (`^1.1.0` as
+- Packaging: `@domecs/*` packages peer-depend on `@domecs/core` (`^2.0.0` as
   published) instead of depending on an exact version; `src` ships so source
   maps resolve; `engines.node >=18`. CI tests Node 20/22/24 and the
   cold-install gate. The API-surface snapshot covers every declaration file.
@@ -487,6 +489,6 @@ Additive self-describing root and surrounding surface (Phase 3 + earlier):
   dual-overload trade-off); `defineEvent` payload tick-delay (emit on tick N →
   visible to `event` systems on N+1) documented and doctested.
 
-[Unreleased]: https://github.com/hypernovasystem/domecs/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/hypernovasystem/domecs/compare/v1.0.0...v1.1.0
+[Unreleased]: https://github.com/hypernovasystem/domecs/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/hypernovasystem/domecs/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/hypernovasystem/domecs/releases/tag/v1.0.0

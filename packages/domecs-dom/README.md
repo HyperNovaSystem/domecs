@@ -6,7 +6,7 @@ Retained-mode DOM renderer for DOMECS worlds.
 each matching entity, updates it after render ticks, and destroys it when the
 entity stops matching.
 
-> Status: v1.x — **API-stable** (semver honored; product contract still hardening).
+> Status: v2.x — **API-stable** (semver honored; product contract still hardening).
 
 ## Install
 
