@@ -40,12 +40,19 @@ describe('hierarchy at scale and over corrupted graphs (O-64)', () => {
     const hub = world.spawn()
     const kids: number[] = []
     for (let i = 0; i < 4000; i++) kids.push(world.spawn([entry(Parent, { entity: hub })]))
-    const t0 = performance.now()
+    // Count Parent scans rather than time the call: the quadratic version
+    // (~800 ms) rescanned every Parent once per despawned entity.
+    const iter = world.iterEntitiesWith.bind(world)
+    let scans = 0
+    world.iterEntitiesWith = ((type) => {
+      if (type === Parent) scans++
+      return iter(type)
+    }) as typeof world.iterEntitiesWith
     despawnTree(world, hub)
-    const ms = performance.now() - t0
+    world.iterEntitiesWith = iter
     expect(kids.every((k) => !world.isAlive(k))).toBe(true)
-    // Was ~800 ms (quadratic); generous bound for slow CI.
-    expect(ms).toBeLessThan(200)
+    // One scan to index children, one orphan pass — not one per entity.
+    expect(scans).toBeLessThanOrEqual(2)
 
     const p = world.spawn()
     const c = world.spawn([entry(Parent, { entity: p })])
