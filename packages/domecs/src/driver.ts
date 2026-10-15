@@ -31,6 +31,12 @@ export interface RafDriver {
   startLoop(options?: DriverStartOptions): () => void
   stop(): void
   wake(): void
+  /**
+   * Wake a sleeping idle loop for one heartbeat frame — `step(0)`: plugin
+   * hooks and render, no tick (O-48). Upgraded to a normal wake step if
+   * {@link wake} is called before the frame runs.
+   */
+  repaint(): void
 }
 
 export function createRafDriver(
@@ -44,6 +50,8 @@ export function createRafDriver(
   let rafLastWallMs: number | null = null
   let rafVisHandler: (() => void) | null = null
   let rafWakeStep = false
+  /** The pending frame was requested by repaint() and should not tick. */
+  let rafRepaintOnly = false
   let rafDtClampMs = 100
   /** True only when *this* driver initiated a pause via visibility hide (O-32). */
   let visibilityOwnedPause = false
@@ -59,8 +67,23 @@ export function createRafDriver(
 
   function wake(): void {
     if (!rafStarted || !idle || hooks.isInTick()) return
-    if (rafHandle !== null) return
+    if (rafHandle !== null) {
+      // A repaint frame is pending: state changed since, so make it a step.
+      if (rafRepaintOnly) {
+        rafRepaintOnly = false
+        if (rafLastWallMs !== null) rafWakeStep = true
+      }
+      return
+    }
     if (rafLastWallMs !== null) rafWakeStep = true
+    scheduleDriverFrame()
+  }
+
+  function repaint(): void {
+    if (!rafStarted || !idle || hooks.isInTick()) return
+    // A frame is already coming (a step, or the priming frame).
+    if (rafHandle !== null) return
+    rafRepaintOnly = true
     scheduleDriverFrame()
   }
 
@@ -74,14 +97,28 @@ export function createRafDriver(
       scheduleDriverFrame()
       return
     }
+    if (rafRepaintOnly) {
+      rafRepaintOnly = false
+      rafLastWallMs = t
+      try {
+        hooks.step(0)
+      } finally {
+        if (rafStarted && hooks.shouldKeepAwake()) scheduleDriverFrame()
+      }
+      return
+    }
     const gap = t - rafLastWallMs
     rafLastWallMs = t
     const dtMs = rafWakeStep ? 1 : (gap > rafDtClampMs ? rafDtClampMs : gap)
     rafWakeStep = false
-    hooks.step(dtMs / 1000)
-    if (!rafStarted) return
-    if (!hooks.shouldKeepAwake()) return
-    scheduleDriverFrame()
+    // O-45: schedule the next frame even when a system throws. The throw
+    // still propagates (the host reports it as an uncaught error from the
+    // rAF callback), but the loop no longer dies with it.
+    try {
+      hooks.step(dtMs / 1000)
+    } finally {
+      if (rafStarted && hooks.shouldKeepAwake()) scheduleDriverFrame()
+    }
   }
 
   function startLoop(options?: DriverStartOptions): () => void {
@@ -153,6 +190,7 @@ export function createRafDriver(
     rafHandle = null
     rafLastWallMs = null
     rafWakeStep = false
+    rafRepaintOnly = false
     // O-32 residual: a pause this driver took on tab-hide must not outlive
     // the driver. Relinquish it on stop() so a stop()+startLoop() cycle
     // while hidden cannot orphan the world at scale 0 with no owner (the
@@ -166,5 +204,5 @@ export function createRafDriver(
     }
   }
 
-  return { startLoop, stop, wake }
+  return { startLoop, stop, wake, repaint }
 }

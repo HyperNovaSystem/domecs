@@ -595,7 +595,9 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function archetypeKeyFor(types: Set<string>): string {
     if (types.size === 0) return EMPTY_ARCH_KEY
-    return Array.from(types).sort().join('|')
+    // O-49: JSON-encode the sorted names; a plain `|` join made {"a|b"} and
+    // {"a", "b"} share a bucket.
+    return JSON.stringify(Array.from(types).sort())
   }
 
   function ensureArchetype(types: Set<string>): ArchetypeBucket {
@@ -753,7 +755,9 @@ export function createWorld(options: WorldOptions = {}): World {
     const cached = viewCache.get(entity)
     if (cached) return cached
     const fresh = buildView(entity)
-    viewCache.set(entity, fresh)
+    // O-47: `OnRemoved` reads build views of despawned ids. Ids are never
+    // reused, so caching those would grow the cache for the world's life.
+    if (alive.has(entity)) viewCache.set(entity, fresh)
     return fresh
   }
 
@@ -826,7 +830,8 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   function isEnabled(s: CompiledSystem): boolean {
-    if (!s.enabled) return false
+    // Removed earlier in the phase that is iterating it (O-43).
+    if (s.removed || !s.enabled) return false
     if (s.def.enabled && s.def.enabled() === false) return false
     return true
   }
@@ -1745,6 +1750,9 @@ export function createWorld(options: WorldOptions = {}): World {
         throw cause
       }
       applySnapshot(stateCtx, s, clock)
+      // O-48: an idle startLoop driver repaints the restored state with a
+      // heartbeat frame — no tick, so the world stays at the checkpoint.
+      driver.repaint()
     },
   }
 

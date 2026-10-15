@@ -94,6 +94,8 @@ Component types are **serializable** by default.  If a schema includes non-clona
 
 Component instances are **owned by the world**.
 
+**Defaults are per entity (O-44, normative).** `create()` copies the declared `defaults` for each instance: arrays and plain objects are cloned recursively, so no two entities share a nested default. Other objects in `defaults` (class instances, `Map`s, functions) are kept by reference. Values the caller passes are taken as given (O-34).
+
 **Reflection (#14).** A component type MAY carry an optional `schema` — a
 field-name → `FieldSchema` map (`kind` plus widget hints: numeric range/step,
 enum `options`, label, readonly). `world.describeComponent(type)` returns a
@@ -362,6 +364,8 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 Priorities disambiguate within a mode.
 Systems registered with the same priority run in **registration order**.
 
+**Schedule changes during a phase (O-43, normative).** Each phase of §4.1 runs the systems that were registered when the phase began. A system removed during the phase does not run later in it, and the systems after it still run. A system registered during the phase first runs at that schedule's next phase: the next fixed sub-step, or the next tick for the other modes. Registration order is a monotonic counter, so equal-priority systems keep their order after removals.
+
 ### Fixed-rate rule (normative)
 
 All `fixed` systems share the **single** world-level accumulator driven by `TimeState.fixedStep` (§2.7). `SystemDef.rateHz` does **not** give a system its own accumulator; it is a **subsampling divisor** over the shared fixed step.
@@ -382,6 +386,14 @@ events, the RAF loop sleeps.
 It resumes on external `world.emit()`, structural component mutations /
 `markChanged`, input activity through `@domecs/input`, `resume()`, an
 explicit `world.startLoop()`, or a call to `world.requestTick()`.
+`restore()` wakes it for one heartbeat frame (§4.0: plugin hooks and render,
+no tick), so the restored state is painted without moving the world past
+the checkpoint (O-48).
+
+**A throwing frame (O-45, normative).** If a step run by the driver throws,
+the driver still schedules its next frame (subject to the idle rule) before
+the error propagates out of the `requestAnimationFrame` callback, where the
+host reports it. One throwing system does not stop the loop.
 
 **External wake API (normative, D-4).** External event sources that mutate
 world state from outside a tick — input plugins, WebSocket feeds, custom
@@ -608,7 +620,7 @@ interface WorldSnapshot {
 
 **Clock continuity (O-40, normative).** `snapshot()` records the cumulative unquantized scaled time (§2.7's drift-free total) as `scaledTime`, plus `fixedBacklog` — fixed steps that time made due but that have not run — when it is non-zero. The backlog is normally 0 after a completed tick; it is positive when a `tickStart` hook paused the world after time advanced (the live world runs those steps once resumed) or when the snapshot is taken inside the fixed-step loop. `restore()` resumes the total and re-derives `time.elapsed`, the fixed-step count (steps due, less the backlog), and `time.fixedAccumulator` with the same expressions the tick uses, so a restored world's `fixed` systems — including divisor-rate ones — fire on the live world's frames, and `time.elapsed` continues instead of restarting at 0. The count is derived against the *restoring* world's `fixedStep`: a world restored with a different `fixedStep` neither bursts through catch-up steps nor stalls. A backlog is recorded with the `fixedStep` it is counted in; restored under another step, the fixed time the live world had run is re-counted in the restoring world's steps, so the time still owed carries over (to within one step) rather than the number of steps. The fields are optional — snapshots from older builds lack them and restore starts the clock at 0.
 
-**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: registered resource values (§2.11) and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
+**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
 
 **What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, and query iteration order (§8, ascending entity id). State outside the envelope is not carried:
 
@@ -617,7 +629,6 @@ interface WorldSnapshot {
 - `time.scale` and pause state — host controls; restore leaves the restoring world's own.
 - System `state` and closure variables — keep durable state in components or resources.
 - `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick.
-- A `world.rand` reference captured before the restore — restore installs a new generator; read `world.rand` or `ctx.rand` at use.
 
 Continuation is therefore exact when the snapshot is taken between ticks with no undelivered events and no out-of-tick mutations since the last `step`. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
 
@@ -626,6 +637,8 @@ Continuation is therefore exact when the snapshot is taken between ticks with no
 `snapshot(options?)` accepts `SnapshotOptions`. `pruneEmptyEntities` (default `false`) drops entities whose serializable bag is empty once transient components are excluded — transient-only and bare `spawn()` entities. The default records every alive entity so id/archetype membership round-trips exactly. `@domecs/persist`'s `pruneTransientOnlyEntities()` plugin applies the same prune on the no-arg `save()` path via `onSnapshot`.
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
+
+**PRNG and driver (O-46, O-48).** `restore()` rewinds the world's generator in place, so a `world.rand` reference captured before the restore draws the restored stream. A restore also gives an idle `startLoop` driver one heartbeat frame, so the restored state is painted while the world stays at the checkpoint, paused or not (§3 Idle suspension).
 
 **Pending events (normative).** `restore()` discards all pending (undelivered) events before applying the snapshot: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. Events a plugin emits during its `onRestore` hook are preserved when the restore succeeds (the pending events are set aside before the hooks run). The event bus is transient by design and is never part of the snapshot envelope; durable history belongs in components/resources (the durable-log pattern).
 

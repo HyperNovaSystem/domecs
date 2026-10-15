@@ -1,5 +1,5 @@
 import { internal } from './component.js'
-import { restoreRng, type Rng } from './rng.js'
+import { restoreRng, rewindRng, type Rng } from './rng.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
@@ -152,8 +152,9 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   })
   ctx.setEmptyArch(ctx.ensureArchetype(new Set<string>()))
 
-  // PRNG state + tick + clock.
-  ctx.setRand(restoreRng(s.seed))
+  // PRNG state + tick + clock. The generator is rewound in place so a
+  // captured `world.rand` handle follows the restore (O-46).
+  if (!rewindRng(ctx.getRand(), s.seed)) ctx.setRand(restoreRng(s.seed))
   ctx.time.tick = s.tick
   ctx.time.delta = 0
   ctx.time.scaledDelta = 0
@@ -208,12 +209,14 @@ export interface SnapshotClock {
 }
 
 /**
- * Check everything restore would reject — resource values and the clock
- * fields — without touching any state. `world.restore()` calls it on the
- * envelope the `onRestore` hooks produce, before it applies it. Returns the
- * parsed clock.
+ * Check everything restore would reject — the envelope shape, every entity
+ * record, resource values and the clock fields — without touching any
+ * state. `world.restore()` calls it on the envelope the `onRestore` hooks
+ * produce, before it applies it, so a malformed snapshot throws while the
+ * live world is still intact (O-41). Returns the parsed clock.
  */
 export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): SnapshotClock {
+  validateEnvelope(s)
   // Resource values are validated for every *registered* resource type,
   // mirroring the setResource() contract; names with no registered type
   // pass through (the name-keyed lazy contract). Component values are
@@ -246,6 +249,62 @@ export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): Snapshot
     )
   }
   return { scaledTime, fixedBacklog, fixedStep }
+}
+
+function invalid(what: string, expected: string, got: unknown): Error {
+  return new Error(`domecs: invalid snapshot ${what}: expected ${expected}, got ${describe(got)}`)
+}
+
+function describe(v: unknown): string {
+  if (v === null) return 'null'
+  if (Array.isArray(v)) return 'an array'
+  if (typeof v === 'object') return 'an object'
+  return typeof v === 'string' ? JSON.stringify(v) : String(v)
+}
+
+function isNonNegativeInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * O-41: the structural checks `applySnapshot` relies on. Everything it reads
+ * after the wipe is checked here first: the seed, tick and id cursor, and
+ * each entity record's id and component bag. Component values themselves
+ * are not validated (see validateSnapshot).
+ */
+function validateEnvelope(s: WorldSnapshot): void {
+  if (!isRecord(s)) throw invalid('envelope', 'an object', s)
+  const seed: unknown = s.seed
+  if (
+    !Array.isArray(seed) ||
+    seed.length !== 4 ||
+    !seed.every((n) => typeof n === 'number' && Number.isFinite(n))
+  ) {
+    throw invalid('seed', 'an array of 4 finite numbers', seed)
+  }
+  if (!isNonNegativeInt(s.tick)) throw invalid('tick', 'an integer >= 0', s.tick)
+  if (s.nextId !== undefined && !isNonNegativeInt(s.nextId)) {
+    throw invalid('nextId', 'an integer >= 0', s.nextId)
+  }
+  if (s.resources !== undefined && !isRecord(s.resources)) {
+    throw invalid('resources', 'an object', s.resources)
+  }
+  const entities: unknown = s.entities
+  if (!Array.isArray(entities)) throw invalid('entities', 'an array', entities)
+  const seen = new Set<number>()
+  entities.forEach((rec: unknown, i) => {
+    if (!isRecord(rec)) throw invalid(`entities[${i}]`, 'an object', rec)
+    if (!isNonNegativeInt(rec.id)) throw invalid(`entities[${i}].id`, 'an integer >= 0', rec.id)
+    if (seen.has(rec.id)) throw invalid(`entities[${i}].id`, 'a unique id', rec.id)
+    seen.add(rec.id)
+    if (!isRecord(rec.components)) {
+      throw invalid(`entities[${i}].components`, 'an object', rec.components)
+    }
+  })
 }
 
 /**

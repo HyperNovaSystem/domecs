@@ -6,6 +6,40 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (2026-10-13 engine review — kernel hardening, O-41–O-50, O-62)
+
+- `@domecs/core`: `restore()` validates the whole snapshot before it touches
+  world state — the seed, `tick`, `nextId`, `resources`, and every entity
+  record (unique integer `id` ≥ 0, object `components`). A malformed save or a
+  buggy migration used to throw after the wipe, so a failed `load()` left the
+  live world empty; it now leaves it as it was. `nextId: null` and
+  `resources: null`, previously read as absent, are now rejected. (O-41)
+- `@domecs/core`: adding or removing a system while a phase is running no
+  longer skips or repeats a system. A system removed mid-phase does not run
+  later in that phase; one added mid-phase first runs at its schedule's next
+  phase. Equal-priority systems keep registration order after removals.
+  (O-43, SPEC §3)
+- `@domecs/core`: **behavior change** — component `defaults` are copied per
+  entity. Arrays and plain objects in `defaults` were one instance shared by
+  every entity (`defaults: { items: [] }`); other objects keep their identity.
+  (O-44, SPEC §2.2)
+- `@domecs/core`: the `startLoop` driver keeps running after a system throws;
+  the error still propagates from the rAF callback. (O-45)
+- `@domecs/core`: `restore()` rewinds `world.rand` in place, so a captured
+  `const rng = world.rand` follows the restore. (O-46)
+- `@domecs/core`: `restore()` gives an idle `startLoop` driver one heartbeat
+  frame (render, no tick), so the restored state is painted and the world
+  stays at the checkpoint. (O-48)
+- `@domecs/core`: views of despawned entities read through `OnRemoved` are no
+  longer cached, which grew without bound in worlds with churn; component
+  names containing `|` no longer collide with another archetype. (O-47, O-49)
+- `@domecs/persist`: `history.undo()`/`redo()` put the cursor back when the
+  restore throws. Corrupt JSON, non-snapshot payloads, unserializable
+  snapshots and restore rejections return `persist_io` with
+  `retryable: false`; storage I/O failures stay retryable. (O-62)
+- AGENTS.md: the post-restore rebuild recipe no longer suggests spawning in a
+  plugin `onRestore`, which runs before the snapshot is applied. (O-50)
+
 ### Fixed (2026-10-13 engine review — restore continuity, O-40)
 
 - `@domecs/core`: snapshots carry the simulation clock (`WorldSnapshot.scaledTime`,

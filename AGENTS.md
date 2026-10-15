@@ -102,8 +102,10 @@ over cloning state for each UI region.
 
 ### Post-restore rebuild
 After `restore`/`load`, rebuild transient projection entities (viewport, table
-rows) from persistent state — often in a plugin `onRestore` or a boot `once`
-system.
+rows) from persistent state — in a call right after `restore`/`load` returns,
+or in a boot `once` system when restoring into a fresh world. Not in a plugin
+`onRestore`: it runs before the snapshot is applied, so anything it spawns is
+wiped.
 
 ### Feed coalesce
 External telemetry: queue → coalesce by entity key → one batch event per frame.
