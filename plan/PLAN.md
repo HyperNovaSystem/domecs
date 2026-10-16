@@ -205,20 +205,20 @@ Everything else waits for a real collision.
 editor — pulled three engine surfaces that this plan did not schedule:
 
 - **`@domecs/scene`** — `Parent` hierarchy, `despawnTree`, transform
-  composition (M4). In the repo, not yet published.
+  composition (M4). Published in 2.0.0.
 - **`@domecs/rules`** — a safe expression language and data-defined rules
-  installed as systems (M6). In the repo, not yet published.
+  installed as systems (M6). Published in 2.0.0.
 - **Persist component-schema I/O** — `serializeComponentType` /
   `registerComponentTypes` in `@domecs/persist`, for user-authored component
   types in documents.
 
 They follow the same rules as everything else here: hardened by the
-2026-10-13 review (FINDINGS O-61–O-69), published only with an engine
+2026-10-13 review (FINDINGS O-61–O-69), published with the 2.0.0 engine
 release (O-70), and grown only when a real application needs more.
 
 ## 6. Cadence
 
-- Engine releases: demand-driven corrective 1.0.x from WS-2 and §5 pulls.
+- Engine releases: demand-driven corrective 2.x from WS-2 and §5 pulls.
 - Re-evaluate this plan when WS-1 results land or WS-4 ships — whichever
   comes first.
 

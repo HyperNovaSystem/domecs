@@ -6,7 +6,7 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-## [2.0.0] — 2026-10-15
+## [2.0.0] — 2026-10-16
 
 All seven `@domecs/*` packages move to 2.0.0, and `@domecs/scene` and
 `@domecs/rules` are published for the first time. This release carries every
