@@ -19,10 +19,11 @@ and this skill. Prefer the agent bridge over inventing control APIs.
 
 ```bash
 npm install @domecs/core @domecs/dom @domecs/input
-# optional: @domecs/persist @domecs/inspector
+# optional: @domecs/persist @domecs/inspector @domecs/scene @domecs/rules
 ```
 
 Import from scoped packages only (`@domecs/core`, never legacy `domecs`).
+Keep every `@domecs/*` package on the same major version (currently 2).
 
 ## Canonical control loop
 
