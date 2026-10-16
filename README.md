@@ -143,11 +143,11 @@ Optional packages:
 ```bash
 npm install @domecs/persist     # snapshot save/load + migrations
 npm install @domecs/inspector   # headless fault + timeline recorder for devtools
+npm install @domecs/scene       # Parent hierarchy + transform composition
+npm install @domecs/rules       # safe expression language for data-defined rules
 ```
 
-`@domecs/scene` (Parent hierarchy, transform composition) and `@domecs/rules`
-(a safe expression language for data-defined rules) are in `packages/` and
-not yet published.
+Keep every `@domecs/*` package on the same major version.
 
 Published packages resolve to built ESM under `dist/` (no bundler required for
 Node or import-map browser hosts). This repository itself is a `pnpm` workspace;

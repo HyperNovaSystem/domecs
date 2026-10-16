@@ -62,7 +62,7 @@ Three independent external reviews converged on the same reading:
 5. **Cooperate, don't rebuild.** Where the ecosystem already paid the tuition
    (virtual lists → TanStack Virtual), integrate via a small adapter or
    recipe instead of building our own (reframes O-5).
-6. **Honest labeling.** "API-stable" with corrective 1.0.x releases — not
+6. **Honest labeling.** "API-stable" with corrective 2.x releases — not
    "stable product" while first-hour traps remain open.
 
 ## 3. Workstreams
