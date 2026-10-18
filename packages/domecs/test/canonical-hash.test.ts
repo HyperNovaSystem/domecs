@@ -26,6 +26,14 @@ describe('canonicalJson', () => {
     // and an astral character (surrogate pair, 0xD83D…) sorts before U+FF5E.
     expect(canonicalJson({ 2: 'x', 10: 'y', a: 0, Z: 0 })).toBe('{"10":"y","2":"x","Z":0,"a":0}')
     expect(canonicalJson({ '～': 1, '\u{1F600}': 2 })).toBe('{"\u{1F600}":2,"～":1}')
+    // Large objects take the Array.prototype.sort path; small ones an
+    // inline insertion sort. Both must agree with code-unit order.
+    for (const n of [3, 16, 17, 40]) {
+      const keys = Array.from({ length: n }, (_, i) => `k${(i * 7919) % 1000}`)
+      const shuffled: Record<string, number> = {}
+      for (const k of [...keys].reverse()) shuffled[k] = 1
+      expect(canonicalJson(shuffled)).toBe(`{${[...keys].sort().map((k) => `"${k}":1`).join(',')}}`)
+    }
   })
 
   it('matches JSON.stringify value semantics for undefined, functions and symbols', () => {

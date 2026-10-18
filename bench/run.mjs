@@ -21,7 +21,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -41,7 +41,7 @@ if (!existsSync(distEntry)) {
   console.error('[bench] Build @domecs/core first:  pnpm --filter @domecs/core build')
   process.exit(1)
 }
-const { createWorld, defineComponent, entry, OnChanged } = await import(
+const { createWorld, defineComponent, entry, OnChanged, hashSnapshot, canonicalSnapshot } = await import(
   pathToFileURL(distEntry).href
 )
 
@@ -77,6 +77,9 @@ const Telemetry = defineComponent('BenchTelemetry', {
 const Row = defineComponent('BenchRow', {
   defaults: { rank: 0, label: '' },
 })
+const HashLabel = defineComponent('BenchHashLabel', {
+  defaults: { name: '', hp: 0, tags: [] },
+})
 
 const results = []
 function record(row) {
@@ -100,6 +103,11 @@ if (workload === 'all' || workload === 'telemetry') {
 }
 if (workload === 'all' || workload === 'snapshot') {
   record(runSnapshot({ entityCount: Math.min(entityCount, 5_000), repeats: 20 }))
+}
+if (workload === 'all' || workload === 'hash') {
+  // Fixed at 1000 entities: the spec §4.1 cost target (≤ 2 ms, informational)
+  // is stated for a 1000-entity snapshot.
+  record(runHash({ entityCount: 1_000, repeats: 50 }))
 }
 if (workload === 'all' || workload === 'windowed') {
   record(
@@ -160,6 +168,8 @@ for (const r of results) {
     `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities} ticks=${r.ticks ?? '-'} ` +
       `p50=${fmtMs(r.p50Ms)} p95=${fmtMs(r.p95Ms)}` +
       (r.snapshotBytes != null ? ` snapBytes=${r.snapshotBytes}` : '') +
+      (r.canonicalBytes != null ? ` canonicalBytes=${r.canonicalBytes}` : '') +
+      (r.targetP50Ms != null ? ` target=${fmtMs(r.targetP50Ms)} withinTarget=${r.withinTarget}` : '') +
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
       (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : '') +
       (r.coalesceRatio != null ? ` coalesce=${r.coalesceRatio}` : ''),
@@ -351,6 +361,56 @@ function runSnapshot({ entityCount, repeats }) {
     p95Ms: p95,
     snapshotBytes: bytes,
     deterministic,
+  }
+}
+
+/**
+ * O-11 / spec §4.1: `hashSnapshot` (canonical JSON + FNV-1a-64) over a
+ * 1000-entity snapshot of roughly the size the spec's target names
+ * (~131 KB). Target p50 ≤ 2 ms on the reference host; informational, not a
+ * gate. Reports the strict (`includeChanges`) hash time, which forks and
+ * keyframes use, and checks the hash is stable across repeats.
+ */
+function runHash({ entityCount, repeats }) {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  registerSnapshotSystems(world)
+  for (let i = 0; i < entityCount; i++) {
+    world.spawn([
+      entry(Position, { x: i * 0.5, y: -i * 1.25 }),
+      entry(Velocity, { dx: (i % 7) - 3.5, dy: -0 }),
+      entry(HashLabel, { name: `unit-${i}`, hp: 100 - (i % 50), tags: ['mobile', i % 2 ? 'red' : 'blue'] }),
+    ])
+  }
+  for (let i = 0; i < 10; i++) world.step(1 / 60)
+  const snap = world.snapshot()
+  const bytes = JSON.stringify(snap).length
+  const canonicalBytes = canonicalSnapshot(snap, { includeChanges: true }).length
+
+  for (let i = 0; i < 5; i++) hashSnapshot(snap, { includeChanges: true })
+  const samples = []
+  let first = null
+  let stable = true
+  for (let i = 0; i < repeats; i++) {
+    const t0 = performance.now()
+    const h = hashSnapshot(snap, { includeChanges: true })
+    samples.push(performance.now() - t0)
+    if (first === null) first = h
+    else if (h !== first) stable = false
+  }
+  const { p50, p95 } = percentiles(samples)
+  const targetP50Ms = 2
+  return {
+    workload: 'hash',
+    engine: 'domecs',
+    entities: entityCount,
+    repeats,
+    p50Ms: p50,
+    p95Ms: p95,
+    snapshotBytes: bytes,
+    canonicalBytes,
+    targetP50Ms,
+    withinTarget: p50 <= targetP50Ms,
+    deterministic: stable,
   }
 }
 

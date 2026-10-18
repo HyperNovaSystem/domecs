@@ -14,6 +14,7 @@ interpretation.
 | 2 | **Telemetry firehose** | `telemetry` | Coalesced markChanged updates |
 | 3 | **Windowed projection** | `windowed` | 50-row window over large set |
 | 4 | **Snapshot / restore** | `snapshot` | Snapshot size/time + determinism |
+| 4b | **Snapshot hash** | `hash` | `hashSnapshot` (canonical JSON + FNV-1a-64) over a 1000-entity snapshot |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
 | 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
 
@@ -69,6 +70,12 @@ pnpm bench:write
   `fixedAccumulator`) — restore fidelity plus dynamic continuation, not just
   round-trip serialization. A sub-rate `fixed` system and frame times that
   are not fixed-step multiples make a lost accumulator visible.
+- **Hash workload (O-11):** times the strict `hashSnapshot(snap,
+  { includeChanges: true })` over a fixed 1000-entity snapshot (three
+  components each, ~168 KB as `JSON.stringify`), warmed, 50 repeats. The
+  row reports `canonicalBytes`, `targetP50Ms` (2 ms, the spec §4.1 target;
+  informational, not a gate), `withinTarget`, and `deterministic` (every
+  repeat produced the same hash).
 - **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).
@@ -100,6 +107,20 @@ windows, `markChanged`); Koota and signals time a bare loop — see
 COMPARISON.md. Ratios are per host and per N.
 
 **Plumbing:** micro-shapes do not show “half the code” vs Koota; product value is the operable stack (action / snapshot / agent), not soak iteration. See COMPARISON.md.
+
+## Hash workload (Node v24.19, x86-64 2-vCPU VM, gc on, 2026-10-18)
+
+`node --expose-gc bench/run.mjs --workload hash`, three runs:
+
+| Snapshot | `JSON.stringify` bytes | canonical bytes | p50 | p95 | target p50 |
+|----------|------------------------|-----------------|-----|-----|------------|
+| 1000 entities × 3 components | 167,872 | 168,861 | 4.5–4.6ms | 6.9–7.2ms | ≤ 2ms (missed) |
+
+On the same host `JSON.stringify` of that snapshot takes ~1.0 ms, so the
+2 ms target asks for a canonical walk plus hash within 2× native
+serialization. The measured split is ~3 ms for `canonicalSnapshot` (about a
+third of it `Number::toString`) and ~1 ms for FNV-1a-64 over the text.
+Recorded as informational (spec §4.1); revisit on the reference host.
 
 ## Status
 

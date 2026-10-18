@@ -112,7 +112,8 @@ import type { Entity } from './types.js';
  * - Numbers use ECMAScript `Number::toString`, except `-0` → `-0`.
  * - `NaN`/`±Infinity`, BigInt and cycles throw `TypeError` with the path
  *   (`"entities[3].components.Body.vx"`).
- * - `toJSON` is honoured, as `JSON.stringify` does.
+ * - `toJSON` is honoured on class instances (a `Date`, say), as
+ *   `JSON.stringify` does; plain objects and arrays are walked as data.
  */
 export declare function canonicalJson(value: unknown): string;
 /** The algorithm behind `hashSnapshot`, `hashEntities` and `hashValue`. */

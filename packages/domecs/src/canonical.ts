@@ -17,9 +17,40 @@ import type { WorldSnapshot } from './snapshot.js'
 import type { Entity } from './types.js'
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+// Characters JSON.stringify escapes: '"', '\\', controls, and surrogates
+// (lone ones are escaped; pairs are not, but they take the slow path).
+const NEEDS_ESCAPE = /["\\\u0000-\u001f\ud800-\udfff]/
+
+function quote(s: string): string {
+  return NEEDS_ESCAPE.test(s) ? JSON.stringify(s) : '"' + s + '"'
+}
+
+// Quoted object keys repeat heavily (component and field names), so they
+// are memoized; the cache is bounded so arbitrary keys cannot grow it.
+const KEY_CACHE = new Map<string, string>()
+const KEY_CACHE_MAX = 4096
+
+function quoteKey(k: string): string {
+  let q = KEY_CACHE.get(k)
+  if (q === undefined) {
+    q = quote(k) + ':'
+    if (KEY_CACHE.size < KEY_CACHE_MAX) KEY_CACHE.set(k, q)
+  }
+  return q
+}
 
 function keySegment(key: string): string {
   return IDENT.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`
+}
+
+/**
+ * Thrown inside the walk and caught at the top: each container frame it
+ * unwinds through prepends its segment, so the happy path never builds a
+ * path.
+ */
+class PathFault {
+  readonly segments: string[] = []
+  constructor(readonly what: string) {}
 }
 
 /** Render a path built from segments as `a.b[2]` (no leading dot). */
@@ -27,10 +58,6 @@ function renderPath(path: readonly string[]): string {
   const s = path.join('')
   if (s === '') return '(root)'
   return s.startsWith('.') ? s.slice(1) : s
-}
-
-function fail(what: string, path: readonly string[]): never {
-  throw new TypeError(`canonicalJson: ${what} at "${renderPath(path)}" (snapshots are plain JSON data)`)
 }
 
 /**
@@ -42,68 +69,109 @@ function fail(what: string, path: readonly string[]): never {
  * - Numbers use ECMAScript `Number::toString`, except `-0` → `-0`.
  * - `NaN`/`±Infinity`, BigInt and cycles throw `TypeError` with the path
  *   (`"entities[3].components.Body.vx"`).
- * - `toJSON` is honoured, as `JSON.stringify` does.
+ * - `toJSON` is honoured on class instances (a `Date`, say), as
+ *   `JSON.stringify` does; plain objects and arrays are walked as data.
  */
 export function canonicalJson(value: unknown): string {
-  const stack = new Set<object>()
-  const path: string[] = []
-
-  // Returns undefined when the value has no JSON text (omitted in objects).
-  function write(key: string, v: unknown): string | undefined {
-    if (v !== null && typeof v === 'object' && typeof (v as { toJSON?: unknown }).toJSON === 'function') {
-      v = (v as { toJSON: (k: string) => unknown }).toJSON(key)
+  try {
+    const text = write('', value, [])
+    if (text === undefined) throw new PathFault(`${typeof value} value has no JSON text`)
+    return text
+  } catch (e) {
+    if (e instanceof PathFault) {
+      throw new TypeError(
+        `canonicalJson: ${e.what} at "${renderPath(e.segments)}" (snapshots are plain JSON data)`,
+      )
     }
-    if (v instanceof Number) v = Number(v)
-    else if (v instanceof String) v = String(v)
-    else if (v instanceof Boolean) v = v.valueOf()
-
-    switch (typeof v) {
-      case 'string':
-        return JSON.stringify(v)
-      case 'number':
-        if (!Number.isFinite(v)) fail(`non-finite number ${String(v)}`, path)
-        return Object.is(v, -0) ? '-0' : String(v)
-      case 'boolean':
-        return v ? 'true' : 'false'
-      case 'bigint':
-        return fail('BigInt value', path)
-      case 'undefined':
-      case 'function':
-      case 'symbol':
-        return undefined
-    }
-    if (v === null) return 'null'
-    const obj = v as object
-    if (stack.has(obj)) fail('cycle', path)
-    stack.add(obj)
-    let out: string
-    if (Array.isArray(obj)) {
-      const parts: string[] = []
-      for (let i = 0; i < obj.length; i++) {
-        path.push(`[${i}]`)
-        parts.push(write(String(i), obj[i]) ?? 'null')
-        path.pop()
-      }
-      out = `[${parts.join(',')}]`
-    } else {
-      const rec = obj as Record<string, unknown>
-      const keys = Object.keys(rec).sort()
-      const parts: string[] = []
-      for (const k of keys) {
-        path.push(keySegment(k))
-        const text = write(k, rec[k])
-        path.pop()
-        if (text !== undefined) parts.push(`${JSON.stringify(k)}:${text}`)
-      }
-      out = `{${parts.join(',')}}`
-    }
-    stack.delete(obj)
-    return out
+    throw e
   }
+}
 
-  const text = write('', value)
-  if (text === undefined) fail(`${typeof value} value has no JSON text`, path)
-  return text
+// Returns undefined when the value has no JSON text (omitted in objects).
+// `stack` holds the containers being written (cycle detection; depth is
+// small, so a linear scan beats a Set).
+function write(key: string | number, v: unknown, stack: object[]): string | undefined {
+  switch (typeof v) {
+    case 'string':
+      return quote(v)
+    case 'number':
+      if (v !== v || v === Infinity || v === -Infinity) throw new PathFault(`non-finite number ${String(v)}`)
+      return v === 0 && 1 / v < 0 ? '-0' : String(v)
+    case 'boolean':
+      return v ? 'true' : 'false'
+    case 'bigint':
+      throw new PathFault('BigInt value')
+    case 'undefined':
+    case 'function':
+    case 'symbol':
+      return undefined
+  }
+  if (v === null) return 'null'
+  const obj = v as object
+  const proto: unknown = Object.getPrototypeOf(obj)
+  // Plain objects and arrays (the snapshot case) skip the exotic checks.
+  if (proto !== Object.prototype && proto !== Array.prototype && proto !== null) {
+    if (typeof (v as { toJSON?: unknown }).toJSON === 'function') {
+      return write(key, (v as { toJSON: (k: string) => unknown }).toJSON(String(key)), stack)
+    }
+    if (v instanceof Number || v instanceof String || v instanceof Boolean) {
+      return write(key, v.valueOf(), stack)
+    }
+  }
+  if (stack.includes(obj)) throw new PathFault('cycle')
+  stack.push(obj)
+  let out: string
+  if (Array.isArray(obj)) {
+    out = '['
+    let i = 0
+    try {
+      for (; i < obj.length; i++) {
+        if (i > 0) out += ','
+        out += write(i, obj[i], stack) ?? 'null'
+      }
+    } catch (e) {
+      if (e instanceof PathFault) e.segments.unshift(`[${i}]`)
+      throw e
+    }
+    out += ']'
+  } else {
+    const rec = obj as Record<string, unknown>
+    const keys = Object.keys(rec)
+    // `<`/`>` on strings and the default sort both compare UTF-16 code
+    // units. Records are small, and an inline insertion sort beats
+    // Array.prototype.sort's call overhead there by a wide margin.
+    if (keys.length > 16) keys.sort()
+    else {
+      for (let i = 1; i < keys.length; i++) {
+        const key = keys[i]!
+        let j = i - 1
+        while (j >= 0 && keys[j]! > key) {
+          keys[j + 1] = keys[j]!
+          j--
+        }
+        keys[j + 1] = key
+      }
+    }
+    out = '{'
+    let first = true
+    let k = ''
+    try {
+      for (let i = 0; i < keys.length; i++) {
+        k = keys[i]!
+        const text = write(k, rec[k], stack)
+        if (text === undefined) continue
+        if (!first) out += ','
+        first = false
+        out += quoteKey(k) + text
+      }
+    } catch (e) {
+      if (e instanceof PathFault) e.segments.unshift(keySegment(k))
+      throw e
+    }
+    out += '}'
+  }
+  stack.pop()
+  return out
 }
 
 // ── Hash ────────────────────────────────────────────────────────────────
@@ -132,20 +200,44 @@ function fnv1a64(text: string): string {
   let h2 = 0x9ce4
   let h3 = 0xcbf2
   const n = text.length
-  for (let i = 0; i < n; i++) {
+  let i = 0
+  // ASCII loop (one byte per unit). Canonical snapshots are usually all
+  // ASCII; the first non-ASCII unit hands the rest to the general loop.
+  for (; i < n; i++) {
+    const c = text.charCodeAt(i)
+    if (c >= 0x80) break
+    h0 ^= c
+    const t0 = Math.imul(h0, 0x1b3)
+    const t1 = Math.imul(h1, 0x1b3) + (t0 >>> 16)
+    const t2 = Math.imul(h2, 0x1b3) + (h0 << 8) + (t1 >>> 16)
+    h3 = (Math.imul(h3, 0x1b3) + (h1 << 8) + (t2 >>> 16)) & 0xffff
+    h0 = t0 & 0xffff
+    h1 = t1 & 0xffff
+    h2 = t2 & 0xffff
+  }
+  if (i < n) return fnv1a64From(text, i, h0, h1, h2, h3)
+  return hex16(h3) + hex16(h2) + hex16(h1) + hex16(h0)
+}
+
+/**
+ * The general FNV-1a-64 loop from `text[start]` on, given the limb state:
+ * UTF-8 encodes each code point (a lone surrogate encodes as U+FFFD,
+ * matching TextEncoder) and mixes its bytes.
+ */
+function fnv1a64From(text: string, start: number, h0: number, h1: number, h2: number, h3: number): string {
+  const n = text.length
+  for (let i = start; i < n; i++) {
     let c = text.charCodeAt(i)
-    // UTF-8 encode the code point; a lone surrogate encodes as U+FFFD,
-    // matching TextEncoder.
-    let bytes: number
+    let count: number
     let b0: number
     let b1 = 0
     let b2 = 0
     let b3 = 0
     if (c < 0x80) {
-      bytes = 1
+      count = 1
       b0 = c
     } else if (c < 0x800) {
-      bytes = 2
+      count = 2
       b0 = 0xc0 | (c >> 6)
       b1 = 0x80 | (c & 63)
     } else {
@@ -159,28 +251,27 @@ function fnv1a64(text: string): string {
         }
       }
       if (c < 0x10000) {
-        bytes = 3
+        count = 3
         b0 = 0xe0 | (c >> 12)
         b1 = 0x80 | ((c >> 6) & 63)
         b2 = 0x80 | (c & 63)
       } else {
-        bytes = 4
+        count = 4
         b0 = 0xf0 | (c >> 18)
         b1 = 0x80 | ((c >> 12) & 63)
         b2 = 0x80 | ((c >> 6) & 63)
         b3 = 0x80 | (c & 63)
       }
     }
-    for (let k = 0; k < bytes; k++) {
+    for (let k = 0; k < count; k++) {
       h0 ^= k === 0 ? b0 : k === 1 ? b1 : k === 2 ? b2 : b3
       const t0 = Math.imul(h0, 0x1b3)
       const t1 = Math.imul(h1, 0x1b3) + (t0 >>> 16)
       const t2 = Math.imul(h2, 0x1b3) + (h0 << 8) + (t1 >>> 16)
-      const t3 = Math.imul(h3, 0x1b3) + (h1 << 8) + (t2 >>> 16)
+      h3 = (Math.imul(h3, 0x1b3) + (h1 << 8) + (t2 >>> 16)) & 0xffff
       h0 = t0 & 0xffff
       h1 = t1 & 0xffff
       h2 = t2 & 0xffff
-      h3 = t3 & 0xffff
     }
   }
   return hex16(h3) + hex16(h2) + hex16(h1) + hex16(h0)
