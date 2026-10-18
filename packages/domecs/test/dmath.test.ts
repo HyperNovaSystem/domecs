@@ -200,6 +200,36 @@ describe('dmath: special values (C99 Annex F)', () => {
   })
 })
 
+/**
+ * Inputs that reach rare `__rem_pio2` / `__rem_pio2_large` branches the
+ * seeded spreads miss (found by mutation testing; each output checked bit for
+ * bit against musl compiled with -ffp-contract=off). Breaking the branch makes
+ * the result wrong by up to 2^63 ulp (recomputation, q0 = 2 mask) or by 1 ulp
+ * (3rd medium round, z >= 2^24 split), which the 100k spread never notices.
+ * Keep in step with section 5 of scripts/dmath-golden.mjs.
+ */
+const RARE_BRANCH_INPUTS = [
+  '41260b1c3fbf40c2', // medium reduction: 3rd round (ex - ey > 49)
+  '7506ac5b262ca1ff', // __rem_pio2_large: z == 0 after 1 - q, recomputation
+  '447c54308a31bb16', //   "
+  '4d7c5c46c14b5e3d', //   "
+  '4480f0cf064dd58a', // __rem_pio2_large: q0 == 2 mask after 1 - q
+  '430971c7a14c731d', //   "
+  '46051a06ed191c9d', //   "
+  '413cc07e17154ca7', // __rem_pio2_large: final z >= 2^24 split
+]
+
+describe('dmath: rare argument-reduction branches', () => {
+  it('stay within 1 ulp of Math.* (both signs)', () => {
+    for (const h of RARE_BRANCH_INPUTS) {
+      for (const x of [fromBits(BigInt(`0x${h}`)), -fromBits(BigInt(`0x${h}`))]) {
+        expect(ulpDistance(dmath.sin(x), Math.sin(x)), `sin(0x${hex(x)})`).toBeLessThanOrEqual(1n)
+        expect(ulpDistance(dmath.cos(x), Math.cos(x)), `cos(0x${hex(x)})`).toBeLessThanOrEqual(1n)
+      }
+    }
+  })
+})
+
 const VECTORS = new URL('../../../test/golden/dmath-vectors.json', import.meta.url)
 
 describe('dmath: golden vectors (pin the port bit for bit)', () => {
@@ -220,5 +250,17 @@ describe('dmath: golden vectors (pin the port bit for bit)', () => {
       if (enc(dmath.cos(x)) !== cosHex) mismatches.push(`cos(0x${xHex})`)
     }
     expect(mismatches.slice(0, 10)).toEqual([])
+  })
+
+  it('pins the rare argument-reduction branches (both signs)', () => {
+    const golden = JSON.parse(readFileSync(VECTORS, 'utf8')) as { vectors: string[][] }
+    const inputs = new Set(golden.vectors.map((v) => v[0]))
+    const missing: string[] = []
+    for (const h of RARE_BRANCH_INPUTS) {
+      for (const x of [fromBits(BigInt(`0x${h}`)), -fromBits(BigInt(`0x${h}`))]) {
+        if (!inputs.has(hex(x))) missing.push(hex(x))
+      }
+    }
+    expect(missing).toEqual([])
   })
 })

@@ -7,7 +7,8 @@
  *   node scripts/dmath-golden.mjs --write  # regenerate it
  *
  * Builds ~3000 inputs (specials and branch thresholds, multiples and
- * near-multiples of pi/2 up to 2^1023, subnormals, a seeded random spread),
+ * near-multiples of pi/2 up to 2^1023, subnormals, a seeded random spread,
+ * then a few inputs that reach rare argument-reduction branches),
  * evaluates the built `dmath.sin` / `dmath.cos`, and reviews every output
  * against `Math.*`: more than 1 ulp anywhere is a port bug and aborts.
  * Vectors are 16-digit hex bit patterns `[x, sin(x), cos(x)]`; a NaN output
@@ -140,6 +141,25 @@ while (inputs.length < 3000) {
     const exp = 0x3e5 + (next() % (0x7ff - 0x3e5))
     add(fromWords(((next() & 1) << 31) | (exp << 20) | (next() & 0xfffff), next()))
   }
+}
+
+// 5. Rare reduction branches the spreads above never reach (found by mutation
+//    testing; outputs checked bit for bit against musl built with
+//    -ffp-contract=off). Appended after the fill so sections 1-4 are stable.
+//    Keep in step with RARE_BRANCH_INPUTS in packages/domecs/test/dmath.test.ts.
+for (const h of [
+  '41260b1c3fbf40c2', // medium reduction: 3rd round (ex - ey > 49)
+  '7506ac5b262ca1ff', // __rem_pio2_large: z == 0 after 1 - q, recomputation
+  '447c54308a31bb16',
+  '4d7c5c46c14b5e3d',
+  '4480f0cf064dd58a', // __rem_pio2_large: q0 == 2 mask after 1 - q
+  '430971c7a14c731d',
+  '46051a06ed191c9d',
+  '413cc07e17154ca7', // __rem_pio2_large: final z >= 2^24 split
+]) {
+  const x = fromBits(BigInt(`0x${h}`))
+  add(x)
+  add(-x)
 }
 
 // Evaluate and review against Math.*.
