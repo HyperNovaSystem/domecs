@@ -815,6 +815,7 @@ assert.equal(hashSnapshot(fork.snapshot(), strict), hashSnapshot(a.snapshot(), s
 // hashEntities points at the entity that diverged.
 const [id] = fork.listEntities([Pos])
 fork.getComponent(id!, Pos)!.x += 0.5
+fork.markChanged(id!, Pos)
 const live = hashEntities(a.snapshot())
 const forked = hashEntities(fork.snapshot())
 assert.deepEqual([...live.keys()].filter((e) => live.get(e) !== forked.get(e)), [id])
@@ -1322,6 +1323,7 @@ const b = w.spawn([entry(Body, { x: 2, inv: [] })])
 const before = w.snapshot()
 w.getComponent(b, Body)!.x = 5
 w.getComponent(b, Body)!.inv.push(9)
+w.markChanged(b, Body)
 const after = w.snapshot()
 
 const d = diffSnapshots(before, after, { fields: true })
