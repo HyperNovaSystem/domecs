@@ -63,6 +63,7 @@ export {
   HASH_ALGORITHM,
 } from './canonical.js'
 export type { CanonicalOptions } from './canonical.js'
+export { dmath } from './dmath.js'
 export type { ChangesSnapshot } from './change-log.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'

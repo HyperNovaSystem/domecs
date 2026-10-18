@@ -249,6 +249,54 @@ export declare function defineComponent<T, const Name extends string>(name: Name
 export declare function defineComponent<T>(name: string, options?: ComponentOptions<T>): ComponentType<T, string>;
 export declare function internal<T>(type: ComponentType<T>): InternalComponentType<T>;
 
+// file: dmath.d.ts
+/**
+ * Deterministic math (spec §4.2, ED-1, ED-18; ledger O-75).
+ *
+ * `Math.sin`/`Math.cos` are implementation-approximated under ECMA-262, and
+ * real engines disagree by up to 1 ulp on thousands of inputs. `dmath` is a
+ * straight-line port of **musl libm** (generic C, non-FMA paths):
+ * `sin.c`, `cos.c`, `__sin.c`, `__cos.c`, `__rem_pio2.c`,
+ * `__rem_pio2_large.c` (themselves from FreeBSD msun / Sun fdlibm).
+ *
+ * Why it is bit-exact everywhere: ECMA-262 numbers are IEEE-754 binary64
+ * with round-to-nearest-even, no FMA contraction and no extended precision,
+ * so evaluating the C expressions in the same order reproduces the same bits
+ * on every engine. Bit access goes through one module-level `DataView` with
+ * explicit little-endian offsets (no platform-endianness dependence). Every
+ * constant is built from its hex words: the C sources spell them with 21
+ * significant digits, and ECMA-262 lets an engine round literals past the
+ * 20th digit either way. `FORCE_EVAL` / `fp_barrier` (exception-flag side
+ * effects) have no JS meaning and are dropped.
+ *
+ * Do not "simplify" an expression here: reassociating changes rounding.
+ *
+ * musl: Copyright © 2005-2020 Rich Felker, et al. (MIT).
+ * fdlibm: Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ * Developed at SunSoft, a Sun Microsystems, Inc. business. Permission to
+ * use, copy, modify, and distribute this software is freely granted,
+ * provided that this notice is preserved. `__rem_pio2` optimized by
+ * Bruce D. Evans.
+ */
+/**
+ * Bit-reproducible math: identical results on every ECMA-262 engine.
+ *
+ * - `sin`, `cos`: musl libm ports, < 1 ulp from the true result; ±0, ±∞,
+ *   NaN and subnormals follow C99 Annex F; huge arguments reduce exactly
+ *   (Payne–Hanek).
+ * - `sqrt`: `Math.sqrt`, which IEEE-754 already makes correctly rounded;
+ *   re-exported so authors need one namespace.
+ *
+ * Authoritative (deterministic) systems use these instead of `Math.sin` /
+ * `Math.cos` (SPEC §8). `@domecs/rules` evaluates `sin()` / `cos()` with them.
+ */
+export declare const dmath: Readonly<{
+    sin(x: number): number;
+    cos(x: number): number;
+    /** = Math.sqrt (correctly rounded by IEEE-754; re-exported so authors need one namespace). */
+    sqrt(x: number): number;
+}>;
+
 // file: driver.d.ts
 /**
  * F-5: thin rAF driver. Every browser exemplar was hand-rolling dt-clamp /
@@ -676,6 +724,7 @@ export { SNAPSHOT_VERSION } from './snapshot.js';
 export type { SnapshotOptions, WorldSnapshot } from './snapshot.js';
 export { canonicalJson, canonicalSnapshot, hashSnapshot, hashEntities, hashValue, HASH_ALGORITHM, } from './canonical.js';
 export type { CanonicalOptions } from './canonical.js';
+export { dmath } from './dmath.js';
 export type { ChangesSnapshot } from './change-log.js';
 export type { Rng, RngState } from './rng.js';
 export type { TimeState } from './time.js';
