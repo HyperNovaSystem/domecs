@@ -1270,7 +1270,7 @@ interface SnapshotDiffOptions {
   readonly fields?: boolean                 // report components/fields/resources; default false
   readonly components?: readonly string[]   // restrict field reporting to these components
   readonly epsilon?: number                 // numbers within epsilon are equal; default 0 (exact, -0 ≠ 0)
-  readonly limit?: number                   // stop after this many field changes; default 10_000
+  readonly limit?: number                   // stop after this many field changes; default 10_000, Infinity = none
 }
 
 interface SnapshotDiff {

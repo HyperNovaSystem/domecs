@@ -161,6 +161,16 @@ describe('diffSnapshots (fields)', () => {
     expect(() => diffSnapshots(s, s, { epsilon: NaN })).toThrow(RangeError)
     expect(() => diffSnapshots(s, s, { limit: -1 })).toThrow(RangeError)
     expect(() => diffSnapshots(s, s, { limit: 1.5 })).toThrow(RangeError)
+    expect(() => diffSnapshots(s, s, { limit: NaN })).toThrow(RangeError)
+    expect(() => diffSnapshots(s, s, { epsilon: Infinity })).toThrow(RangeError)
+  })
+
+  it('accepts limit: Infinity as "no limit"', () => {
+    const many = (v: number): WorldSnapshot =>
+      snap(Array.from({ length: 30 }, (_, i): [number, Record<string, unknown>] => [i, { P: { a: v } }]))
+    const d = diffSnapshots(many(0), many(1), { fields: true, limit: Infinity })
+    expect(d.fieldChanges).toHaveLength(30)
+    expect(d.truncated).toBe(false)
   })
 })
 

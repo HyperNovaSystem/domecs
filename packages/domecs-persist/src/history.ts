@@ -186,7 +186,7 @@ export interface SnapshotDiffOptions {
   readonly epsilon?: number
   /**
    * Stop after this many field changes (component fields plus resources)
-   * and set `truncated`. Default 10_000.
+   * and set `truncated`. Default 10_000; `Infinity` for no limit.
    */
   readonly limit?: number
 }
@@ -366,8 +366,8 @@ function validateDiffOptions(o: SnapshotDiffOptions | undefined): { epsilon: num
   if (!(Number.isFinite(epsilon) && epsilon >= 0)) {
     throw new RangeError(`diffSnapshots: epsilon must be a finite number >= 0, got ${String(o?.epsilon)}`)
   }
-  if (!(Number.isInteger(limit) && limit >= 0)) {
-    throw new RangeError(`diffSnapshots: limit must be an integer >= 0, got ${String(o?.limit)}`)
+  if (!((Number.isInteger(limit) && limit >= 0) || limit === Infinity)) {
+    throw new RangeError(`diffSnapshots: limit must be an integer >= 0 or Infinity, got ${String(o?.limit)}`)
   }
   return { epsilon, limit }
 }

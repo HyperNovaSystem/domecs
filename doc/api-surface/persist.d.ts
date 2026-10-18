@@ -72,7 +72,7 @@ export interface SnapshotDiffOptions {
     readonly epsilon?: number;
     /**
      * Stop after this many field changes (component fields plus resources)
-     * and set `truncated`. Default 10_000.
+     * and set `truncated`. Default 10_000; `Infinity` for no limit.
      */
     readonly limit?: number;
 }
