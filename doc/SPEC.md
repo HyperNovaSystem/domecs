@@ -228,6 +228,7 @@ world.system(name, {
   query:     QueryDef,
   schedule:  'tick' | 'fixed' | 'event' | 'once' | 'reactive',
   priority?: number,         // lower runs first; default 0
+  order?:    number,         // tie-break within a priority; default 0, finite (§3)
   rateHz?:   number,         // fixed only
   triggers?: EventType[],    // event only
   reactsTo?: QueryDef,       // reactive only
@@ -372,10 +373,20 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 | `event`    | events buffered from previous tick      | event view                          |
 | `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) or resource change |
 
-Priorities disambiguate within a mode.
-Systems registered with the same priority run in **registration order**.
+**Run order within a mode (normative).** Systems run by the triple **(priority, order, registration index)**, each ascending: `priority` first (default 0), then `order` (default 0), then registration order. `order` must be a finite number; a non-finite or non-number `order` throws at `world.system()`, as an invalid `rateHz` does. With every `order` left at 0 this is the 1.x/2.0 rule: equal priorities run in registration order. `order` lets a library place its systems deterministically regardless of when they were registered or re-registered (O-76): `installRules(world, defs, resolve, { order: 'stable' })` from `@domecs/rules` registers rule *i* of the de-duplicated defs with `order: orderBase + i` (default base 1), so a rule's position is a function of (priority, defs order) only, and every equal-priority system left at order 0 runs before the rules. The default `order: 'registration'` keeps the 2.0 behaviour, where `RulesHandle.update()` re-registers every rule and so moves them after every equal-priority system registered earlier (a 3.0 candidate to flip). Two stable rule handles on one world need disjoint `orderBase` ranges, or their rules tie-break by registration index again. `describe().systems[i]` reports `priority` and `order`.
 
-**Schedule changes during a phase (O-43, normative).** Each phase of §4.1 runs the systems that were registered when the phase began. A system removed during the phase does not run later in it, and the systems after it still run. A system registered during the phase first runs at that schedule's next phase: the next fixed sub-step, or the next tick for the other modes. Registration order is a monotonic counter, so equal-priority systems keep their order after removals.
+**Recommended priority bands (convention, not enforced).** A world whose systems keep to these bands has a run order that depends only on what it registers, not on when:
+
+| Band | Priority | Examples |
+|---|---|---|
+| commands, input | −100 | command handlers, std command systems |
+| rules | strictly between −100 and 100 (default 0) | `installRules` |
+| derived transforms | 100 | `composeTransforms({ priority: 100 })` |
+| contacts | 150 | contact detection (planned) |
+| derived, render-only | 200 | caches, view state |
+| level switching | 1000 | scene-goto systems |
+
+**Schedule changes during a phase (O-43, normative).** Each phase of §4.1 runs the systems that were registered when the phase began. A system removed during the phase does not run later in it, and the systems after it still run. A system registered during the phase first runs at that schedule's next phase: the next fixed sub-step, or the next tick for the other modes. Registration order is a monotonic counter, so systems equal in priority and `order` keep their order after removals.
 
 ### Fixed-rate rule (normative)
 
@@ -666,7 +677,7 @@ interface WorldSnapshot {
 
 **Unseen change marks (O-42, normative).** A mark a system has not seen yet (§2.9) is part of the live world's future: that system reports it at its next run. `snapshot()` records such marks as `changes: { marks, seen }` — `marks` in the order they were made (`[kind, componentName, entityId]` for `added`/`changed`/`removed`, `["resource", name]`), and `seen[systemName]`, how many of them that system had already seen; a system missing from `seen` had seen them all. Only systems whose `query` or `reactsTo` has a change-detection node are recorded. `restore()` re-issues the marks, after every mark the restoring world has issued, and positions each system with that name accordingly — including one registered after the restore and before the next tick ends. Systems not in `seen`, and every other live query, start having seen all of them. The field is omitted when every system has seen every mark; a snapshot without it restores with no marks (the pre-O-42 behavior).
 
-The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. A snapshot taken while a system is running records that system's position before the run.
+The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. The restored world also continues the live one exactly only if its systems run in the same order (§3). A live world whose rules were re-registered by `RulesHandle.update()` runs them in a different order from a fresh world built from the same defs, unless the rules were installed with `{ order: 'stable' }`; with stable rules, the rules' run order no longer depends on when `update()` ran, so a fresh world that registers its other systems the same way and installs the current defs is a valid restore target. A snapshot taken while a system is running records that system's position before the run.
 
 **Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
 

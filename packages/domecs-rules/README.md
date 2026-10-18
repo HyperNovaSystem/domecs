@@ -44,10 +44,44 @@ Any other error is a bug and propagates out of the step.
 
 Rules run as systems named `rule:<name>`. `RuleDef.priority` (default 0)
 places them among other systems; rules of equal priority run in the order of
-the `defs` array last passed to `update()`. A def with an unknown `schedule`
+the `defs` array last passed to `update()` (see "Ordering" below). A def with an unknown `schedule`
 or a non-finite `priority` is a compile error, and a def repeating an earlier
 def's name is not installed and is reported under that name. Number literals
 too large for a double and unknown string escapes (`\q`) are parse errors.
+
+## Ordering
+
+Systems run by (priority, `order`, registration index), each ascending
+(SPEC §3). `installRules(world, defs, resolve, options?)` picks how rules
+fill the `order` slot:
+
+- `{ order: 'registration' }` (the default, 2.0 behaviour): rules register
+  with `order` 0 and tie-break by registration index. `update()` re-registers
+  every rule, so after any `update()` — even a no-op one — the rules run
+  after every equal-priority system registered before it, while a fresh world
+  built from the same defs runs them first. A live world and a fresh build
+  restored from its snapshot then diverge.
+- `{ order: 'stable', orderBase? }`: rule *i* of the de-duplicated defs
+  registers with `order: orderBase + i` (default base 1). Its position is a
+  pure function of (priority, defs order): equal-priority systems left at
+  `order` 0 run first, rules follow in defs order, and `update()` cannot move
+  them. Reordering the defs reorders the runs; a rule added later sits at its
+  defs index, not at the end. A def that fails to compile keeps its index, so
+  fixing it does not shift the rules after it; a repeated name takes none.
+
+```ts
+const rules = installRules(world, defs, resolve, { order: 'stable' })
+```
+
+Use one stable handle per world, or give each its own `orderBase` range;
+two handles with equal keys tie-break by registration index again. An
+unknown `order` or a non-finite `orderBase` throws. Keep rule priorities in
+the open band (−100, 100): commands and input at −100, derived transforms
+such as `composeTransforms({ priority: 100 })` at 100 (bands table in SPEC
+§3). `world.describe().systems` reports each rule system's `priority` and
+`order`. The default may flip to `'stable'` in 3.0.
+
+## Timing and functions
 
 `dt` for a `fixed` rule is the fixed step, but `time` is the frame's elapsed
 time, the same in every fixed sub-step of a frame.

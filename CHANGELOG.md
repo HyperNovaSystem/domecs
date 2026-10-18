@@ -44,6 +44,18 @@ peer ranges still resolve.
   every ECMA-262 engine, where `Math.sin`/`Math.cos` differ by up to 1 ulp
   between V8 builds. Golden vectors in `test/golden/dmath-vectors.json`
   (`scripts/dmath-golden.mjs`).
+- `@domecs/core`: `SystemDef.order` (G20, O-76) — a finite secondary sort
+  key (default 0). Systems in a mode run by (priority, order, registration
+  index); a non-finite `order` throws at `world.system()`.
+  `describe().systems[i]` now reports `priority` and `order`.
+- `@domecs/rules`: `installRules(world, defs, resolve, options?)` takes
+  `InstallRulesOptions` (G20, O-76). `{ order: 'stable', orderBase? }`
+  registers rule *i* of the de-duplicated defs with `order: orderBase + i`
+  (default base 1), so `update()` no longer moves rules behind equal-priority
+  systems and a live world after updates stays hash-equal to a fresh build
+  from the current defs restored from its snapshot. The default
+  `'registration'` keeps the 2.0 order. SPEC §3 documents the ordering
+  triple and the recommended priority bands.
 
 #### Changed
 

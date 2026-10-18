@@ -436,7 +436,8 @@ function entry<T>(type: ComponentType<T>, value: T): ComponentEntry<T>
 interface SystemDef {
   query?:    QueryDef
   schedule?: 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
-  priority?: number
+  priority?: number                        // lower runs first; default 0
+  order?:    number                        // tie-break within a priority; default 0, finite (throws otherwise)
   rateHz?:   number                        // fixed only
   triggers?: EventType<unknown>[]          // event only
   reactsTo?: QueryDef                      // reactive only
@@ -1470,6 +1471,83 @@ interface InspectorSnapshot {
   readonly entityScoped: InspectorEntry[]
   readonly timeline:     TimelineEvent[]
 }
+```
+
+---
+
+## `@domecs/rules`
+
+Data-defined rules (`RuleDef`: `query`, `when`, `actions`) compiled and
+installed as systems named `rule:<name>`. The full rule language is in the
+package README; this section covers installation and ordering.
+
+```ts
+function installRules(
+  world: World,
+  defs: RuleDef[],
+  resolve: (name: string) => ComponentType<any> | undefined,
+  options?: InstallRulesOptions,
+): RulesHandle   // throws on an unknown `order` or a non-finite `orderBase`
+
+interface InstallRulesOptions {
+  // 'registration' (default, 2.0 behaviour): rules tie-break by registration
+  // index, so update() moves every rule after the equal-priority systems
+  // registered before it.
+  // 'stable': rule i of the de-duplicated defs registers with
+  // `order: orderBase + i`; its run position depends only on
+  // (priority, defs order). A def that fails to compile keeps its index.
+  readonly order?: 'registration' | 'stable'
+  readonly orderBase?: number   // first order key in 'stable' mode; default 1
+}
+
+interface RulesHandle {
+  update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
+  uninstall(): void
+}
+```
+
+**Ordering.** Systems run by (priority, `order`, registration index) — SPEC
+§3. In `'stable'` mode an equal-priority system left at the default `order`
+0 runs before every rule, and rules run in defs order however many times
+`update()` ran, so a live world and a fresh world built from the current
+defs and restored from the live snapshot stay hash-equal. Use one stable
+handle per world, or give each its own `orderBase` range. Keep rule
+priorities strictly between −100 (commands, input) and 100 (derived
+transforms such as `composeTransforms({ priority: 100 })`); the full band
+table is in SPEC §3.
+
+```ts doctest name=rules-stable-order
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { installRules, type RuleDef } from '@domecs/rules'
+
+const P = defineComponent<{ x: number }>('RoP', { defaults: { x: 0 } })
+const W = defineComponent<{ x: number }>('RoW', { defaults: { x: 0 } })
+const defs: RuleDef[] = [
+  { name: 'inc', schedule: 'tick', query: ['RoP'], actions: [{ set: 'RoP.x', expr: 'RoP.x + 1' }] },
+]
+
+function build(order: 'registration' | 'stable', update: boolean): string {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.spawn([entry(P, { x: 0 }), entry(W, { x: 0 })])
+  const rules = installRules(w, defs, (n) => (n === 'RoP' ? P : undefined), { order })
+  w.system('copy', { query: [P, W] }, ({ entities }) => {
+    for (const e of entities) {
+      w.getComponent(e.id, W)!.x = w.getComponent(e.id, P)!.x
+      w.markChanged(e.id, W)
+    }
+  })
+  if (update) rules.update(defs) // re-registers every rule
+  for (let i = 0; i < 5; i++) w.stepOnce()
+  return hashSnapshot(w.snapshot(), { includeChanges: true })
+}
+
+// 'registration': a no-op update() moves the rule after `copy`.
+assert.notEqual(build('registration', true), build('registration', false))
+// 'stable': position is a function of the defs, not of update() history.
+assert.equal(build('stable', true), build('stable', false))
+// order is validated at registration.
+assert.throws(() => createWorld({ headless: true }).system('s', { order: NaN }, () => {}), /order/)
 ```
 
 ---
