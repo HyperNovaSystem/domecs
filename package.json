@@ -26,6 +26,8 @@
     "cold-install": "node scripts/cold-install.mjs",
     "cold-install:registry": "node scripts/cold-install.mjs --registry",
     "test:cold-install": "node --test test/cold-install.test.mjs",
+    "pack:studio": "node scripts/pack-for-studio.mjs --out ../studio/vendor/domecs",
+    "test:pack": "node --test test/pack-for-studio.test.mjs",
     "codemod": "jscodeshift --parser=tsx -t tools/codemod/domecs-v1.cjs"
   },
   "devDependencies": {
