@@ -33,6 +33,7 @@ export type {
   ActionResolver,
   ActionOptions,
   ActionResult,
+  RegisterError,
 } from './world.js'
 export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js'
 export type { WorldManifest, PluginManifestEntry } from './manifest.js'

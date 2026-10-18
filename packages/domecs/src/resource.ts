@@ -41,6 +41,15 @@ export function defineResource<T>(
   return shape as unknown as ResourceType<T, string>
 }
 
+/** Whether `value` is a {@link ResourceType} made by `defineResource`. */
+export function isResourceType(value: unknown): value is ResourceType<unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    (value as { __tag?: unknown }).__tag === tag
+  )
+}
+
 export function internalResource<T>(type: ResourceType<T>): InternalResourceType<T> {
   return type as InternalResourceType<T>
 }

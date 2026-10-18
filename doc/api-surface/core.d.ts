@@ -247,6 +247,8 @@ export interface InternalComponentType<T, Name extends string = string> extends 
  */
 export declare function defineComponent<T, const Name extends string>(name: Name, options?: ComponentOptions<T>): ComponentType<T, Name>;
 export declare function defineComponent<T>(name: string, options?: ComponentOptions<T>): ComponentType<T, string>;
+/** Whether `value` is a {@link ComponentType} made by `defineComponent`. */
+export declare function isComponentType(value: unknown): value is ComponentType<unknown>;
 export declare function internal<T>(type: ComponentType<T>): InternalComponentType<T>;
 
 // file: dmath.d.ts
@@ -531,6 +533,8 @@ export interface InternalEventType<T> extends EventType<T> {
     readonly __schema?: ComponentSchema;
 }
 export declare function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>;
+/** Whether `value` is an {@link EventType} (carries the `eventTag` brand). */
+export declare function isEventType(value: unknown): value is EventType<unknown>;
 export declare function internalEvent<T>(type: EventType<T>): InternalEventType<T>;
 /**
  * O-39: shallow payload validation against an event's declared schema, used
@@ -594,6 +598,13 @@ export interface EventBus {
     knownTypes(): EventType<unknown>[];
     /** Record `type` as known without emitting or subscribing (O-51). */
     note(type: EventType<unknown>): void;
+    /**
+     * The known event type named `name`, or `undefined` when none is known or
+     * when two distinct known types share the name (§4.5).
+     */
+    lookup(name: string): EventType<unknown> | undefined;
+    /** Whether a known event type other than `type` already holds `type.name`. */
+    nameTakenByOther(type: EventType<unknown>): boolean;
     /**
      * Set all pending (undelivered) events aside and start an empty queue,
      * returning the set-aside events. Called by `world.restore()`: events
@@ -712,7 +723,7 @@ export { defineEvent } from './events.js';
 export { createRng, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';
 export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResource, normalize as normalizeQuery, collectHasComponents, QueryNodeKind, } from './query.js';
-export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, } from './world.js';
+export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, RegisterError, } from './world.js';
 export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js';
 export type { WorldManifest, PluginManifestEntry } from './manifest.js';
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js';
@@ -1105,6 +1116,8 @@ export interface InternalResourceType<T, Name extends string = string> extends R
 }
 export declare function defineResource<T, const Name extends string>(name: Name, options?: ResourceOptions<T>): ResourceType<T, Name>;
 export declare function defineResource<T>(name: string, options?: ResourceOptions<T>): ResourceType<T, string>;
+/** Whether `value` is a {@link ResourceType} made by `defineResource`. */
+export declare function isResourceType(value: unknown): value is ResourceType<unknown>;
 export declare function internalResource<T>(type: ResourceType<T>): InternalResourceType<T>;
 
 // file: result.d.ts
@@ -1619,6 +1632,8 @@ export declare function createResourceState(recordChange: (name: string) => void
     markChanged: <T>(type: ResourceType<T>) => void;
     types: () => ResourceType<unknown>[];
     describe: <T>(type: ResourceType<T>) => ResourceDescriptor;
+    register: (type: ResourceType<unknown>) => void;
+    lookup: (name: string) => ResourceType<unknown> | undefined;
     snapshotValues: () => Record<string, unknown> | undefined;
     validateSnapshot: (snapResources: Record<string, unknown>) => void;
     clearForRestore: () => void;
@@ -1864,6 +1879,43 @@ export interface World {
     /** Every resource type registered or touched in this world. */
     resourceTypes(): ResourceType<unknown>[];
     /**
+     * Every known event type — registered, emitted, subscribed to, or named as
+     * an event system's trigger — in first-seen order (parity with
+     * {@link componentTypes} / {@link resourceTypes}). A fresh array each call.
+     */
+    eventTypes(): EventType<unknown>[];
+    /**
+     * Eagerly register component, event and resource types so reflection
+     * (`componentTypes()`, `eventTypes()`, `resourceTypes()`, `describe()`) and
+     * the `lookup*` methods list them before first use (O-30, §4.5).
+     *
+     * Registering is idempotent and touches no state the snapshot carries: a
+     * resource's default is not materialized, no entity or event is created.
+     * Implicit discovery (spawn, emit, `on`, triggers, resource access) works as
+     * before; `register` is how to assert that a name is unique — an
+     * agent-facing command name must be.
+     *
+     * All-or-nothing: when any argument's name is already held by a different
+     * type of the same kind (or by another argument), nothing is registered and
+     * the first conflict is returned as `name_conflict`. Components, events and
+     * resources are separate namespaces. Throws `TypeError` for an argument that
+     * is not a type made by `defineComponent` / `defineEvent` / `defineResource`.
+     *
+     * (Resources are taken as `ResourceType<never>` so a `ResourceType<T>` of
+     * any `T` is accepted: its brand is contravariant in `T`.)
+     */
+    register(...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>): Result<void, RegisterError>;
+    /** The component type registered under `name` (eagerly or by first use), or `undefined`. */
+    lookupComponent(name: string): ComponentType<unknown> | undefined;
+    /**
+     * The known event type named `name`, or `undefined` when none is known, or
+     * when two distinct known event types share the name (F-8 lets them
+     * coexist; the name is then ambiguous).
+     */
+    lookupEvent(name: string): EventType<unknown> | undefined;
+    /** The resource type registered under `name` (eagerly or by first use), or `undefined`. */
+    lookupResource(name: string): ResourceType<unknown> | undefined;
+    /**
      * Iterate every live entity that currently holds component `type`, paired
      * with its value. Convenience over `world.query(Has(type))` + per-entity
      * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
@@ -2071,5 +2123,14 @@ export interface ActionResult {
     reason?: string;
     events: readonly ActionEvent[];
     snapshot?: WorldSnapshot;
+}
+/**
+ * Why {@link World.register} refused: `name` is already held, in `registry`,
+ * by a different type object (§4.5).
+ */
+export interface RegisterError {
+    readonly kind: 'name_conflict';
+    readonly registry: 'component' | 'event' | 'resource';
+    readonly name: string;
 }
 export declare function createWorld(options?: WorldOptions): World;

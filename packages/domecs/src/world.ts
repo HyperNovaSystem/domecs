@@ -1,6 +1,7 @@
-import { internal } from './component.js'
+import { internal, isComponentType } from './component.js'
 import { createChangeLog, type MarkKind } from './change-log.js'
 import { createRafDriver } from './driver.js'
+import { isResourceType } from './resource.js'
 import { createResourceState } from './world-resources.js'
 import {
   applySnapshot,
@@ -22,6 +23,7 @@ import type {
 import {
   createEventBus,
   internalEvent,
+  isEventType,
   validateEventPayload,
   type EmittedEvent,
   type EventBus,
@@ -37,7 +39,7 @@ import {
 import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin, type TickInfo } from './plugin.js'
-import { normalizeCause, toJsonValue, type Result } from './result.js'
+import { err, normalizeCause, ok, toJsonValue, type Result } from './result.js'
 import { createRng, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
@@ -115,6 +117,14 @@ const ARCH_YES: ArchMatch = 2
 // The manifest is a plain-data handoff: clone FieldSchema values so no
 // consumer holds references into the live component/event schema metadata
 // (mutating a manifest must never corrupt reflection world-wide).
+/** Short label for a bad {@link World.register} argument in its TypeError. */
+function describeValue(v: unknown): string {
+  if (v === null) return 'null'
+  if (typeof v !== 'object') return typeof v
+  const name = (v as { name?: unknown }).name
+  return typeof name === 'string' ? `an object named "${name}"` : 'an object'
+}
+
 function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
   const out: Record<string, FieldSchema> = {}
   for (const [key, value] of Object.entries(src)) out[key] = { ...value }
@@ -253,6 +263,45 @@ export interface World {
   componentTypes(): ComponentType<unknown>[]
   /** Every resource type registered or touched in this world. */
   resourceTypes(): ResourceType<unknown>[]
+  /**
+   * Every known event type — registered, emitted, subscribed to, or named as
+   * an event system's trigger — in first-seen order (parity with
+   * {@link componentTypes} / {@link resourceTypes}). A fresh array each call.
+   */
+  eventTypes(): EventType<unknown>[]
+  /**
+   * Eagerly register component, event and resource types so reflection
+   * (`componentTypes()`, `eventTypes()`, `resourceTypes()`, `describe()`) and
+   * the `lookup*` methods list them before first use (O-30, §4.5).
+   *
+   * Registering is idempotent and touches no state the snapshot carries: a
+   * resource's default is not materialized, no entity or event is created.
+   * Implicit discovery (spawn, emit, `on`, triggers, resource access) works as
+   * before; `register` is how to assert that a name is unique — an
+   * agent-facing command name must be.
+   *
+   * All-or-nothing: when any argument's name is already held by a different
+   * type of the same kind (or by another argument), nothing is registered and
+   * the first conflict is returned as `name_conflict`. Components, events and
+   * resources are separate namespaces. Throws `TypeError` for an argument that
+   * is not a type made by `defineComponent` / `defineEvent` / `defineResource`.
+   *
+   * (Resources are taken as `ResourceType<never>` so a `ResourceType<T>` of
+   * any `T` is accepted: its brand is contravariant in `T`.)
+   */
+  register(
+    ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+  ): Result<void, RegisterError>
+  /** The component type registered under `name` (eagerly or by first use), or `undefined`. */
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+  /**
+   * The known event type named `name`, or `undefined` when none is known, or
+   * when two distinct known event types share the name (F-8 lets them
+   * coexist; the name is then ambiguous).
+   */
+  lookupEvent(name: string): EventType<unknown> | undefined
+  /** The resource type registered under `name` (eagerly or by first use), or `undefined`. */
+  lookupResource(name: string): ResourceType<unknown> | undefined
   /**
    * Iterate every live entity that currently holds component `type`, paired
    * with its value. Convenience over `world.query(Has(type))` + per-entity
@@ -471,6 +520,16 @@ export interface ActionResult {
   snapshot?: WorldSnapshot
 }
 
+
+/**
+ * Why {@link World.register} refused: `name` is already held, in `registry`,
+ * by a different type object (§4.5).
+ */
+export interface RegisterError {
+  readonly kind: 'name_conflict'
+  readonly registry: 'component' | 'event' | 'resource'
+  readonly name: string
+}
 
 export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
@@ -1665,6 +1724,58 @@ export function createWorld(options: WorldOptions = {}): World {
 
     resourceTypes(): ResourceType<unknown>[] {
       return resourceState.types()
+    },
+
+    eventTypes(): EventType<unknown>[] {
+      return bus.knownTypes()
+    },
+
+    register(
+      ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+    ): Result<void, RegisterError> {
+      // Validate the whole call first so a conflict registers nothing.
+      const components = new Map<string, ComponentType<unknown>>()
+      const events = new Map<string, EventType<unknown>>()
+      const resources = new Map<string, ResourceType<unknown>>()
+      const conflict = (registry: RegisterError['registry'], name: string) =>
+        err<RegisterError>({ kind: 'name_conflict', registry, name })
+      for (const t of types) {
+        if (isComponentType(t)) {
+          const held = components.get(t.name) ?? typeRegistry.get(t.name)
+          if (held !== undefined && held !== t) return conflict('component', t.name)
+          components.set(t.name, t)
+        } else if (isResourceType(t)) {
+          const held = resources.get(t.name) ?? resourceState.lookup(t.name)
+          if (held !== undefined && held !== t) return conflict('resource', t.name)
+          resources.set(t.name, t as ResourceType<unknown>)
+        } else if (isEventType(t)) {
+          const held = events.get(t.name)
+          if ((held !== undefined && held !== t) || bus.nameTakenByOther(t)) {
+            return conflict('event', t.name)
+          }
+          events.set(t.name, t)
+        } else {
+          throw new TypeError(
+            `domecs: register() expects types made by defineComponent, defineEvent or defineResource; got ${describeValue(t)}`,
+          )
+        }
+      }
+      for (const t of components.values()) storeFor(t)
+      for (const t of events.values()) bus.note(t)
+      for (const t of resources.values()) resourceState.register(t as ResourceType<unknown>)
+      return ok(undefined)
+    },
+
+    lookupComponent(name: string): ComponentType<unknown> | undefined {
+      return typeRegistry.get(name)
+    },
+
+    lookupEvent(name: string): EventType<unknown> | undefined {
+      return bus.lookup(name)
+    },
+
+    lookupResource(name: string): ResourceType<unknown> | undefined {
+      return resourceState.lookup(name)
     },
 
     *iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {

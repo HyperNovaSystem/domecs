@@ -36,6 +36,15 @@ export function defineEvent<T>(name: string, options?: EventDefOptions): EventTy
   } as InternalEventType<T>
 }
 
+/** Whether `value` is an {@link EventType} (carries the `eventTag` brand). */
+export function isEventType(value: unknown): value is EventType<unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as Partial<EventType<unknown>>)[eventTag] === 'symbol'
+  )
+}
+
 export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
   return type as InternalEventType<T>
 }
@@ -142,6 +151,13 @@ export interface EventBus {
   /** Record `type` as known without emitting or subscribing (O-51). */
   note(type: EventType<unknown>): void
   /**
+   * The known event type named `name`, or `undefined` when none is known or
+   * when two distinct known types share the name (§4.5).
+   */
+  lookup(name: string): EventType<unknown> | undefined
+  /** Whether a known event type other than `type` already holds `type.name`. */
+  nameTakenByOther(type: EventType<unknown>): boolean
+  /**
    * Set all pending (undelivered) events aside and start an empty queue,
    * returning the set-aside events. Called by `world.restore()`: events
    * queued before a restore belong to the abandoned timeline and must not
@@ -179,6 +195,18 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
   // the pending/current maps only carry the symbol. Populated on first emit of
   // each type and never cleared (bounded by the number of distinct types).
   const typeByTag = new Map<symbol, EventType<unknown>>()
+  // Name index over typeByTag (§4.5): the type known under each name, or
+  // `null` once two distinct types share it (F-8 lets them coexist; the name
+  // is then ambiguous). Like typeByTag, never cleared.
+  const byName = new Map<string, EventType<unknown> | null>()
+
+  /** Record `type` as known (first-seen order) and index its name. */
+  function know(type: EventType<unknown>): void {
+    const key = type[eventTag]
+    if (typeByTag.has(key)) return
+    typeByTag.set(key, type)
+    byName.set(type.name, byName.has(type.name) ? null : type)
+  }
 
   const makeView = (src: Map<symbol, unknown[]>): EventView => ({
     of<T>(type: EventType<T>): readonly T[] {
@@ -187,7 +215,7 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     emit<T>(type: EventType<T>, payload: T): void {
       const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
+      know(type as EventType<unknown>)
       let a = pending.get(key)
       if (!a) {
         a = []
@@ -200,7 +228,7 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
   return {
     emit<T>(type: EventType<T>, payload: T): void {
       const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
+      know(type as EventType<unknown>)
       let a = pending.get(key)
       if (!a) {
         a = []
@@ -210,7 +238,7 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
       const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
+      know(type as EventType<unknown>)
       let s = subs.get(key)
       if (!s) {
         s = new Set()
@@ -264,8 +292,14 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
       return Array.from(typeByTag.values())
     },
     note(type: EventType<unknown>): void {
-      const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type)
+      know(type)
+    },
+    lookup(name: string): EventType<unknown> | undefined {
+      return byName.get(name) ?? undefined
+    },
+    nameTakenByOther(type: EventType<unknown>): boolean {
+      const held = byName.get(type.name)
+      return held !== undefined && held !== type
     },
     takePending(): PendingEvents {
       const taken = pending

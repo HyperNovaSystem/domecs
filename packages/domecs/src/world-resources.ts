@@ -63,6 +63,16 @@ export function createResourceState(recordChange: (name: string) => void) {
     recordChange(type.name)
   }
 
+  /** Register `type` (as first use would) — caller has checked conflicts. */
+  function register(type: ResourceType<unknown>): void {
+    require(type)
+  }
+
+  /** The registered resource type named `name`, if any. */
+  function lookup(name: string): ResourceType<unknown> | undefined {
+    return registry.get(name)
+  }
+
   function types(): ResourceType<unknown>[] {
     return Array.from(registry.values())
   }
@@ -118,6 +128,8 @@ export function createResourceState(recordChange: (name: string) => void) {
     markChanged,
     types,
     describe,
+    register,
+    lookup,
     snapshotValues,
     validateSnapshot,
     clearForRestore,
