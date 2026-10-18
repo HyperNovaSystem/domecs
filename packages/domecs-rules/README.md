@@ -50,9 +50,15 @@ def's name is not installed and is reported under that name. Number literals
 too large for a double and unknown string escapes (`\q`) are parse errors.
 
 `dt` for a `fixed` rule is the fixed step, but `time` is the frame's elapsed
-time, the same in every fixed sub-step of a frame. `sin`/`cos` use
-`Math.sin`/`Math.cos`, which are not bit-identical across JS engines (SPEC
-§8): avoid them in rules that must replay identically elsewhere.
+time, the same in every fixed sub-step of a frame.
+
+Every function is bit-reproducible: a rule computes the same bits in Node,
+Electron and every browser. `sin`/`cos` evaluate with `dmath` from
+`@domecs/core` (a musl libm port, < 1 ulp; since 2.1 — 2.0 used
+`Math.sin`/`Math.cos`, which differ by up to 1 ulp between engines, so 2.1
+results can differ from 2.0 by that much once). `min`, `max`, `clamp`, `abs`
+and `floor` are exact, and `random()` draws from the world's seeded RNG
+(SPEC §8).
 
 Expressions are compiled once to closures, and a rule skips write staging
 when no action reads a field an earlier action wrote. A simple rule over 5k

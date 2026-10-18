@@ -21,7 +21,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -41,7 +41,7 @@ if (!existsSync(distEntry)) {
   console.error('[bench] Build @domecs/core first:  pnpm --filter @domecs/core build')
   process.exit(1)
 }
-const { createWorld, defineComponent, entry, OnChanged, hashSnapshot, canonicalSnapshot } = await import(
+const { createWorld, defineComponent, entry, OnChanged, hashSnapshot, canonicalSnapshot, dmath } = await import(
   pathToFileURL(distEntry).href
 )
 
@@ -108,6 +108,9 @@ if (workload === 'all' || workload === 'hash') {
   // Fixed at 1000 entities: the spec §4.1 cost target (≤ 2 ms, informational)
   // is stated for a 1000-entity snapshot.
   record(runHash({ entityCount: 1_000, repeats: 50 }))
+}
+if (workload === 'all' || workload === 'dmath') {
+  record(runDmath({ calls: 1_000_000, repeats: 15 }))
 }
 if (workload === 'all' || workload === 'windowed') {
   record(
@@ -411,6 +414,62 @@ function runHash({ entityCount, repeats }) {
     targetP50Ms,
     withinTarget: p50 <= targetP50Ms,
     deterministic: stable,
+  }
+}
+
+/**
+ * O-75 / spec §4.2 test 5: `dmath.sin` / `dmath.cos` (musl port) vs the
+ * engine's `Math.sin` / `Math.cos` over the same inputs: 80% in the
+ * everyday range [-4π, 4π], 20% in [-1e5, 1e5] (multi-step reduction).
+ * Target: dmath within 3× of Math (informational, not a gate). Each sample
+ * times `calls` calls; the checksum keeps the JIT from dropping the loop.
+ */
+function runDmath({ calls, repeats }) {
+  const xs = new Float64Array(calls)
+  let s = 0x9e3779b9
+  for (let i = 0; i < calls; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    const u = s / 0x100000000
+    xs[i] = i % 5 === 0 ? (u * 2 - 1) * 1e5 : (u * 2 - 1) * 4 * Math.PI
+  }
+  const time = (fn) => {
+    let sum = 0
+    for (let i = 0; i < calls; i++) sum += fn(xs[i])
+    const samples = []
+    for (let r = 0; r < repeats; r++) {
+      const t0 = performance.now()
+      for (let i = 0; i < calls; i++) sum += fn(xs[i])
+      samples.push(performance.now() - t0)
+    }
+    return { ...percentiles(samples), sum }
+  }
+  const rows = {}
+  for (const name of ['sin', 'cos']) {
+    // interleave so neither side gets a warmer JIT or quieter host
+    const d1 = time(dmath[name])
+    const m1 = time(Math[name])
+    const d2 = time(dmath[name])
+    const m2 = time(Math[name])
+    const dP50 = Math.min(d1.p50, d2.p50)
+    const mP50 = Math.min(m1.p50, m2.p50)
+    rows[name] = {
+      dmathNsPerCall: (dP50 * 1e6) / calls,
+      mathNsPerCall: (mP50 * 1e6) / calls,
+      ratio: dP50 / mP50,
+      checksum: d1.sum + m1.sum,
+    }
+  }
+  const targetRatio = 3
+  return {
+    workload: 'dmath',
+    engine: 'domecs',
+    calls,
+    repeats,
+    p50Ms: rows.sin.dmathNsPerCall * calls / 1e6,
+    sin: rows.sin,
+    cos: rows.cos,
+    targetRatio,
+    withinTarget: rows.sin.ratio <= targetRatio && rows.cos.ratio <= targetRatio,
   }
 }
 

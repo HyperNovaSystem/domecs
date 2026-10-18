@@ -825,6 +825,63 @@ assert.equal(canonicalJson({ vx: -0 }), '{"vx":-0}')
 assert.equal(JSON.stringify({ vx: -0 }), '{"vx":0}')
 ```
 
+### Deterministic math
+
+`Math.sin` and `Math.cos` are implementation-approximated under ECMA-262, and
+engine builds disagree by up to 1 ulp (O-75; SPEC §8). `dmath` returns the
+same bits on every engine: `sin` and `cos` are a straight-line port of musl
+libm (generic C, non-FMA, < 1 ulp from the true result; ±0, ±∞, NaN and
+subnormals per C99 Annex F; huge arguments reduced exactly). `sqrt` is
+`Math.sqrt`, which IEEE-754 already makes correctly rounded.
+
+```ts
+const dmath: Readonly<{
+  sin(x: number): number
+  cos(x: number): number
+  sqrt(x: number): number   // = Math.sqrt
+}>
+```
+
+- Authoritative systems call `dmath.sin`/`dmath.cos`, never `Math.sin`/
+  `Math.cos` (or any other platform transcendental). The arithmetic
+  operators, `Math.sqrt`, `Math.floor`, `Math.round`, `Math.abs`,
+  `Math.min` and `Math.max` are exact and need no wrapper.
+- `@domecs/rules` evaluates `sin()`/`cos()` with `dmath`, so rule outputs
+  are bit-reproducible with no author action.
+- `atan2`, `hypot` and `pow` join in 2.2; `tan`, `atan`, `exp` and `log` are
+  added on demand.
+
+```ts doctest name=deterministic-math
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, dmath, entry, hashSnapshot } from '@domecs/core'
+
+const Orbit = defineComponent<{ angle: number; x: number; y: number }>('DmOrbit', {
+  defaults: { angle: 0, x: 0, y: 0 },
+})
+
+function run(): string {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4], fixedStep: 1 / 60 })
+  w.system('orbit', { schedule: 'fixed', query: [Orbit] }, ({ entities }) => {
+    for (const e of entities) {
+      const o = w.getComponent(e.id, Orbit)!
+      o.angle += 0.05
+      o.x = 10 * dmath.cos(o.angle) // not Math.cos: identical bits in Node, Electron, browsers
+      o.y = 10 * dmath.sin(o.angle)
+      w.markChanged(e.id, Orbit)
+    }
+  })
+  w.spawn([entry(Orbit, { angle: 0, x: 10, y: 0 })])
+  for (let i = 0; i < 600; i++) w.step(1 / 60)
+  return hashSnapshot(w.snapshot(), { includeChanges: true })
+}
+
+assert.equal(run(), run())
+assert.equal(dmath.sin(Math.PI / 2), 1)
+assert.equal(dmath.cos(Math.PI), -1)
+assert.ok(Object.is(dmath.sin(-0), -0))
+assert.equal(dmath.sqrt(2), Math.sqrt(2))
+```
+
 ### Build identity
 
 Every package exports `BUILD_ID: string` (ED-15). It is `'dev'` in source and

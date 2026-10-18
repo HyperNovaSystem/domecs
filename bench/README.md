@@ -15,6 +15,7 @@ interpretation.
 | 3 | **Windowed projection** | `windowed` | 50-row window over large set |
 | 4 | **Snapshot / restore** | `snapshot` | Snapshot size/time + determinism |
 | 4b | **Snapshot hash** | `hash` | `hashSnapshot` (canonical JSON + FNV-1a-64) over a 1000-entity snapshot |
+| 4c | **Deterministic math** | `dmath` | `dmath.sin`/`dmath.cos` vs `Math.sin`/`Math.cos`, 1M calls |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
 | 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
 
@@ -76,6 +77,11 @@ pnpm bench:write
   row reports `canonicalBytes`, `targetP50Ms` (2 ms, the spec §4.1 target;
   informational, not a gate), `withinTarget`, and `deterministic` (every
   repeat produced the same hash).
+- **dmath workload (O-75):** 1M seeded inputs (80% in [-4π, 4π], 20% in
+  [-1e5, 1e5]), each function timed twice interleaved with its `Math.*`
+  counterpart, 15 samples per pass; the row reports ns/call and the
+  `dmath ÷ Math` p50 ratio per function, `targetRatio` (3×, spec §4.2 test 5;
+  informational, not a gate) and `withinTarget`.
 - **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).
@@ -121,6 +127,18 @@ On the same host `JSON.stringify` of that snapshot takes ~1.0 ms, so the
 serialization. The measured split is ~3 ms for `canonicalSnapshot` (about a
 third of it `Number::toString`) and ~1 ms for FNV-1a-64 over the text.
 Recorded as informational (spec §4.1); revisit on the reference host.
+
+## dmath workload (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-18)
+
+`node --expose-gc bench/run.mjs --workload dmath`, three runs:
+
+| Function | `dmath` ns/call | `Math` ns/call | ratio | target |
+|----------|-----------------|----------------|-------|--------|
+| `sin` | 63.4–64.5 | 54.3–54.5 | 1.16–1.19× | ≤ 3× (met) |
+| `cos` | 65.7–65.9 | 54.3 | 1.21× | ≤ 3× (met) |
+
+Both sides are called through the same function-value loop, so the absolute
+numbers include call overhead; the ratio is the figure of merit.
 
 ## Status
 

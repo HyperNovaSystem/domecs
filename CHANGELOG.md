@@ -29,7 +29,8 @@ peer ranges still resolve.
   packages as `domecs-<pkg>-<buildId>.tgz`, and writes `manifest.json`
   (`version`, `buildId`, `gitSha`, `dirty`, `packedAt`, per-package `file`,
   `integrity`, `buildId`). Never publishes.
-- `bench`: `hash` workload (1000-entity snapshot, strict hash).
+- `bench`: `hash` workload (1000-entity snapshot, strict hash); `dmath`
+  workload (`dmath.sin`/`cos` vs `Math.sin`/`cos`, informational ≤ 3×).
 - `@domecs/persist`: field-level diff (G9, O-31 diff half).
   `diffSnapshots(prev, next, { fields: true })` adds `componentsAdded`,
   `componentsRemoved`, `fieldChanges` and `resourceChanges` (dotted paths,

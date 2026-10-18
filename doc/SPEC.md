@@ -1,6 +1,6 @@
 # DOMECS — Specification v1.0
 
-**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 2.0.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 2.0.0; `@domecs/sprites` and `@domecs/worker` are planned and do not exist yet (the once-planned `@domecs/math` is superseded by `dmath` in `@domecs/core`, 2.1). Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -38,6 +38,8 @@ Planned (do not exist yet):
 @domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
 @domecs/worker         — off-main-thread simulation host
 ```
+
+Deterministic math is not a separate package: `@domecs/core` exports `dmath` (2.1; §8). The `@domecs/math` package earlier drafts planned will not ship.
 
 ### Module dependency DAG
 
@@ -757,7 +759,8 @@ This relies on:
 - `world.rand` is the only PRNG used in authoritative systems.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
 - Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, `selectViews`, `countEntities`, and `iterEntitiesWith` alike — regardless of the order entities joined a query or archetypes were created. `Where` predicates are evaluated in the same order, so a predicate with side effects makes the same calls. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
-- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
+- **Transcendentals go through `dmath` (O-75).** `Math.sin`, `Math.cos`, `Math.tan`, `Math.atan2`, `Math.exp`, `Math.log`, `Math.pow`, `Math.hypot` and the other platform transcendentals are implementation-approximated under ECMA-262 and differ by up to 1 ulp between engine builds (Node 24 and Electron 44 disagree on thousands of inputs per 200k). Authoritative systems use `dmath` from `@domecs/core` instead: `dmath.sin` and `dmath.cos` are a straight-line port of musl libm (generic C, non-FMA) and return the same bits on every ECMA-262 engine; `dmath.sqrt` is `Math.sqrt`. `@domecs/rules` does this automatically: `sin()`/`cos()` evaluate with `dmath` from 2.1 (`atan2`/`hypot`/`pow` join in 2.2). `Math.sqrt`, the arithmetic operators, `Math.floor`, `Math.round`, `Math.abs`, `Math.min` and `Math.max` are exact under ECMA-262 / IEEE-754 and need no wrapper.
+- **Runtime stamp.** Determinism holds per runtime build until every transcendental goes through `dmath`. Rules guarantee that; hand-written JS systems may not, so a host comparing runs across runtimes stamps its runtime identity (engine and version, arch, platform) plus each package's `BUILD_ID`.
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
 - **Equality is by hash (O-11).** "Same state" means equal `hashSnapshot` (§7.1 "Canonical form"): canonical JSON with sorted keys and a lossless `-0`, hashed with FNV-1a-64. Restore-equivalence checks (fork vs live, checkpoints, keyframes) use the strict form, `hashSnapshot(snap, { includeChanges: true })`. `JSON.stringify(snapshot())` is not an equality test: it depends on component insertion order and writes `-0` as `0`.

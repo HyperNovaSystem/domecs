@@ -162,6 +162,9 @@ components are `markChanged`.
   strict form is the restore-equivalence key). Not `JSON.stringify`: it
   depends on component insertion order and writes `-0` as `0`. Serialize
   keyframes/forks with `canonicalJson` (lossless `-0`)
+- [ ] Cross-runtime determinism: authoritative systems use `dmath.sin` /
+  `dmath.cos` from `@domecs/core`, never `Math.sin` / `Math.cos` (they differ
+  by up to 1 ulp between engines); rules do this automatically
 - [ ] Agent loop: `reset → observe → act → step → snapshot` is enough for the task
 - [ ] No invented methods; imports resolve from published `@domecs/*` only
 

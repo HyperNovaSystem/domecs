@@ -84,6 +84,9 @@ for (const entity of world.query(Has(Position)).entities) {
   "same state" means equal hashes (the strict `includeChanges` form for live
   vs fork). `canonicalJson` (sorted keys, lossless `-0`) for keyframes,
   `hashEntities` to localize a divergence, `hashValue` for any plain data.
+- `dmath.sin` / `dmath.cos` / `dmath.sqrt` — bit-reproducible math (a musl
+  libm port; `sqrt` is `Math.sqrt`). Deterministic systems use these instead
+  of `Math.sin` / `Math.cos`, which differ by up to 1 ulp between engines.
 - `BUILD_ID` — `'dev'` in source; stamped `<version>+g<sha>[-dirty]` in packed
   builds (every `@domecs/*` package exports it).
 - `world.use(plugin)` — install plugins.
