@@ -94,6 +94,30 @@ describe('canonicalJson', () => {
     expect(canonicalJson({ a: shared, b: [shared] })).toBe('{"a":{"k":1},"b":[{"k":1}]}')
   })
 
+  it('applies toJSON once per value, as JSON.stringify does', () => {
+    // A toJSON that returns `this` (or another toJSON-bearing instance) is
+    // serialized as an object; JSON.stringify never re-applies toJSON to the
+    // result, so neither may canonicalJson (it used to recurse until the
+    // stack overflowed).
+    class Self {
+      b = 1
+      a = 2
+      toJSON(): unknown {
+        return this
+      }
+    }
+    class Wrap {
+      toJSON(): unknown {
+        return new Self()
+      }
+    }
+    expect(canonicalJson({ s: new Self() })).toBe('{"s":{"a":2,"b":1}}')
+    expect(canonicalJson({ w: new Wrap() })).toBe('{"w":{"a":2,"b":1}}')
+    expect(canonicalJson([new Self()])).toBe('[{"a":2,"b":1}]')
+    // The result's children still get their own toJSON.
+    expect(canonicalJson({ d: new Date(0) })).toBe(JSON.stringify({ d: new Date(0) }))
+  })
+
   it('throws a TypeError for a top-level value with no JSON text', () => {
     expect(() => canonicalJson(undefined)).toThrow(TypeError)
     expect(() => canonicalJson(() => 1)).toThrow(TypeError)

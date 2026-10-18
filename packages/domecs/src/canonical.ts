@@ -89,8 +89,10 @@ export function canonicalJson(value: unknown): string {
 
 // Returns undefined when the value has no JSON text (omitted in objects).
 // `stack` holds the containers being written (cycle detection; depth is
-// small, so a linear scan beats a Set).
-function write(key: string | number, v: unknown, stack: object[]): string | undefined {
+// small, so a linear scan beats a Set). `toJSON` is false for a value that
+// a `toJSON` call just returned: JSON.stringify applies it once per value,
+// so a `toJSON` returning `this` serializes the object instead of recursing.
+function write(key: string | number, v: unknown, stack: object[], toJSON = true): string | undefined {
   switch (typeof v) {
     case 'string':
       return quote(v)
@@ -111,8 +113,8 @@ function write(key: string | number, v: unknown, stack: object[]): string | unde
   const proto: unknown = Object.getPrototypeOf(obj)
   // Plain objects and arrays (the snapshot case) skip the exotic checks.
   if (proto !== Object.prototype && proto !== Array.prototype && proto !== null) {
-    if (typeof (v as { toJSON?: unknown }).toJSON === 'function') {
-      return write(key, (v as { toJSON: (k: string) => unknown }).toJSON(String(key)), stack)
+    if (toJSON && typeof (v as { toJSON?: unknown }).toJSON === 'function') {
+      return write(key, (v as { toJSON: (k: string) => unknown }).toJSON(String(key)), stack, false)
     }
     if (v instanceof Number || v instanceof String || v instanceof Boolean) {
       return write(key, v.valueOf(), stack)
