@@ -15,6 +15,13 @@ export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
 interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
   query?: QueryDef
   priority?: number
+  /**
+   * Secondary sort key within a priority (default 0; finite). Run order in a
+   * mode is priority, then order, then registration index. Lets a library
+   * place its systems deterministically regardless of when they were
+   * (re)registered (SPEC §3; O-76).
+   */
+  order?: number
   enabled?: () => boolean
   state?: State
   /**
@@ -126,6 +133,8 @@ export interface CompiledSystem {
   pendingFn?: System
   schedule: SystemSchedule
   priority: number
+  /** Secondary sort key within a priority (default 0). */
+  order: number
   enabled: boolean
   state: unknown
   query?: QueryResult
@@ -174,7 +183,11 @@ export interface Scheduler {
 }
 
 function comparator(a: CompiledSystem, b: CompiledSystem): number {
-  return a.priority - b.priority || a.registrationIndex - b.registrationIndex
+  return (
+    a.priority - b.priority ||
+    a.order - b.order ||
+    a.registrationIndex - b.registrationIndex
+  )
 }
 
 const CHANGE_KINDS: ReadonlySet<QueryNode['kind']> = new Set([
@@ -231,6 +244,12 @@ export function createScheduler(
     register(name, def, fn): SystemHandle {
       const schedule = def.schedule ?? 'tick'
       const priority = def.priority ?? 0
+      const order = def.order ?? 0
+      if (typeof order !== 'number' || !Number.isFinite(order)) {
+        throw new Error(
+          `domecs: system "${name}" order=${String(order)} must be a finite number (SPEC §3 ordering: priority, then order, then registration index).`,
+        )
+      }
 
       if (def.schedule === 'reactive') {
         // defensive — unrepresentable in TS, retained for untyped JS callers
@@ -275,6 +294,7 @@ export function createScheduler(
         fn,
         schedule,
         priority,
+        order,
         enabled: true,
         state: def.state,
         fixedDivisor,

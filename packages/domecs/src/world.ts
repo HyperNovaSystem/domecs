@@ -1738,6 +1738,8 @@ export function createWorld(options: WorldOptions = {}): World {
           name: s.name,
           schedule: s.schedule,
           enabled: s.enabled,
+          priority: s.priority,
+          order: s.order,
         })),
       )
 

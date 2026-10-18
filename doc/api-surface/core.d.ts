@@ -833,6 +833,10 @@ export interface WorldManifest {
         readonly name: string;
         readonly schedule: SystemSchedule;
         readonly enabled: boolean;
+        /** Primary sort key within a schedule (lower runs first). */
+        readonly priority: number;
+        /** Secondary sort key within a priority (default 0; SPEC §3). */
+        readonly order: number;
     }[];
     readonly plugins: PluginManifestEntry[];
     readonly capabilities: string[];
@@ -1233,6 +1237,13 @@ export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive';
 interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
     query?: QueryDef;
     priority?: number;
+    /**
+     * Secondary sort key within a priority (default 0; finite). Run order in a
+     * mode is priority, then order, then registration index. Lets a library
+     * place its systems deterministically regardless of when they were
+     * (re)registered (SPEC §3; O-76).
+     */
+    order?: number;
     enabled?: () => boolean;
     state?: State;
     /**
@@ -1308,6 +1319,8 @@ export interface CompiledSystem {
     pendingFn?: System;
     schedule: SystemSchedule;
     priority: number;
+    /** Secondary sort key within a priority (default 0). */
+    order: number;
     enabled: boolean;
     state: unknown;
     query?: QueryResult;

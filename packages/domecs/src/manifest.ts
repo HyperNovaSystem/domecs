@@ -33,6 +33,10 @@ export interface WorldManifest {
     readonly name: string
     readonly schedule: SystemSchedule
     readonly enabled: boolean
+    /** Primary sort key within a schedule (lower runs first). */
+    readonly priority: number
+    /** Secondary sort key within a priority (default 0; SPEC §3). */
+    readonly order: number
   }[]
   readonly plugins: PluginManifestEntry[]
   readonly capabilities: string[]
