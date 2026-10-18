@@ -722,6 +722,120 @@ interface SnapshotOptions {
 }
 ```
 
+### Determinism tools
+
+Equality between worlds is by **canonical hash** (O-11; SPEC §7.1
+"Canonical form", §8). `JSON.stringify(snapshot())` is not an equality test:
+component key order follows archetype insertion order, and it writes `-0` as
+`0`.
+
+```ts
+/** Canonical JSON of plain data: sorted keys (UTF-16 code unit), JSON value
+ *  semantics, `-0` written as `-0`. NaN/±Infinity, BigInt and cycles throw
+ *  TypeError naming the path ("entities[3].components.Body.vx"). */
+function canonicalJson(value: unknown): string
+
+interface CanonicalOptions {
+  readonly includeChanges?: boolean  // add `changes` (strict restore-equivalence key)
+  readonly includeMeta?: boolean     // add `meta`
+}
+/** Canonical JSON of the simulation state: every top-level field except
+ *  `version`, `meta` and `changes` (unless the options add them). */
+function canonicalSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string
+/** FNV-1a-64 of canonicalSnapshot's UTF-8 bytes: 16 lowercase hex chars. */
+function hashSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string
+/** Entity id (ascending) → hash of that record's canonical `components`. */
+function hashEntities(snap: WorldSnapshot): Map<Entity, string>
+/** FNV-1a-64 of canonicalJson(value) — metric results, act logs, doc versions. */
+function hashValue(value: unknown): string
+const HASH_ALGORITHM: 'fnv1a64'
+```
+
+- **Strict vs default.** Every restore-equivalence check — fork vs live,
+  checkpoints, keyframe verification — uses
+  `hashSnapshot(snap, { includeChanges: true })`: `changes` decides what
+  change-gated systems do next. The default hash (no `changes`) is for cache
+  keys and UI.
+- **Keyframes.** Serialize with `canonicalJson`, not `JSON.stringify`, so a
+  `-0` survives the round trip; `JSON.parse(canonicalJson(snap))` restores
+  to a world that continues exactly like one restored from `snap`.
+  `@domecs/persist` `save()` still writes `JSON.stringify` (follow-up).
+- The hash is not cryptographic. All five functions are pure and identical
+  across runs and JS engines.
+
+```ts doctest name=determinism-hash
+import { strict as assert } from 'node:assert'
+import {
+  canonicalJson,
+  createWorld,
+  defineComponent,
+  entry,
+  hashEntities,
+  hashSnapshot,
+  type World,
+  type WorldSnapshot,
+} from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('DtPos', { defaults: { x: 0 } })
+const Vel = defineComponent<{ vx: number }>('DtVel', { defaults: { vx: 0 } })
+
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4], fixedStep: 1 / 60 })
+  w.system('move', { schedule: 'fixed', query: [Pos, Vel] }, ({ entities }) => {
+    for (const e of entities) {
+      const p = w.getComponent(e.id, Pos)!
+      const v = w.getComponent(e.id, Vel)!
+      p.x += v.vx
+      if (p.x > 5 || p.x < -5) v.vx = -v.vx
+      w.markChanged(e.id, Pos)
+    }
+  })
+  return w
+}
+
+// Same state, different component-add order: JSON.stringify differs, the hash does not.
+const a = build()
+a.addComponent(a.spawn([entry(Pos, { x: 0 })]), Vel, { vx: 1 })
+const b = build()
+b.addComponent(b.spawn([entry(Vel, { vx: 1 })]), Pos, { x: 0 })
+assert.notEqual(JSON.stringify(a.snapshot()), JSON.stringify(b.snapshot()))
+assert.equal(hashSnapshot(a.snapshot()), hashSnapshot(b.snapshot()))
+
+// Fork from a canonical keyframe; compare strict hashes while both run.
+const keyframe = canonicalJson(a.snapshot())
+const fork = build()
+fork.restore(JSON.parse(keyframe) as WorldSnapshot)
+for (let i = 0; i < 120; i++) {
+  a.step(1 / 60)
+  fork.step(1 / 60)
+}
+const strict = { includeChanges: true }
+assert.equal(hashSnapshot(fork.snapshot(), strict), hashSnapshot(a.snapshot(), strict))
+
+// hashEntities points at the entity that diverged.
+const [id] = fork.listEntities([Pos])
+fork.getComponent(id!, Pos)!.x += 0.5
+const live = hashEntities(a.snapshot())
+const forked = hashEntities(fork.snapshot())
+assert.deepEqual([...live.keys()].filter((e) => live.get(e) !== forked.get(e)), [id])
+
+// -0 survives canonicalJson; JSON.stringify drops the sign.
+assert.equal(canonicalJson({ vx: -0 }), '{"vx":-0}')
+assert.equal(JSON.stringify({ vx: -0 }), '{"vx":0}')
+```
+
+### Build identity
+
+Every package exports `BUILD_ID: string` (ED-15). It is `'dev'` in source and
+workspace builds; `scripts/pack-for-studio.mjs` stamps the packed
+`dist/build-id.js` with `'<version>+g<sha7>[-dirty]'`; a published build
+carries the plain version. Hosts record it next to their runtime identity, so
+two packs of the same version stay distinguishable.
+
+```ts
+import { BUILD_ID } from '@domecs/core'   // also @domecs/dom, input, inspector, persist, rules, scene
+```
+
 ### Plugin
 
 ```ts

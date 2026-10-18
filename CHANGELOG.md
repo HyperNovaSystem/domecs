@@ -12,6 +12,35 @@ All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the
 determinism foundation and build identity for the Studio harness. `^2.0.0`
 peer ranges still resolve.
 
+#### Added
+
+- `@domecs/core`: canonical snapshot hash (O-11). `canonicalJson(value)` —
+  `JSON.stringify` value semantics with object keys sorted by UTF-16 code
+  unit, `-0` kept as the literal `-0`, and a `TypeError` naming the path for
+  `NaN`/`±Infinity`, BigInt and cycles. `canonicalSnapshot(snap, options?)`,
+  `hashSnapshot(snap, options?)` (FNV-1a-64, 16 hex chars; `version`, `meta`
+  and `changes` excluded unless `includeMeta`/`includeChanges`),
+  `hashEntities(snap)`, `hashValue(value)`, `HASH_ALGORITHM` (`'fnv1a64'`),
+  type `CanonicalOptions`. SPEC §7.1 "Canonical form", §8.
+- Every package: `BUILD_ID: string` export (`'dev'` in source; stamped by
+  `scripts/pack-for-studio.mjs`, plain version when published).
+- `scripts/pack-for-studio.mjs` (`pnpm pack:studio`): builds, stamps
+  `BUILD_ID` and a `<version>+g<sha>[-dirty]` package version, packs the seven
+  packages as `domecs-<pkg>-<buildId>.tgz`, and writes `manifest.json`
+  (`version`, `buildId`, `gitSha`, `dirty`, `packedAt`, per-package `file`,
+  `integrity`, `buildId`). Never publishes.
+- `bench`: `hash` workload (1000-entity snapshot, strict hash).
+
+#### Changed
+
+- **Behavior change (determinism checks):** "same state" now means equal
+  `hashSnapshot(snap, { includeChanges: true })`, not equal
+  `JSON.stringify(snapshot())` (AGENTS.md checklist, SPEC §8). Canonical JSON
+  keeps `-0`, so two snapshots that differ only by the sign of a zero now
+  compare unequal — they can have different futures (`1 / v`, `atan2`,
+  `Math.sign`). `@domecs/persist` `save()` still serializes with
+  `JSON.stringify`, which writes `-0` as `0`.
+
 ## [2.0.0] — 2026-10-16
 
 All seven `@domecs/*` packages move to 2.0.0, and `@domecs/scene` and

@@ -157,9 +157,11 @@ components are `markChanged`.
 ## Verification checklist before claiming “it works”
 
 - [ ] Headless: `createWorld({ headless: true })` + `step`/`stepOnce` tests pass
-- [ ] Determinism: same seed + same acts → identical `JSON.stringify(snapshot())`
-  (key-order-stable today; a canonical serializer/hash is tracked as ledger
-  O-11 — switch to it when it ships)
+- [ ] Determinism: same seed + same acts → identical
+  `hashSnapshot(snapshot(), { includeChanges: true })` (`@domecs/core`; the
+  strict form is the restore-equivalence key). Not `JSON.stringify`: it
+  depends on component insertion order and writes `-0` as `0`. Serialize
+  keyframes/forks with `canonicalJson` (lossless `-0`)
 - [ ] Agent loop: `reset → observe → act → step → snapshot` is enough for the task
 - [ ] No invented methods; imports resolve from published `@domecs/*` only
 

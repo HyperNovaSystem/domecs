@@ -86,10 +86,14 @@ bridge.reset()                         // episode boundary
 - **Feed coalesce:** queue → coalesce by key → one event per frame
 - **Prefs vs world:** operator prefs outside snapshot; sim state inside
 - **History vs saves:** `createSnapshotHistory` for undo; `save`/`load` for named slots
+- **Equality / forks:** `hashSnapshot(snap, { includeChanges: true })` for live vs
+  fork; `hashEntities` localizes a divergence; `canonicalJson` for keyframes
 
 ## Done when
 
 - [ ] App runs headless with deterministic seed
+- [ ] Same seed + same acts → equal `hashSnapshot(snap, { includeChanges: true })`
+  (never compare `JSON.stringify(snapshot())`; keyframes use `canonicalJson`)
 - [ ] Agent can `observe` → `act` → `step` → `snapshot` without private APIs
 - [ ] No methods invented outside `@domecs/*` public surface
 - [ ] Tests cover at least one full episode + reset

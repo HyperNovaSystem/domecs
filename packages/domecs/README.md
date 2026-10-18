@@ -80,6 +80,12 @@ for (const entity of world.query(Has(Position)).entities) {
   `{ accepted, consumedTurn, reason?, events, snapshot? }` result; the verdict
   comes from an optional `opts.resolve`.
 - `world.snapshot()` / `world.restore(...)` — serialize and restore world state.
+- `hashSnapshot(snap, { includeChanges: true })` — canonical FNV-1a-64 hash;
+  "same state" means equal hashes (the strict `includeChanges` form for live
+  vs fork). `canonicalJson` (sorted keys, lossless `-0`) for keyframes,
+  `hashEntities` to localize a divergence, `hashValue` for any plain data.
+- `BUILD_ID` — `'dev'` in source; stamped `<version>+g<sha>[-dirty]` in packed
+  builds (every `@domecs/*` package exports it).
 - `world.use(plugin)` — install plugins.
 
 ## Related packages
