@@ -166,6 +166,26 @@ describe('rules — stable ordering option (E3.2)', () => {
     expect(() => installRules(w, [], resolveOrd, { order: 'stable', orderBase: Infinity })).toThrow(/orderBase/)
   })
 
+  // fix(E3): orderBase + i must stay exact, or two rules share an order key
+  // and tie-break by registration index again (the O-76 hazard, silently).
+  it('rejects an orderBase so large that orderBase + i would collide', () => {
+    const w = createWorld({ headless: true })
+    const defs = [digit('a', 1), digit('b', 2), digit('c', 3)]
+    // MAX_SAFE_INTEGER + 1 === MAX_SAFE_INTEGER + 2 in doubles.
+    expect(() => installRules(w, defs, resolveOrd, { order: 'stable', orderBase: Number.MAX_SAFE_INTEGER })).toThrow(/orderBase/)
+    expect(() => installRules(w, defs, resolveOrd, { order: 'stable', orderBase: -(2 ** 53) })).toThrow(/orderBase/)
+    expect(ruleSystems(w)).toHaveLength(0)
+  })
+
+  it('accepts orderBase up to ±2^51 with distinct, increasing keys', () => {
+    for (const orderBase of [2 ** 51, -(2 ** 51), 2 ** 51 - 0.5]) {
+      const w = createWorld({ headless: true })
+      installRules(w, [digit('a', 1), digit('b', 2), digit('c', 3), digit('d', 4)], resolveOrd, { order: 'stable', orderBase })
+      const keys = ruleSystems(w).map((s) => s.order)
+      for (let i = 1; i < keys.length; i++) expect(keys[i]!).toBeGreaterThan(keys[i - 1]!)
+    }
+  })
+
   describe('fork contract: live world after updates == fresh build restored', () => {
     const fixedHalf: RuleDef = {
       name: 'half', schedule: 'fixed', query: ['OrdP'], actions: [{ set: 'OrdP.x', expr: 'OrdP.x * 0.5 + 1' }],

@@ -346,7 +346,8 @@ export interface InstallRulesOptions {
      */
     readonly order?: 'registration' | 'stable';
     /**
-     * First order key used in 'stable' mode (finite). Default 1, so systems
+     * First order key used in 'stable' mode (finite, |orderBase| <= 2^51 so
+     * every key orderBase + i stays exact). Default 1, so systems
      * with the default order 0 run before rules of the same priority. Give
      * each stable handle on one world its own range.
      */
@@ -356,7 +357,7 @@ export interface InstallRulesOptions {
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
  *
  * @throws Error when `options.order` is not 'registration' or 'stable', or
- *   `options.orderBase` is not a finite number.
+ *   `options.orderBase` is not a finite number with |orderBase| <= 2^51.
  */
 export declare function installRules(world: World, defs: RuleDef[], resolve: (name: string) => ComponentType<any> | undefined, options?: InstallRulesOptions): RulesHandle;
 

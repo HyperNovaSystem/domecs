@@ -1487,7 +1487,7 @@ function installRules(
   defs: RuleDef[],
   resolve: (name: string) => ComponentType<any> | undefined,
   options?: InstallRulesOptions,
-): RulesHandle   // throws on an unknown `order` or a non-finite `orderBase`
+): RulesHandle   // throws on an unknown `order`, or an `orderBase` that is not finite or exceeds ±2^51
 
 interface InstallRulesOptions {
   // 'registration' (default, 2.0 behaviour): rules tie-break by registration
@@ -1497,7 +1497,7 @@ interface InstallRulesOptions {
   // `order: orderBase + i`; its run position depends only on
   // (priority, defs order). A def that fails to compile keeps its index.
   readonly order?: 'registration' | 'stable'
-  readonly orderBase?: number   // first order key in 'stable' mode; default 1
+  readonly orderBase?: number   // first order key in 'stable' mode; default 1; |orderBase| <= 2^51
 }
 
 interface RulesHandle {

@@ -75,7 +75,9 @@ const rules = installRules(world, defs, resolve, { order: 'stable' })
 
 Use one stable handle per world, or give each its own `orderBase` range;
 two handles with equal keys tie-break by registration index again. An
-unknown `order` or a non-finite `orderBase` throws. Keep rule priorities in
+unknown `order` throws, as does an `orderBase` that is not finite or exceeds
+±2^51 (beyond that `orderBase + i` is no longer exact and two rules could
+share a key). Keep rule priorities in
 the open band (−100, 100): commands and input at −100, derived transforms
 such as `composeTransforms({ priority: 100 })` at 100 (bands table in SPEC
 §3). `world.describe().systems` reports each rule system's `priority` and

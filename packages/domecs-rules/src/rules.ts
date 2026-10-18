@@ -403,6 +403,9 @@ export interface RulesHandle {
   uninstall(): void
 }
 
+/** Largest |orderBase| for which every key orderBase + i stays exact. */
+const MAX_ORDER_BASE = 2 ** 51
+
 /** Options for {@link installRules}. */
 export interface InstallRulesOptions {
   /**
@@ -416,7 +419,8 @@ export interface InstallRulesOptions {
    */
   readonly order?: 'registration' | 'stable'
   /**
-   * First order key used in 'stable' mode (finite). Default 1, so systems
+   * First order key used in 'stable' mode (finite, |orderBase| <= 2^51 so
+   * every key orderBase + i stays exact). Default 1, so systems
    * with the default order 0 run before rules of the same priority. Give
    * each stable handle on one world its own range.
    */
@@ -427,7 +431,7 @@ export interface InstallRulesOptions {
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
  *
  * @throws Error when `options.order` is not 'registration' or 'stable', or
- *   `options.orderBase` is not a finite number.
+ *   `options.orderBase` is not a finite number with |orderBase| <= 2^51.
  */
 export function installRules(
   world: World,
@@ -440,8 +444,14 @@ export function installRules(
     throw new Error(`@domecs/rules: installRules order must be 'registration' or 'stable', got ${JSON.stringify(mode)}`)
   }
   const orderBase = options.orderBase ?? 1
-  if (typeof orderBase !== 'number' || !Number.isFinite(orderBase)) {
-    throw new Error(`@domecs/rules: installRules orderBase must be a finite number, got ${String(orderBase)}`)
+  // |orderBase| <= 2^51 keeps every key orderBase + i below 2^52, where a
+  // double's spacing is at most 0.5, so consecutive keys stay distinct and
+  // increasing. Past that, e.g. MAX_SAFE_INTEGER + 1 === MAX_SAFE_INTEGER + 2,
+  // two rules would share a key and tie-break by registration index again.
+  if (typeof orderBase !== 'number' || !Number.isFinite(orderBase) || Math.abs(orderBase) > MAX_ORDER_BASE) {
+    throw new Error(
+      `@domecs/rules: installRules orderBase must be a finite number with |orderBase| <= 2^51 (so orderBase + i stays exact), got ${String(orderBase)}`,
+    )
   }
   const active = new Map<string, SystemHandle>()
 
