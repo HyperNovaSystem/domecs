@@ -30,6 +30,13 @@ peer ranges still resolve.
   (`version`, `buildId`, `gitSha`, `dirty`, `packedAt`, per-package `file`,
   `integrity`, `buildId`). Never publishes.
 - `bench`: `hash` workload (1000-entity snapshot, strict hash).
+- `@domecs/persist`: field-level diff (G9, O-31 diff half).
+  `diffSnapshots(prev, next, { fields: true })` adds `componentsAdded`,
+  `componentsRemoved`, `fieldChanges` and `resourceChanges` (dotted paths,
+  canonical order), with `epsilon`, `components` and `limit`/`truncated`
+  options; `firstDivergence(a, b)` returns the first difference (state, then
+  lowest entity id, then resources) or `null`. New types
+  `SnapshotDiffOptions`, `FieldChange`, `ResourceChange`, `Divergence`.
 
 #### Changed
 
@@ -40,6 +47,10 @@ peer ranges still resolve.
   compare unequal — they can have different futures (`1 / v`, `atan2`,
   `Math.sign`). `@domecs/persist` `save()` still serializes with
   `JSON.stringify`, which writes `-0` as `0`.
+- `@domecs/persist`: **behavior change (narrowing)** — `diffSnapshots`
+  compares component bags as data instead of by `JSON.stringify`, so an
+  entity whose components differ only in key order is no longer in
+  `changedEntities`; one whose field went from `0` to `-0` now is.
 
 ## [2.0.0] — 2026-10-16
 

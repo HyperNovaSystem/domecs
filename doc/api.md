@@ -1236,8 +1236,9 @@ function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 ```
 
 **Snapshot history (undo/redo).** `createSnapshotHistory` is an in-memory
-undo/redo ring over `WorldSnapshot`s; `diffSnapshots` is an entity-level diff
-between two snapshots.
+undo/redo ring over `WorldSnapshot`s; `diffSnapshots` diffs two snapshots —
+entity-level by default, field-level with `{ fields: true }` — and
+`firstDivergence` finds the first difference in canonical order.
 
 ```ts
 function createSnapshotHistory(world: World, opts?: SnapshotHistoryOptions): SnapshotHistory
@@ -1263,13 +1264,79 @@ interface SnapshotHistory {
   load(json: string): Result<void, DomecsError>
 }
 
-function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot): SnapshotDiff
+function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot, options?: SnapshotDiffOptions): SnapshotDiff
+
+interface SnapshotDiffOptions {
+  readonly fields?: boolean                 // report components/fields/resources; default false
+  readonly components?: readonly string[]   // restrict field reporting to these components
+  readonly epsilon?: number                 // numbers within epsilon are equal; default 0 (exact, -0 ≠ 0)
+  readonly limit?: number                   // stop after this many field changes; default 10_000
+}
 
 interface SnapshotDiff {
   readonly addedEntities:   readonly Entity[]
   readonly removedEntities: readonly Entity[]
-  readonly changedEntities: readonly Entity[]
+  readonly changedEntities: readonly Entity[]  // compared as data: key order ignored
+  // fields: true only ↓ (ascending entity id, sorted component name, sorted key)
+  readonly componentsAdded?:   ReadonlyArray<{ entity: Entity; component: string }>
+  readonly componentsRemoved?: ReadonlyArray<{ entity: Entity; component: string }>
+  readonly fieldChanges?:      readonly FieldChange[]
+  readonly resourceChanges?:   readonly ResourceChange[]  // a resource on one side only: path ""
+  readonly truncated?:         boolean                    // limit cut reporting short
 }
+
+interface FieldChange {
+  readonly entity: Entity
+  readonly component: string
+  readonly path: string                     // "x", "inv.items[2].qty", '["a-b"]'; "" = whole value
+  readonly before: JsonValue | undefined    // undefined = absent
+  readonly after:  JsonValue | undefined
+}
+interface ResourceChange { readonly resource: string; readonly path: string; readonly before: JsonValue | undefined; readonly after: JsonValue | undefined }
+
+/** First difference: state (seed, tick, scaledTime, nextId, rngRoot, rngStreams,
+ *  fixedBacklog), then the lowest entity id, then resources. null when equal.
+ *  version, meta and changes are not compared. */
+function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null
+
+type Divergence =
+  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' }
+  | { where: 'entity'; entity: Entity; change: 'added' | 'removed' | FieldChange }
+  | { where: 'resource'; change: ResourceChange }
+```
+
+Arrays compare element-wise; a length change is reported as added (`before:
+undefined`) or removed (`after: undefined`) tail elements. `changedEntities`
+switched from `JSON.stringify` to data comparison in 2.1, so key-order-only
+differences are no longer reported (**behaviour change**, narrowing).
+
+```ts doctest name=diff-fields
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { diffSnapshots, firstDivergence } from '@domecs/persist'
+
+const Body = defineComponent<{ x: number; inv: number[] }>('DfBody', { defaults: { x: 0, inv: [] } })
+const w = createWorld({ headless: true })
+const a = w.spawn([entry(Body, { x: 1, inv: [1, 2] })])
+const b = w.spawn([entry(Body, { x: 2, inv: [] })])
+const before = w.snapshot()
+w.getComponent(b, Body)!.x = 5
+w.getComponent(b, Body)!.inv.push(9)
+const after = w.snapshot()
+
+const d = diffSnapshots(before, after, { fields: true })
+assert.deepEqual(d.changedEntities, [b])
+assert.deepEqual(d.fieldChanges, [
+  { entity: b, component: 'DfBody', path: 'inv[0]', before: undefined, after: 9 },
+  { entity: b, component: 'DfBody', path: 'x', before: 2, after: 5 },
+])
+assert.deepEqual(firstDivergence(before, after), {
+  where: 'entity',
+  entity: b,
+  change: { entity: b, component: 'DfBody', path: 'inv[0]', before: undefined, after: 9 },
+})
+assert.equal(firstDivergence(before, before), null)
+assert.ok(a < b)
 ```
 
 ---

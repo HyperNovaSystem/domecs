@@ -9,7 +9,7 @@
 export declare const BUILD_ID: string;
 
 // file: history.d.ts
-import type { DomecsError, Entity, Result, World, WorldSnapshot } from '@domecs/core';
+import type { DomecsError, Entity, JsonValue, Result, World, WorldSnapshot } from '@domecs/core';
 export interface SnapshotHistoryOptions {
     /**
      * Maximum number of checkpoints retained. Once exceeded, the oldest are
@@ -58,21 +58,109 @@ export interface SnapshotHistory {
     load(json: string): Result<void, DomecsError>;
 }
 export declare function createSnapshotHistory(world: World, opts?: SnapshotHistoryOptions): SnapshotHistory;
+/** Options for {@link diffSnapshots}. */
+export interface SnapshotDiffOptions {
+    /** Report component/field/resource changes, not just entity ids. Default false. */
+    readonly fields?: boolean;
+    /**
+     * Restrict field reporting (`fieldChanges`, `componentsAdded`,
+     * `componentsRemoved`) to these component names. The entity-level lists
+     * stay complete.
+     */
+    readonly components?: readonly string[];
+    /** Numbers within epsilon compare equal (absolute). Default 0 (exact, `-0` ≠ `0`). */
+    readonly epsilon?: number;
+    /**
+     * Stop after this many field changes (component fields plus resources)
+     * and set `truncated`. Default 10_000.
+     */
+    readonly limit?: number;
+}
+/** One changed value inside a component. */
+export interface FieldChange {
+    readonly entity: Entity;
+    readonly component: string;
+    /**
+     * Dotted path inside the component value: `"x"`, `"inv.items[2].qty"`; a
+     * key that is not an identifier is written `["key"]`. `""` is the whole
+     * value.
+     */
+    readonly path: string;
+    /** `undefined` = absent. */
+    readonly before: JsonValue | undefined;
+    readonly after: JsonValue | undefined;
+}
+/** One changed value inside a resource (`path` as in {@link FieldChange}). */
+export interface ResourceChange {
+    readonly resource: string;
+    readonly path: string;
+    readonly before: JsonValue | undefined;
+    readonly after: JsonValue | undefined;
+}
 export interface SnapshotDiff {
     /** Entity ids present in `next` but not `prev`. */
     readonly addedEntities: readonly Entity[];
     /** Entity ids present in `prev` but not `next`. */
     readonly removedEntities: readonly Entity[];
-    /** Entity ids in both whose component bag differs (shallow JSON equality). */
+    /**
+     * Entity ids in both whose component bag differs as data (canonical
+     * comparison: key order is ignored, `-0` ≠ `0` unless `epsilon` covers it).
+     */
     readonly changedEntities: readonly Entity[];
+    /** With `fields: true`: components an entity in both snapshots gained. */
+    readonly componentsAdded?: ReadonlyArray<{
+        readonly entity: Entity;
+        readonly component: string;
+    }>;
+    /** With `fields: true`: components an entity in both snapshots lost. */
+    readonly componentsRemoved?: ReadonlyArray<{
+        readonly entity: Entity;
+        readonly component: string;
+    }>;
+    /** With `fields: true`: value changes inside components both sides hold. */
+    readonly fieldChanges?: readonly FieldChange[];
+    /** With `fields: true`: value changes inside resources, and resources added or removed (`path: ""`). */
+    readonly resourceChanges?: readonly ResourceChange[];
+    /** With `fields: true`: whether `limit` cut the field reporting short. */
+    readonly truncated?: boolean;
 }
+/** The first difference {@link firstDivergence} finds. */
+export type Divergence = {
+    readonly where: 'state';
+    readonly key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog';
+} | {
+    readonly where: 'entity';
+    readonly entity: Entity;
+    readonly change: 'added' | 'removed' | FieldChange;
+} | {
+    readonly where: 'resource';
+    readonly change: ResourceChange;
+};
 /**
- * Entity-level diff between two snapshots. `changedEntities` compares each
- * shared entity's component bag by JSON equality — snapshots are JSON-shaped
- * and per-entity key order is archetype-deterministic, so value or
- * composition changes both register. Useful for history timelines / undo UIs.
+ * Diff between two snapshots. Entity-level by default: `changedEntities`
+ * compares each shared entity's component bag as data (key order ignored —
+ * a **behaviour change** from the earlier `JSON.stringify` comparison,
+ * which also reported key-order-only differences).
+ *
+ * With `fields: true` it also walks the values — ascending entity id, then
+ * sorted component name, then sorted key; arrays element-wise, with a
+ * length change reported as added/removed tail elements — and lists
+ * components added/removed, field changes and resource changes, up to
+ * `limit` changes (`truncated` says whether it stopped early). Pure; never
+ * mutates its inputs. Throws `RangeError` for an invalid `epsilon`/`limit`.
  */
-export declare function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot): SnapshotDiff;
+export declare function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot, options?: SnapshotDiffOptions): SnapshotDiff;
+/**
+ * The first difference between two snapshots, in canonical order: the
+ * top-level state fields (`seed`, `tick`, `scaledTime`, `nextId`,
+ * `rngRoot`, `rngStreams`, then `fixedBacklog` with its `fixedStep`), then
+ * the lowest entity id that differs (added, removed, or its first field
+ * change by sorted component name and key; a component present on one side
+ * only is a change at path `""`), then resources by sorted name. `version`,
+ * `meta` and `changes` are not compared (the default `hashSnapshot` scope).
+ * `null` when the snapshots are equal as data. Exact comparison (`-0` ≠ `0`).
+ */
+export declare function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null;
 
 // file: index.d.ts
 /**
@@ -82,7 +170,7 @@ export declare function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot):
 export { load, loadIfPresent, pruneTransientOnlyEntities, save, type LoadOptions, type SaveOptions, } from './persist.js';
 export { migrate, BUILTIN_MIGRATIONS, withBuiltinMigrations, type Migration, type MigrationFailedError, type MigrationMap, } from './migrate.js';
 export { createLocalStorageStorage, createMemoryStorage, type Storage } from './storage.js';
-export { createSnapshotHistory, diffSnapshots, type SnapshotHistory, type SnapshotHistoryOptions, type SnapshotDiff, } from './history.js';
+export { createSnapshotHistory, diffSnapshots, firstDivergence, type SnapshotHistory, type SnapshotHistoryOptions, type SnapshotDiff, type SnapshotDiffOptions, type FieldChange, type ResourceChange, type Divergence, } from './history.js';
 export { registerComponentTypes, serializeComponentType, type ComponentFieldData, type ComponentTypeData, type SchemaProblem, } from './schema.js';
 export { BUILD_ID } from './build-id.js';
 

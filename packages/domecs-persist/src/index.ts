@@ -22,9 +22,14 @@ export { createLocalStorageStorage, createMemoryStorage, type Storage } from './
 export {
   createSnapshotHistory,
   diffSnapshots,
+  firstDivergence,
   type SnapshotHistory,
   type SnapshotHistoryOptions,
   type SnapshotDiff,
+  type SnapshotDiffOptions,
+  type FieldChange,
+  type ResourceChange,
+  type Divergence,
 } from './history.js'
 export {
   registerComponentTypes,

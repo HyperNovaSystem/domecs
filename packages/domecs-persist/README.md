@@ -72,11 +72,20 @@ else if (!boot.value) { /* first run */ }
 - `createSnapshotHistory(world, opts?)` — bounded undo/redo ring over
   snapshots: `push` / `undo` / `redo` / `canUndo` / `canRedo` / `clear`, with
   redo-branch truncation, a `limit` ring, and `toJSON` / `load` for export.
-- `diffSnapshots(prev, next)` — entity-level diff (added / removed / changed).
+- `diffSnapshots(prev, next, options?)` — entity-level diff (added / removed /
+  changed, compared as data so key order is ignored). With `{ fields: true }`
+  it also lists `componentsAdded` / `componentsRemoved`, `fieldChanges`
+  (`{ entity, component, path: "inv.items[2].qty", before, after }`) and
+  `resourceChanges`, in ascending entity id, sorted component name and key;
+  `epsilon` (absolute) for numbers, `components` to restrict, `limit` (default
+  10 000) with `truncated`.
+- `firstDivergence(a, b)` — the first difference in canonical order (state
+  fields, then the lowest entity id, then resources), or `null`.
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
 - Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`,
   `MigrationFailedError`, `Storage`, `SnapshotHistory`,
-  `SnapshotHistoryOptions`, `SnapshotDiff`.
+  `SnapshotHistoryOptions`, `SnapshotDiff`, `SnapshotDiffOptions`,
+  `FieldChange`, `ResourceChange`, `Divergence`.
 
 ## Related packages
 
