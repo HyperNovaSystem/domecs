@@ -168,12 +168,15 @@ const summary = {
 console.log(JSON.stringify(summary, null, 2))
 for (const r of results) {
   console.error(
-    `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities} ticks=${r.ticks ?? '-'} ` +
+    `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities ?? r.calls} ticks=${r.ticks ?? '-'} ` +
       `p50=${fmtMs(r.p50Ms)} p95=${fmtMs(r.p95Ms)}` +
       (r.snapshotBytes != null ? ` snapBytes=${r.snapshotBytes}` : '') +
       (r.canonicalBytes != null ? ` canonicalBytes=${r.canonicalBytes}` : '') +
       (r.targetP50Ms != null ? ` target=${fmtMs(r.targetP50Ms)} withinTarget=${r.withinTarget}` : '') +
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
+      (r.targetRatio != null
+        ? ` sinRatio=${r.sin.ratio.toFixed(2)} cosRatio=${r.cos.ratio.toFixed(2)} targetRatio=${r.targetRatio} withinTarget=${r.withinTarget}`
+        : '') +
       (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : '') +
       (r.coalesceRatio != null ? ` coalesce=${r.coalesceRatio}` : ''),
   )
@@ -453,6 +456,8 @@ function runDmath({ calls, repeats }) {
     const dP50 = Math.min(d1.p50, d2.p50)
     const mP50 = Math.min(m1.p50, m2.p50)
     rows[name] = {
+      dmathP50Ms: dP50,
+      dmathP95Ms: Math.min(d1.p95, d2.p95),
       dmathNsPerCall: (dP50 * 1e6) / calls,
       mathNsPerCall: (mP50 * 1e6) / calls,
       ratio: dP50 / mP50,
@@ -465,7 +470,9 @@ function runDmath({ calls, repeats }) {
     engine: 'domecs',
     calls,
     repeats,
-    p50Ms: rows.sin.dmathNsPerCall * calls / 1e6,
+    // p50/p95: ms per `calls` dmath.sin calls (the summary line needs both)
+    p50Ms: rows.sin.dmathP50Ms,
+    p95Ms: rows.sin.dmathP95Ms,
     sin: rows.sin,
     cos: rows.cos,
     targetRatio,
