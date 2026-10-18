@@ -89,8 +89,10 @@ export declare const BUILD_ID: string;
 // file: evaluator.d.ts
 import type { AstNode } from './ast.js';
 /**
- * Everything `evaluate` needs, without importing "@domecs/core" — the AST /
- * parser / evaluator stay pure and world-agnostic. The world-facing wiring
+ * Everything `evaluate` needs, without touching a `World` — the AST /
+ * parser / evaluator stay pure and world-agnostic (the only "@domecs/core"
+ * import is the pure `dmath` namespace, so `sin()`/`cos()` are
+ * bit-reproducible across engines; O-75). The world-facing wiring
  * (resolving `Component.field` against a real `World`) lives in rules.ts.
  */
 export interface EvalEnv {

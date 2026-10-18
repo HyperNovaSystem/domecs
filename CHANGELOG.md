@@ -37,6 +37,12 @@ peer ranges still resolve.
   options; `firstDivergence(a, b)` returns the first difference (state, then
   lowest entity id, then resources) or `null`. New types
   `SnapshotDiffOptions`, `FieldChange`, `ResourceChange`, `Divergence`.
+- `@domecs/core`: `dmath` (G19, O-75) — bit-reproducible `sin` and `cos`
+  (a straight-line port of musl libm, generic C / non-FMA, < 1 ulp) and
+  `sqrt` (= `Math.sqrt`, already correctly rounded). Identical results on
+  every ECMA-262 engine, where `Math.sin`/`Math.cos` differ by up to 1 ulp
+  between V8 builds. Golden vectors in `test/golden/dmath-vectors.json`
+  (`scripts/dmath-golden.mjs`).
 
 #### Changed
 
@@ -51,6 +57,12 @@ peer ranges still resolve.
   compares component bags as data instead of by `JSON.stringify`, so an
   entity whose components differ only in key order is no longer in
   `changedEntities`; one whose field went from `0` to `-0` now is.
+- `@domecs/rules`: **behavior change (≤ 1 ulp)** — `sin()` and `cos()`
+  evaluate with `dmath` instead of `Math.sin`/`Math.cos` (O-75). A rule
+  using them may produce a result that differs from 2.0 by at most 1 ulp in
+  a given runtime, so an existing sim's hashes change once; in exchange the
+  results are now the same in Node, Electron and browsers. SPEC §8 already
+  disclaimed bit-identity for platform transcendentals.
 
 ## [2.0.0] — 2026-10-16
 

@@ -1,8 +1,11 @@
+import { dmath } from '@domecs/core'
 import type { AstNode, FunctionName } from './ast.js'
 
 /**
- * Everything `evaluate` needs, without importing "@domecs/core" — the AST /
- * parser / evaluator stay pure and world-agnostic. The world-facing wiring
+ * Everything `evaluate` needs, without touching a `World` — the AST /
+ * parser / evaluator stay pure and world-agnostic (the only "@domecs/core"
+ * import is the pure `dmath` namespace, so `sin()`/`cos()` are
+ * bit-reproducible across engines; O-75). The world-facing wiring
  * (resolving `Component.field` against a real `World`) lives in rules.ts.
  */
 export interface EvalEnv {
@@ -176,9 +179,9 @@ function evaluateCall(name: FunctionName, args: AstNode[], env: EvalEnv): number
     case 'abs':
       return Math.abs(expectNumber(evaluate(args[0]!, env), 'abs()'))
     case 'sin':
-      return Math.sin(expectNumber(evaluate(args[0]!, env), 'sin()'))
+      return dmath.sin(expectNumber(evaluate(args[0]!, env), 'sin()'))
     case 'cos':
-      return Math.cos(expectNumber(evaluate(args[0]!, env), 'cos()'))
+      return dmath.cos(expectNumber(evaluate(args[0]!, env), 'cos()'))
     case 'floor':
       return Math.floor(expectNumber(evaluate(args[0]!, env), 'floor()'))
     case 'random':
@@ -265,8 +268,8 @@ export function compileExpression(ast: AstNode): CompiledExpression {
           return Math.min(Math.max(v, lo), n(2, env, 'clamp()'))
         }
         case 'abs': return (env) => Math.abs(n(0, env, 'abs()'))
-        case 'sin': return (env) => Math.sin(n(0, env, 'sin()'))
-        case 'cos': return (env) => Math.cos(n(0, env, 'cos()'))
+        case 'sin': return (env) => dmath.sin(n(0, env, 'sin()'))
+        case 'cos': return (env) => dmath.cos(n(0, env, 'cos()'))
         case 'floor': return (env) => Math.floor(n(0, env, 'floor()'))
         case 'random': return (env) => env.rand.uniform()
       }
