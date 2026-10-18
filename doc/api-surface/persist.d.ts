@@ -1,3 +1,13 @@
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and a published build
+ * carries the plain version. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: history.d.ts
 import type { DomecsError, Entity, Result, World, WorldSnapshot } from '@domecs/core';
 export interface SnapshotHistoryOptions {
@@ -74,6 +84,7 @@ export { migrate, BUILTIN_MIGRATIONS, withBuiltinMigrations, type Migration, typ
 export { createLocalStorageStorage, createMemoryStorage, type Storage } from './storage.js';
 export { createSnapshotHistory, diffSnapshots, type SnapshotHistory, type SnapshotHistoryOptions, type SnapshotDiff, } from './history.js';
 export { registerComponentTypes, serializeComponentType, type ComponentFieldData, type ComponentTypeData, type SchemaProblem, } from './schema.js';
+export { BUILD_ID } from './build-id.js';
 
 // file: migrate.d.ts
 import type { DomecsError, Result, WorldSnapshot } from '@domecs/core';

@@ -18,3 +18,4 @@ export {
   type TimelineEvent,
   type TimelineEventKind,
 } from './inspector.js'
+export { BUILD_ID } from './build-id.js'

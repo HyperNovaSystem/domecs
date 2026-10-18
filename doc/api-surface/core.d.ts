@@ -86,6 +86,16 @@ export interface AgentBridge {
  */
 export declare function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge;
 
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and a published build
+ * carries the plain version. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: canonical.d.ts
 /**
  * Canonical JSON and the snapshot hash (O-11, SPEC §7.1 "Canonical form").
@@ -677,6 +687,7 @@ export type { Result, Ok, Err, JsonValue, SerializedError } from './result.js';
 export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint } from './errors.js';
 export type { DomecsError, ErrorKind, PluginError, PluginResult, SystemFault, SystemResult, SystemicFault, SystemId, ComponentId, EventId, FaultEntry, } from './errors.js';
 export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from './faulted.js';
+export { BUILD_ID } from './build-id.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';

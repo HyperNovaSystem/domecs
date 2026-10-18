@@ -1,3 +1,13 @@
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and a published build
+ * carries the plain version. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: compose-transforms.d.ts
 import { type ComponentType, type Plugin } from '@domecs/core';
 export interface ComposeTransformsOptions {
@@ -138,3 +148,4 @@ export { Parent, setParent, childrenOf, ancestorsOf, rootsOf, despawnTree, } fro
 export { installHierarchy } from './despawn-orphan-plugin.js';
 export { composeTransforms } from './compose-transforms.js';
 export type { ComposeTransformsOptions } from './compose-transforms.js';
+export { BUILD_ID } from './build-id.js';

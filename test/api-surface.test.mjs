@@ -40,3 +40,19 @@ test('snapshot covers every workspace package (no package escapes the contract)'
     )
   }
 })
+
+test('every package exports BUILD_ID: string (ED-15, E1.5)', () => {
+  for (const [dir, name] of PACKAGES) {
+    const snap = readFileSync(join(OUT_DIR, `${name}.d.ts`), 'utf8')
+    assert.match(
+      snap,
+      /\/\/ file: build-id\.d\.ts\n(?:[^\n]*\n)*?export declare const BUILD_ID: string;/,
+      `${name}: doc/api-surface/${name}.d.ts lacks build-id.d.ts with \`export declare const BUILD_ID: string\``,
+    )
+    assert.match(
+      readFileSync(join(ROOT, dir, 'src', 'index.ts'), 'utf8'),
+      /export \{ BUILD_ID \} from '\.\/build-id\.js'/,
+      `${name}: src/index.ts does not re-export BUILD_ID`,
+    )
+  }
+})

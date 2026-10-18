@@ -137,3 +137,4 @@ export {
   CONSOLIDATE_FAULTS_NAME,
   CONSOLIDATE_FAULTS_PRIORITY,
 } from './faulted.js'
+export { BUILD_ID } from './build-id.js'

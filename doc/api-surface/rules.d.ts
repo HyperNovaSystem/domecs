@@ -76,6 +76,16 @@ export type AstNode = {
  */
 export declare function walkFieldRefs(node: AstNode, visit: (component: string, field: string, pos: number) => void): void;
 
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and a published build
+ * carries the plain version. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: evaluator.d.ts
 import type { AstNode } from './ast.js';
 /**
@@ -151,6 +161,7 @@ export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
 export { compileRule, installRules } from './rules.js';
 export type { CompiledRule, RuleActionDef, RuleDef, RuleError, RuleFault, RulesHandle } from './rules.js';
+export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
 /**

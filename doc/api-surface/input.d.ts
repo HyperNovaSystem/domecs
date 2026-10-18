@@ -1,3 +1,13 @@
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and a published build
+ * carries the plain version. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: collector.d.ts
 import type { Plugin } from '@domecs/core';
 export interface InputPluginOptions {
@@ -43,3 +53,4 @@ export declare function createInputPlugin(options?: InputPluginOptions): Plugin;
 // file: index.d.ts
 export { createInputPlugin, DEFAULT_INPUT_OPTIONS, TEXT_INPUT_SELECTOR } from './collector.js';
 export type { InputPluginOptions } from './collector.js';
+export { BUILD_ID } from './build-id.js';

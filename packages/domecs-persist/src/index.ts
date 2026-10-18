@@ -33,3 +33,4 @@ export {
   type ComponentTypeData,
   type SchemaProblem,
 } from './schema.js'
+export { BUILD_ID } from './build-id.js'
