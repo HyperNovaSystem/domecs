@@ -6,6 +6,12 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### 2.1.0 (in progress on `feat/harness-engine-gaps`)
+
+All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the
+determinism foundation and build identity for the Studio harness. `^2.0.0`
+peer ranges still resolve.
+
 ## [2.0.0] — 2026-10-16
 
 All seven `@domecs/*` packages move to 2.0.0, and `@domecs/scene` and
