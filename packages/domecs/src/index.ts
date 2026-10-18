@@ -54,6 +54,15 @@ export { definePlugin } from './plugin.js'
 export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js'
 export { SNAPSHOT_VERSION } from './snapshot.js'
 export type { SnapshotOptions, WorldSnapshot } from './snapshot.js'
+export {
+  canonicalJson,
+  canonicalSnapshot,
+  hashSnapshot,
+  hashEntities,
+  hashValue,
+  HASH_ALGORITHM,
+} from './canonical.js'
+export type { CanonicalOptions } from './canonical.js'
 export type { ChangesSnapshot } from './change-log.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'

@@ -86,6 +86,68 @@ export interface AgentBridge {
  */
 export declare function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge;
 
+// file: canonical.d.ts
+/**
+ * Canonical JSON and the snapshot hash (O-11, SPEC §7.1 "Canonical form").
+ *
+ * `canonicalJson` is `JSON.stringify` value semantics with object keys
+ * sorted by UTF-16 code unit, so two values that are equal as data
+ * serialize to the same text regardless of key insertion order. It is
+ * lossless where `JSON.stringify` is not: `-0` is written as the literal
+ * `-0` (valid JSON; `JSON.parse('-0')` is `-0`). A non-finite number, a
+ * BigInt or a cycle throws a `TypeError` naming the path, since snapshots
+ * are plain data by contract.
+ *
+ * Everything here is a pure function of its input: no clock, no
+ * randomness, identical across runs and JS engines.
+ */
+import type { WorldSnapshot } from './snapshot.js';
+import type { Entity } from './types.js';
+/**
+ * Canonical JSON of any plain-data value: sorted keys, JSON value
+ * semantics, lossless `-0`.
+ *
+ * - `undefined`, function and symbol values are omitted in objects and
+ *   become `null` in arrays; at the top level they throw (no JSON text).
+ * - Numbers use ECMAScript `Number::toString`, except `-0` → `-0`.
+ * - `NaN`/`±Infinity`, BigInt and cycles throw `TypeError` with the path
+ *   (`"entities[3].components.Body.vx"`).
+ * - `toJSON` is honoured, as `JSON.stringify` does.
+ */
+export declare function canonicalJson(value: unknown): string;
+/** The algorithm behind `hashSnapshot`, `hashEntities` and `hashValue`. */
+export declare const HASH_ALGORITHM: "fnv1a64";
+/** FNV-1a-64 of `canonicalJson(value)`. For metric results, act logs, doc versions. */
+export declare function hashValue(value: unknown): string;
+/** Options for {@link canonicalSnapshot} and {@link hashSnapshot}. */
+export interface CanonicalOptions {
+    /**
+     * Include `changes` (unseen marks + system cursors, O-42). Default false.
+     * Pass `true` for every restore-equivalence check (fork vs live,
+     * checkpoints, keyframes): `changes` decides what change-gated systems do
+     * next, so two worlds with equal default hashes can still diverge.
+     */
+    readonly includeChanges?: boolean;
+    /** Include `meta`. Default false. */
+    readonly includeMeta?: boolean;
+}
+/**
+ * Canonical JSON of a snapshot's simulation state. `version` (format, not
+ * state), `meta` and `changes` are left out unless the options ask for
+ * them; every other top-level field — `seed`, `tick`, `scaledTime`,
+ * `fixedBacklog`, `fixedStep`, `nextId`, `entities`, `resources`, and the
+ * fields later snapshot versions add — is state and is included.
+ */
+export declare function canonicalSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string;
+/** 16 lowercase hex chars: FNV-1a-64 over the UTF-8 bytes of {@link canonicalSnapshot}. */
+export declare function hashSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string;
+/**
+ * Per-entity hash of each record's canonical `components`, in ascending
+ * entity id. Comparing two maps localizes a divergence to the entities
+ * whose hashes differ.
+ */
+export declare function hashEntities(snap: WorldSnapshot): Map<Entity, string>;
+
 // file: change-log.d.ts
 import type { Entity } from './types.js';
 /**
@@ -601,6 +663,8 @@ export { definePlugin } from './plugin.js';
 export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js';
 export { SNAPSHOT_VERSION } from './snapshot.js';
 export type { SnapshotOptions, WorldSnapshot } from './snapshot.js';
+export { canonicalJson, canonicalSnapshot, hashSnapshot, hashEntities, hashValue, HASH_ALGORITHM, } from './canonical.js';
+export type { CanonicalOptions } from './canonical.js';
 export type { ChangesSnapshot } from './change-log.js';
 export type { Rng, RngState } from './rng.js';
 export type { TimeState } from './time.js';
