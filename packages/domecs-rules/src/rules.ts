@@ -22,6 +22,8 @@ export interface RuleDef {
   /**
    * System priority (lower runs first; default 0). Rules of equal priority
    * run in the order of the `defs` array last passed to `update()` (O-69).
+   * Where they sit among other systems of that priority depends on
+   * {@link InstallRulesOptions.order}.
    */
   priority?: number
   enabled?: boolean
@@ -238,8 +240,11 @@ function checkWrite(action: CompiledAction, current: Record<string, unknown>, va
   }
 }
 
-/** Register a single compiled rule as a `world.system(...)`. */
-function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHandle {
+/**
+ * Register a single compiled rule as a `world.system(...)`. `order` is the
+ * secondary sort key (0 in 'registration' mode; `orderBase + i` in 'stable').
+ */
+function registerRuleSystem(world: World, rule: CompiledRuleInternal, order: number): SystemHandle {
   const { def, queryTypes, when, actions, componentsByName } = rule
   // Keyed by the rule's own names, as reads through resolveField are.
   const actionKeys = actions.map((a) => `${a.componentName}.${a.field}`)
@@ -261,6 +266,7 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal): SystemHan
       schedule: def.schedule,
       query: queryTypes,
       priority: def.priority ?? 0,
+      order,
       enabled: () => def.enabled !== false,
     },
     (ctx) => {
@@ -383,7 +389,9 @@ export interface RulesHandle {
    * fails to compile.
    *
    * Rules are registered in `defs` order, so equal-priority rules run in
-   * that order (O-69). A def that repeats an earlier def's name is not
+   * that order (O-69). In 'registration' mode re-registration also moves
+   * every rule after the equal-priority systems registered before this
+   * call; in 'stable' mode it does not (see {@link InstallRulesOptions}). A def that repeats an earlier def's name is not
    * installed and is reported under that name.
    *
    * @returns a `Map<string, RuleError[]>` keyed by rule name for every def
@@ -395,17 +403,53 @@ export interface RulesHandle {
   uninstall(): void
 }
 
-/** Constructs a {@link RulesHandle} and immediately calls `update(defs)` once. */
+/** Options for {@link installRules}. */
+export interface InstallRulesOptions {
+  /**
+   * 'registration' (default, 2.0 behaviour): rules tie-break by registration
+   * index, so after `update()` they run after every equal-priority system
+   * registered before it.
+   * 'stable': rule i (its index in the de-duplicated defs) registers with
+   * `order: orderBase + i`, so its run position is a pure function of
+   * (priority, defs order), never of when `update()` ran. A def that fails
+   * to compile keeps its index.
+   */
+  readonly order?: 'registration' | 'stable'
+  /**
+   * First order key used in 'stable' mode (finite). Default 1, so systems
+   * with the default order 0 run before rules of the same priority. Give
+   * each stable handle on one world its own range.
+   */
+  readonly orderBase?: number
+}
+
+/**
+ * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
+ *
+ * @throws Error when `options.order` is not 'registration' or 'stable', or
+ *   `options.orderBase` is not a finite number.
+ */
 export function installRules(
   world: World,
   defs: RuleDef[],
   resolve: (name: string) => ComponentType<any> | undefined,
+  options: InstallRulesOptions = {},
 ): RulesHandle {
+  const mode = options.order ?? 'registration'
+  if (mode !== 'registration' && mode !== 'stable') {
+    throw new Error(`@domecs/rules: installRules order must be 'registration' or 'stable', got ${JSON.stringify(mode)}`)
+  }
+  const orderBase = options.orderBase ?? 1
+  if (typeof orderBase !== 'number' || !Number.isFinite(orderBase)) {
+    throw new Error(`@domecs/rules: installRules orderBase must be a finite number, got ${String(orderBase)}`)
+  }
   const active = new Map<string, SystemHandle>()
 
   function update(newDefs: RuleDef[]): Map<string, RuleError[]> {
     const errorsByName = new Map<string, RuleError[]>()
     const newNames = new Set<string>()
+    // Index in the de-duplicated defs: the stable-mode order key.
+    let index = 0
 
     for (const def of newDefs) {
       // O-69 (R8): a repeated name would silently replace the earlier rule.
@@ -416,6 +460,8 @@ export function installRules(
         continue
       }
       newNames.add(def.name)
+      const order = mode === 'stable' ? orderBase + index : 0
+      index++
 
       // Always drop any previous registration for this name before
       // (re)installing — a def may have changed shape (schedule, query,
@@ -433,7 +479,7 @@ export function installRules(
         continue
       }
 
-      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal)
+      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal, order)
       active.set(def.name, handle)
     }
 

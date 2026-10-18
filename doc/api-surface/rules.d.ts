@@ -162,7 +162,7 @@ export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
 export { compileRule, installRules } from './rules.js';
-export type { CompiledRule, RuleActionDef, RuleDef, RuleError, RuleFault, RulesHandle } from './rules.js';
+export type { CompiledRule, InstallRulesOptions, RuleActionDef, RuleDef, RuleError, RuleFault, RulesHandle } from './rules.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
@@ -248,6 +248,8 @@ export interface RuleDef {
     /**
      * System priority (lower runs first; default 0). Rules of equal priority
      * run in the order of the `defs` array last passed to `update()` (O-69).
+     * Where they sit among other systems of that priority depends on
+     * {@link InstallRulesOptions.order}.
      */
     priority?: number;
     enabled?: boolean;
@@ -318,7 +320,9 @@ export interface RulesHandle {
      * fails to compile.
      *
      * Rules are registered in `defs` order, so equal-priority rules run in
-     * that order (O-69). A def that repeats an earlier def's name is not
+     * that order (O-69). In 'registration' mode re-registration also moves
+     * every rule after the equal-priority systems registered before this
+     * call; in 'stable' mode it does not (see {@link InstallRulesOptions}). A def that repeats an earlier def's name is not
      * installed and is reported under that name.
      *
      * @returns a `Map<string, RuleError[]>` keyed by rule name for every def
@@ -329,8 +333,32 @@ export interface RulesHandle {
     /** Remove every currently-installed rule system. */
     uninstall(): void;
 }
-/** Constructs a {@link RulesHandle} and immediately calls `update(defs)` once. */
-export declare function installRules(world: World, defs: RuleDef[], resolve: (name: string) => ComponentType<any> | undefined): RulesHandle;
+/** Options for {@link installRules}. */
+export interface InstallRulesOptions {
+    /**
+     * 'registration' (default, 2.0 behaviour): rules tie-break by registration
+     * index, so after `update()` they run after every equal-priority system
+     * registered before it.
+     * 'stable': rule i (its index in the de-duplicated defs) registers with
+     * `order: orderBase + i`, so its run position is a pure function of
+     * (priority, defs order), never of when `update()` ran. A def that fails
+     * to compile keeps its index.
+     */
+    readonly order?: 'registration' | 'stable';
+    /**
+     * First order key used in 'stable' mode (finite). Default 1, so systems
+     * with the default order 0 run before rules of the same priority. Give
+     * each stable handle on one world its own range.
+     */
+    readonly orderBase?: number;
+}
+/**
+ * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
+ *
+ * @throws Error when `options.order` is not 'registration' or 'stable', or
+ *   `options.orderBase` is not a finite number.
+ */
+export declare function installRules(world: World, defs: RuleDef[], resolve: (name: string) => ComponentType<any> | undefined, options?: InstallRulesOptions): RulesHandle;
 
 // file: typecheck.d.ts
 import type { AstNode } from './ast.js';
