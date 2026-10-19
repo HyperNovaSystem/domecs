@@ -61,7 +61,7 @@ else if (!boot.value) { /* first run */ }
   any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply
   lacks `resources`) and, from 2.1, the `2 → 3` bump (a v2 snapshot simply
   lacks `rngRoot`, `rngStreams` and `pendingEvents`); both are pure version
-  bumps. A loaded v2 save keeps the world's own root and re-derives every
+  bumps. A loaded v2 save uses the world's `createWorld` root and re-derives every
   `rng: 'own'` stream. `save()` writes v3, which 2.0 engines reject.
 - `withBuiltinMigrations(user?)` — overlay a caller `MigrationMap` on the
   built-ins (caller keys win); returns the built-ins unchanged when `user` is

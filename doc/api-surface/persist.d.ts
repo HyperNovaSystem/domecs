@@ -198,7 +198,7 @@ export type MigrationMap = ReadonlyMap<number, Migration>;
  *   `world.restore` treats the absent `resources` as an empty set.
  * - `2 → 3` (2.1): v3 added the optional `rngRoot`, `rngStreams` and
  *   `pendingEvents` fields. A v2 snapshot lacks them, so the step is a pure
- *   version bump — restore keeps the world's own root, re-derives every own
+ *   version bump — restore uses the world's createWorld root, re-derives every own
  *   stream and abandons the event queue, as for a v2 snapshot.
  */
 export declare const BUILTIN_MIGRATIONS: MigrationMap;

@@ -234,6 +234,31 @@ describe('§4.4 per-system RNG streams', () => {
     expect(logOf(dst, da)).toEqual([...before, firstDraws(deriveStream(seedToState(22), 'k'), 1)[0]])
   })
 
+  it('a v2 snapshot restores onto the createWorld root, not a root adopted from an earlier restore', () => {
+    const v3src = createWorld({ headless: true, seed: 33 })
+    v3src.system('k', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+    v3src.stepOnce()
+    const v3 = v3src.snapshot()
+    const { rngRoot: _r, rngStreams: _s, ...rest } = v3
+    const v2: WorldSnapshot = { ...rest, version: 2 }
+
+    const make = (): World => {
+      const w = createWorld({ headless: true, seed: 22 })
+      w.system('k', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+      return w
+    }
+    const fresh = make()
+    fresh.restore(v2)
+    const used = make()
+    used.restore(v3) // adopts root 33
+    used.restore(v2) // must not depend on that history
+    expect(used.snapshot().rngRoot).toEqual(seedToState(22))
+    expect(used.snapshot().rngStreams).toEqual({ k: deriveStream(seedToState(22), 'k') })
+    expect(hashSnapshot(used.snapshot(), { includeChanges: true })).toBe(
+      hashSnapshot(fresh.snapshot(), { includeChanges: true }),
+    )
+  })
+
   it('5: invalid rngRoot / rngStreams throw before any state change', () => {
     const w = createWorld({ headless: true, seed: 6 })
     const a = w.spawn([entry(Draws, { log: [] })])

@@ -1536,7 +1536,8 @@ export interface WorldSnapshot {
      * `rng: 'own'` stream derives (§4.4, v3). It never advances. Written by
      * every 2.1 snapshot. Restore adopts it, so systems registered after the
      * restore derive the streams the source world would; absent (a v2
-     * snapshot), the restoring world keeps its own root.
+     * snapshot), the restoring world uses its own `createWorld` root, not one
+     * adopted from an earlier restore.
      */
     readonly rngRoot?: RngState;
     /**

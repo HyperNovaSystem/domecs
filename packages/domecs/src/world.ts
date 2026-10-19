@@ -559,8 +559,11 @@ export function createWorld(options: WorldOptions = {}): World {
   const warnedSystems = new Set<number>()
   let rand = createRng(seed)
   // §4.4: the root every own stream derives from — the createWorld seed,
-  // replaced by a restored snapshot's `rngRoot`; it never advances.
-  let rngRoot: RngState = seedToState(seed)
+  // replaced by a restored snapshot's `rngRoot`; it never advances. A
+  // snapshot without one (v2) restores onto the createWorld root, so the
+  // outcome never depends on what the world restored before.
+  const createRoot: RngState = seedToState(seed)
+  let rngRoot: RngState = createRoot
   // Every own stream this world has created, by stream key. An entry
   // outlives its system: a re-registration under the key resumes it.
   let streams = new Map<string, Rng>()
@@ -988,7 +991,7 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   /**
-   * §4.4 restore: adopt the snapshot's root (absent: keep ours), replace the
+   * §4.4 restore: adopt the snapshot's root (absent: the createWorld root), replace the
    * stream map with its streams (absent: empty), then re-derive from the
    * root the stream of every registered own system whose key is missing.
    * Live generators are rewound in place (O-46), so captured `ctx.rand`
@@ -998,7 +1001,7 @@ export function createWorld(options: WorldOptions = {}): World {
     root: RngState | undefined,
     rec: Readonly<Record<string, RngState>> | undefined,
   ): void {
-    if (root !== undefined) rngRoot = seedToState(root)
+    rngRoot = root !== undefined ? seedToState(root) : createRoot
     const prev = streams
     const next = new Map<string, Rng>()
     const held = new Map<string, Rng>()

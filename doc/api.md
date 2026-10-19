@@ -822,7 +822,7 @@ interface WorldSnapshot {
   readonly seed:     readonly [number, number, number, number]   // shared stream (world.rand)
   // The root seed own streams derive from (the createWorld seed); never
   // advances. Written by every 2.1 snapshot; restore() adopts it (absent in
-  // a v2 snapshot → the world keeps its own root). (v3)
+  // a v2 snapshot → the world's own createWorld root). (v3)
   readonly rngRoot?: RngState
   // Every own stream the world has created, by key (rng: 'own' systems;
   // entries outlive their systems). Omitted while there is none; an explicit

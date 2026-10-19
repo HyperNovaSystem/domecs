@@ -687,8 +687,8 @@ interface InstallRulesOptions { readonly rng?: 'shared' | 'own' }   // default f
 **Semantics**
 
 - **Root.** `rngRoot = seedToState(options.seed ?? 0)` is fixed at `createWorld`. `restore()` sets
-  the world's root to the snapshot's `rngRoot` when present (a v2 snapshot keeps the world's own
-  root). Systems registered after a restore then derive the same streams the source world would.
+  the world's root to the snapshot's `rngRoot` when present (a v2 snapshot uses the world's own
+  `createWorld` root, not one adopted from an earlier restore). Systems registered after a restore then derive the same streams the source world would.
 - **Derivation.** `deriveStream(root, key)`:
   - FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`;
   - each root word XOR-mixed with the key hash and passed through `splitmix32` (word *i*: the
@@ -738,8 +738,8 @@ interface InstallRulesOptions { readonly rng?: 'shared' | 'own' }   // default f
     empty record behave identically.
   - `pendingEvents` (§4.7, shipped in E7 as an optional field on the v2 envelope) becomes one of
     v3's optional fields with no further change.
-  - A v2 snapshot still restores (any version ≤ 3), keeps the world's own root and re-derives
-    every own stream (test 4). Persist `load` migrates it to v3 in memory; `save` writes v3.
+  - A v2 snapshot still restores (any version ≤ 3), uses the world's own `createWorld` root and
+    re-derives every own stream (test 4). Persist `load` migrates it to v3 in memory; `save` writes v3.
   - `canonicalSnapshot` excludes `version`, so the bump alone does not change any hash; adding
     `rngRoot` does change the hash of world-built snapshots (no golden pins one before E8).
 - Validation before effects (O-41 pattern): `rngRoot` must be 4 finite numbers, and `rngStreams`
@@ -2470,6 +2470,7 @@ Owner decision (revision 3): `SNAPSHOT_VERSION` is 3 for every 2.1 snapshot.
 | §4.4 `rng` validation | An `rng` other than `'shared'`/`'own'` throws at `world.system()` before any state change; in rules, an unknown `RuleDef.rng` is a `RuleError` with the new `RuleDefPath` member `'rng'`, an unknown `InstallRulesOptions.rng` throws at `installRules` | Mirrors a non-finite `order` (core), a bad `priority` (rules, O-69 R7) and a bad `order` option (E3). `RuleDefPath` is documented as widening in later minors |
 | §4.4 validation | `rngRoot`/`rngStreams` present but `null` (or any non-conforming value) are rejected like `scaledTime` (only an absent field means "older build"); stream values must be arrays of 4 finite numbers. Root and stream states are normalized with `seedToState` on restore | O-41 / O-40 pattern |
 | §4.4 reseed recipe typing | `WorldSnapshot.rngStreams` is typed `Readonly<Record<string, RngState>> \| undefined`; an explicit `undefined` restores as absent | The spec's recipe `{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }` did not type-check under `exactOptionalPropertyTypes` (the repo's own tsconfig); found by the full typecheck after E4.4 |
+| §4.4 v2 restore root (verify pass) | A snapshot without `rngRoot` (v2, or a migrated v2 save) restores onto the world's **`createWorld`** root, not the root it currently holds | The first implementation kept the current root, which may have been adopted from an earlier v3 restore, so the same v2 snapshot restored into the same build gave different own streams depending on what the world had restored before (red test: "a v2 snapshot restores onto the createWorld root…"). "Keeps the world's own root" now reads as the root fixed at `createWorld` |
 | §4.4 `deriveStream` export | Exported from `@domecs/core` | Tests 6 and 8 and the reseed recipe need it; it is part of the snapshot contract |
 | Plan E4.1 vs E4.3 split | The persist built-in `2 → 3` step shipped in the E4.1 commit (with its `migrate.test.ts` red), E4.3 added the persist save/load tests and the rules option | With `SNAPSHOT_VERSION = 3` and no step, every persist load of a 1.x/2.0 save failed (two existing persist tests went red), and ground rule 3 forbids committing failing tests |
 | Plan E4.2 red step | Spec tests 3, 8 and 9 passed on first run: the restore path (map replacement plus missing-key re-derive) had to land in E4.1, whose v2-restore test exercises the same code. Each E4.2 test was checked to fail with the re-derive loop or the root adoption disabled | Recorded so the commit history is not read as a skipped red step |
