@@ -32,13 +32,29 @@ export interface RuleDef {
   actions: RuleActionDef[]
 }
 
+/**
+ * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
+ * members, so keep a default branch when switching on it.
+ */
+export type RuleDefPath =
+  | 'name'
+  | 'schedule'
+  | 'priority'
+  | 'when'
+  | { readonly query: number }
+  | { readonly action: number; readonly part: 'set' | 'expr' }
+
 export interface RuleError {
   rule: string
-  /** Character position within the offending expression source, or -1 for
-   *  a non-syntax error (e.g. an unresolvable component name in `query` or
-   *  an action's `set` target — see compileRule doc for the exact rule). */
+  /** Character position within the offending part's string (see `field`),
+   *  or -1 for a non-syntax error (e.g. an unresolvable component name in
+   *  `query` or an action's `set` target — see compileRule doc for the
+   *  exact rule). */
   position: number
   message: string
+  /** The part of the def the error is about. Set by compileRule and
+   *  installRules from 2.1 on every error. */
+  field?: RuleDefPath
 }
 
 /**
@@ -98,6 +114,12 @@ interface CompiledRuleInternal extends CompiledRule {
  *   operator result of that kind, where arithmetic, a comparison or a
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
+ * - Every error carries `field` (§4.6), the one part of the def it is about:
+ *   `'schedule'`, `'priority'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
+ *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
+ *   (every error inside that expression). `position` is an offset within
+ *   that part's string, or -1.
  * - If there are ANY errors, returns `{ rule: null, errors }` — never a
  *   partially-compiled rule.
  */
@@ -110,38 +132,42 @@ export function compileRule(
 
   // O-69 (R7): a bad schedule or priority is a compile error, not a throw
   // from world.system().
-  if (def.schedule !== 'tick' && def.schedule !== 'fixed') {
-    errors.push({
-      rule: def.name,
-      position: -1,
-      message: `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick" or "fixed")`,
-    })
-  }
-  if (def.priority !== undefined && !Number.isFinite(def.priority)) {
-    errors.push({ rule: def.name, position: -1, message: 'priority must be a finite number' })
+  // §4.6: every error names the one part of the def it is about.
+  const fail = (field: RuleDefPath, position: number, message: string): void => {
+    errors.push({ rule: def.name, position, message, field })
   }
 
-  function resolveAndTrack(name: string, pos: number, context: string): ComponentType<any> | undefined {
+  if (def.schedule !== 'tick' && def.schedule !== 'fixed') {
+    fail('schedule', -1, `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick" or "fixed")`)
+  }
+  if (def.priority !== undefined && !Number.isFinite(def.priority)) {
+    fail('priority', -1, 'priority must be a finite number')
+  }
+
+  function resolveAndTrack(
+    name: string,
+    pos: number,
+    context: string,
+    field: RuleDefPath,
+  ): ComponentType<any> | undefined {
     const cached = componentsByName.get(name)
     if (cached) return cached
     const resolved = resolve(name)
     if (!resolved) {
-      errors.push({ rule: def.name, position: pos, message: `Unknown component "${name}" ${context}` })
+      fail(field, pos, `Unknown component "${name}" ${context}`)
       return undefined
     }
     componentsByName.set(name, resolved)
     return resolved
   }
 
-  function checkField(field: string, pos: number): void {
-    if (FORBIDDEN_FIELDS.has(field)) {
-      errors.push({ rule: def.name, position: pos, message: `Field name "${field}" is not allowed` })
-    }
+  function checkField(name: string, pos: number, field: RuleDefPath): void {
+    if (FORBIDDEN_FIELDS.has(name)) fail(field, pos, `Field name "${name}" is not allowed`)
   }
 
   const queryTypes: ComponentType<any>[] = []
-  for (const name of def.query) {
-    const t = resolveAndTrack(name, -1, 'referenced in query')
+  for (let i = 0; i < def.query.length; i++) {
+    const t = resolveAndTrack(def.query[i]!, -1, 'referenced in query', { query: i })
     if (t) queryTypes.push(t)
   }
 
@@ -149,42 +175,44 @@ export function compileRule(
   if (def.when !== undefined) {
     const parsed = parseExpression(def.when)
     if ('errors' in parsed) {
-      for (const e of parsed.errors) errors.push({ rule: def.name, position: e.position, message: e.message })
+      for (const e of parsed.errors) fail('when', e.position, e.message)
     } else {
       whenAst = parsed.ast
       walkFieldRefs(whenAst, (component, field, pos) => {
-        checkField(field, pos)
-        resolveAndTrack(component, pos, 'referenced in "when"')
+        checkField(field, pos, 'when')
+        resolveAndTrack(component, pos, 'referenced in "when"', 'when')
       })
     }
   }
 
   const compiledActions: CompiledAction[] = []
-  for (const action of def.actions) {
+  // Index into def.actions of each compiledActions entry, for type errors.
+  const compiledIndex: number[] = []
+  for (let i = 0; i < def.actions.length; i++) {
+    const action = def.actions[i]!
+    const setPath: RuleDefPath = { action: i, part: 'set' }
+    const exprPath: RuleDefPath = { action: i, part: 'expr' }
     const dotIdx = action.set.indexOf('.')
     if (dotIdx <= 0 || dotIdx === action.set.length - 1) {
-      errors.push({
-        rule: def.name,
-        position: -1,
-        message: `Action "set" must be "Component.field", got "${action.set}"`,
-      })
+      fail(setPath, -1, `Action "set" must be "Component.field", got "${action.set}"`)
       continue
     }
     const compName = action.set.slice(0, dotIdx)
     const fieldName = action.set.slice(dotIdx + 1)
-    checkField(fieldName, -1)
-    const targetType = resolveAndTrack(compName, -1, `referenced in action "${action.set}"`)
+    checkField(fieldName, -1, setPath)
+    const targetType = resolveAndTrack(compName, -1, `referenced in action "${action.set}"`, setPath)
 
     const parsed = parseExpression(action.expr)
     if ('errors' in parsed) {
-      for (const e of parsed.errors) errors.push({ rule: def.name, position: e.position, message: e.message })
+      for (const e of parsed.errors) fail(exprPath, e.position, e.message)
       continue
     }
     walkFieldRefs(parsed.ast, (component, field, pos) => {
-      checkField(field, pos)
-      resolveAndTrack(component, pos, `referenced in action "${action.set}" expr`)
+      checkField(field, pos, exprPath)
+      resolveAndTrack(component, pos, `referenced in action "${action.set}" expr`, exprPath)
     })
     if (targetType) {
+      compiledIndex.push(i)
       compiledActions.push({
         component: targetType,
         componentName: compName,
@@ -199,11 +227,11 @@ export function compileRule(
 
   // O-68 (R4): reject type errors certain before the rule runs (see
   // typecheck.ts). Field kinds are not inferred: defaults do not fix them.
-  const report = (position: number, message: string): void => {
-    errors.push({ rule: def.name, position, message })
+  if (whenAst) inferKind(whenAst, (position, message) => fail('when', position, message))
+  for (let j = 0; j < compiledActions.length; j++) {
+    const exprPath: RuleDefPath = { action: compiledIndex[j]!, part: 'expr' }
+    inferKind(compiledActions[j]!.ast, (position, message) => fail(exprPath, position, message))
   }
-  if (whenAst) inferKind(whenAst, report)
-  for (const action of compiledActions) inferKind(action.ast, report)
   if (errors.length > 0) return { rule: null, errors }
 
   const rule: CompiledRuleInternal = {
@@ -467,7 +495,12 @@ export function installRules(
       // O-69 (R8): a repeated name would silently replace the earlier rule.
       if (newNames.has(def.name)) {
         const list = errorsByName.get(def.name) ?? []
-        list.push({ rule: def.name, position: -1, message: `Duplicate rule name "${def.name}"; only the first is installed` })
+        list.push({
+          rule: def.name,
+          position: -1,
+          message: `Duplicate rule name "${def.name}"; only the first is installed`,
+          field: 'name',
+        })
         errorsByName.set(def.name, list)
         continue
       }

@@ -162,7 +162,7 @@ export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
 export { compileRule, installRules } from './rules.js';
-export type { CompiledRule, InstallRulesOptions, RuleActionDef, RuleDef, RuleError, RuleFault, RulesHandle } from './rules.js';
+export type { CompiledRule, InstallRulesOptions, RuleActionDef, RuleDef, RuleDefPath, RuleError, RuleFault, RulesHandle } from './rules.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
@@ -257,13 +257,27 @@ export interface RuleDef {
     when?: string;
     actions: RuleActionDef[];
 }
+/**
+ * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
+ * members, so keep a default branch when switching on it.
+ */
+export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'when' | {
+    readonly query: number;
+} | {
+    readonly action: number;
+    readonly part: 'set' | 'expr';
+};
 export interface RuleError {
     rule: string;
-    /** Character position within the offending expression source, or -1 for
-     *  a non-syntax error (e.g. an unresolvable component name in `query` or
-     *  an action's `set` target — see compileRule doc for the exact rule). */
+    /** Character position within the offending part's string (see `field`),
+     *  or -1 for a non-syntax error (e.g. an unresolvable component name in
+     *  `query` or an action's `set` target — see compileRule doc for the
+     *  exact rule). */
     position: number;
     message: string;
+    /** The part of the def the error is about. Set by compileRule and
+     *  installRules from 2.1 on every error. */
+    field?: RuleDefPath;
 }
 /**
  * The error a rule reports, as an entity fault (`Faulted`, source
@@ -300,6 +314,12 @@ export interface CompiledRule {
  *   operator result of that kind, where arithmetic, a comparison or a
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
+ * - Every error carries `field` (§4.6), the one part of the def it is about:
+ *   `'schedule'`, `'priority'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
+ *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
+ *   (every error inside that expression). `position` is an offset within
+ *   that part's string, or -1.
  * - If there are ANY errors, returns `{ rule: null, errors }` — never a
  *   partially-compiled rule.
  */

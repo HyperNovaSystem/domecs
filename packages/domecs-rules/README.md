@@ -42,6 +42,33 @@ attaches a fault to it: `Faulted` gets an entry with kind `rule_eval_failed`,
 source `rule:<name>` and `detail: { rule, message }` (the `RuleFault` type).
 Any other error is a bug and propagates out of the step.
 
+Each `RuleError` (`{ rule, position, message, field }`) names the part of the
+def it is about in `field` (a `RuleDefPath`), and `position` is an offset
+within that part's string, or −1:
+
+| Error | `field` |
+|---|---|
+| Unknown `schedule` | `'schedule'` |
+| Non-finite `priority` | `'priority'` |
+| Unknown component in `query[i]` | `{ query: i }` |
+| `when` parse, resolve or type error | `'when'` |
+| Malformed `actions[i].set`, unknown target component, forbidden field | `{ action: i, part: 'set' }` |
+| Any error inside `actions[i].expr` | `{ action: i, part: 'expr' }` |
+| Repeated rule name (from `update()`) | `'name'` |
+
+The union widens in later minors (for example `'rng'` or `{ without: i }`),
+so keep a default branch when you switch on it:
+
+```ts
+function widgetFor(e: RuleError): string {
+  const f = e.field
+  if (typeof f === 'string') return f
+  if (f && 'query' in f) return `query[${f.query}]`
+  if (f && 'action' in f) return `actions[${f.action}].${f.part}`
+  return 'rule' // a part this version does not know yet
+}
+```
+
 Rules run as systems named `rule:<name>`. `RuleDef.priority` (default 0)
 places them among other systems; rules of equal priority run in the order of
 the `defs` array last passed to `update()` (see "Ordering" below). A def with an unknown `schedule`

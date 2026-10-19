@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createWorld, defineComponent, type ComponentType, type World } from '@domecs/core'
-import { compileRule, installRules, type RuleDef } from '../src/rules.js'
+import { compileRule, installRules, type RuleDef, type RuleError } from '../src/rules.js'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 const Velocity = defineComponent<{ x: number; y: number }>('Velocity', { defaults: { x: 0, y: 0 } })
@@ -372,5 +372,70 @@ describe('installRules — determinism', () => {
     expect(a).toBe(b)
     // Sanity: random() actually did something (not stuck at the seeded default).
     expect(a).not.toBe(0)
+  })
+})
+
+describe('RuleError.field — per-part attribution (§4.6)', () => {
+  const resolve = resolveFrom([Health, Velocity, Flag])
+  const base = (over: Partial<RuleDef>): RuleDef => ({
+    name: 'r',
+    schedule: 'tick',
+    query: ['Health'],
+    actions: [{ set: 'Health.hp', expr: 'Health.hp' }],
+    ...over,
+  })
+  const ok = { set: 'Health.hp', expr: 'Health.hp' }
+
+  // One def per error class → the single error it produces.
+  const cases: Array<[string, RuleDef, RuleError['field'], number]> = [
+    ['bad schedule', base({ schedule: 'frame' as 'tick' }), 'schedule', -1],
+    ['non-finite priority', base({ priority: Number.NaN }), 'priority', -1],
+    ['unknown query component', base({ query: ['Health', 'Nope'] }), { query: 1 }, -1],
+    ['when parse error', base({ when: 'Health.hp >' }), 'when', 11],
+    ['when unknown component', base({ when: 'Health.hp > Nope.x' }), 'when', 12],
+    ['when forbidden field', base({ when: 'Health.__proto__ > 0' }), 'when', 0],
+    ['when type error', base({ when: 'Health.hp > "a"' }), 'when', 12],
+    ['malformed set', base({ actions: [ok, { set: 'Health', expr: '1' }] }), { action: 1, part: 'set' }, -1],
+    ['unknown set component', base({ actions: [ok, { set: 'Nope.x', expr: '1' }] }), { action: 1, part: 'set' }, -1],
+    ['forbidden set field', base({ actions: [ok, { set: 'Health.constructor', expr: '1' }] }), { action: 1, part: 'set' }, -1],
+    ['expr parse error', base({ actions: [ok, { set: 'Health.hp', expr: '1 +' }] }), { action: 1, part: 'expr' }, 3],
+    ['expr unknown component', base({ actions: [ok, { set: 'Health.hp', expr: '1 + Nope.x' }] }), { action: 1, part: 'expr' }, 4],
+    ['expr forbidden field', base({ actions: [ok, { set: 'Health.hp', expr: 'Health.prototype' }] }), { action: 1, part: 'expr' }, 0],
+    ['expr type error', base({ actions: [ok, { set: 'Health.hp', expr: '2 * "a"' }] }), { action: 1, part: 'expr' }, 4],
+  ]
+
+  it.each(cases)('%s', (_label, def, field, position) => {
+    const result = compileRule(def, resolve)
+    expect(result.rule).toBeNull()
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0]!.field).toEqual(field)
+    expect(result.errors[0]!.position).toBe(position)
+  })
+
+  it('attributes a duplicate name to "name" through update()', () => {
+    const world = createWorld({ headless: true })
+    const errors = installRules(world, [], resolve).update([base({}), base({})])
+    expect(errors.get('r')).toEqual([
+      { rule: 'r', position: -1, message: expect.stringContaining('Duplicate'), field: 'name' },
+    ])
+  })
+
+  it('keeps one field per error when several parts fail together', () => {
+    const result = compileRule(
+      base({
+        schedule: 'x' as 'tick',
+        query: ['Nope'],
+        when: 'Nope.a > 0',
+        actions: [{ set: 'Nope.b', expr: 'Nope.c' }],
+      }),
+      resolve,
+    )
+    expect(result.errors.map((e) => e.field)).toEqual([
+      'schedule',
+      { query: 0 },
+      'when',
+      { action: 0, part: 'set' },
+      { action: 0, part: 'expr' },
+    ])
   })
 })

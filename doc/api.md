@@ -1626,6 +1626,20 @@ interface RulesHandle {
   update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
   uninstall(): void
 }
+
+interface RuleError {
+  rule: string
+  position: number        // offset within the part named by `field`, or -1
+  message: string
+  field?: RuleDefPath     // set on every error from compileRule / update() (2.1)
+}
+
+// Which part of a RuleDef an error is about. Later minors add members:
+// keep a default branch.
+type RuleDefPath =
+  | 'name' | 'schedule' | 'priority' | 'when'
+  | { readonly query: number }
+  | { readonly action: number; readonly part: 'set' | 'expr' }
 ```
 
 **Ordering.** Systems run by (priority, `order`, registration index) — SPEC

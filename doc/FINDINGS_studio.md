@@ -118,6 +118,11 @@ caller can route each error to the right widget directly instead of
 re-deriving that mapping with its own parallel (and necessarily
 simplified/duplicated) validation pass.
 
+**Resolved in 2.1 (O-79, engine milestone E6):** every `RuleError` from
+`compileRule` and `RulesHandle.update()` now carries `field: RuleDefPath`
+(`'name' | 'schedule' | 'priority' | 'when' | { query: i } | { action: i;
+part: 'set' | 'expr' }`), with `position` relative to that part's string.
+
 ## 2026-07-25 — `@domecs/dom`'s `mountDOM` has no caller-invoked "patch now" entry point, and a heartbeat step used to fake one re-fires `tickEnd`
 
 Evaluated `packages/domecs-dom` (`mountDOM`/`defineView`) as the
