@@ -58,6 +58,19 @@ All notable changes to DOMECS are documented here. The format is based on
   `ContactPhase`, `ContactStateValue`. Docs: scene README "Contacts",
   `doc/api.md` doctest `scene-contacts`, SPEC §2.12. Bench workload
   `contacts`.
+- `@domecs/scene` scenes (2.3, harness spec §7.3, O-13 partly):
+  `instantiateScene(world, data, { resolve, refFields? })` spawns a
+  `SceneData` (`{ name, entities: [{ key, components, parent? }] }`) in array
+  order, links parents by key with `setParent` and remaps `refFields` keys
+  to live ids; it returns `{ ids, problems }` and never throws for bad scene
+  data (unknown components, duplicate keys spawned as `key#2`, missing parent
+  keys, cycles and unknown ref keys are `SceneProblem`s with paths). Every
+  entity carries the new schema'd, persistent `SceneMember { scene, key }`.
+  `unloadScene(world, name)` despawns the scene's trees and returns the
+  count; `sceneEntities(world, name)` lists members in ascending id. Types
+  `SceneData`, `SceneEntityData`, `SceneProblem`, `InstantiateSceneOptions`,
+  `InstantiateSceneResult`. Docs: scene README "Scenes", `doc/api.md`
+  doctest `scene-goto-level`, SPEC §7.6.
 - `@domecs/rules`: `walkFieldRefs(ast, visit)` is now exported from the
   package entry (it was only in `dist/ast.js`). Unchanged behaviour: it visits
   the evaluated entity's own field reads with their positions; use

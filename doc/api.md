@@ -2318,7 +2318,8 @@ interface InspectorSnapshot {
 
 Hierarchy (`Parent`, `setParent`, `childrenOf`, `ancestorsOf`, `rootsOf`,
 `despawnTree`, `installHierarchy`) and `composeTransforms` are documented in
-the package README. This section covers the spatial index and contacts.
+the package README. This section covers the spatial index, contacts and
+scenes.
 
 ### Spatial index
 
@@ -2502,6 +2503,130 @@ assert.deepEqual(fork.log, live.log)
 assert.equal(live.world.getComponent(hero, Player)!.hp, 7)
 const strict = (w: typeof live.world) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
 assert.equal(strict(fork.world), strict(live.world))
+```
+
+### Scenes
+
+`instantiateScene` spawns a scene given as plain data, mapping its authored
+keys to live ids; `unloadScene` removes it again (2.3; O-13 partly; SPEC
+§7.6). A "goto level" command is an event rule that records the request plus
+a host call after the step; there is no scene rule effect.
+
+```ts
+const SceneMember: ComponentType<{ scene: string; key: string }, 'SceneMember'>   // schema'd, persistent
+
+interface SceneEntityData {
+  readonly key: string                                     // unique in the scene
+  readonly components: Readonly<Record<string, Readonly<Record<string, unknown>>>>   // name → fields
+  readonly parent?: string | null                          // a key in the same scene
+}
+interface SceneData { readonly name: string; readonly entities: readonly SceneEntityData[] }
+interface SceneProblem { readonly path: string; readonly message: string }   // e.g. 'entities[2].parent'
+interface InstantiateSceneOptions {
+  readonly resolve: (name: string) => ComponentType<any> | undefined
+  readonly refFields?: ReadonlyArray<readonly [component: string, field: string]>   // key → live id
+}
+interface InstantiateSceneResult { readonly ids: ReadonlyMap<string, Entity>; readonly problems: readonly SceneProblem[] }
+
+function instantiateScene(world: World, data: SceneData, options: InstantiateSceneOptions): InstantiateSceneResult
+function unloadScene(world: World, name: string): number     // entities removed
+function sceneEntities(world: World, name: string): Entity[] // members, ascending id
+```
+
+- **Order:** spawn in array order (equal data on equal worlds → equal ids),
+  then `setParent` by key, then `refFields` (a string key in a listed field
+  becomes the live id and the component is marked changed; `null` and
+  numbers are left alone).
+- **Values:** each component is its defaults plus the given fields (a
+  plain-data copy, built with `create`), plus `SceneMember { scene, key }`.
+- **Problems, never throws** (only a bad `data`/`options` shape is a
+  `TypeError`): an unknown component, fields that are not an object or that
+  `validate` rejects, a type whose name another type holds in the world →
+  that component is skipped and the entity still spawns; a duplicate key →
+  the entity spawns as `key#2` (`#3`, …; keys in the data name the first
+  holder); a missing parent key, a self-parent or a cycle → the entity stays
+  a root; an unknown `refFields` key → the field is left unchanged.
+- **Unload:** `despawnTree` over the member roots (members whose parent is
+  not a member) in ascending id, so non-member descendants go too and
+  ancestors outside the scene stay. A scene name instantiated twice unloads
+  as one.
+- **Snapshots:** `SceneMember` and `Parent` are ordinary components, so
+  scenes survive snapshot/restore, saves and replay. Host-driven swaps
+  between steps are out-of-tick changes: an act-log recorder notes them as
+  gaps (SPEC §7.5).
+
+```ts doctest name=scene-goto-level
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, hashSnapshot, type World } from '@domecs/core'
+import { instantiateScene, sceneEntities, unloadScene, type SceneData } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('LvPos', { defaults: { x: 0, y: 0 } })
+const Chase = defineComponent<{ target: number | string | null }>('LvChase', { defaults: { target: null } })
+const Level = defineComponent<{ current: string; requested: string }>('LvLevel', {
+  defaults: { current: '', requested: '' },
+})
+const GotoScene = defineEvent<{ scene: string }>('LvGotoScene', {
+  schema: { fields: { scene: { kind: 'string', description: 'Scene to load' } } },
+})
+const types = [Pos, Chase, Level]
+const resolve = (name: string) => types.find((t) => t.name === name)
+
+const scenes: Record<string, SceneData> = {
+  town: {
+    name: 'town',
+    entities: [
+      { key: 'hero', components: { LvPos: { x: 1 } } },
+      { key: 'dog', components: { LvPos: {}, LvChase: { target: 'hero' } }, parent: 'hero' },
+    ],
+  },
+  cave: { name: 'cave', entities: [{ key: 'bat', components: { LvPos: { y: 3 }, Bogus: {} } }] },
+}
+
+function build(): World {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  assert.ok(world.register(GotoScene, ...types).ok) // restore resolves pending events by name
+  const errors = installRules(world, [], resolve).update([{
+    name: 'goto', schedule: 'event', on: 'LvGotoScene', priority: 1000, query: ['LvLevel'],
+    actions: [{ set: 'LvLevel.requested', expr: 'event.scene' }],
+  }])
+  assert.equal(errors.size, 0)
+  return world
+}
+
+/** The host, after each step: swap scenes when the rule recorded a request. */
+function swap(world: World): string[] {
+  const [level] = [...world.iterEntitiesWith(Level)]
+  const { current, requested } = level!.value
+  if (requested === current) return []
+  if (current) unloadScene(world, current)
+  const { problems } = instantiateScene(world, scenes[requested]!, { resolve, refFields: [['LvChase', 'target']] })
+  level!.value.current = requested
+  world.markChanged(level!.id, Level)
+  return problems.map((p) => `${p.path}: ${p.message}`)
+}
+
+const live = build()
+live.spawn([entry(Level, { current: '', requested: 'town' })])
+assert.deepEqual(swap(live), [])
+const [hero, dog] = sceneEntities(live, 'town')
+assert.deepEqual(live.getComponent(dog!, Chase), { target: hero }) // key remapped to the live id
+
+live.emit(GotoScene, { scene: 'cave' })
+// Fork with the command in flight: it continues exactly like the live world.
+const fork = build()
+fork.restore(live.snapshot({ pendingEvents: true }))
+const reports: string[][] = []
+for (const world of [live, fork]) {
+  world.stepOnce() // the rule records the request
+  reports.push(swap(world)) // the host swaps scenes
+}
+assert.deepEqual(reports[0], ['entities[0].components.Bogus: unknown component "Bogus"; skipped'])
+assert.deepEqual(sceneEntities(live, 'town'), [])
+assert.equal(sceneEntities(live, 'cave').length, 1)
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork), strict(live))
+assert.equal(unloadScene(live, 'cave'), 1)
 ```
 
 ---

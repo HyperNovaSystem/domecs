@@ -2,8 +2,8 @@
 
 Parent-child entity hierarchy for DOMECS (M4): a `Parent` component plus
 tree-shaped queries, a despawn-orphan policy plugin, and parent-before-child
-transform composition; a world-bound spatial index (2.2); and contact events
-for rules (2.3).
+transform composition; a world-bound spatial index (2.2); contact events
+for rules (2.3); and scenes as data (2.3).
 
 ## Install
 
@@ -182,11 +182,77 @@ installRules(world, [{
 - Out of scope: AABB and polygon shapes, physics response, continuous
   collision.
 
+## Scenes
+
+`instantiateScene(world, data, options)` spawns a scene given as plain data
+(a level, a screen, a prefab group), mapping its authored keys to live ids;
+`unloadScene(world, name)` removes it again (2.3; SPEC §7.6):
+
+```ts
+import { createWorld, defineComponent } from '@domecs/core'
+import { instantiateScene, sceneEntities, unloadScene, type SceneData } from '@domecs/scene'
+
+const Pos = defineComponent<{ x: number; y: number }>('Pos', { defaults: { x: 0, y: 0 } })
+const Chase = defineComponent<{ target: number | string | null }>('Chase', { defaults: { target: null } })
+
+const town: SceneData = {
+  name: 'town',
+  entities: [
+    { key: 'hero', components: { Pos: { x: 1 } } },
+    { key: 'dog', components: { Pos: {}, Chase: { target: 'hero' } }, parent: 'hero' },
+  ],
+}
+
+const world = createWorld({ headless: true })
+const { ids, problems } = instantiateScene(world, town, {
+  resolve: (name) => [Pos, Chase].find((t) => t.name === name),
+  refFields: [['Chase', 'target']],          // 'hero' becomes hero's live id
+})
+problems                                     // [] — or { path, message } per problem
+sceneEntities(world, 'town')                 // [ids.get('hero'), ids.get('dog')]
+unloadScene(world, 'town')                   // 2
+```
+
+- **Order.** Entities spawn in array order, so equal data on equal worlds
+  gives equal ids. Then `parent` keys become `setParent` links (a parent may
+  come later in the array), then each `refFields` field holding a string
+  key gets the live id (and is marked changed). `null` and numbers are left
+  alone.
+- **Values.** Each component is its defaults plus the given fields (a
+  plain-data copy, built with the component's `create`). Every entity also
+  gets `SceneMember { scene, key }`, a schema'd, persistent component, so
+  scenes survive snapshots, saves and replay, and snapshot pruning keeps
+  otherwise bare scene entities.
+- **Problems are returned, never thrown.** Each has a `path` into the data
+  (`entities[2].components.Target.entity`). An unknown component, fields
+  that are not an object or that `validate` rejects, or a type whose name
+  another type already holds in the world: that component is skipped and
+  the entity still spawns. A duplicate key: the entity spawns as `key#2`
+  (`#3`, …) and keys in the data keep naming the first holder. A missing
+  parent key, a self-parent or a cycle: the entity stays a root. An unknown
+  `refFields` key: the field is left as authored. Only a malformed `data`
+  or `options` shape is a `TypeError`.
+- **Unload.** `unloadScene` runs `despawnTree` over the scene's member roots
+  (members whose parent is not a member), in ascending id, and returns how
+  many entities it removed: non-member descendants (a bullet parented under
+  a scene entity) go too, a member's ancestors outside the scene stay. A
+  scene name instantiated twice unloads as one. `sceneEntities` lists the
+  members in ascending id.
+- **"Goto level".** Declare a `GotoScene` command with a schema and handle
+  it with an event rule that records the request in a level-state entity
+  (`actions: [{ set: 'Level.requested', expr: 'event.scene' }]`); after the
+  step, the host reads it and calls `unloadScene` + `instantiateScene`
+  (`doc/api.md` doctest `scene-goto-level`). There is no scene rule effect.
+  The swap happens between steps, so an act-log recorder notes it as a gap.
+- Out of scope: a codec registry that keeps unknown component types as
+  inspectable data (the rest of O-13), streaming or partial loads.
+
 ## Related packages
 
 - `@domecs/core` — provides `World`, `defineComponent`, `definePlugin`,
   `world.snapshot()` / `world.restore()`, and `createSpatialGrid`.
-- `@domecs/rules` — event rules (`on: 'Contact'`) consume contacts.
+- `@domecs/rules` — event rules (`on: 'Contact'`) consume contacts; an event
+  rule records a "goto level" request for the host's scene swap.
 
 ## License
 

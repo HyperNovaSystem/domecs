@@ -123,6 +123,11 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   opt-in) on the `fixed` schedule; rules react next tick with `{ schedule: 'event', on:
   'Contact', self: 'event.a', other: 'event.b', when: "event.phase == 'begin'" }`.
   `ContactState` is snapshotted; forks take `snapshot({ pendingEvents: true })`
+- **Levels / scenes:** `instantiateScene(world, { name, entities: [{ key, components, parent? }] },
+  { resolve, refFields: [['Target', 'entity']] })` (`@domecs/scene`) spawns in array order and
+  maps keys to live ids; it returns `{ ids, problems }` (never throws for bad data — check
+  `problems`). `unloadScene(world, name)` removes the scene's trees. "Goto level": an event
+  rule writes `event.scene` into a level-state entity; the host swaps scenes after the step
 - **Trig in systems:** `dmath.sin` / `dmath.cos` / `dmath.atan2` /
   `dmath.hypot` / `dmath.pow` (`@domecs/core`), not `Math.*`, so Node,
   Electron and browsers agree bit for bit

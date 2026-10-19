@@ -451,28 +451,28 @@ Scheduled in revision 3 (was EC3).
 #### E21.1 `SceneMember` and `instantiateScene`
 
 - **Files:** create `packages/domecs-scene/src/scenes.ts`; `packages/domecs-scene/src/index.ts`; test `packages/domecs-scene/test/scenes.test.ts`.
-- [ ] **Red:** spec test 1: ids are deterministic (spawn in array order; same data → same ids in two worlds); test 2: `parent` keys become `setParent` links, a cycle and a missing key are reported as problems with paths, never thrown; test 3: `refFields` remap string keys to live ids, an unknown key is a problem and the field is left unchanged; test 4: an unknown component name is a problem, that component is skipped and the entity still spawns; a duplicate key is a problem and the second entity spawns as `key#2`; each spawn carries `SceneMember{scene, key}` with values built from the component's defaults plus the given fields.
-- [ ] **Green:** `SceneMember` (schema'd, persistent), `SceneEntityData`, `SceneData`, `SceneProblem`, `InstantiateSceneOptions`, `instantiateScene` (spawn → parent by key → remap `refFields`).
-- [ ] **Commit:** `feat(scene): instantiateScene with key remapping and reported problems (E21.1)`
+- [x] **Red:** spec test 1: ids are deterministic (spawn in array order; same data → same ids in two worlds); test 2: `parent` keys become `setParent` links, a cycle and a missing key are reported as problems with paths, never thrown; test 3: `refFields` remap string keys to live ids, an unknown key is a problem and the field is left unchanged; test 4: an unknown component name is a problem, that component is skipped and the entity still spawns; a duplicate key is a problem and the second entity spawns as `key#2`; each spawn carries `SceneMember{scene, key}` with values built from the component's defaults plus the given fields.
+- [x] **Green:** `SceneMember` (schema'd, persistent), `SceneEntityData`, `SceneData`, `SceneProblem`, `InstantiateSceneOptions`, `instantiateScene` (spawn → parent by key → remap `refFields`).
+- [x] **Commit:** `feat(scene): instantiateScene with key remapping and reported problems (E21.1)`
 
 #### E21.2 `unloadScene` and `sceneEntities`
 
 - **Files:** `packages/domecs-scene/src/scenes.ts`; same test file.
-- [ ] **Red:** spec test 5: two scenes plus unrelated entities, `unloadScene('a')` despawns exactly scene a's trees (member roots via `despawnTree`) and returns the count; `sceneEntities` lists members in ascending id; test 6: instantiate → snapshot → restore into a fresh world gives an equal strict hash, and `sceneEntities`/`unloadScene` work on the restored world.
-- [ ] **Green:** `unloadScene`, `sceneEntities`.
-- [ ] **Commit:** `feat(scene): unloadScene and sceneEntities (E21.2)`
+- [x] **Red:** spec test 5: two scenes plus unrelated entities, `unloadScene('a')` despawns exactly scene a's trees (member roots via `despawnTree`) and returns the count; `sceneEntities` lists members in ascending id; test 6: instantiate → snapshot → restore into a fresh world gives an equal strict hash, and `sceneEntities`/`unloadScene` work on the restored world.
+- [x] **Green:** `unloadScene`, `sceneEntities`.
+- [x] **Commit:** `feat(scene): unloadScene and sceneEntities (E21.2)`
 
 #### E21.3 "Goto level" through an event rule
 
 - **Files:** `packages/domecs-scene/package.json` (dev dependency `@domecs/rules: workspace:*`, unless E15 already added it); same test file.
-- [ ] **Red:** spec test 7: an event rule (§6.1, E14) on a `GotoScene` command writes the requested scene name (`event.scene`) into a field of a level-state entity, and after the step the host reads it and calls `unloadScene` + `instantiateScene`; the live world and a fork restored mid-sequence (`pendingEvents: true`) reach equal strict hashes. No rule effect for scenes is added.
-- [ ] **Commit:** `test(scene): goto-level event rule with host-driven scene swap (E21.3)`
+- [x] **Red:** spec test 7: an event rule (§6.1, E14) on a `GotoScene` command writes the requested scene name (`event.scene`) into a field of a level-state entity, and after the step the host reads it and calls `unloadScene` + `instantiateScene`; the live world and a fork restored mid-sequence (`pendingEvents: true`) reach equal strict hashes. No rule effect for scenes is added.
+- [x] **Commit:** `test(scene): goto-level event rule with host-driven scene swap (E21.3)`
 
 #### E21.4 Docs
 
 - **Files:** scene README "Scenes"; `doc/api.md` with a `ts doctest` fence; SPEC §7 note (O-13 partly closed: unknown-type surfacing); `pnpm -r build && pnpm api:surface` (`scene.d.ts`); CHANGELOG; `plan/FINDINGS.md` O-13 row (partial).
-- [ ] **Red:** `pnpm doctest:check` fails on the new fence until E21.2 exists.
-- [ ] **Commit:** `docs(scene): scenes in README, api.md and SPEC (E21.4)`
+- [x] **Red:** `pnpm doctest:check` fails on the new fence until E21.2 exists.
+- [x] **Commit:** `docs(scene): scenes in README, api.md and SPEC (E21.4)`
 
 ### E18 — 2.3 release candidate
 
