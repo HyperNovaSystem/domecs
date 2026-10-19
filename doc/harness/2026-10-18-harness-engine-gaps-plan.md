@@ -434,8 +434,9 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 #### E16.1 Run named systems / render without a tick
 
 - **Files:** `packages/domecs/src/world.ts`, test `packages/domecs/test/run-systems.test.ts`.
-- [ ] **Red:** after `restore`, `runSystems([compose name])` populates `WorldTransform` with `tick` unchanged; unknown/other-schedule names reported as skipped; `render()` calls `onRender` without `tickStart`/`tickEnd`; default hash unchanged by `render()`.
-- [ ] **Commit:** `feat(core): runSystems and render without a tick (E16.1)`
+- [x] **Red:** after `restore`, `runSystems([compose name])` populates `WorldTransform` with `tick` unchanged; unknown/other-schedule names reported as skipped; `render()` calls `onRender` without `tickStart`/`tickEnd`; default hash unchanged by `render()`.
+- [x] **Commit:** `feat(core): runSystems and render without a tick (E16.1)`
+- [x] **Docs:** SPEC §4.0 ("Render and named systems without a tick"), `doc/api.md` (World listing + doctest `run-systems-render`), `doc/api-surface/core.d.ts`, core README, SKILL.md, CHANGELOG, `doc/FINDINGS_studio.md` entries 2 and 4 resolved, `plan/FINDINGS.md` O-88 closed. **Commit:** `docs(core): runSystems and render in SPEC, api.md and findings (E16.1)`. Choices in spec Appendix C ("Implementation notes — E16")
 
 ### E17 — Small items (§6.4; O-36, O-89)
 

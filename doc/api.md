@@ -202,6 +202,16 @@ interface World {
   stepOnce(): void             // one tick, delta = 0; fixed systems do not fire
   stepN(n: number, dt?: number): void
 
+  // O-88 (SPEC §4.0): part of a tick's work without a tick. runSystems runs
+  // the named enabled tick/fixed systems once, in run order (fixed phase,
+  // then tick); no time advance, no event flush, no hooks or signals. For
+  // derived/transient state only (an attached recorder notes a gap). Unknown,
+  // disabled and event/reactive/once names are reported in `skipped`.
+  runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] }
+  // Plugin onRender only ({ heartbeat: true }): no tickStart/tickEnd, no
+  // systems, time unchanged; renderer query windows advance (painted once).
+  render(): void
+
   // Turn-based action: emit an event and advance one tick.
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
 
@@ -578,6 +588,54 @@ interface Rng {
   seed():      readonly [number, number, number, number]
   fork(label: string): Rng     // deterministic subrng
 }
+```
+
+After `restore()` (a scrub, a branch selection) derived state such as
+`composeTransforms` output may be missing until the next tick, and a forced
+repaint through a heartbeat `step(0)` would re-fire every `tickStart`/`tickEnd`
+subscriber. `runSystems` primes the derived state and `render` repaints,
+neither moving `time.tick` (SPEC §4.0, O-88):
+
+```ts doctest name=run-systems-render
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, definePlugin, entry } from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('RsdPos', { defaults: { x: 0 } })
+const Screen = defineComponent<{ px: number }>('RsdScreen', { defaults: { px: 0 } })
+
+const w = createWorld({ headless: true })
+w.system('to-screen', { query: [Pos] }, (ctx) => {
+  for (const e of ctx.entities) ctx.world.addComponent(e.id, Screen, { px: e.RsdPos!.x * 10 })
+})
+let ran = 0
+w.system('gameplay', {}, () => void ran++)
+const painted: number[] = []
+w.use(definePlugin({
+  name: 'paint',
+  install: () => ({
+    onRender: () => {
+      for (const id of w.listEntities([Screen])) painted.push(w.getComponent(id, Screen)!.px)
+    },
+  }),
+}))
+let tickEnds = 0
+w.signals.tickEnd.subscribe(() => void tickEnds++)
+
+const id = w.spawn([entry(Pos, { x: 4 })])
+w.stepOnce()
+w.removeComponent(id, Screen) // derived state lost, e.g. not carried by a save
+
+const r = w.runSystems(['to-screen', 'no-such-system'])
+assert.deepEqual(r, { ran: ['to-screen'], skipped: ['no-such-system'] })
+assert.equal(w.getComponent(id, Screen)!.px, 40)
+assert.equal(ran, 1)            // only the named system ran
+assert.equal(w.time.tick, 1)    // tick identity unchanged
+
+painted.length = 0
+w.render()
+assert.deepEqual(painted, [40])
+assert.equal(tickEnds, 1)       // render fired no tickEnd
+assert.equal(w.time.tick, 1)
 ```
 
 ### Query builder

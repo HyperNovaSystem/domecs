@@ -80,6 +80,11 @@ for (const entity of world.query(Has(Position)).entities) {
   `{ accepted, consumedTurn, reason?, events, snapshot? }` result; the verdict
   comes from an optional `opts.resolve`.
 - `world.snapshot()` / `world.restore(...)` — serialize and restore world state.
+- `world.runSystems(names)` / `world.render()` — after a restore or scrub,
+  run named `tick`/`fixed` systems once (prime derived state such as
+  `composeTransforms` output) and repaint through plugin `onRender`, without
+  advancing `time.tick` or firing `tickStart`/`tickEnd` (2.3, SPEC §4.0).
+  `runSystems` is for derived/transient state only; a recorder notes a gap.
 - `hashSnapshot(snap, { includeChanges: true })` — canonical FNV-1a-64 hash;
   "same state" means equal hashes (the strict `includeChanges` form for live
   vs fork). `canonicalJson` (sorted keys, lossless `-0`) for keyframes,

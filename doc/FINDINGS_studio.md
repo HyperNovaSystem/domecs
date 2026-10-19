@@ -82,6 +82,20 @@ at install time, and let a host app (like Studio) prime post-`restore()`
 state on demand, without the caller having to reason about tick/history side
 effects just to warm up one value.
 
+**Resolved in 2.3 (O-88, engine milestone E16):** `World.runSystems(names)`
+runs the named enabled `tick`/`fixed` systems once, in run order, without
+advancing `time.tick`, flushing events or firing `tickStart`/`tickEnd`, and
+returns `{ ran, skipped }` — after `restore()`,
+`world.runSystems(['domecs-scene:compose-transforms:Local>World_'])`
+populates `World_` with the tick unchanged and no other system run (SPEC
+§4.0; test in `packages/domecs-scene/test/compose-transforms.test.ts`). It is
+for derived/transient state only: an attached act-log recorder notes an
+`out_of_tick_mutation` gap, and on worlds compared by hash it must be called
+on all or none (it adds change marks). Studio's authoritative worlds do not
+use it (harness spec §6.3: studio snapshots `WorldTransform` and computes
+frame positions with the pure compose function); renderer-side stage worlds
+can.
+
 ## 2026-07-25 — `RuleError` has no field-level tag, so a per-field UI must re-derive attribution itself
 
 `compileRule` (`packages/domecs-rules/src/rules.ts`) aggregates every defect
@@ -168,6 +182,18 @@ skipped") but doesn't say "signals" the way the internal `runTick` F-6
 comment does — worth naming `tickEnd`/`tickStart` explicitly there too, so a
 consumer discovers this specific hazard from the public signature alone
 rather than needing to read `runTick`'s implementation.
+
+**Resolved in 2.3 (O-88, engine milestone E16):** `World.render()` calls
+plugin `onRender` only, with heartbeat `TickInfo` (`{ heartbeat: true }`): no
+`onTickStart`/`onTickEnd` hooks, no `tickStart`/`tickEnd` signals, no
+systems, `time` unchanged, and renderer query windows advance as after a
+heartbeat (marks are painted once). A host that redraws from
+`signals.tickEnd` can force a `mountDOM` repaint with it without
+re-entering its own handler. It throws when called during a tick or
+heartbeat (so a `tickEnd` subscriber cannot recurse into it). The public
+`World.step(dt)` JSDoc now names the hooks and the `tickStart`/`tickEnd`
+signals a heartbeat fires and points to `render()`; SPEC §4.0 documents
+`render()` beside the heartbeat.
 
 ## 2026-10-19 — `validateEventPayload` is not exported from `@domecs/core`
 

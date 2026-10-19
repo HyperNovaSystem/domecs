@@ -8,6 +8,15 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `@domecs/core` `World.runSystems(names)` and `World.render()` (2.3, harness
+  spec §6.3, O-88). `runSystems` runs the named enabled `tick`/`fixed`
+  systems once, in run order, without advancing time, flushing events or
+  firing `tickStart`/`tickEnd`, and returns `{ ran, skipped }` (unknown,
+  disabled and `event`/`reactive`/`once` names are skipped); an attached
+  recorder notes an `out_of_tick_mutation` gap. `render` calls plugin
+  `onRender` only (heartbeat `TickInfo`) and advances renderer query windows,
+  so a host can repaint after a restore without re-firing `tickEnd`
+  subscribers. Docs: SPEC §4.0, `doc/api.md` doctest `run-systems-render`.
 - `@domecs/rules` event-triggered rules (2.3, harness spec §6.1, O-84):
   `RuleDef.schedule: 'event'` with `on` (the trigger's name, resolved by the
   new `InstallRulesOptions.resolveEvent`, default `world.lookupEvent`),

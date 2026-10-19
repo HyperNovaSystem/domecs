@@ -379,9 +379,10 @@ export interface World {
   /**
    * Advance the world by `dt` seconds (real-time tick).
    * - `dt > 0` → normal real-time tick; time advances by `dt`.
-   * - `dt <= 0` → **heartbeat**: plugin hooks + render fire, but system
-   *   execution and change-detection buffer swap are skipped. Use for
-   *   lightweight UI repaints between turns (SPEC F-6).
+   * - `dt <= 0` → **heartbeat**: plugin hooks (`onTickStart`, `onRender`,
+   *   `onTickEnd`) and the `tickStart`/`tickEnd` signals fire, but system
+   *   execution and change-detection buffer swap are skipped (SPEC F-6). To
+   *   repaint without re-firing `tickStart`/`tickEnd`, use {@link render}.
    *
    * For the turn-based no-arg single advance, use {@link stepOnce}.
    */

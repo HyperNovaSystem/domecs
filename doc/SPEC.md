@@ -566,6 +566,13 @@ A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the w
 
 **Legacy carve-out.** A no-argument `step()` call (`dt === undefined`) is *not* a heartbeat — it advances a tick with `time.delta = 0` for backwards compatibility with turn-based exemplars. Turn-based callers should use `turn(event, payload)` (which invokes `step()` internally) rather than passing literal zero. Code that wants explicit "do nothing now but keep the UI alive" behavior MUST pass `0` explicitly.
 
+**Render and named systems without a tick (O-88, normative).** Two calls do part of a tick's work without being one:
+
+- `world.render()` calls plugin `onRender` only, with `{ heartbeat: true }`. Unlike a heartbeat it fires no `onTickStart`/`onTickEnd` hooks and no `tickStart`/`tickEnd` signals, and leaves `time` (including `delta`) unchanged. Live-query windows advance at its end exactly as at the end of a heartbeat (also when a hook threw), so a mark is painted once. It changes no snapshot field: the default and strict hashes are unchanged unless a hook writes.
+- `world.runSystems(names)` runs the named **enabled `tick` and `fixed`** systems once, in run order — the `fixed` phase, then `tick`, each by priority, order, registration (§3) — and returns `{ ran, skipped }`. `ran` has one entry per system run (a name two systems share appears twice); `skipped` lists, once each in input order, every name with no system run: unknown, disabled (its `enabled` gate is checked just before its run), or of another schedule (`event`, `reactive` and `once` are never run on demand). It does not advance time, flush events, apply pending `replaceFn` bodies or fire hooks or signals. `ctx.time` is the current `time` (its `scaledDelta` is what the last tick left) and `ctx.events` the current view; emits stay queued for the next tick. `tick` systems run while paused and a `fixed` system's `rateHz` divisor is not applied. Each run is a normal run for change windows (§2.9): the system's window advances. A throwing system propagates and the systems after it do not run. Use it only for **derived and transient** state the next tick recomputes anyway (priming `composeTransforms` after `restore()`): its writes are out of tick, so an attached act-log recorder (§7.5) notes an `out_of_tick_mutation` gap whenever a system runs. On worlds compared by hash, call it on all of them or none — it adds change marks.
+
+Both throw `Error` when called during a tick or heartbeat (from a system, hook or handler); `runSystems` throws `TypeError` unless `names` is an array of strings.
+
 ### 4.1 Normal tick order
 
 For each `step(dt)` with `dt > 0` (or `step()` with no argument — see §4.0):

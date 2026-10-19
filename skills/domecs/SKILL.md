@@ -109,6 +109,10 @@ bridge.reset()                         // episode boundary
   fork; `hashEntities` localizes a divergence; `canonicalJson` for keyframes
 - **Events in flight:** forks/keyframes use `snapshot({ pendingEvents: true })`
   and `register` every event type that can be pending in the restoring world
+- **Redraw without a tick:** after `restore`/scrub, `world.runSystems(['<name>'])` primes
+  derived state (e.g. `composeTransforms`; `{ ran, skipped }`, only enabled `tick`/`fixed`)
+  and `world.render()` repaints via `onRender` only — neither advances `time.tick` nor fires
+  `tickStart`/`tickEnd` (unlike `step(0)`). Derived/transient state only: a recorder notes a gap
 - **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
   step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
 - **Contacts (hits, pickups):** `world.use(installContacts({ position: { component: Pos },
