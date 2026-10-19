@@ -143,6 +143,34 @@ once per step (at the start of the system that queries), then
 independent of `cellSize`; the index is never snapshotted, so `refresh()`
 after `restore`. The pure grid is `createSpatialGrid` in `@domecs/core`.
 
+### Behaviours as rules
+Data-defined behaviours (chase, flee, keep distance, counters) are
+`@domecs/rules` `RuleDef`s, not a hand-written system each:
+
+```ts
+import { installRules, type RuleDef } from '@domecs/rules'
+
+const chase: RuleDef = {
+  name: 'chase', schedule: 'fixed', query: ['Pos', 'Vel'], without: ['Player'],
+  actions: [
+    { set: 'Vel.x', expr: '(first(Player).Pos.x - Pos.x) * 0.1 ?? 0' },
+    { set: 'Vel.y', expr: '(nearest(Coin, 50).Pos.y - Pos.y) * 0.1 ?? 0' },
+  ],
+}
+const rules = installRules(world, [], resolve, { spatial: { component: 'Pos' } })
+const errors = rules.update([chase])          // Map<rule name, RuleError[]>; empty = all installed
+```
+
+Read other entities with `first(S)`, `nearest(S[, d])`, `entity(n)`; over sets
+with `count`, `exists`, `sum`/`avg`/`minOf`/`maxOf(S, C.f)`,
+`countWithin(S, r)`, `distanceTo(e)`. Wrap reads that may have no value (no
+player, nothing in range) in `?? fallback`. `nearest`, `countWithin` and
+`distanceTo` need the `spatial` option (else a compile error). A rule writes
+only its own entity; other entities react by reading it (`first(S).C.f`) in
+their own rules. `self`, `tick`, `other`, `event`, `pointer` are reserved
+words. Contract: SPEC Appendix A; tutorial:
+the `@domecs/rules` README.
+
 ### Record and replay
 Record what enters the world from outside, then re-run it on a fresh world
 built by the same setup:
