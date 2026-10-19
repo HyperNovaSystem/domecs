@@ -79,11 +79,14 @@ export interface InstantiateSceneResult {
  *    plain-data copy; built with the component's `create`). An unknown
  *    component name, a component the resolver cannot give, fields that are
  *    not an object or that `validate` rejects, a name another component type
- *    holds in this world, and a second component of the same type are
- *    problems: that component is skipped and the entity still spawns. A
- *    duplicate key is a problem, and the entity spawns as `key#2` (`#3`, …);
- *    a key that is not a string is a problem and the entity spawns as
- *    `#<index>`.
+ *    holds in this world, a second component of the same type, and
+ *    `SceneMember` or `Parent` given as a component (links come only from
+ *    `parent` keys) are problems: that component is skipped and the entity
+ *    still spawns. A duplicate key is a problem, and the entity spawns as
+ *    `key#2` (`#3`, …); an entry that is not an object (a hole included) or
+ *    whose key is not a string is a problem and the entity spawns as
+ *    `#<index>`. A generated key never takes a key authored anywhere in the
+ *    data (it moves on to the next free suffix).
  * 2. **Parents** by key, in array order, through `setParent` (so a parent may
  *    come later in the array). A key the scene does not have, a self-parent
  *    and a link that would close a cycle are problems; the entity stays a
@@ -125,8 +128,23 @@ export function instantiateScene(
   const ids = new Map<string, Entity>()
   const spawned: Array<{ id: Entity; raw: unknown; components: Map<string, ComponentType<any>> }> = []
 
-  // 1. Spawn in array order.
-  data.entities.forEach((raw: unknown, i) => {
+  // Every authored string key, so a generated key (a duplicate's suffix or a
+  // bad key's `#<index>`) never takes one, even one later in the array: a
+  // key in `parent`/`refFields` then always names its first authored holder.
+  const authored = new Set<string>()
+  for (let i = 0; i < data.entities.length; i++) {
+    const raw: unknown = data.entities[i]
+    if (isRecord(raw) && typeof raw.key === 'string') authored.add(raw.key)
+  }
+  const unused = (base: string): string => {
+    let n = 2
+    while (ids.has(`${base}#${n}`) || authored.has(`${base}#${n}`)) n++
+    return `${base}#${n}`
+  }
+
+  // 1. Spawn in array order (every index, holes included).
+  for (let i = 0; i < data.entities.length; i++) {
+    const raw: unknown = data.entities[i]
     const at = `entities[${i}]`
     const entity = isRecord(raw) ? raw : undefined
     if (!entity) problems.push({ path: at, message: 'expected an object with key and components' })
@@ -135,14 +153,13 @@ export function instantiateScene(
     if (entity && typeof entity.key === 'string') {
       key = entity.key
       if (ids.has(key)) {
-        let n = 2
-        while (ids.has(`${key}#${n}`)) n++
-        const suffixed = `${key}#${n}`
+        const suffixed = unused(key)
         problems.push({ path: `${at}.key`, message: `duplicate key "${key}"; spawned as "${suffixed}"` })
         key = suffixed
       }
     } else {
-      key = `#${i}`
+      const base = `#${i}`
+      key = ids.has(base) || authored.has(base) ? unused(base) : base
       if (entity) problems.push({ path: `${at}.key`, message: `key must be a string; spawned as "${key}"` })
     }
 
@@ -169,7 +186,7 @@ export function instantiateScene(
     const id = world.spawn(bag)
     ids.set(key, id)
     spawned.push({ id, raw: entity, components: byName })
-  })
+  }
 
   // 2. Parents by key.
   spawned.forEach(({ id, raw }, i) => {
@@ -294,6 +311,7 @@ function buildComponent(
   }
   if (type === undefined) return `unknown component "${name}"; skipped`
   if (type === SceneMember) return 'SceneMember is set by instantiateScene; skipped'
+  if (type === Parent) return 'Parent is set from the entity\'s "parent" key; skipped'
   if (!isRecord(fields)) return `fields of "${name}" must be an object; skipped`
   if (used.has(type)) return `component "${type.name}" is already set on this entity; skipped`
   // register checks that this is a component type and that no other type

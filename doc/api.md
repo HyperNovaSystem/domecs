@@ -2541,10 +2541,13 @@ function sceneEntities(world: World, name: string): Entity[] // members, ascendi
   plain-data copy, built with `create`), plus `SceneMember { scene, key }`.
 - **Problems, never throws** (only a bad `data`/`options` shape is a
   `TypeError`): an unknown component, fields that are not an object or that
-  `validate` rejects, a type whose name another type holds in the world →
-  that component is skipped and the entity still spawns; a duplicate key →
-  the entity spawns as `key#2` (`#3`, …; keys in the data name the first
-  holder); a missing parent key, a self-parent or a cycle → the entity stays
+  `validate` rejects (it runs before the `refFields` remap, so it sees the
+  authored key), a type whose name another type holds in the world,
+  `Parent` or `SceneMember` given as a component (links come only from
+  `parent` keys) → that component is skipped and the entity still spawns; a
+  duplicate key → the entity spawns as `key#2` (`#3`, …; a suffix never
+  takes a key authored elsewhere in the data, and keys in the data name the
+  first holder); a missing parent key, a self-parent or a cycle → the entity stays
   a root; an unknown `refFields` key → the field is left unchanged.
 - **Unload:** `despawnTree` over the member roots (members whose parent is
   not a member) in ascending id, so non-member descendants go too and

@@ -217,7 +217,8 @@ unloadScene(world, 'town')                   // 2
   gives equal ids. Then `parent` keys become `setParent` links (a parent may
   come later in the array), then each `refFields` field holding a string
   key gets the live id (and is marked changed). `null` and numbers are left
-  alone.
+  alone. A component's `validate` runs when it is built, before the remap,
+  so it sees the authored key in a ref field.
 - **Values.** Each component is its defaults plus the given fields (a
   plain-data copy, built with the component's `create`). Every entity also
   gets `SceneMember { scene, key }`, a schema'd, persistent component, so
@@ -225,10 +226,12 @@ unloadScene(world, 'town')                   // 2
   otherwise bare scene entities.
 - **Problems are returned, never thrown.** Each has a `path` into the data
   (`entities[2].components.Target.entity`). An unknown component, fields
-  that are not an object or that `validate` rejects, or a type whose name
-  another type already holds in the world: that component is skipped and
-  the entity still spawns. A duplicate key: the entity spawns as `key#2`
-  (`#3`, …) and keys in the data keep naming the first holder. A missing
+  that are not an object or that `validate` rejects, a type whose name
+  another type already holds in the world, or `Parent`/`SceneMember` given
+  as a component (links come only from `parent` keys): that component is
+  skipped and the entity still spawns. A duplicate key: the entity spawns
+  as `key#2` (`#3`, …; a suffix never takes a key authored elsewhere in the
+  data) and keys in the data keep naming the first holder. A missing
   parent key, a self-parent or a cycle: the entity stays a root. An unknown
   `refFields` key: the field is left as authored. Only a malformed `data`
   or `options` shape is a `TypeError`.

@@ -10,6 +10,7 @@ import {
   unloadScene,
   type InstantiateSceneOptions,
   type SceneData,
+  type SceneEntityData,
 } from '../src/index.js'
 
 // Spec §7.3 (G14, O-13), plan E21: scenes as data. instantiateScene spawns
@@ -214,6 +215,89 @@ describe('instantiateScene (E21.1)', () => {
     // Keys in the data name the first holder.
     expect(w.getComponent(ids.get('c')!, Parent)).toEqual({ entity: ids.get('a') })
     expect(w.getComponent(ids.get('c')!, Target)).toEqual({ entity: ids.get('a') })
+  })
+
+  it('a suffix never takes an authored key, even one later in the array; references name the authored holder', () => {
+    const w = fresh()
+    const { ids, problems } = instantiateScene(
+      w,
+      {
+        name: 's',
+        entities: [
+          { key: 'a', components: {} },
+          { key: 'a', components: {} },
+          { key: 'a#2', components: {} },
+          { key: 'c', components: { ScTarget: { entity: 'a#2' } }, parent: 'a#2' },
+        ],
+      },
+      { resolve, refFields: [['ScTarget', 'entity']] },
+    )
+    // Only the real duplicate is a problem; the authored "a#2" keeps its key.
+    expect(problems).toEqual([{ path: 'entities[1].key', message: expect.stringMatching(/duplicate key "a".*"a#3"/) }])
+    expect([...ids.keys()]).toEqual(['a', 'a#3', 'a#2', 'c'])
+    const authored = ids.get('a#2')!
+    expect(w.getComponent(authored, SceneMember)).toEqual({ scene: 's', key: 'a#2' })
+    expect(w.getComponent(ids.get('c')!, Parent)).toEqual({ entity: authored })
+    expect(w.getComponent(ids.get('c')!, Target)).toEqual({ entity: authored })
+  })
+
+  it('the #<index> fallback for a bad key never replaces another entry in ids', () => {
+    const w = fresh()
+    const data = {
+      name: 's',
+      entities: [
+        { key: '#1', components: {} },
+        { key: 5, components: {} },
+        { key: 'c', components: {}, parent: '#1' },
+        { key: 9, components: {} },
+        { key: '#3#2', components: {} },
+        { key: '#3', components: {} },
+      ],
+    } as unknown as SceneData
+    const { ids, problems } = instantiateScene(w, data, opts)
+    expect(ids.size).toBe(6)
+    expect([...ids.keys()]).toEqual(['#1', '#1#2', 'c', '#3#3', '#3#2', '#3'])
+    expect(problems.map((p) => p.path)).toEqual(['entities[1].key', 'entities[3].key'])
+    expect(problems[0]!.message).toMatch(/spawned as "#1#2"/)
+    expect(w.getComponent(ids.get('#1')!, SceneMember)).toEqual({ scene: 's', key: '#1' })
+    // The authored "#1" is still the parent the data names.
+    expect(w.getComponent(ids.get('c')!, Parent)).toEqual({ entity: ids.get('#1') })
+  })
+
+  it('a hole in the entities array is a problem and still spawns (every index spawns)', () => {
+    const w = fresh()
+    const entities: SceneEntityData[] = [{ key: 'a', components: {} }]
+    entities[2] = { key: 'c', components: {} }
+    const { ids, problems } = instantiateScene(w, { name: 's', entities }, opts)
+    expect([...ids.keys()]).toEqual(['a', '#1', 'c'])
+    expect(problems).toEqual([{ path: 'entities[1]', message: expect.stringMatching(/expected an object/) }])
+  })
+
+  it('a Parent component in the data is a problem and skipped; links come only from parent keys', () => {
+    const w = fresh()
+    w.use(installHierarchy())
+    const stranger = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    const resolveWithParent = (n: string): ComponentType<any> | undefined => (n === 'Parent' ? Parent : resolve(n))
+    const { ids, problems } = instantiateScene(
+      w,
+      {
+        name: 's',
+        entities: [
+          { key: 'a', components: {} },
+          // A key in Parent.entity would be stored as a string; a stale id
+          // would link to whatever entity holds that id now.
+          { key: 'b', components: { Parent: { entity: 'a' } } },
+          { key: 'c', components: { Parent: { entity: stranger } }, parent: 'a' },
+        ],
+      },
+      { resolve: resolveWithParent },
+    )
+    expect(problems).toEqual([
+      { path: 'entities[1].components.Parent', message: expect.stringMatching(/parent/) },
+      { path: 'entities[2].components.Parent', message: expect.stringMatching(/parent/) },
+    ])
+    expect(w.getComponent(ids.get('b')!, Parent)).toBeUndefined()
+    expect(w.getComponent(ids.get('c')!, Parent)).toEqual({ entity: ids.get('a') })
   })
 
   it('a component whose validate rejects the fields is a problem and is skipped', () => {

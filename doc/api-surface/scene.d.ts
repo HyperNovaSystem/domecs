@@ -304,11 +304,14 @@ export interface InstantiateSceneResult {
  *    plain-data copy; built with the component's `create`). An unknown
  *    component name, a component the resolver cannot give, fields that are
  *    not an object or that `validate` rejects, a name another component type
- *    holds in this world, and a second component of the same type are
- *    problems: that component is skipped and the entity still spawns. A
- *    duplicate key is a problem, and the entity spawns as `key#2` (`#3`, …);
- *    a key that is not a string is a problem and the entity spawns as
- *    `#<index>`.
+ *    holds in this world, a second component of the same type, and
+ *    `SceneMember` or `Parent` given as a component (links come only from
+ *    `parent` keys) are problems: that component is skipped and the entity
+ *    still spawns. A duplicate key is a problem, and the entity spawns as
+ *    `key#2` (`#3`, …); an entry that is not an object (a hole included) or
+ *    whose key is not a string is a problem and the entity spawns as
+ *    `#<index>`. A generated key never takes a key authored anywhere in the
+ *    data (it moves on to the next free suffix).
  * 2. **Parents** by key, in array order, through `setParent` (so a parent may
  *    come later in the array). A key the scene does not have, a self-parent
  *    and a link that would close a cycle are problems; the entity stays a
