@@ -26,6 +26,15 @@ export interface RuleDef {
    * {@link InstallRulesOptions.order}.
    */
   priority?: number
+  /**
+   * Which stream the rule's `random()` draws (§4.4; SPEC §2.8). Overrides
+   * {@link InstallRulesOptions.rng} for this rule. `'own'`: the rule's own
+   * stream, keyed `rule:<name>` and derived from the world's root seed, so
+   * adding, removing or editing another rule never changes its draws (its
+   * draws still depend on how many entities it visits). `'shared'`: the
+   * world's shared stream. Any other value is a {@link RuleError} on `'rng'`.
+   */
+  rng?: 'shared' | 'own'
   enabled?: boolean
   query: string[]
   when?: string
@@ -40,6 +49,7 @@ export type RuleDefPath =
   | 'name'
   | 'schedule'
   | 'priority'
+  | 'rng'
   | 'when'
   | { readonly query: number }
   | { readonly action: number; readonly part: 'set' | 'expr' }
@@ -115,7 +125,7 @@ interface CompiledRuleInternal extends CompiledRule {
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
  * - Every error carries `field` (§4.6), the one part of the def it is about:
- *   `'schedule'`, `'priority'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   `'schedule'`, `'priority'`, `'rng'`, `{ query: i }`, `'when'` (parse, resolve and
  *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
  *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
  *   (every error inside that expression). `position` is an offset within
@@ -142,6 +152,9 @@ export function compileRule(
   }
   if (def.priority !== undefined && !Number.isFinite(def.priority)) {
     fail('priority', -1, 'priority must be a finite number')
+  }
+  if (def.rng !== undefined && def.rng !== 'shared' && def.rng !== 'own') {
+    fail('rng', -1, `Unknown rng ${JSON.stringify(def.rng)} (expected "shared" or "own")`)
   }
 
   function resolveAndTrack(
@@ -270,9 +283,15 @@ function checkWrite(action: CompiledAction, current: Record<string, unknown>, va
 
 /**
  * Register a single compiled rule as a `world.system(...)`. `order` is the
- * secondary sort key (0 in 'registration' mode; `orderBase + i` in 'stable').
+ * secondary sort key (0 in 'registration' mode; `orderBase + i` in 'stable');
+ * `rng` the stream mode when the def gives none (§4.4).
  */
-function registerRuleSystem(world: World, rule: CompiledRuleInternal, order: number): SystemHandle {
+function registerRuleSystem(
+  world: World,
+  rule: CompiledRuleInternal,
+  order: number,
+  rng: 'shared' | 'own',
+): SystemHandle {
   const { def, queryTypes, when, actions, componentsByName } = rule
   // Keyed by the rule's own names, as reads through resolveField are.
   const actionKeys = actions.map((a) => `${a.componentName}.${a.field}`)
@@ -295,6 +314,9 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal, order: num
       query: queryTypes,
       priority: def.priority ?? 0,
       order,
+      // §4.4: an own stream is keyed by the cursor key `rule:<name>`, and
+      // outlives the system, so update() re-registration resumes it.
+      rng: def.rng ?? rng,
       enabled: () => def.enabled !== false,
       // §4.5: lets describe().systems map the system back to its rule.
       meta: { rule: def.name },
@@ -455,13 +477,20 @@ export interface InstallRulesOptions {
    * each stable handle on one world its own range.
    */
   readonly orderBase?: number
+  /**
+   * Default stream mode for every rule that sets no {@link RuleDef.rng}
+   * (§4.4). Default `'shared'` (2.0 behaviour). `'own'` gives each rule its
+   * own stream, so editing one rule never reshuffles another's draws.
+   */
+  readonly rng?: 'shared' | 'own'
 }
 
 /**
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
  *
- * @throws Error when `options.order` is not 'registration' or 'stable', or
- *   `options.orderBase` is not a finite number with |orderBase| <= 2^51.
+ * @throws Error when `options.order` is not 'registration' or 'stable',
+ *   `options.orderBase` is not a finite number with |orderBase| <= 2^51, or
+ *   `options.rng` is not 'shared' or 'own'.
  */
 export function installRules(
   world: World,
@@ -482,6 +511,10 @@ export function installRules(
     throw new Error(
       `@domecs/rules: installRules orderBase must be a finite number with |orderBase| <= 2^51 (so orderBase + i stays exact), got ${String(orderBase)}`,
     )
+  }
+  const rngMode = options.rng ?? 'shared'
+  if (rngMode !== 'shared' && rngMode !== 'own') {
+    throw new Error(`@domecs/rules: installRules rng must be 'shared' or 'own', got ${JSON.stringify(rngMode)}`)
   }
   const active = new Map<string, SystemHandle>()
 
@@ -524,7 +557,7 @@ export function installRules(
         continue
       }
 
-      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal, order)
+      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal, order, rngMode)
       active.set(def.name, handle)
     }
 

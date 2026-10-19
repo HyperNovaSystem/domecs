@@ -252,6 +252,15 @@ export interface RuleDef {
      * {@link InstallRulesOptions.order}.
      */
     priority?: number;
+    /**
+     * Which stream the rule's `random()` draws (§4.4; SPEC §2.8). Overrides
+     * {@link InstallRulesOptions.rng} for this rule. `'own'`: the rule's own
+     * stream, keyed `rule:<name>` and derived from the world's root seed, so
+     * adding, removing or editing another rule never changes its draws (its
+     * draws still depend on how many entities it visits). `'shared'`: the
+     * world's shared stream. Any other value is a {@link RuleError} on `'rng'`.
+     */
+    rng?: 'shared' | 'own';
     enabled?: boolean;
     query: string[];
     when?: string;
@@ -261,7 +270,7 @@ export interface RuleDef {
  * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
  * members, so keep a default branch when switching on it.
  */
-export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'when' | {
+export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | {
     readonly query: number;
 } | {
     readonly action: number;
@@ -315,7 +324,7 @@ export interface CompiledRule {
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
  * - Every error carries `field` (§4.6), the one part of the def it is about:
- *   `'schedule'`, `'priority'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   `'schedule'`, `'priority'`, `'rng'`, `{ query: i }`, `'when'` (parse, resolve and
  *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
  *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
  *   (every error inside that expression). `position` is an offset within
@@ -372,12 +381,19 @@ export interface InstallRulesOptions {
      * each stable handle on one world its own range.
      */
     readonly orderBase?: number;
+    /**
+     * Default stream mode for every rule that sets no {@link RuleDef.rng}
+     * (§4.4). Default `'shared'` (2.0 behaviour). `'own'` gives each rule its
+     * own stream, so editing one rule never reshuffles another's draws.
+     */
+    readonly rng?: 'shared' | 'own';
 }
 /**
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
  *
- * @throws Error when `options.order` is not 'registration' or 'stable', or
- *   `options.orderBase` is not a finite number with |orderBase| <= 2^51.
+ * @throws Error when `options.order` is not 'registration' or 'stable',
+ *   `options.orderBase` is not a finite number with |orderBase| <= 2^51, or
+ *   `options.rng` is not 'shared' or 'own'.
  */
 export declare function installRules(world: World, defs: RuleDef[], resolve: (name: string) => ComponentType<any> | undefined, options?: InstallRulesOptions): RulesHandle;
 

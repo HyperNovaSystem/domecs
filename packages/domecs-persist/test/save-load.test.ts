@@ -1,4 +1,4 @@
-import { createWorld, defineComponent, err, ok, type WorldSnapshot } from '@domecs/core'
+import { createWorld, defineComponent, deriveStream, err, ok, seedToState, type WorldSnapshot } from '@domecs/core'
 import { entry } from '@domecs/core'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { load, loadIfPresent, save } from '../src/persist.js'
@@ -248,6 +248,48 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(r.ok).toBe(true)
     expect(w.time.tick).toBe(3)
     expect(w.getComponent(0 as never, Health)?.hp).toBe(8)
+  })
+
+  it('save writes v3 (rngRoot, rngStreams); load restores the streams (§4.4)', () => {
+    const w1 = createWorld({ seed: 5 })
+    w1.system('own', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+    for (let i = 0; i < 3; i++) w1.stepOnce()
+    expect(save(w1, storage, 'v3').ok).toBe(true)
+    const read = storage.read('v3')
+    if (!read.ok || read.value === null) throw new Error('slot missing')
+    const raw = JSON.parse(read.value) as WorldSnapshot
+    expect(raw.version).toBe(3)
+    expect(raw.rngRoot).toEqual(seedToState(5))
+    expect(Object.keys(raw.rngStreams!)).toEqual(['own'])
+    const w2 = createWorld({ seed: 6 })
+    w2.system('own', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+    expect(load(w2, storage, 'v3').ok).toBe(true)
+    expect(w2.snapshot().rngStreams).toEqual(raw.rngStreams)
+    expect(w2.snapshot().rngRoot).toEqual(seedToState(5))
+  })
+
+  it('a v2 save still loads: migrated to v3 in memory, own streams re-derived from the world root (§4.4)', () => {
+    const v2: WorldSnapshot = {
+      version: 2,
+      seed: [1, 2, 3, 4],
+      tick: 7,
+      entities: [{ id: 0 as never, components: { Health: { hp: 4 } } }],
+      nextId: 1,
+    }
+    storage.write('v2', JSON.stringify(v2))
+    const w = createWorld({ seed: 9 })
+    w.system('own', { rng: 'own' }, () => {})
+    const r = load(w, storage, 'v2')
+    expect(r.ok).toBe(true)
+    expect(w.time.tick).toBe(7)
+    expect(w.getComponent(0 as never, Health)?.hp).toBe(4)
+    expect(w.snapshot().rngStreams).toEqual({ own: deriveStream(seedToState(9), 'own') })
+    // the slot bytes are left as written; the next save writes v3
+    const before = storage.read('v2')
+    expect(before.ok && JSON.parse(before.value!).version).toBe(2)
+    expect(save(w, storage, 'v2').ok).toBe(true)
+    const after = storage.read('v2')
+    expect(after.ok && JSON.parse(after.value!).version).toBe(3)
   })
 
   it('built-in migrations do not paper over pre-v1 gaps (v0 with no user migration fails)', () => {
