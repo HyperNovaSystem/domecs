@@ -420,6 +420,29 @@ describe('RuleError.field — per-part attribution (§4.6)', () => {
     ])
   })
 
+  it('maps type errors to their own action index, after other errors are clear', () => {
+    // Type checking runs only once parse/resolve errors are gone, so a def
+    // with a type error in a later action reports exactly that action.
+    const result = compileRule(
+      base({
+        when: '1 > "a"',
+        actions: [ok, ok, { set: 'Health.hp', expr: '2 * "a"' }],
+      }),
+      resolve,
+    )
+    expect(result.errors.map((e) => [e.field, e.position])).toEqual([
+      ['when', 4],
+      [{ action: 2, part: 'expr' }, 4],
+    ])
+  })
+
+  it('appends the duplicate-name error after the first def\'s own compile errors', () => {
+    const world = createWorld({ headless: true })
+    const bad = base({ schedule: 'x' as 'tick' })
+    const errors = installRules(world, [], resolve).update([bad, base({})])
+    expect(errors.get('r')!.map((e) => e.field)).toEqual(['schedule', 'name'])
+  })
+
   it('keeps one field per error when several parts fail together', () => {
     const result = compileRule(
       base({

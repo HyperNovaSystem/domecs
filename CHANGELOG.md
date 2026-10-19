@@ -74,6 +74,13 @@ peer ranges still resolve.
 - `@domecs/persist`: `ComponentFieldData.description` round-trips through
   `serializeComponentType` / `registerComponentTypes`.
 - `@domecs/rules`: each rule's system carries `meta: { rule: name }`.
+- `@domecs/rules`: `RuleError.field?: RuleDefPath` (G12, O-79). Every error
+  from `compileRule` and `RulesHandle.update()` names the one part of the def
+  it is about: `'name'` (duplicate), `'schedule'`, `'priority'`,
+  `{ query: i }`, `'when'`, or `{ action: i, part: 'set' | 'expr' }`.
+  `position` keeps its meaning (offset within that part's string, or -1).
+  New type `RuleDefPath`; the union widens in later minors, so keep a
+  default branch when switching on it.
 
 #### Changed
 
