@@ -5,6 +5,7 @@ import {
   createSpatialGrid,
   type ComponentType,
   type EntityView,
+  type InputSnapshot,
   type QueryDef,
   type SpatialGrid,
   type SystemFault,
@@ -380,6 +381,25 @@ export function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) =
 }
 
 /**
+ * §5.4 (verify pass): `setInput` takes whatever the host built, and a host
+ * rebuilding snapshots from JSON (an act log) can pass arrays or drop a
+ * part. A malformed part is a fault on the entity, as a non-number pointer
+ * field is (evaluator.ts), never a TypeError out of the step.
+ */
+function inputSet(value: unknown, part: string): ReadonlySet<string> {
+  if (value instanceof Set) return value as ReadonlySet<string>
+  if (value !== null && typeof value === 'object' && typeof (value as { has?: unknown }).has === 'function') {
+    return value as ReadonlySet<string>
+  }
+  throw new RuleEvalError(`input.${part} is not a Set (${Array.isArray(value) ? 'an array' : value === null ? 'null' : typeof value})`)
+}
+
+function inputMods(value: unknown): Readonly<Record<string, unknown>> {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) return value as Readonly<Record<string, unknown>>
+  throw new RuleEvalError(`input.mods is not an object (${Array.isArray(value) ? 'an array' : value === null ? 'null' : typeof value})`)
+}
+
+/**
  * O-67: a write must target an existing own field and keep its kind
  * (number, string or boolean); a field holding `null` or `undefined` takes
  * any of the three. Numbers must be finite. Anything else would add fields
@@ -502,7 +522,8 @@ function registerRuleSystem(
           : undefined
       }
       // §5.4: the input `setInput` (or an input plugin) installed for this tick.
-      const input = ctx.input
+      // Typed as possibly absent: a host can install anything (see inputSet).
+      const input = ctx.input as InputSnapshot | undefined
       const excluding = (exclude: number | undefined): ((id: number) => boolean) | undefined =>
         exclude === undefined ? undefined : (id) => id !== exclude
       const env: EvalEnv = {
@@ -544,11 +565,14 @@ function registerRuleSystem(
           return grid ? grid.within(x, y, r, excluding(exclude)) : []
         },
         input: {
-          key: (name) => input.keys.has(name),
-          pressed: (name) => input.keyDelta.pressed.has(name),
-          released: (name) => input.keyDelta.released.has(name),
-          mod: (name) => input.mods[name] === true,
-          pointer: input.pointer,
+          key: (name) => inputSet(input?.keys, 'keys').has(name),
+          pressed: (name) => inputSet(input?.keyDelta?.pressed, 'keyDelta.pressed').has(name),
+          released: (name) => inputSet(input?.keyDelta?.released, 'keyDelta.released').has(name),
+          mod: (name) => {
+            const mods = inputMods(input?.mods)
+            return Object.hasOwn(mods, name) && mods[name] === true
+          },
+          pointer: input?.pointer as NonNullable<EvalEnv['input']>['pointer'],
         },
       }
       // §5.2 spatial selection: grids from positions at the start of the run.

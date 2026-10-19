@@ -231,6 +231,42 @@ describe('input in rules (§5.4)', () => {
     expect(fault).toMatchObject({ kind: 'rule_eval_failed', source: 'rule:k' })
     expect(JSON.stringify(fault.detail)).toMatch(/string for key\(\)/)
   })
+
+  // Verify pass: a host that rebuilds InputSnapshots from JSON (an act log)
+  // can hand setInput arrays or missing parts. That must be a fault on the
+  // entity, like a non-number pointer field — never a TypeError thrown out
+  // of the step.
+  it('a malformed input snapshot faults the entity instead of throwing out of the step', () => {
+    const cases: Array<[string, unknown, RegExp]> = [
+      ['key("a")', { ...input(), keys: ['a'] }, /input\.keys is not a Set/],
+      ['pressed("a")', { ...input(), keyDelta: { pressed: ['a'], released: [] } }, /input\.keyDelta\.pressed is not a Set/],
+      ['released("a")', { ...input(), keyDelta: undefined }, /input\.keyDelta\.released is not a Set/],
+      ['mod("ctrl")', { ...input(), mods: undefined }, /input\.mods is not an object/],
+      ['pointer.x > 0', { ...input(), pointer: undefined }, /input\.pointer is not an object/],
+      ['key("a")', {}, /input\.keys is not a Set/],
+      ['mod("shift")', undefined, /input\.mods is not an object/],
+      ['pointer.wheel', null, /input\.pointer is not an object/],
+    ]
+    for (const [expr, snap, message] of cases) {
+      const w = world()
+      const id = w.spawn([entry(Out, OUT0)])
+      installRules(w, [{ name: 'm', schedule: 'tick', query: ['InOut'], actions: [{ set: 'InOut.a', expr: `${expr} ? 1 : 2` }] }], resolve)
+      w.setInput(snap as InputSnapshot)
+      expect(() => w.stepOnce(), expr).not.toThrow()
+      expect(w.getComponent(id, Out)!.a, expr).toBe(0)
+      const fault = w.getComponent(id, Faulted)?.faults[0]
+      expect(fault, expr).toMatchObject({ kind: 'rule_eval_failed', source: 'rule:m' })
+      expect(JSON.stringify(fault!.detail), expr).toMatch(message)
+    }
+  })
+
+  it('a malformed pointer from any EvalEnv host is a type error, not a TypeError', () => {
+    const env = {
+      resolveField: () => undefined, dt: 0, time: 0, rand: { uniform: () => 0 },
+      input: { key: () => false, pressed: () => false, released: () => false, mod: () => false, pointer: undefined },
+    } as unknown as EvalEnv
+    expect(() => evaluate(ast('pointer.x'), env)).toThrow(RuleEvalError)
+  })
 })
 
 describe('input in world expressions (§5.4)', () => {

@@ -196,7 +196,11 @@ function readInput(op: InputOp, name: Value, env: EvalEnv): boolean {
 function readPointer(field: PointerField, env: EvalEnv): number {
   const input = env.input
   if (input === undefined) throw notAvailable(`pointer.${field}`)
-  const value: unknown = input.pointer[field]
+  const pointer: unknown = input.pointer
+  if (pointer === null || typeof pointer !== 'object') {
+    throw new RuleEvalError(`input.pointer is not an object (${describeValue(pointer)})`)
+  }
+  const value: unknown = (pointer as Record<string, unknown>)[field]
   if (typeof value !== 'number') throw new RuleEvalError(`pointer.${field} is not a number (${describeValue(value)})`)
   return value
 }

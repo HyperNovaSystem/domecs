@@ -294,7 +294,13 @@ const steer: RuleDef = {
   that records the input it applies (with `setInput` before each step)
   reproduces the run, on a fork restored from a snapshot too. A headless
   world without an input plugin reads an empty snapshot: no key held,
-  pointer at 0.
+  pointer at 0. An installed snapshot stays until the next `setInput`
+  (the `@domecs/input` plugin installs one every tick): headless, a
+  `pressed("Space")` edge reads true on every step until you replace it.
+  Input is not in the snapshot and `restore` does not clear it, so install
+  input before every step after a restore (or `bridge.reset()`). A
+  malformed snapshot (an array where a `Set` belongs, a missing part) is a
+  `rule_eval_failed` fault on the entity, not a throw from the step.
 
 ## Timing and functions
 

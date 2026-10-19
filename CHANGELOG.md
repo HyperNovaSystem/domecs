@@ -71,7 +71,9 @@ All notable changes to DOMECS are documented here. The format is based on
   last one render tick), and every input form is a compile error in
   `compileWorldExpression`. `EvalEnv.input` (optional; rules wire it from
   `ctx.input`), `SPECIAL_FORMS` gains `key`/`pressed`/`released`/`mod`,
-  types `InputOp`, `PointerField`, `ModifierName`.
+  types `InputOp`, `PointerField`, `ModifierName`. A malformed input
+  snapshot (an array for a `Set`, a missing part) is a `rule_eval_failed`
+  fault on the entity, not a throw from the step.
 - `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
   `rules-keep-distance` (built with `@domecs/rules`) and a
   `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and
