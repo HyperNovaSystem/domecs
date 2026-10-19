@@ -10,8 +10,9 @@ import {
   encodeInput,
   entry,
   hashSnapshot,
+  replay,
 } from '../src/index.js'
-import type { InputSnapshot, World } from '../src/index.js'
+import type { ActLog, InputSnapshot, World, WorldSnapshot } from '../src/index.js'
 
 const strict = (w: World): string => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
 
@@ -407,5 +408,357 @@ describe('createRecorder (§7.1 capture)', () => {
     })
     w.stepOnce()
     expect(thrown).toBeInstanceOf(Error)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Replay (E19.3)
+// ---------------------------------------------------------------------------
+
+const Body = defineComponent<{ x: number; v: number }>('RpBody', { defaults: { x: 0, v: 1 } })
+const Stats = defineComponent<{ t: number; hits: number; echoes: number; keys: number; r: number; fixed: number }>(
+  'RpStats',
+  { defaults: { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 } },
+)
+
+/** The same setup for the recording world and every replay world: tick, fixed, event and own-stream systems and an on handler. */
+function build(w: World): void {
+  w.register(Hit, Echo, Tick, Body, Stats)
+  w.system('move', { schedule: 'fixed', query: [Body] }, (ctx) => {
+    for (const e of ctx.entities) {
+      e.RpBody!.x += e.RpBody!.v * ctx.time.fixedStep
+      w.markChanged(e.id, Body)
+    }
+    for (const id of w.listEntities([Stats])) w.getComponent(id, Stats)!.fixed += 1
+  })
+  w.system('clock', { query: [Stats] }, (ctx) => {
+    for (const e of ctx.entities) {
+      const s = e.RpStats!
+      s.t += ctx.time.scaledDelta
+      if (ctx.input.keys.has('KeyA')) s.keys += 1
+      if (ctx.input.keyDelta.pressed.has('Space')) s.keys += 10
+      w.markChanged(e.id, Stats)
+    }
+  })
+  w.system('noise', { rng: 'own', query: [Stats] }, (ctx) => {
+    for (const e of ctx.entities) e.RpStats!.r = ctx.rand.uniform()
+  })
+  w.system('hits', { schedule: 'event', triggers: [Hit] }, (ctx) => {
+    for (const h of ctx.events.of(Hit)) {
+      for (const id of w.listEntities([Stats])) w.getComponent(id, Stats)!.hits += h.amount
+      ctx.events.emit(Echo, { from: 'hit' })
+    }
+  })
+  w.on(Echo, () => {
+    for (const id of w.listEntities([Stats])) w.getComponent(id, Stats)!.echoes += 1
+  })
+  w.on(Tick, () => {
+    for (const id of w.listEntities([Body])) w.getComponent(id, Body)!.v += 1
+  })
+}
+
+function source(): World {
+  const w = createWorld({ headless: true, seed: [9, 8, 7, 6] })
+  build(w)
+  w.spawn([entry(Body, { x: 0, v: 2 })])
+  w.spawn([entry(Body, { x: 5, v: -1 }), entry(Stats, { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 })])
+  w.step(1 / 60)
+  w.stepOnce()
+  return w
+}
+
+function fresh(): World {
+  const w = createWorld({ headless: true, seed: [1, 1, 1, 1] })
+  build(w)
+  return w
+}
+
+/** 300 frames: acts, step(1/60), stepOnce, scale changes, input changes. */
+function drive(w: World, frames = 300): void {
+  for (let i = 0; i < frames; i++) {
+    if (i % 13 === 0) w.setInput(inputWith(i % 26 === 0 ? ['KeyA'] : [], i % 39 === 0 ? ['Space'] : []))
+    if (i === 100) w.setScale(2)
+    if (i === 150) w.setScale(0)
+    if (i === 160) w.setScale(0.5)
+    if (i === 220) w.setScale(1)
+    if (i % 17 === 0) w.emit(Tick, undefined)
+    if (i % 7 === 0) {
+      w.action(Hit, { amount: (i % 5) + 1 }, i % 2 === 0 ? {} : { dt: 1 / 60 })
+      continue
+    }
+    if (i % 11 === 0) w.emit(Echo, { from: `outside-${i}` })
+    if (i % 23 === 0) w.step(0)
+    if (i % 3 === 0) w.stepOnce()
+    else w.step(1 / 60)
+  }
+}
+
+function record(frames = 300, hashEvery = 10): { live: World; base: WorldSnapshot; log: ActLog } {
+  const live = source()
+  const base = live.snapshot({ pendingEvents: true })
+  const rec = createRecorder(live, { hashEvery })
+  drive(live, frames)
+  return { live, base, log: rec.stop() }
+}
+
+describe('replay (§7.1)', () => {
+  it('300 mixed frames replay on a fresh world to equal hashes at every checkpoint and the end (test 1)', () => {
+    const { live, base, log } = record()
+    expect(log.frames).toHaveLength(300)
+    expect(log.gaps).toBeUndefined()
+    expect(log.checkpoints!.length).toBe(30)
+    expect(log.frames.some((f) => f.scale !== undefined)).toBe(true)
+    expect(log.frames.filter((f) => f.input !== undefined).length).toBeGreaterThan(3)
+
+    const w = fresh()
+    const seen: number[] = []
+    const r = replay(w, log, { base, onFrame: (tick) => seen.push(tick) })
+    expect(r).toEqual({ ok: true, value: { ticks: 300, hash: strict(live) } })
+    expect(w.time.tick).toBe(live.time.tick)
+    expect(seen).toHaveLength(300)
+    expect(seen[0]).toBe(log.startTick + 1)
+    // Every checkpoint was compared: a replay that stops checking would not see a tampered one.
+    const tampered = { ...log, checkpoints: log.checkpoints!.map((c, i) => (i === 29 ? { ...c, hash: 'x' } : c)) }
+    const r2 = replay(fresh(), tampered, { base })
+    expect(r2).toEqual({ ok: false, error: { kind: 'diverged', tick: log.checkpoints![29]!.tick, expected: 'x', actual: log.checkpoints![29]!.hash } })
+  })
+
+  it('the stats really depend on the log: dropping an act diverges', () => {
+    const { base, log } = record()
+    const frames = log.frames.map((f, i) => (i === 7 ? { tick: f.tick, dt: f.dt } : f))
+    const r = replay(fresh(), { ...log, frames }, { base })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('diverged')
+  })
+
+  it('replays into a world already at the base without `base`', () => {
+    const { live, base, log } = record(60)
+    const w = fresh()
+    w.restore(base)
+    expect(replay(w, log)).toEqual({ ok: true, value: { ticks: 60, hash: strict(live) } })
+  })
+
+  it('a log past an out_of_tick_mutation gap reports diverged at the next checkpoint (test 3)', () => {
+    const live = source()
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 5 })
+    drive(live, 12)
+    const id = live.listEntities([Stats])[0]!
+    live.getComponent(id, Stats)!.hits = 999
+    live.markChanged(id, Stats)
+    const gapTick = live.time.tick
+    drive(live, 12)
+    const log = rec.stop()
+    expect(log.gaps).toEqual([{ tick: gapTick, reason: 'out_of_tick_mutation' }])
+    const next = log.checkpoints!.find((c) => c.tick > gapTick)!
+    const r = replay(fresh(), log, { base })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error.kind).toBe('diverged')
+      expect((r.error as { tick: number }).tick).toBe(next.tick)
+    }
+    // verify: false replays through it.
+    expect(replay(fresh(), log, { base, verify: false }).ok).toBe(true)
+  })
+
+  it('emits from systems are not recorded, so replay does not double-emit (test 4)', () => {
+    const { live, base, log } = record(40)
+    const acts = log.frames.flatMap((f) => f.acts ?? [])
+    expect(acts.some((a) => a.event === 'RpEcho' && (a.payload as { from: string }).from === 'hit')).toBe(false)
+    const w = fresh()
+    expect(replay(w, log, { base }).ok).toBe(true)
+    const sid = (x: World) => x.listEntities([Stats])[0]!
+    expect(w.getComponent(sid(w), Stats)!.echoes).toBe(live.getComponent(sid(live), Stats)!.echoes)
+  })
+
+  it('unknown or ambiguous names → unknown_event before any emit for that frame (test 5)', () => {
+    const { base, log } = record(30)
+    const i = log.frames.findIndex((f) => (f.acts ?? []).length > 0)
+    const frame = log.frames[i]!
+    const bad = {
+      ...log,
+      frames: log.frames.map((f, j) =>
+        j === i ? { ...f, acts: [...frame.acts!, { event: 'RpNope', payload: {}, via: 'emit' as const }] } : f,
+      ),
+    }
+    const w = fresh()
+    const emitted: string[] = []
+    w.on(Hit, () => emitted.push('hit'))
+    const r = replay(w, bad, { base })
+    expect(r).toEqual({ ok: false, error: { kind: 'unknown_event', event: 'RpNope', tick: frame.tick } })
+    // The frame's other acts were not emitted.
+    expect(w.pendingEvents().filter((e) => e.type.name === 'RpHit')).toEqual([])
+    expect(w.time.tick).toBe(frame.tick)
+
+    const twin = createWorld({ headless: true, seed: [1, 1, 1, 1] })
+    build(twin)
+    const Other = defineEvent<{ amount: number }>('RpHit')
+    twin.on(Other, () => {})
+    const r2 = replay(twin, log, { base })
+    expect(r2.ok).toBe(false)
+    if (!r2.ok) expect(r2.error).toMatchObject({ kind: 'unknown_event', event: 'RpHit' })
+  })
+
+  it("schema-invalid via 'action' → rejected_payload; the same payload via 'emit' replays unvalidated (test 5)", () => {
+    const w0 = fresh()
+    w0.spawn([entry(Stats, { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 })])
+    const base = w0.snapshot({ pendingEvents: true })
+    const rec = createRecorder(w0)
+    w0.emit(Hit, { amount: 'lots' } as unknown as { amount: number })
+    w0.stepOnce()
+    const log = rec.stop()
+    expect(log.frames[0]!.acts).toEqual([{ event: 'RpHit', payload: { amount: 'lots' }, via: 'emit' }])
+    expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 1, hash: strict(w0) } })
+
+    const asAction = {
+      ...log,
+      frames: [{ ...log.frames[0]!, acts: [{ event: 'RpHit', payload: { amount: 'lots' }, via: 'action' as const }] }],
+    }
+    const r = replay(fresh(), asAction, { base })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatchObject({ kind: 'rejected_payload', event: 'RpHit', tick: 0 })
+      expect((r.error as { reason: string }).reason).toMatch(/amount/)
+    }
+  })
+
+  it('toTick stops after the frame that ends at that tick (test 7)', () => {
+    const { live, base, log } = record(50)
+    const target = log.startTick + 20
+    const w = fresh()
+    const r = replay(w, log, { base, toTick: target })
+    expect(r.ok && r.value.ticks).toBe(20)
+    expect(w.time.tick).toBe(target)
+    // The same as a live world stopped there.
+    const { live: live20 } = record(20)
+    expect(r.ok && r.value.hash).toBe(strict(live20))
+    void live
+    expect(replay(fresh(), log, { base, toTick: log.startTick })).toEqual({
+      ok: true,
+      value: { ticks: 0, hash: strict((() => { const x = fresh(); x.restore(base); return x })()) },
+    })
+  })
+
+  it('the JSON-parsed log replays identically (test 8)', () => {
+    const { live, base, log } = record()
+    const parsed = JSON.parse(JSON.stringify(log)) as ActLog
+    expect(parsed).toEqual(log)
+    const baseParsed = JSON.parse(JSON.stringify(base)) as WorldSnapshot
+    expect(replay(fresh(), parsed, { base: baseParsed })).toEqual({ ok: true, value: { ticks: 300, hash: strict(live) } })
+  })
+
+  it('plugin onTickStart emits (full tick and heartbeat) replay on a world without the plugin (test 9)', () => {
+    const live = source()
+    live.use(
+      definePlugin({
+        name: 'stimulus',
+        install: () => ({
+          onTickStart(world, info) {
+            if (info.heartbeat) world.emit(Hit, { amount: 100 })
+            else if (world.time.tick % 4 === 0) world.emit(Echo, { from: 'plugin' })
+          },
+        }),
+      }),
+    )
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 4 })
+    for (let i = 0; i < 40; i++) {
+      if (i % 9 === 0) live.step(0)
+      live.step(1 / 60)
+    }
+    const log = rec.stop()
+    expect(log.frames.flatMap((f) => f.acts ?? []).length).toBeGreaterThan(10)
+    expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 40, hash: strict(live) } })
+  })
+
+  it('a tickStart hook pausing at tick 50: replay reproduces the paused ticks without the hook (test 10)', () => {
+    for (const via of ['signal', 'plugin'] as const) {
+      const live = source()
+      const pauseAt = live.time.tick + 50
+      if (via === 'signal') {
+        live.signals.tickStart.subscribe((t) => {
+          if (t.tick === pauseAt) live.setScale(0)
+        })
+      } else {
+        live.use(definePlugin({ name: 'pauser', install: () => ({ onTickStart(world, info) { if (!info.heartbeat && world.time.tick === pauseAt) world.pause() } }) }))
+      }
+      const base = live.snapshot({ pendingEvents: true })
+      const rec = createRecorder(live, { hashEvery: 1 })
+      for (let i = 0; i < 60; i++) live.step(1 / 60)
+      live.resume()
+      for (let i = 0; i < 10; i++) live.step(1 / 60)
+      const log = rec.stop()
+      const statsId = live.listEntities([Stats])[0]!
+      const fixedAtPause = live.getComponent(statsId, Stats)!.fixed
+      expect(fixedAtPause).toBeGreaterThan(0)
+      const w = fresh()
+      expect(replay(w, log, { base }), via).toEqual({ ok: true, value: { ticks: 70, hash: strict(live) } })
+      // The pause tick needs hookScale: the entry scale alone runs that tick's systems.
+      expect(log.frames.filter((f) => f.hookScale !== undefined)).toHaveLength(1)
+      const stripped = { ...log, frames: log.frames.map(({ hookScale: _h, ...f }) => f) }
+      const r = replay(fresh(), stripped, { base })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toMatchObject({ kind: 'diverged', tick: pauseAt })
+    }
+  })
+
+  it('base_mismatch when the world is not at the log base', () => {
+    const { base, log } = record(10)
+    const w = fresh()
+    const r = replay(w, log)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatchObject({ kind: 'base_mismatch', expected: log.baseHash })
+    void base
+  })
+
+  it('invalid_log when the replay world has a different fixedStep', () => {
+    const { base, log } = record(10)
+    const w = createWorld({ headless: true, seed: [1, 1, 1, 1], fixedStep: 1 / 30 })
+    build(w)
+    const r = replay(w, log, { base })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('invalid_log')
+  })
+
+  it('invalid_log for a wrong format/version or a malformed log; never throws for bad logs', () => {
+    const { base, log } = record(10)
+    const cases: unknown[] = [
+      null,
+      42,
+      'log',
+      [],
+      { ...log, format: 'other' },
+      { ...log, version: 2 },
+      { ...log, frames: 'x' },
+      { ...log, baseHash: 5 },
+      { ...log, startScale: -1 },
+      { ...log, startScale: Number.NaN },
+      { ...log, frames: [null] },
+      { ...log, frames: [{ tick: 'a', dt: null }] },
+      { ...log, frames: [{ tick: 0, dt: 0 }] },
+      { ...log, frames: [{ tick: 0, dt: -1 }] },
+      { ...log, frames: [{ tick: 0, dt: Number.POSITIVE_INFINITY }] },
+      { ...log, frames: [{ tick: 0, dt: null, scale: -2 }] },
+      { ...log, frames: [{ tick: 0, dt: null, hookScale: 'x' }] },
+      { ...log, frames: [{ tick: 0, dt: null, acts: {} }] },
+      { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 3, via: 'emit' }] }] },
+      { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 'RpHit', via: 'shout' }] }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: {} }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: { keys: [1] } }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: { keys: [], pointer: { x: 0 } } }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: { keys: [], gamepads: [{ index: 0, axes: [], buttons: [{}] }] } }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: { keys: [], mods: { ctrl: 1 } } }] },
+      { ...log, frames: [{ tick: 0, dt: null, input: { keys: [], focus: { activeTag: 1 } } }] },
+      { ...log, checkpoints: [{ tick: 1 }] },
+      { ...log, gaps: 'none' },
+    ]
+    for (const bad of cases) {
+      const w = fresh()
+      let r
+      expect(() => (r = replay(w, bad as ActLog, { base }))).not.toThrow()
+      expect(r, JSON.stringify(bad)?.slice(0, 120)).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
+      // Nothing happened: the world was not restored or stepped.
+      expect(w.time.tick).toBe(0)
+    }
   })
 })

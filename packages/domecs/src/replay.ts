@@ -5,8 +5,9 @@
 import { actTapOf, type ActTapListener } from './act-tap.js'
 import { canonicalJson, hashSnapshot } from './canonical.js'
 import type { GamepadSnapshot, InputSnapshot, PointerSnapshot } from './input.js'
-import type { JsonValue } from './result.js'
-import { cloneSerializable } from './snapshot.js'
+import { validateEventPayload, type EventType } from './events.js'
+import { err, ok, type JsonValue, type Result } from './result.js'
+import { cloneSerializable, type WorldSnapshot } from './snapshot.js'
 import type { Entity } from './types.js'
 import type { World } from './world.js'
 import { plainDataCopy } from './world-state.js'
@@ -406,4 +407,231 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       return cloneSerializable(finalLog)
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Replay
+// ---------------------------------------------------------------------------
+
+/** Why {@link replay} stopped. Errors are data: a bad log never throws. */
+export type ReplayError =
+  | { readonly kind: 'invalid_log'; readonly reason: string }
+  | { readonly kind: 'base_mismatch'; readonly expected: string; readonly actual: string }
+  | { readonly kind: 'unknown_event'; readonly event: string; readonly tick: number }
+  | { readonly kind: 'rejected_payload'; readonly event: string; readonly tick: number; readonly reason: string }
+  | { readonly kind: 'diverged'; readonly tick: number; readonly expected: string; readonly actual: string }
+
+/** Options for {@link replay}. */
+export interface ReplayOptions {
+  /** Restore this first (else the world must already be at the log's base). Take it with `{ pendingEvents: true }`. */
+  readonly base?: WorldSnapshot
+  /** Stop after the frame that ends at this tick. */
+  readonly toTick?: number
+  /** Compare checkpoints (default true). */
+  readonly verify?: boolean
+  /** Called after each replayed frame with `world.time.tick`. */
+  readonly onFrame?: (tick: number, world: World) => void
+}
+
+type Rec = Record<string, unknown>
+const isRec = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
+const isFinite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isScale = (v: unknown): boolean => isFinite(v) && v >= 0
+const isTick = (v: unknown): boolean => Number.isInteger(v) && (v as number) >= 0
+const isStrings = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === 'string')
+const isNumbers = (v: unknown): boolean => Array.isArray(v) && v.every(isFinite)
+
+function checkInput(v: unknown): string | null {
+  if (!isRec(v)) return 'is not an object'
+  if (!isStrings(v.keys)) return 'keys is not an array of strings'
+  if (v.pressed !== undefined && !isStrings(v.pressed)) return 'pressed is not an array of strings'
+  if (v.released !== undefined && !isStrings(v.released)) return 'released is not an array of strings'
+  const m = v.mods
+  if (m !== undefined) {
+    if (!isRec(m) || !['ctrl', 'alt', 'shift', 'meta'].every((k) => typeof m[k] === 'boolean')) {
+      return 'mods is not { ctrl, alt, shift, meta } booleans'
+    }
+  }
+  const p = v.pointer
+  if (p !== undefined) {
+    if (
+      !isRec(p) ||
+      !isFinite(p.x) ||
+      !isFinite(p.y) ||
+      !isFinite(p.buttons) ||
+      !isFinite(p.wheel) ||
+      !isRec(p.delta) ||
+      !isFinite(p.delta.x) ||
+      !isFinite(p.delta.y) ||
+      !isNumbers(p.entered)
+    ) {
+      return 'pointer is not { x, y, buttons, delta: { x, y }, wheel, entered } numbers'
+    }
+  }
+  const g = v.gamepads
+  if (g !== undefined) {
+    const okPad = (pad: unknown): boolean =>
+      isRec(pad) &&
+      isFinite(pad.index) &&
+      isNumbers(pad.axes) &&
+      Array.isArray(pad.buttons) &&
+      pad.buttons.every((b) => isRec(b) && typeof b.pressed === 'boolean' && isFinite(b.value))
+    if (!Array.isArray(g) || !g.every(okPad)) return 'gamepads is not an array of { index, axes, buttons }'
+  }
+  const f = v.focus
+  if (f !== undefined) {
+    if (!isRec(f) || typeof f.activeTag !== 'string' || typeof f.consumesKeys !== 'boolean') {
+      return 'focus is not { activeTag: string, consumesKeys: boolean }'
+    }
+  }
+  return null
+}
+
+function checkFrame(f: unknown): string | null {
+  if (!isRec(f)) return 'is not an object'
+  if (!isTick(f.tick)) return 'tick is not a non-negative integer'
+  if (f.dt !== null && !(isFinite(f.dt) && f.dt > 0)) return 'dt is not null or a positive finite number'
+  if (f.scale !== undefined && !isScale(f.scale)) return 'scale is not a non-negative finite number'
+  if (f.hookScale !== undefined && !isScale(f.hookScale)) return 'hookScale is not a non-negative finite number'
+  if (f.acts !== undefined) {
+    if (!Array.isArray(f.acts)) return 'acts is not an array'
+    for (let i = 0; i < f.acts.length; i++) {
+      const a: unknown = f.acts[i]
+      if (!isRec(a) || typeof a.event !== 'string') return `acts[${i}].event is not a string`
+      if (a.via !== 'emit' && a.via !== 'action') return `acts[${i}].via is not 'emit' or 'action'`
+    }
+  }
+  if (f.input !== undefined) {
+    const bad = checkInput(f.input)
+    if (bad !== null) return `input ${bad}`
+  }
+  return null
+}
+
+/** A reason the log is malformed, or `null`. Reads defensively; never throws. */
+function checkLog(log: unknown): string | null {
+  try {
+    if (!isRec(log)) return 'the log is not an object'
+    if (log.format !== 'domecs-actlog') return `format is ${JSON.stringify(log.format) ?? 'undefined'}, expected "domecs-actlog"`
+    if (log.version !== 1) return `version is ${JSON.stringify(log.version) ?? 'undefined'}, expected 1`
+    if (!isTick(log.startTick)) return 'startTick is not a non-negative integer'
+    if (!(isFinite(log.fixedStep) && log.fixedStep > 0)) return 'fixedStep is not a positive finite number'
+    if (!isScale(log.startScale)) return 'startScale is not a non-negative finite number'
+    if (typeof log.baseHash !== 'string') return 'baseHash is not a string'
+    if (!Array.isArray(log.frames)) return 'frames is not an array'
+    for (let i = 0; i < log.frames.length; i++) {
+      const bad = checkFrame(log.frames[i])
+      if (bad !== null) return `frames[${i}] ${bad}`
+    }
+    if (log.checkpoints !== undefined) {
+      if (!Array.isArray(log.checkpoints)) return 'checkpoints is not an array'
+      for (let i = 0; i < log.checkpoints.length; i++) {
+        const c: unknown = log.checkpoints[i]
+        if (!isRec(c) || !isTick(c.tick) || typeof c.hash !== 'string') return `checkpoints[${i}] is not { tick, hash }`
+      }
+    }
+    if (log.gaps !== undefined) {
+      if (!Array.isArray(log.gaps)) return 'gaps is not an array'
+      for (let i = 0; i < log.gaps.length; i++) {
+        const g: unknown = log.gaps[i]
+        if (!isRec(g) || !isTick(g.tick) || typeof g.reason !== 'string') return `gaps[${i}] is not { tick, reason }`
+      }
+    }
+    return null
+  } catch (cause) {
+    return `the log could not be read: ${cause instanceof Error ? cause.message : String(cause)}`
+  }
+}
+
+/**
+ * Apply one log frame to `world` (§7.1 replay step 3): resolve every act
+ * (`unknown_event` / `rejected_payload` before any emit), set the scale and
+ * input, emit the acts in order, then `stepOnce()` or `step(dt)` — with the
+ * frame's `hookScale` set from a one-step `signals.tickStart` subscription.
+ * Returns `null` when the frame was applied. The frame must be valid
+ * (checked by {@link replay}); shared with `runBranch` (§7.2).
+ */
+export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null {
+  const resolved: Array<{ type: EventType<unknown>; payload: unknown }> = []
+  for (const act of frame.acts ?? []) {
+    const type = world.lookupEvent(act.event)
+    if (type === undefined) return { kind: 'unknown_event', event: act.event, tick: frame.tick }
+    const payload = act.payload === undefined ? undefined : cloneSerializable(act.payload)
+    if (act.via === 'action') {
+      const reason = validateEventPayload(type, payload)
+      if (reason !== null) return { kind: 'rejected_payload', event: act.event, tick: frame.tick, reason }
+    }
+    resolved.push({ type, payload })
+  }
+  if (frame.scale !== undefined) world.setScale(frame.scale)
+  if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
+  for (const { type, payload } of resolved) world.emit(type, payload)
+  const hookScale = frame.hookScale
+  const unsubscribe =
+    hookScale === undefined ? undefined : world.signals.tickStart.subscribe(() => world.setScale(hookScale))
+  try {
+    if (frame.dt === null) world.stepOnce()
+    else world.step(frame.dt)
+  } finally {
+    unsubscribe?.()
+  }
+  return null
+}
+
+/**
+ * Replay `log` on `world` (§7.1): optionally `restore(options.base)`, then
+ * `setScale(log.startScale)`, check the strict base hash, and apply every
+ * frame (acts by name through `lookupEvent`, schema-validated only when
+ * recorded `via: 'action'`; scale; input; `stepOnce()`/`step(dt)`),
+ * comparing checkpoints unless `verify: false`.
+ *
+ * Preconditions (SPEC §7.5): the same setup (systems, plugins, order) as the
+ * recording world, minus every stimulus source — no input plugin, no plugin
+ * or hook that emits events or sets `time.scale` at tick start (their
+ * effects are in the log) — and no enabled `once` system the source had
+ * already run.
+ *
+ * A malformed log, a log for another `fixedStep`, a world not at the base,
+ * an unknown act or a checkpoint mismatch is an error value, never a throw.
+ * `restore(base)` throws for a malformed snapshot, by its own contract.
+ */
+export function replay(
+  world: World,
+  log: ActLog,
+  options: ReplayOptions = {},
+): Result<{ readonly ticks: number; readonly hash: string }, ReplayError> {
+  const bad = checkLog(log)
+  if (bad !== null) return err({ kind: 'invalid_log', reason: bad })
+  if (log.fixedStep !== world.time.fixedStep) {
+    return err({
+      kind: 'invalid_log',
+      reason: `the log was recorded at fixedStep ${log.fixedStep}, the world steps at ${world.time.fixedStep}`,
+    })
+  }
+  if (options.base !== undefined) world.restore(options.base)
+  world.setScale(log.startScale)
+  const actual = actLogHash(world)
+  if (actual !== log.baseHash) return err({ kind: 'base_mismatch', expected: log.baseHash, actual })
+
+  const verify = options.verify !== false
+  const checkpoints = log.checkpoints ?? []
+  let next = 0
+  let ticks = 0
+  for (const frame of log.frames) {
+    if (options.toTick !== undefined && frame.tick >= options.toTick) break
+    const failed = applyActFrame(world, frame)
+    if (failed !== null) return err(failed)
+    ticks++
+    // Checkpoints were taken at frame ends, in frame order.
+    const cp = checkpoints[next]
+    if (cp !== undefined && cp.tick === frame.tick + 1) {
+      next++
+      if (verify) {
+        const hash = actLogHash(world)
+        if (hash !== cp.hash) return err({ kind: 'diverged', tick: cp.tick, expected: cp.hash, actual: hash })
+      }
+    }
+    options.onFrame?.(world.time.tick, world)
+  }
+  return ok({ ticks, hash: actLogHash(world) })
 }

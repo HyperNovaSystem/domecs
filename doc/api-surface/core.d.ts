@@ -846,8 +846,8 @@ export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from '
 export { BUILD_ID } from './build-id.js';
 export { encodeInput, decodeInput } from './replay.js';
 export type { JsonInput } from './replay.js';
-export { createRecorder } from './replay.js';
-export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, } from './replay.js';
+export { createRecorder, replay } from './replay.js';
+export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, ReplayError, ReplayOptions, } from './replay.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';
@@ -1219,7 +1219,8 @@ export {};
 
 // file: replay.d.ts
 import type { GamepadSnapshot, InputSnapshot } from './input.js';
-import type { JsonValue } from './result.js';
+import { type JsonValue, type Result } from './result.js';
+import { type WorldSnapshot } from './snapshot.js';
 import type { Entity } from './types.js';
 import type { World } from './world.js';
 /**
@@ -1367,6 +1368,70 @@ export declare function actLogHash(world: World): string;
  * `hashEvery`, and `Error` when called during a tick.
  */
 export declare function createRecorder(world: World, options?: RecorderOptions): Recorder;
+/** Why {@link replay} stopped. Errors are data: a bad log never throws. */
+export type ReplayError = {
+    readonly kind: 'invalid_log';
+    readonly reason: string;
+} | {
+    readonly kind: 'base_mismatch';
+    readonly expected: string;
+    readonly actual: string;
+} | {
+    readonly kind: 'unknown_event';
+    readonly event: string;
+    readonly tick: number;
+} | {
+    readonly kind: 'rejected_payload';
+    readonly event: string;
+    readonly tick: number;
+    readonly reason: string;
+} | {
+    readonly kind: 'diverged';
+    readonly tick: number;
+    readonly expected: string;
+    readonly actual: string;
+};
+/** Options for {@link replay}. */
+export interface ReplayOptions {
+    /** Restore this first (else the world must already be at the log's base). Take it with `{ pendingEvents: true }`. */
+    readonly base?: WorldSnapshot;
+    /** Stop after the frame that ends at this tick. */
+    readonly toTick?: number;
+    /** Compare checkpoints (default true). */
+    readonly verify?: boolean;
+    /** Called after each replayed frame with `world.time.tick`. */
+    readonly onFrame?: (tick: number, world: World) => void;
+}
+/**
+ * Apply one log frame to `world` (§7.1 replay step 3): resolve every act
+ * (`unknown_event` / `rejected_payload` before any emit), set the scale and
+ * input, emit the acts in order, then `stepOnce()` or `step(dt)` — with the
+ * frame's `hookScale` set from a one-step `signals.tickStart` subscription.
+ * Returns `null` when the frame was applied. The frame must be valid
+ * (checked by {@link replay}); shared with `runBranch` (§7.2).
+ */
+export declare function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null;
+/**
+ * Replay `log` on `world` (§7.1): optionally `restore(options.base)`, then
+ * `setScale(log.startScale)`, check the strict base hash, and apply every
+ * frame (acts by name through `lookupEvent`, schema-validated only when
+ * recorded `via: 'action'`; scale; input; `stepOnce()`/`step(dt)`),
+ * comparing checkpoints unless `verify: false`.
+ *
+ * Preconditions (SPEC §7.5): the same setup (systems, plugins, order) as the
+ * recording world, minus every stimulus source — no input plugin, no plugin
+ * or hook that emits events or sets `time.scale` at tick start (their
+ * effects are in the log) — and no enabled `once` system the source had
+ * already run.
+ *
+ * A malformed log, a log for another `fixedStep`, a world not at the base,
+ * an unknown act or a checkpoint mismatch is an error value, never a throw.
+ * `restore(base)` throws for a malformed snapshot, by its own contract.
+ */
+export declare function replay(world: World, log: ActLog, options?: ReplayOptions): Result<{
+    readonly ticks: number;
+    readonly hash: string;
+}, ReplayError>;
 
 // file: resource.d.ts
 import type { ResourceOptions, ResourceType } from './types.js';
