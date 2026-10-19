@@ -796,6 +796,8 @@ export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint 
 export type { DomecsError, ErrorKind, PluginError, PluginResult, SystemFault, SystemResult, SystemicFault, SystemId, ComponentId, EventId, FaultEntry, } from './errors.js';
 export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from './faulted.js';
 export { BUILD_ID } from './build-id.js';
+export { encodeInput, decodeInput } from './replay.js';
+export type { JsonInput } from './replay.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';
@@ -1164,6 +1166,57 @@ export declare function collectTypesByKind(node: QueryNode, kind: QueryNode['kin
  */
 export declare function collectHasComponents(node: QueryNode, out?: Map<string, ComponentType<unknown>>, inNot?: boolean): Map<string, ComponentType<unknown>>;
 export {};
+
+// file: replay.d.ts
+import type { GamepadSnapshot, InputSnapshot } from './input.js';
+import type { Entity } from './types.js';
+/**
+ * A JSON form of {@link InputSnapshot} (whose key sets are `Set`s). Key
+ * arrays are sorted; `pressed`/`released` are omitted when empty, and
+ * `mods`, `pointer`, `gamepads` and `focus` when they equal the empty input
+ * (no modifier, pointer at rest at 0,0, no gamepad, no focus).
+ */
+export interface JsonInput {
+    /** Held keys, sorted. */
+    readonly keys: readonly string[];
+    /** Keys pressed this render tick, sorted; omitted when empty. */
+    readonly pressed?: readonly string[];
+    /** Keys released this render tick, sorted; omitted when empty. */
+    readonly released?: readonly string[];
+    readonly mods?: {
+        readonly ctrl: boolean;
+        readonly alt: boolean;
+        readonly shift: boolean;
+        readonly meta: boolean;
+    };
+    readonly pointer?: {
+        readonly x: number;
+        readonly y: number;
+        readonly buttons: number;
+        readonly delta: {
+            readonly x: number;
+            readonly y: number;
+        };
+        readonly wheel: number;
+        readonly entered: readonly Entity[];
+    };
+    readonly gamepads?: readonly GamepadSnapshot[];
+    readonly focus?: {
+        readonly activeTag: string;
+        readonly consumesKeys: boolean;
+    };
+}
+/**
+ * Encode an input snapshot as plain JSON data (§7.1). The result shares no
+ * object with `input`; {@link decodeInput} rebuilds an equal snapshot.
+ */
+export declare function encodeInput(input: InputSnapshot): JsonInput;
+/**
+ * Rebuild an {@link InputSnapshot} from {@link encodeInput}'s form: `Set`s
+ * for the key arrays, the empty input's value for every omitted part. The
+ * result shares no object with `json`.
+ */
+export declare function decodeInput(json: JsonInput): InputSnapshot;
 
 // file: resource.d.ts
 import type { ResourceOptions, ResourceType } from './types.js';

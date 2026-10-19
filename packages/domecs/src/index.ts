@@ -142,3 +142,5 @@ export {
   CONSOLIDATE_FAULTS_PRIORITY,
 } from './faulted.js'
 export { BUILD_ID } from './build-id.js'
+export { encodeInput, decodeInput } from './replay.js'
+export type { JsonInput } from './replay.js'
