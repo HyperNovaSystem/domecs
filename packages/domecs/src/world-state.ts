@@ -214,6 +214,24 @@ export function encodePendingEvents(
   })
 }
 
+/**
+ * A plain-data copy of `value` under the rules {@link encodePendingEvents}
+ * applies (finite numbers with `-0` kept, plain objects and arrays, no
+ * cycles; an `undefined` object property is omitted). Anything else throws
+ * `TypeError` naming `label` and the path. Used by the act-log recorder
+ * (§7.1) for act payloads.
+ */
+export function plainDataCopy(value: unknown, label: string): JsonValue {
+  try {
+    return plainCopy(value, [])
+  } catch (fault) {
+    if (fault instanceof PlainFault) {
+      throw new TypeError(`${label}${fault.path.reverse().join('')} is not plain data: ${fault.what}`)
+    }
+    throw fault
+  }
+}
+
 class PlainFault {
   readonly path: string[] = []
   constructor(readonly what: string) {}

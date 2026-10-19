@@ -144,3 +144,12 @@ export {
 export { BUILD_ID } from './build-id.js'
 export { encodeInput, decodeInput } from './replay.js'
 export type { JsonInput } from './replay.js'
+export { createRecorder } from './replay.js'
+export type {
+  ActLog,
+  ActLogFrame,
+  ActLogGapReason,
+  ActRecord,
+  Recorder,
+  RecorderOptions,
+} from './replay.js'

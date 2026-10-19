@@ -1,3 +1,44 @@
+// file: act-tap.d.ts
+import type { EventType } from './events.js';
+/** How an external emit entered the world (§7.1 `ActRecord.via`). */
+export type ActVia = 'emit' | 'action';
+/** What the world reports to an attached recorder. Listeners must not throw. */
+export interface ActTapListener {
+    /**
+     * An emit not made by a system or an `on` handler: `world.emit`, `turn`,
+     * `action`, `world.events.emit` outside a tick, or a plugin hook / signal
+     * subscriber during a tick or heartbeat.
+     */
+    emitted(type: EventType<unknown>, payload: unknown, via: ActVia): void;
+    /**
+     * A full (non-heartbeat) `runTick` was entered: `tick` is `time.tick`
+     * before the step, `dt` the caller's dt (`null` for `stepOnce`), `scale`
+     * `time.scale` on entry — the scale this step's dt is scaled by.
+     */
+    frameEntered(tick: number, dt: number | null, scale: number): void;
+    /** Plugin `onTickStart` hooks ran (the step's input is in place). */
+    frameStarted(): void;
+    /** The `tickStart` signal ran: `time.scale` is now what systems run under. */
+    hooksDone(): void;
+    /** The full tick completed. */
+    frameEnded(): void;
+    /** Spawn/despawn/add/remove/`markChanged`/`setResource`/`markResourceChanged` outside a full tick. */
+    mutated(): void;
+    /** `restore()` began (before plugin `onRestore` hooks). */
+    restoreBegan(): void;
+    /** `restore()` finished: `ok` false when it threw and left the world as it was. */
+    restoreEnded(ok: boolean): void;
+}
+export interface ActTap {
+    /** Attach `listener`; returns a detach function. */
+    attach(listener: ActTapListener): () => void;
+    /** Whether a full tick or a heartbeat is running. */
+    readonly inTick: boolean;
+}
+export declare const ACT_TAP: unique symbol;
+/** The tap of a world made by `createWorld`; `undefined` for anything else. */
+export declare function actTapOf(world: object): ActTap | undefined;
+
 // file: agent.d.ts
 /**
  * Thin agent operability facade (PLAN WS-3).
@@ -677,7 +718,14 @@ export type PendingEvents = Map<symbol, unknown[]>;
  * `signals.faultRaised`; the bus itself stays decoupled from fault plumbing.
  */
 export type HandlerFaultSink = (eventName: string, cause: unknown) => void;
-export declare function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus;
+/**
+ * Optional observer of every emit (`bus.emit` and a view's `emit`), called
+ * after the event is queued. Not called for events re-queued by
+ * {@link EventBus.prependPending}. The world uses it for the act-log tap
+ * (§7.1).
+ */
+export type EmitObserver = (type: EventType<unknown>, payload: unknown) => void;
+export declare function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitObserver): EventBus;
 
 // file: faulted.d.ts
 import type { FaultEntry } from './errors.js';
@@ -798,6 +846,8 @@ export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from '
 export { BUILD_ID } from './build-id.js';
 export { encodeInput, decodeInput } from './replay.js';
 export type { JsonInput } from './replay.js';
+export { createRecorder } from './replay.js';
+export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, } from './replay.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';
@@ -1169,7 +1219,9 @@ export {};
 
 // file: replay.d.ts
 import type { GamepadSnapshot, InputSnapshot } from './input.js';
+import type { JsonValue } from './result.js';
 import type { Entity } from './types.js';
+import type { World } from './world.js';
 /**
  * A JSON form of {@link InputSnapshot} (whose key sets are `Set`s). Key
  * arrays are sorted; `pressed`/`released` are omitted when empty, and
@@ -1217,6 +1269,104 @@ export declare function encodeInput(input: InputSnapshot): JsonInput;
  * result shares no object with `json`.
  */
 export declare function decodeInput(json: JsonInput): InputSnapshot;
+/** One external emit, by event name (§7.1). */
+export interface ActRecord {
+    /** The event's name; replay resolves it with `world.lookupEvent`. */
+    readonly event: string;
+    /** A plain-data copy of the payload taken at emit time; absent for an `undefined` payload. */
+    readonly payload?: JsonValue;
+    /** How the act entered the world. Only `'action'` acts are schema-validated on replay. */
+    readonly via: 'emit' | 'action';
+}
+/** One full step (a `stepOnce()` or a `step(dt)` with `dt > 0`). Heartbeats are not frames. */
+export interface ActLogFrame {
+    /** `world.time.tick` before this step. */
+    readonly tick: number;
+    /** The dt passed to `step(dt)`; `null` = `stepOnce()`. */
+    readonly dt: number | null;
+    /**
+     * `time.scale` on entry to this step, when it differs from the scale the
+     * previous frame ended with (for the first frame: the log's `startScale`).
+     * This step's dt is scaled by it.
+     */
+    readonly scale?: number;
+    /**
+     * `time.scale` after this step's tick-start hooks (plugin `onTickStart`,
+     * `signals.tickStart`), when a hook changed it — a `tickStart` pause
+     * control. It governs whether this step's `fixed` and `tick` systems run;
+     * replay applies it at the same point.
+     */
+    readonly hookScale?: number;
+    /** Events emitted from outside since the previous step, in emit order. */
+    readonly acts?: readonly ActRecord[];
+    /** `world.input` as systems saw it this step, when it differs from the previous frame's (always on the first frame). */
+    readonly input?: JsonInput;
+}
+/** Why a log stops describing the world at a tick (replay past it is unverified). */
+export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore';
+/** A recorded session (§7.1): a new artifact with its own `format` and `version`. */
+export interface ActLog {
+    readonly format: 'domecs-actlog';
+    readonly version: 1;
+    /** `world.time.tick` when recording started. */
+    readonly startTick: number;
+    /** `world.time.fixedStep` of the recording world. */
+    readonly fixedStep: number;
+    /** `time.scale` when recording started. */
+    readonly startScale: number;
+    /** `hashSnapshot(world.snapshot({ pendingEvents: true }), { includeChanges: true })` when recording started. */
+    readonly baseHash: string;
+    readonly frames: readonly ActLogFrame[];
+    /** Strict hashes at tick ends (`hashEvery`). */
+    readonly checkpoints?: ReadonlyArray<{
+        readonly tick: number;
+        readonly hash: string;
+    }>;
+    /** Points where the log stops describing the world (replay past them is unverified). */
+    readonly gaps?: ReadonlyArray<{
+        readonly tick: number;
+        readonly reason: ActLogGapReason;
+    }>;
+}
+/** Options for {@link createRecorder}. */
+export interface RecorderOptions {
+    /** Append a strict-hash checkpoint at each tick end where `tick % hashEvery === 0` (a positive integer). */
+    readonly hashEvery?: number;
+}
+/** A running act-log recording (§7.1). */
+export interface Recorder {
+    /** `false` once {@link stop} was called. */
+    readonly active: boolean;
+    /** The log so far (a copy). */
+    peek(): ActLog;
+    /** Stop recording and return the log. Later calls return the same log (a copy). */
+    stop(): ActLog;
+}
+/**
+ * The strict state hash act logs use: `hashSnapshot(snapshot({ pendingEvents:
+ * true }), { includeChanges: true })`. When a pending event's payload is not
+ * plain data (the snapshot throws `TypeError`), pending events are left out.
+ */
+export declare function actLogHash(world: World): string;
+/**
+ * Start recording `world` (§7.1). The recorder listens on a world-internal
+ * tap and writes down what a replay cannot reproduce by itself:
+ *
+ * - every emit **not made by a system or an `on` handler** (`world.emit`,
+ *   `turn`, `action`, plugin hooks and signal subscribers, heartbeats
+ *   included), with `via`, into the next frame's `acts`;
+ * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
+ *   scale on entry, a scale a tick-start hook set, and `world.input` after
+ *   plugin `onTickStart`, delta-encoded;
+ * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
+ *   `markResourceChanged` outside a full tick (`out_of_tick_mutation`), a
+ *   payload that is not plain data (`unserializable_payload`; the act is
+ *   dropped), and `restore()` (`restore`).
+ *
+ * Throws `TypeError` for a world not made by `createWorld` or an invalid
+ * `hashEvery`, and `Error` when called during a tick.
+ */
+export declare function createRecorder(world: World, options?: RecorderOptions): Recorder;
 
 // file: resource.d.ts
 import type { ResourceOptions, ResourceType } from './types.js';
@@ -1933,6 +2083,7 @@ export declare function createResourceState(recordChange: (name: string) => void
 import type { ChangeCursor, ChangeLog } from './change-log.js';
 import { type Rng, type RngState } from './rng.js';
 import type { EmittedEvent, EventType } from './events.js';
+import type { JsonValue } from './result.js';
 import { type SnapshotPendingEvent, type WorldSnapshot } from './snapshot.js';
 import { type TimeState } from './time.js';
 import type { ComponentType, Entity } from './types.js';
@@ -2050,6 +2201,14 @@ export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, p
  * only the other type.
  */
 export declare function encodePendingEvents(events: readonly EmittedEvent[], lookup?: (name: string) => EventType<unknown> | undefined): SnapshotPendingEvent[];
+/**
+ * A plain-data copy of `value` under the rules {@link encodePendingEvents}
+ * applies (finite numbers with `-0` kept, plain objects and arrays, no
+ * cycles; an `undefined` object property is omitted). Anything else throws
+ * `TypeError` naming `label` and the path. Used by the act-log recorder
+ * (§7.1) for act payloads.
+ */
+export declare function plainDataCopy(value: unknown, label: string): JsonValue;
 /**
  * Check a snapshot's `pendingEvents` field and resolve each name through
  * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a

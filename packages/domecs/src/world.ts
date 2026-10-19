@@ -1,4 +1,5 @@
 import { internal, isComponentType } from './component.js'
+import { ACT_TAP, type ActTap, type ActTapListener, type ActVia } from './act-tap.js'
 import { createChangeLog, type MarkKind } from './change-log.js'
 import { createRafDriver } from './driver.js'
 import { isResourceType } from './resource.js'
@@ -582,6 +583,22 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
 
+  // §7.1 (G4; O-80): the act-log tap (act-tap.ts). Listeners hear external
+  // emits, frame boundaries, out-of-tick mutations and restores.
+  const tapListeners = new Set<ActTapListener>()
+  // > 0 while a system or an `on` handler runs: replay reproduces their
+  // emits, so they are not external.
+  let reproducing = 0
+  // True only during a full (non-heartbeat) tick: a mutation outside one is
+  // a direct write a replay cannot reproduce.
+  let inFullTick = false
+  let emitVia: ActVia = 'emit'
+
+  function tapMutated(): void {
+    if (tapListeners.size === 0 || inFullTick) return
+    for (const l of tapListeners) l.mutated()
+  }
+
   // The event bus is decoupled from fault plumbing; it reports a throwing
   // direct on() subscriber back through this sink. Core owns the DomecsError
   // construction and the signal. There is no originating system, so the
@@ -599,6 +616,9 @@ export function createWorld(options: WorldOptions = {}): World {
       recoverable: true,
     })
     sigFaultRaised.emit({ source: eventName, tick: time.tick, entry })
+  }, (type, payload) => {
+    if (tapListeners.size === 0 || reproducing > 0) return
+    for (const l of tapListeners) l.emitted(type, payload, emitVia)
   })
 
   const signals: WorldSignals = {
@@ -1192,9 +1212,11 @@ export function createWorld(options: WorldOptions = {}): World {
     // and seenThrough moves past it when the run ends.
     s.runStart = changes.seq
     s.running = true
+    reproducing++
     try {
       runSystemBody(s, view)
     } finally {
+      reproducing--
       s.running = false
       s.seenThrough = changes.seq
     }
@@ -1334,6 +1356,11 @@ export function createWorld(options: WorldOptions = {}): World {
       return
     }
     const d = dt ?? 0
+    // §7.1: the scale on entry is the one this step's dt is scaled by,
+    // before any tickStart hook can change it.
+    if (tapListeners.size > 0) {
+      for (const l of tapListeners) l.frameEntered(time.tick, dt === undefined ? null : dt, time.scale)
+    }
 
     scheduler.applyPendingReplacements()
 
@@ -1362,13 +1389,23 @@ export function createWorld(options: WorldOptions = {}): World {
     time.tick += 1
 
     inTick = true
+    inFullTick = true
     try {
       // SPEC §9.4 — plugin onTickStart fires at step 0.
       plugins.callTickStart(world, FULL_TICK)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.frameStarted()
 
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
-      const eventView = bus.flush()
+      // Direct `on` handlers run inside the flush (their emits are reproduced).
+      reproducing++
+      let eventView: EventView
+      try {
+        eventView = bus.flush()
+      } finally {
+        reproducing--
+      }
       if (sigTickStart.size > 0) sigTickStart.emit(time)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.hooksDone()
 
       // SPEC §4 step 2 — input collection (stub in headless).
 
@@ -1440,6 +1477,7 @@ export function createWorld(options: WorldOptions = {}): World {
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
     } finally {
       inTick = false
+      inFullTick = false
       // SPEC §4 step 8 (O-42): close the tick for change windows. Also when
       // the tick threw (O-53): a query read before the throw has seen what
       // it read, so a renderer whose callback threw is not handed the same
@@ -1449,6 +1487,7 @@ export function createWorld(options: WorldOptions = {}): World {
     lastTickEndSeq = changes.seq
     pendingCursors.clear()
     changes.pruneRemoved(removalHorizon())
+    if (tapListeners.size > 0) for (const l of tapListeners) l.frameEnded()
   }
 
   /**
@@ -1696,6 +1735,7 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       sigEntitySpawned.emit(id)
+      tapMutated()
       wakeDriver()
       return id
     },
@@ -1731,6 +1771,7 @@ export function createWorld(options: WorldOptions = {}): World {
       alive.delete(entity)
       viewCache.delete(entity)
       sigEntityDespawned.emit(entity)
+      tapMutated()
       wakeDriver()
     },
 
@@ -1762,6 +1803,7 @@ export function createWorld(options: WorldOptions = {}): World {
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
+      tapMutated()
       wakeDriver()
     },
 
@@ -1776,6 +1818,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const nextTypes = currentTypes(entity)
       nextTypes.delete(type.name)
       moveEntity(entity, nextTypes)
+      tapMutated()
       wakeDriver()
     },
 
@@ -1791,7 +1834,10 @@ export function createWorld(options: WorldOptions = {}): World {
       const store = storeFor(type)
       // A mark on a component the entity lacks can never match OnChanged;
       // recording it would only leave a stamp nothing removes (O-42).
-      if (store.has(entity)) record('changed', type.name, entity)
+      if (store.has(entity)) {
+        record('changed', type.name, entity)
+        tapMutated()
+      }
       wakeDriver()
     },
 
@@ -1801,11 +1847,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     setResource<T>(type: ResourceType<T>, value: T): void {
       resourceState.set(type, value)
+      tapMutated()
       wakeDriver()
     },
 
     markResourceChanged<T>(type: ResourceType<T>): void {
       resourceState.markChanged(type)
+      tapMutated()
       wakeDriver()
     },
 
@@ -2150,7 +2198,12 @@ export function createWorld(options: WorldOptions = {}): World {
       // — they are now buffered as "pending" for next tick, so bus.pendingEvents
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
-      bus.emit(type, payload)
+      emitVia = 'action'
+      try {
+        bus.emit(type, payload)
+      } finally {
+        emitVia = 'emit'
+      }
       const heartbeat = opts.dt !== undefined && opts.dt <= 0
       opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
       // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
@@ -2225,6 +2278,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // restore, making identical episodes diverge (SPEC §7.1). They are set
       // aside before the plugin chain, so anything a plugin emits during
       // onRestore survives.
+      if (tapListeners.size > 0) for (const l of tapListeners) l.restoreBegan()
       const abandoned = bus.takePending()
       let s = snap
       let clock: SnapshotClock
@@ -2242,12 +2296,14 @@ export function createWorld(options: WorldOptions = {}): World {
         restored = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes())
       } catch (cause) {
         bus.putBackPending(abandoned)
+        if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(false)
         throw cause
       }
       applySnapshot(stateCtx, s, clock)
       // The snapshot's queue replaces the abandoned one; anything an
       // onRestore hook emitted stays queued after it.
       if (restored !== undefined) bus.prependPending(restored)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(true)
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()
@@ -2261,6 +2317,19 @@ export function createWorld(options: WorldOptions = {}): World {
     (name) => claimStream(name),
   )
   plugins = createPluginRegistry(world)
+
+  const tap: ActTap = {
+    attach(listener) {
+      tapListeners.add(listener)
+      return () => {
+        tapListeners.delete(listener)
+      }
+    },
+    get inTick() {
+      return inTick
+    },
+  }
+  Object.defineProperty(world, ACT_TAP, { value: tap })
 
   // Register the built-in end-of-tick fault consolidator (BETTER_ERRORS
   // Phase 1). Collapses redundant entries by (source, kind, component)

@@ -214,7 +214,15 @@ export type PendingEvents = Map<symbol, unknown[]>
  */
 export type HandlerFaultSink = (eventName: string, cause: unknown) => void
 
-export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
+/**
+ * Optional observer of every emit (`bus.emit` and a view's `emit`), called
+ * after the event is queued. Not called for events re-queued by
+ * {@link EventBus.prependPending}. The world uses it for the act-log tap
+ * (§7.1).
+ */
+export type EmitObserver = (type: EventType<unknown>, payload: unknown) => void
+
+export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitObserver): EventBus {
   // Keyed by the per-type `eventTag` symbol — identity-based, not name-based.
   let pending = new Map<symbol, unknown[]>()
   let current = new Map<symbol, unknown[]>()
@@ -255,12 +263,14 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     emit<T>(type: EventType<T>, payload: T): void {
       enqueue(type as EventType<unknown>, payload)
+      onEmit?.(type as EventType<unknown>, payload)
     },
   })
 
   return {
     emit<T>(type: EventType<T>, payload: T): void {
       enqueue(type as EventType<unknown>, payload)
+      onEmit?.(type as EventType<unknown>, payload)
     },
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
       const key = type[eventTag]
