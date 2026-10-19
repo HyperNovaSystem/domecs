@@ -92,7 +92,13 @@ bridge.reset()                         // episode boundary
 - **Post-restore:** rebuild transient views after `restore`/`load`
 - **Feed coalesce:** queue → coalesce by key → one event per frame
 - **Prefs vs world:** operator prefs outside snapshot; sim state inside
-- **History vs saves:** `createSnapshotHistory` for undo; `save`/`load` for named slots
+- **History vs saves:** `createSnapshotHistory` for undo; `save`/`load` for named slots;
+  a re-runnable session is a base snapshot + act log
+- **Record and replay:** `base = world.snapshot({ pendingEvents: true })`,
+  `rec = createRecorder(world, { hashEvery })`, drive with commands/steps/`setInput`,
+  `log = rec.stop()` (plain JSON); `replay(build(), log, { base })` → `Result<{ ticks, hash }>`.
+  Direct writes / `spawn` / `setResource` outside a tick are gaps (replay diverges);
+  replay world = same setup minus input plugin and emitting hooks; `register` command events
 - **Equality / forks:** `hashSnapshot(snap, { includeChanges: true })` for live vs
   fork; `hashEntities` localizes a divergence; `canonicalJson` for keyframes
 - **Events in flight:** forks/keyframes use `snapshot({ pendingEvents: true })`

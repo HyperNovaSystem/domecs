@@ -84,6 +84,11 @@ for (const entity of world.query(Has(Position)).entities) {
   "same state" means equal hashes (the strict `includeChanges` form for live
   vs fork). `canonicalJson` (sorted keys, lossless `-0`) for keyframes,
   `hashEntities` to localize a divergence, `hashValue` for any plain data.
+- `createRecorder(world, { hashEvery? })` / `replay(world, log, { base })` —
+  record an act log (external commands, each step's dt and scale, input,
+  strict-hash checkpoints) and re-run it on a fresh world built by the same
+  setup; `encodeInput` / `decodeInput` turn an `InputSnapshot` into JSON and
+  back (2.2, SPEC §7.5).
 - `dmath.sin` / `dmath.cos` / `dmath.sqrt`, and from 2.2 `dmath.atan2` /
   `dmath.hypot` / `dmath.pow` — bit-reproducible math (musl libm ports, `pow`
   from fdlibm; `sqrt` is `Math.sqrt`). Deterministic systems use these

@@ -341,30 +341,30 @@ checkpoints. Core tests use a core system with `rng: 'own'` where the spec says 
 #### E19.1 `encodeInput` / `decodeInput`
 
 - **Files:** create `packages/domecs/src/replay.ts`; `packages/domecs/src/index.ts`; test `packages/domecs/test/replay.test.ts`.
-- [ ] **Red:** spec test 2: round trip of an `InputSnapshot` with keys, pressed/released, mods, pointer (incl. `entered`), gamepads and focus; arrays sorted; empty `pressed`/`released` and absent optional parts omitted; `decodeInput(encodeInput(x))` deep-equals `x` (Sets rebuilt); the encoded value survives `JSON.parse(JSON.stringify(…))`.
-- [ ] **Green:** `JsonInput`, `encodeInput`, `decodeInput`.
-- [ ] **Commit:** `feat(core): JSON input encoding for act logs (E19.1)`
+- [x] **Red:** spec test 2: round trip of an `InputSnapshot` with keys, pressed/released, mods, pointer (incl. `entered`), gamepads and focus; arrays sorted; empty `pressed`/`released` and absent optional parts omitted; `decodeInput(encodeInput(x))` deep-equals `x` (Sets rebuilt); the encoded value survives `JSON.parse(JSON.stringify(…))`.
+- [x] **Green:** `JsonInput`, `encodeInput`, `decodeInput`.
+- [x] **Commit:** `feat(core): JSON input encoding for act logs (E19.1)`
 
 #### E19.2 World-internal tap and `createRecorder`
 
 - **Files:** `packages/domecs/src/world.ts` (symbol-keyed tap, `internal()` pattern; emit sites, `runTick` entry, mutation sites, `restore`), `packages/domecs/src/replay.ts`; same test file.
-- [ ] **Red:** external emits recorded with `via: 'emit' | 'action'` into the next frame (spec test 4: emits from systems and `on` handlers are not recorded); plugin `onTickStart` emits recorded during a full tick and during a heartbeat (half of test 9); frames carry `{tick, dt, scale?, input?}` with `dt: null` for `stepOnce`, `scale` read on `runTick` entry (a `tickStart` hook setting `scale = 0` at tick 50 records the pre-hook scale; half of test 10) and input delta-encoded after `onTickStart`; a heartbeat between acts does not split them into an extra frame and `setInput` + heartbeat records nothing (test 6); out-of-tick spawn/despawn/add/remove/`markChanged`/`setResource` records `out_of_tick_mutation`, a non-JSON payload `unserializable_payload`, `restore()` `restore` (half of test 3); `hashEvery: k` appends strict-hash checkpoints at tick ends where `tick % k === 0`; `startScale`, `fixedStep`, `baseHash` (strict, `pendingEvents: true`) set at creation; `peek()` returns a copy, `stop()` detaches (`active === false`).
-- [ ] **Green:** the tap (not a public signal), `ActRecord`, `ActLogFrame`, `ActLog`, `Recorder`, `createRecorder`.
-- [ ] **Note:** the spec's gap union lists `'heartbeat_input'`, but §7.1 says `setInput` + heartbeat records nothing, so no rule produces it. Drop it from the union unless implementation finds a case that needs it, and record the choice in spec Appendix C (E19 notes).
-- [ ] **Commit:** `feat(core): act-log recorder on a world-internal tap (E19.2)`
+- [x] **Red:** external emits recorded with `via: 'emit' | 'action'` into the next frame (spec test 4: emits from systems and `on` handlers are not recorded); plugin `onTickStart` emits recorded during a full tick and during a heartbeat (half of test 9); frames carry `{tick, dt, scale?, input?}` with `dt: null` for `stepOnce`, `scale` read on `runTick` entry (a `tickStart` hook setting `scale = 0` at tick 50 records the pre-hook scale; half of test 10) and input delta-encoded after `onTickStart`; a heartbeat between acts does not split them into an extra frame and `setInput` + heartbeat records nothing (test 6); out-of-tick spawn/despawn/add/remove/`markChanged`/`setResource` records `out_of_tick_mutation`, a non-JSON payload `unserializable_payload`, `restore()` `restore` (half of test 3); `hashEvery: k` appends strict-hash checkpoints at tick ends where `tick % k === 0`; `startScale`, `fixedStep`, `baseHash` (strict, `pendingEvents: true`) set at creation; `peek()` returns a copy, `stop()` detaches (`active === false`).
+- [x] **Green:** the tap (not a public signal), `ActRecord`, `ActLogFrame`, `ActLog`, `Recorder`, `createRecorder`.
+- [x] **Note:** the spec's gap union lists `'heartbeat_input'`, but §7.1 says `setInput` + heartbeat records nothing, so no rule produces it. Drop it from the union unless implementation finds a case that needs it, and record the choice in spec Appendix C (E19 notes).
+- [x] **Commit:** `feat(core): act-log recorder on a world-internal tap (E19.2)`
 
 #### E19.3 `replay`
 
 - **Files:** `packages/domecs/src/replay.ts`; same test file.
-- [ ] **Red:** spec test 1: 300 recorded frames (mixed acts, `step(1/60)`, `stepOnce`, a scale change, input changes) on a world with tick, fixed and event systems and an own-stream system replay on a fresh world restored from the base with equal strict hashes at every checkpoint and at the end; test 3: replay past an `out_of_tick_mutation` gap reports `diverged` at the next checkpoint; test 5: unknown or ambiguous name → `unknown_event` before any emit for that frame, schema-invalid `via: 'action'` payload → `rejected_payload`, the same payload `via: 'emit'` replays unvalidated; test 7: `toTick` stops at the right tick; test 8: the JSON-parsed log replays identically; tests 9–10 replay legs (world without the emitting plugin; paused ticks reproduced); `base_mismatch` when the world is not at `baseHash`; `invalid_log` for a wrong `format`/`version`. No throws for bad logs.
-- [ ] **Green:** `ReplayError`, `ReplayOptions`, `replay` (restore base → `setScale(startScale)` → base-hash check → per frame: scale, input, acts via `lookupEvent`, `stepOnce`/`step(dt)` → checkpoints). Export the frame-application helper internally for E20.
-- [ ] **Commit:** `feat(core): replay act logs with checkpoint verification (E19.3)`
+- [x] **Red:** spec test 1: 300 recorded frames (mixed acts, `step(1/60)`, `stepOnce`, a scale change, input changes) on a world with tick, fixed and event systems and an own-stream system replay on a fresh world restored from the base with equal strict hashes at every checkpoint and at the end; test 3: replay past an `out_of_tick_mutation` gap reports `diverged` at the next checkpoint; test 5: unknown or ambiguous name → `unknown_event` before any emit for that frame, schema-invalid `via: 'action'` payload → `rejected_payload`, the same payload `via: 'emit'` replays unvalidated; test 7: `toTick` stops at the right tick; test 8: the JSON-parsed log replays identically; tests 9–10 replay legs (world without the emitting plugin; paused ticks reproduced); `base_mismatch` when the world is not at `baseHash`; `invalid_log` for a wrong `format`/`version`. No throws for bad logs.
+- [x] **Green:** `ReplayError`, `ReplayOptions`, `replay` (restore base → `setScale(startScale)` → base-hash check → per frame: scale, input, acts via `lookupEvent`, `stepOnce`/`step(dt)` → checkpoints). Export the frame-application helper internally for E20.
+- [x] **Commit:** `feat(core): replay act logs with checkpoint verification (E19.3)`
 
 #### E19.4 Docs
 
 - **Files:** SPEC new §7.5 "Act logs and replay" (preconditions: same setup, no input plugin, no `tickStart` scale mutators, no re-run `once`); `doc/api.md` with a `ts doctest` record → replay fence; AGENTS.md "Durable log" and "History vs named saves" recipes plus a new "Record and replay" recipe; `skills/domecs/SKILL.md`; `pnpm -r build && pnpm api:surface` (`core.d.ts`); CHANGELOG; `plan/FINDINGS.md` O-80 row.
-- [ ] **Red:** `pnpm doctest:check` fails on the new fence until E19.3 exists; `pnpm api:check` passes after regeneration.
-- [ ] **Commit:** `docs(core): act logs and replay in SPEC, api.md and AGENTS recipes (E19.4)`
+- [x] **Red:** `pnpm doctest:check` fails on the new fence until E19.3 exists; `pnpm api:check` passes after regeneration.
+- [x] **Commit:** `docs(core): act logs and replay in SPEC, api.md and AGENTS recipes (E19.4)`
 
 ### E20 — `createBranch` / `runBranch` (§7.2; O-81)
 

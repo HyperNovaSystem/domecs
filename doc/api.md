@@ -1437,6 +1437,166 @@ const r = world.register(defineEvent('Damage'))
 assert.deepEqual(r, { ok: false, error: { kind: 'name_conflict', registry: 'event', name: 'Damage' } })
 ```
 
+### Act logs and replay
+
+A recorder writes down what entered a world from outside — commands, the dt
+and scale of every step, the input systems saw — so a fresh world built by the
+same setup and restored from the same base replays to the same strict hashes
+(harness spec §7.1, SPEC §7.5). The log is plain JSON.
+
+```ts
+function createRecorder(world: World, options?: { readonly hashEvery?: number }): Recorder
+function replay(world: World, log: ActLog, options?: ReplayOptions):
+  Result<{ readonly ticks: number; readonly hash: string }, ReplayError>
+function encodeInput(input: InputSnapshot): JsonInput   // Sets -> sorted arrays
+function decodeInput(json: JsonInput): InputSnapshot
+
+interface Recorder {
+  readonly active: boolean
+  peek(): ActLog                 // the log so far (a copy)
+  stop(): ActLog                 // stop recording; later calls return the same log
+}
+
+interface ActLog {
+  readonly format: 'domecs-actlog'
+  readonly version: 1
+  readonly startTick: number
+  readonly fixedStep: number
+  readonly startScale: number    // time.scale when recording started
+  readonly baseHash: string      // strict hash (pendingEvents included) at start
+  readonly frames: readonly ActLogFrame[]
+  readonly checkpoints?: ReadonlyArray<{ tick: number; hash: string }>   // hashEvery
+  readonly gaps?: ReadonlyArray<{ tick: number; reason: ActLogGapReason }>
+}
+interface ActLogFrame {          // one stepOnce() or step(dt > 0); heartbeats are not frames
+  readonly tick: number          // time.tick before the step
+  readonly dt: number | null     // null = stepOnce()
+  readonly scale?: number        // entry scale, when it changed since the previous frame ended
+  readonly hookScale?: number    // scale a tickStart hook set during this step
+  readonly acts?: readonly ActRecord[]
+  readonly input?: JsonInput     // when it changed (always on the first frame)
+}
+interface ActRecord {
+  readonly event: string         // replay resolves it with world.lookupEvent
+  readonly payload?: JsonValue   // absent for an undefined payload
+  readonly via: 'emit' | 'action'  // only 'action' acts are schema-checked on replay
+}
+type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore'
+
+interface ReplayOptions {
+  readonly base?: WorldSnapshot  // restore first (take it with { pendingEvents: true })
+  readonly toTick?: number       // stop after the frame that ends at this tick
+  readonly verify?: boolean      // compare checkpoints (default true)
+  readonly onFrame?: (tick: number, world: World) => void
+}
+type ReplayError =
+  | { kind: 'invalid_log'; reason: string }
+  | { kind: 'base_mismatch'; expected: string; actual: string }
+  | { kind: 'unknown_event'; event: string; tick: number }
+  | { kind: 'rejected_payload'; event: string; tick: number; reason: string }
+  | { kind: 'diverged'; tick: number; expected: string; actual: string }
+```
+
+What is recorded:
+- **Acts:** every emit not made by a system or an `on` handler —
+  `world.emit`, `turn`, `action` (`via: 'action'`), and emits from plugin
+  hooks and signal subscribers, heartbeats included — into the next frame,
+  in emit order. Emits from systems and handlers are reproduced by replay.
+- **Frames:** per full step, the caller's dt (so wall-clock `step(dt)`
+  replays exactly), the scale on entry, a scale a `tickStart` hook set, and
+  `world.input` after plugin `onTickStart`, delta-encoded.
+- **Gaps:** a spawn/despawn/add/remove/`markChanged`/`setResource`/
+  `markResourceChanged` outside a full tick, a payload that is not plain
+  data, and `restore()`. Replay past a gap is unverified: the next
+  checkpoint reports `diverged`. Route every runtime change through a
+  command.
+
+Replay restores `base`, sets `startScale`, checks `baseHash`, then per frame
+resolves the acts (an unknown or ambiguous name → `unknown_event`, an
+`'action'` payload failing its schema → `rejected_payload`, both before any
+emit), sets scale and input, emits, and steps. A malformed log, or one
+recorded at another `fixedStep`, is `invalid_log`; nothing throws for a bad
+log. The replay world must have the same setup minus every stimulus source
+(no input plugin, no hook that emits or sets the scale at tick start: their
+effects are in the log) and no `once` system the source had already run.
+
+```ts doctest name=act-log-replay
+import { strict as assert } from 'node:assert'
+import {
+  createRecorder,
+  createWorld,
+  decodeInput,
+  defineComponent,
+  defineEvent,
+  entry,
+  hashSnapshot,
+  replay,
+  type ActLog,
+  type World,
+} from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('ArPos', { defaults: { x: 0 } })
+const Push = defineEvent<{ dx: number }>('ArPush', { schema: { fields: { dx: { kind: 'number' } } } })
+
+// One setup for the recording world and every replay world.
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.register(Push) // replay resolves acts by name
+  w.system('push', { schedule: 'event', triggers: [Push] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Pos])) {
+      for (const p of ctx.events.of(Push)) ctx.world.getComponent(id, Pos)!.x += p.dx
+      ctx.world.markChanged(id, Pos)
+    }
+  })
+  w.system('drift', { query: [Pos] }, (ctx) => {
+    for (const e of ctx.entities) {
+      e.ArPos!.x += ctx.time.scaledDelta + (ctx.input.keys.has('ArrowRight') ? 1 : 0)
+      ctx.world.markChanged(e.id, Pos)
+    }
+  })
+  return w
+}
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+const live = build()
+const id = live.spawn([entry(Pos, { x: 0 })])
+const base = live.snapshot({ pendingEvents: true })
+const rec = createRecorder(live, { hashEvery: 2 })
+live.action(Push, { dx: 5 })                            // recorded via 'action'
+live.step(0.016)                                        // a wall-clock dt is recorded as-is
+live.setInput(decodeInput({ keys: ['ArrowRight'] }))
+live.step(0.021)
+live.emit(Push, { dx: -2 })                             // recorded via 'emit'
+live.stepOnce()
+const log: ActLog = rec.stop()
+assert.equal(log.frames.length, 4)
+assert.deepEqual(log.frames[0]!.acts, [{ event: 'ArPush', payload: { dx: 5 }, via: 'action' }])
+assert.deepEqual(log.frames[2]!.input, { keys: ['ArrowRight'] })
+assert.equal(log.gaps, undefined)
+
+// The log is plain JSON: replay the parsed copy on a fresh world.
+const parsed = JSON.parse(JSON.stringify(log)) as ActLog
+const r = replay(build(), parsed, { base })
+if (!r.ok) throw new Error(r.error.kind)
+assert.equal(r.value.ticks, 4)
+assert.equal(r.value.hash, strict(live))
+
+// A direct write is a gap; replay past it reports where it diverged.
+const base2 = live.snapshot({ pendingEvents: true })
+const rec2 = createRecorder(live, { hashEvery: 1 })
+live.stepOnce()
+live.getComponent(id, Pos)!.x = 100
+live.markChanged(id, Pos)
+live.stepOnce()
+const log2 = rec2.stop()
+assert.deepEqual(log2.gaps, [{ tick: 5, reason: 'out_of_tick_mutation' }])
+const r2 = replay(build(), log2, { base: base2 })
+assert.equal(r2.ok, false)
+if (!r2.ok) assert.deepEqual([r2.error.kind, (r2.error as { tick: number }).tick], ['diverged', 6])
+
+assert.equal(replay(build(), { ...log, version: 2 } as unknown as ActLog).ok, false) // invalid_log, no throw
+```
+
 ---
 
 ## `@domecs/input`

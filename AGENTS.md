@@ -97,7 +97,9 @@ agent.reset()                        // back to baseline for next episode
 
 ### Durable log
 Event buffers are transient. Append accepted events into a component or
-resource if the log must survive `snapshot`/`restore`.
+resource if the log must survive `snapshot`/`restore`. To re-run a session
+(not to read its events in-world), record an act log instead — see
+"Record and replay".
 
 ### Multi-view projection
 One world → many DOM slots/views (`stage`, `hud`, `panel`). Prefer extra views
@@ -127,6 +129,8 @@ disposable live feed state stays in the world.
 ### History vs named saves
 - Undo/redo ring → `createSnapshotHistory`
 - Named slots / labels → `save`/`load` + `Storage`
+- Re-runnable session (bug repro, playtest, scrub from keyframes) → base
+  snapshot + act log (`createRecorder` / `replay`), not a snapshot per tick
 
 Install redaction plugins **before** constructing history with
 `captureInitial`, or the baseline leaks unredacted state.
@@ -138,6 +142,31 @@ once per step (at the start of the system that queries), then
 `within` / `nearest` / `pairs` with tag filters. Results are id-sorted and
 independent of `cellSize`; the index is never snapshotted, so `refresh()`
 after `restore`. The pure grid is `createSpatialGrid` in `@domecs/core`.
+
+### Record and replay
+Record what enters the world from outside, then re-run it on a fresh world
+built by the same setup:
+
+```ts
+import { createRecorder, replay } from '@domecs/core'
+
+const base = world.snapshot({ pendingEvents: true })
+const rec = createRecorder(world, { hashEvery: 60 })
+// … world.action(Cmd, payload), world.step(dt), world.setInput(snap) …
+const log = rec.stop()                       // plain JSON (ActLog)
+
+const fork = build()                         // same systems/plugins, same order
+const r = replay(fork, log, { base })        // Result<{ ticks, hash }, ReplayError>
+if (!r.ok) console.log(r.error.kind)         // 'diverged' at the first bad checkpoint, …
+```
+
+Every runtime change goes through a command (`emit`/`action`/`turn`): a
+direct `getComponent` write + `markChanged`, `spawn` or `setResource` outside
+a tick is a **gap** (`log.gaps`) and replay past it diverges. `register`
+every command event so `replay` resolves acts by name. Build the replay world
+without stimulus sources (no input plugin, no hook that emits or sets the
+scale at tick start — their effects are in the log) and with no `once`
+system the source already ran.
 
 ### Control while paused
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM

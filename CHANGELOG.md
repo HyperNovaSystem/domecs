@@ -8,6 +8,23 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `@domecs/core`: act logs and replay (G4, O-80, harness spec §7.1; SPEC
+  §7.5). `createRecorder(world, { hashEvery? })` → `Recorder { active,
+  peek(), stop() }` records an `ActLog` (`format: 'domecs-actlog'`,
+  `version: 1`): the base (`startTick`, `fixedStep`, `startScale`, strict
+  `baseHash`), one frame per full step `{ tick, dt, scale?, hookScale?,
+  acts?, input? }` (the caller's dt, `null` for `stepOnce`; the scale on
+  entry and a scale a `tickStart` hook set; input delta-encoded), external
+  emits by name with `via: 'emit' | 'action'` (plugin-hook emits included,
+  heartbeats too; emits from systems and `on` handlers are not recorded),
+  strict-hash checkpoints and gaps (`out_of_tick_mutation`,
+  `unserializable_payload`, `restore`). `replay(world, log, { base?,
+  toTick?, verify?, onFrame? })` → `Result<{ ticks, hash }, ReplayError>`
+  (`invalid_log`, `base_mismatch`, `unknown_event`, `rejected_payload`,
+  `diverged`); it never throws for a bad log. `encodeInput` /
+  `decodeInput` / `JsonInput` give `InputSnapshot` a JSON form. AGENTS.md
+  "Record and replay" recipe.
+
 - `@domecs/core`: `validateEventPayload(type, payload): string | null` is now
   exported — the O-39 schema check `world.action()` / `bridge.act()` apply,
   for hosts that pre-validate a command without emitting or stepping (studio

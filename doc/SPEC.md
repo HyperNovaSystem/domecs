@@ -854,6 +854,28 @@ The codec system allows one component schema to evolve without forcing monolithi
 The inspector (§10) consumes a bounded ring buffer of **diff snapshots**: each entry records only the components that changed since the previous snapshot.
 Memory is `O(changes)` not `O(entities × snapshots)`.
 
+### 7.5 Act logs and replay (`@domecs/core`, 2.2)
+
+An act log (`ActLog`, `format: 'domecs-actlog'`, `version: 1`) records what entered a world from outside so that another world, built by the same setup and restored from the same base, replays to equal strict hashes (harness spec §7.1; O-80). It is a separate artifact; the snapshot format is unchanged.
+
+**Recording.** `createRecorder(world, { hashEvery? })` attaches to a world-internal tap (not a public signal) and records the base (`startTick`, `fixedStep`, `startScale`, and `baseHash` = `hashSnapshot(snapshot({ pendingEvents: true }), { includeChanges: true })`). Then:
+
+- **Acts.** Every emit not made by a system or a direct `on` handler — `world.emit`, `world.events.emit` outside a tick, `turn`, `action` (`via: 'action'`, the others `via: 'emit'`), and emits from plugin hooks and signal subscribers during full ticks **and** heartbeats — is recorded by event name with a plain-data copy of its payload (absent for `undefined`) into the next frame's `acts`, in emit order. Plugin `onTickStart` runs before the event flush, so its emits join the frame of the tick that delivers them.
+- **Frames.** Each full step (`stepOnce()`, or `step(dt)` with `dt > 0`) is one frame `{ tick, dt, scale?, hookScale?, acts?, input? }`: `tick` before the step, the caller's `dt` (`null` for `stepOnce`), `scale` = `time.scale` on entry to the tick (the scale its dt is scaled by) when it differs from the scale the previous frame ended with, `hookScale` = the scale after the tick-start hooks (plugin `onTickStart`, `signals.tickStart`) when a hook changed it (it decides whether that step's `fixed` and `tick` systems run), and `input` = `encodeInput(world.input)` after plugin `onTickStart` when it differs from the previous frame's (always on the first frame). Heartbeats (`step(dt <= 0)`) are not frames: acts emitted around them carry over to the next frame, and a `setInput` followed only by a heartbeat records nothing.
+- **Gaps.** `out_of_tick_mutation` (spawn, despawn, add/remove component, `markChanged`, `setResource`, `markResourceChanged` outside a full tick, heartbeats included), `unserializable_payload` (a payload that is not plain data; the act is dropped) and `restore` (acts the restore abandoned are dropped; `onRestore` emits are kept). The log stops describing the world at a gap. Route every runtime perturbation through a command.
+- **Checkpoints.** With `hashEvery: k`, the strict hash at each full-tick end where `tick % k === 0`.
+
+`encodeInput` / `decodeInput` convert `InputSnapshot` (whose key sets are `Set`s) to `JsonInput` (sorted arrays; empty `pressed`/`released` and parts equal to the empty input omitted) and back.
+
+**Replay.** `replay(world, log, { base?, toTick?, verify?, onFrame? })` returns `Result<{ ticks, hash }, ReplayError>` and never throws for a bad log:
+
+1. Check the log's shape (`invalid_log`, also for a `fixedStep` other than `world.time.fixedStep`).
+2. `restore(base)` when given, then `setScale(log.startScale)`; compare the strict hash with `baseHash` (`base_mismatch`).
+3. Per frame (stopping before the first frame whose `tick >= toTick`): resolve every act with `lookupEvent` (an unknown or ambiguous name is `unknown_event`) and check `via: 'action'` payloads against the event's schema (`rejected_payload`; raw emits are never validated live, so `via: 'emit'` acts are not), both before any emit; set `scale` and `input` (else keep the previous ones); emit the acts in order; `stepOnce()` or `step(dt)`, applying `hookScale` from a one-step `signals.tickStart` subscription.
+4. Compare the checkpoint taken at that frame's end (`diverged`), unless `verify: false`.
+
+**Preconditions** (§8): the replay world has the same setup (systems, plugins, order) as the recording world **minus every stimulus source** — no input plugin (it would overwrite `world.input` at `onTickStart`) and no plugin hook or signal subscriber that emits events or sets `time.scale` at tick start (their effects are already in the log) — and no enabled `once` system the source had already run (`once` run state is not snapshotted). Under them the same base, setup and log give the same hashes, tick systems (`scaledDelta` comes from the recorded dt and scale) and own RNG streams included. Not recorded: `runSystems` calls, direct RNG draws outside a tick, changes to the setup.
+
 ---
 
 ## 8. Determinism contract
@@ -873,7 +895,7 @@ This relies on:
 
 - **Equality is by hash (O-11).** "Same state" means equal `hashSnapshot` (§7.1 "Canonical form"): canonical JSON with sorted keys and a lossless `-0`, hashed with FNV-1a-64. Restore-equivalence checks (fork vs live, checkpoints, keyframes) use the strict form, `hashSnapshot(snap, { includeChanges: true })`. `JSON.stringify(snapshot())` is not an equality test: it depends on component insertion order and writes `-0` as `0`.
 
-Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `hashSnapshot(snapshot(), { includeChanges: true })`.
+Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `hashSnapshot(snapshot(), { includeChanges: true })`. `createRecorder` / `replay` (§7.5) record a live session and re-run it with checkpoint verification.
 
 ---
 
