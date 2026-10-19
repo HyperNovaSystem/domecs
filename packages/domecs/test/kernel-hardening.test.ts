@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { OnRemoved } from '../src/query.js'
+import { defineEvent } from '../src/events.js'
 import { definePlugin } from '../src/plugin.js'
 import { createRng, rewindRng } from '../src/rng.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
@@ -317,6 +318,34 @@ describe('driver', () => {
       w.stop()
     })
   }
+
+  it('O-48 + §4.7: an idle loop restored with events in flight delivers them', () => {
+    raf = installRaf()
+    const KhPing = defineEvent<{ n: number }>('KhPing')
+    const seen: number[] = []
+    const build = () => {
+      const w = createWorld()
+      w.system('kh-recv', { schedule: 'event', triggers: [KhPing] }, (ctx) => {
+        for (const p of ctx.events.of(KhPing)) seen.push(p.n)
+      })
+      return w
+    }
+    const src = build()
+    src.emit(KhPing, { n: 7 })
+    const snap = src.snapshot({ pendingEvents: true })
+    const w = build()
+    w.startLoop()
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    expect(raf.pending()).toBe(false)
+    w.restore(snap)
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    // The repaint frame does not tick; the queue keeps the loop awake for one
+    // step that delivers the event, then the loop sleeps again.
+    expect(seen).toEqual([7])
+    expect(w.time.tick).toBe(snap.tick + 1)
+    expect(raf.pending()).toBe(false)
+    w.stop()
+  })
 
   it('O-48: a mutation before the repaint frame turns it into a step', () => {
     raf = installRaf()
