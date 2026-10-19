@@ -2400,6 +2400,9 @@ export function createWorld(options: WorldOptions = {}): World {
         throw cause
       }
       applySnapshot(stateCtx, s, clock)
+      // The flushed view belongs to the abandoned timeline too (O-88): a
+      // restored world reads what a fresh one restored from `s` reads.
+      bus.clearCurrent()
       // The snapshot's queue replaces the abandoned one; anything an
       // onRestore hook emitted stays queued after it.
       if (restored !== undefined) bus.prependPending(restored)

@@ -172,6 +172,30 @@ describe('runSystems (§6.3)', () => {
     expect(seen).toEqual([[], [1, 2]])
   })
 
+  it('after an in-place restore, ctx.events is not the abandoned timeline’s view', () => {
+    const build = (): { w: World; seen: number[][] } => {
+      const w = createWorld({ headless: true })
+      const seen: number[][] = []
+      w.system('read', { schedule: 'tick' }, (ctx) => void seen.push(ctx.events.of(Ping).map((p) => p.n)))
+      return { w, seen }
+    }
+    const a = build()
+    const snap = a.w.snapshot()
+    a.w.emit(Ping, { n: 9 })
+    a.w.stepOnce() // delivers Ping: it is in the current view
+    expect(a.w.events.of(Ping).map((p) => p.n)).toEqual([9])
+    a.w.restore(snap)
+    // As in a fresh world restored from the same snapshot.
+    const b = build()
+    b.w.restore(snap)
+    a.seen.length = 0
+    a.w.runSystems(['read'])
+    b.w.runSystems(['read'])
+    expect(a.seen).toEqual(b.seen)
+    expect(a.seen).toEqual([[]])
+    expect(a.w.events.of(Ping)).toEqual([])
+  })
+
   it('a run is a normal run for change windows: marks it saw are not reported again', () => {
     const w = createWorld({ headless: true })
     const id = w.spawn([entry(Local, { x: 1 })])

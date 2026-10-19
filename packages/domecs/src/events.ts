@@ -189,6 +189,14 @@ export interface EventBus {
    */
   takePending(): PendingEvents
   /**
+   * Empty the current (already-flushed) view. Called by a successful
+   * `world.restore()`: the view holds what the abandoned timeline delivered
+   * and no snapshot carries it, so a restored world reads the same (empty)
+   * view as a fresh world restored from the same snapshot (§6.3, O-88:
+   * `world.events` and `runSystems`' `ctx.events` before the next flush).
+   */
+  clearCurrent(): void
+  /**
    * Make `taken` the pending queue again, dropping anything emitted since
    * {@link takePending}. `world.restore()` calls it when the restore throws,
    * so a failed restore leaves the pending events as they were.
@@ -341,6 +349,9 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
       const taken = pending
       pending = new Map()
       return taken
+    },
+    clearCurrent(): void {
+      current = new Map()
     },
     putBackPending(taken: PendingEvents): void {
       pending = taken
