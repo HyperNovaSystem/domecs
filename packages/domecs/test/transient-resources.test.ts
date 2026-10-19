@@ -102,6 +102,40 @@ describe('transient resources (E17.1, O-36)', () => {
     expect(world.snapshot().resources).toEqual({ TrScore: 5 })
   })
 
+  it('a legacy value restored before the transient resource is first used is dropped', () => {
+    // A save written before the resource was declared transient, restored
+    // into a world that has not touched the resource yet (registration is
+    // lazy): the first use registers it and must not surface the stale
+    // value, and the next snapshot must not carry it either.
+    const { world } = build()
+    const snap = world.snapshot()
+    const legacy = {
+      ...snap,
+      resources: { ...snap.resources, TrCamera: { x: 6, y: 6, zoom: 6 } },
+    }
+    const fresh = build()
+    fresh.world.restore(legacy)
+    expect(fresh.world.getResource(Camera)).toEqual({ x: 0, y: 0, zoom: 1 })
+    expect(fresh.world.snapshot().resources).toEqual({ TrScore: 5 })
+    expect(strict(fresh.world)).toBe(strict(world))
+  })
+
+  it('a legacy value is dropped on first setResource and first markResourceChanged too', () => {
+    const { world } = build()
+    const snap = world.snapshot()
+    const legacy = {
+      ...snap,
+      resources: { ...snap.resources, TrCamera: { x: 6, y: 6, zoom: 6 } },
+    }
+    const a = build()
+    a.world.restore(legacy)
+    a.world.markResourceChanged(Camera)
+    expect(a.world.getResource(Camera)).toEqual({ x: 0, y: 0, zoom: 1 })
+    const b = build()
+    b.world.restore(legacy)
+    expect(b.world.describeResource(Camera).hasValue).toBe(false)
+  })
+
   it('the default and strict hashes are stable when a camera resource changes', () => {
     const { world } = build()
     world.stepOnce()

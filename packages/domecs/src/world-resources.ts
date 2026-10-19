@@ -23,8 +23,17 @@ export function createResourceState(recordChange: (name: string) => void) {
         `domecs: two distinct ResourceType objects share the name "${type.name}"`,
       )
     }
-    if (!existing) registry.set(type.name, type)
-    return internalResource(type)
+    const meta = internalResource(type)
+    if (!existing) {
+      registry.set(type.name, type)
+      // O-36: a value already here for a name that was never registered
+      // came from `restore()` (get/set register first). For a transient
+      // resource that is a stale value from a save written before it was
+      // declared transient: drop it, so the first use sees the default, as
+      // `restoreValues` would have done had the type been registered.
+      if (meta.__transient) values.delete(type.name)
+    }
+    return meta
   }
 
   function validate(
