@@ -140,6 +140,24 @@ Recorded as informational (spec §4.1); revisit on the reference host.
 Both sides are called through the same function-value loop, so the absolute
 numbers include call overhead; the ratio is the figure of merit.
 
+## 2.1 release-candidate check (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+Spec §8 asks the RC for no regression beyond noise on soak, telemetry or
+windowed. Each workload ran interleaved against a 2.0.0 checkout (`b425242`,
+built the same way), medians of the per-run p50/p95:
+
+| Workload | Runs | 2.1 p50 / p95 | 2.0 p50 / p95 | ratio p50 / p95 |
+|----------|------|---------------|---------------|-----------------|
+| soak (`--ticks 500 --warmup 100`) | 9 | 1.127 / 1.454 ms | 1.121 / 1.408 ms | 1.01 / 1.03 |
+| telemetry (`--ticks 500 --warmup 100`) | 9 | 0.347 / 0.527 ms | 0.346 / 0.538 ms | 1.00 / 0.98 |
+| windowed (`--ticks 1000 --warmup 200`) | 15 | 0.0356 / 0.0632 ms | 0.0346 / 0.0611 ms | 1.03 / 1.03 |
+| snapshot (default) | 7 | 5.14 / 9.02 ms | 5.84 / 8.90 ms | 0.88 / 1.01 |
+
+The same harness comparing 2.0 with itself gave ratios of 0.995–1.045, so
+every difference is within noise. Default-length runs (100 ticks) are
+noisier: one 7-run pass showed windowed p95 at 1.9× (0.28 vs 0.15 ms), which
+did not reproduce with longer runs.
+
 ## Status
 
 - [x] Headless suite + baselines

@@ -6,13 +6,14 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-### 2.1.0 (in progress on `feat/harness-engine-gaps`)
+## [2.1.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the
 determinism foundation and build identity for the Studio harness. `^2.0.0`
-peer ranges still resolve.
+peer ranges still resolve. Release notes:
+[`doc/release-notes/v2.1.0.md`](doc/release-notes/v2.1.0.md).
 
-#### Added
+### Added
 
 - `@domecs/core`: canonical snapshot hash (O-11). `canonicalJson(value)` —
   `JSON.stringify` value semantics with object keys sorted by UTF-16 code
@@ -109,16 +110,32 @@ peer ranges still resolve.
   `rule:<name>`, and `update()` re-registration resumes it. `RuleDefPath`
   gains `'rng'` (an unknown `RuleDef.rng` is a `RuleError`).
 - `@domecs/persist`: built-in `2 → 3` migration (pure version bump).
+- Dual-runtime determinism golden (spec §3.4): `scripts/determinism-golden.mjs`
+  steps four fixed headless worlds (`trig`, `random`, `own-streams`,
+  `bounce0`) 1000 fixed steps on the built `@domecs/core` and prints
+  `{ buildId, fixtures, dmathFingerprint }` with strict hashes; `--engine
+  <node_modules>` loads core from an install. `pnpm test:golden` (also a CI
+  step) compares it with `test/golden/determinism.json` and, when
+  `DOMECS_ALT_RUNTIME` is set (e.g. `env ELECTRON_RUN_AS_NODE=1 <electron>`),
+  requires identical output under that runtime.
+- `scripts/pack-for-studio.mjs` copies `determinism-golden.mjs` next to the
+  tarballs; `manifest.json` gains `golden: { file, integrity }`.
+- `@domecs/rules`: fork-equivalence suite (`test/fork-equivalence.test.ts`):
+  a live world edited mid-run equals a fresh build restored from its
+  `snapshot({ pendingEvents: true })` for 150 ticks (tick and fixed rules,
+  `composeTransforms` at priority 100, own and shared streams, spawns, `-0`,
+  events in flight). `@domecs/scene` is a new devDependency of
+  `@domecs/rules` (tests only).
 
-#### Changed
+### Changed
 
 - **Behavior change (snapshot format): `SNAPSHOT_VERSION` is 3.** Every
   snapshot a 2.1 world writes has `version: 3`, whether or not it uses own
   streams or pending events, and carries `rngRoot` (`rngStreams` and
   `pendingEvents` are omitted while empty). **2.0 engines reject 2.1 saves**
   ("newer than this engine supports"); 2.0 saves still restore and load (v2
-  keeps the restoring world's root and re-derives own streams; persist
-  migrates 2 → 3 in memory, and `save()` writes v3).
+  restores onto the world's `createWorld` root and re-derives own streams;
+  persist migrates 2 → 3 in memory, and `save()` writes v3).
   `describe().snapshotVersion` is 3. `hashSnapshot` excludes `version`, but
   `rngRoot` is state, so hashes of world-built snapshots change once.
 - **Behavior change (determinism checks):** "same state" now means equal

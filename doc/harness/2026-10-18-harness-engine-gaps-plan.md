@@ -264,8 +264,8 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E8.3 Release notes and gates
 
 - **Files:** `doc/release-notes/v2.1.0.md`, `CHANGELOG.md`.
-- [ ] **Accept:** **E8 exit:** `pnpm bench` (no regression), `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` (plus `DOMECS_ALT_RUNTIME` with the studio's pinned Electron) all green; `pack-for-studio` tarball delivered; **publish only on owner approval**.
-- [ ] **Commit:** `docs(release): 2.1.0 release notes (E8.3)`
+- [x] **Accept:** **E8 exit:** `pnpm bench` (no regression), `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` (plus `DOMECS_ALT_RUNTIME` with the studio's pinned Electron) all green; `pack-for-studio` tarball delivered; **publish only on owner approval**.
+- [x] **Commit:** `docs(release): 2.1.0 release notes (E8.3)`
 
 ---
 
