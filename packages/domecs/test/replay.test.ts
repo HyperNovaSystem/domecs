@@ -965,3 +965,23 @@ describe('act payload validation', () => {
     }
   })
 })
+
+describe('recorders attached and detached (E13 bench fix: a plain attached flag)', () => {
+  it('a second recorder still hears out-of-tick mutations after the first stops', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const id = w.spawn([entry(Score, { n: 0, hits: 0 })])
+    const a = createRecorder(w)
+    const b = createRecorder(w)
+    w.stepOnce()
+    a.stop()
+    w.markChanged(id, Score)
+    w.stepOnce()
+    expect(b.peek().gaps).toEqual([{ tick: 1, reason: 'out_of_tick_mutation' }])
+    b.stop()
+    // A recorder attached after every other one stopped hears them again.
+    const c = createRecorder(w)
+    w.setResource(Level, { n: 1 })
+    w.stepOnce()
+    expect(c.stop().gaps).toEqual([{ tick: 2, reason: 'out_of_tick_mutation' }])
+  })
+})

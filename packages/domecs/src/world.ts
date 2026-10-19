@@ -593,9 +593,13 @@ export function createWorld(options: WorldOptions = {}): World {
   // a direct write a replay cannot reproduce.
   let inFullTick = false
   let emitVia: ActVia = 'emit'
+  // `tapListeners.size > 0`, kept as a plain boolean: the mutation hot paths
+  // (`markChanged` runs per entity per tick) test it before calling out, so
+  // a world with no recorder pays one field read (E13 bench: soak p50).
+  let tapAttached = false
 
   function tapMutated(): void {
-    if (tapListeners.size === 0 || inFullTick) return
+    if (inFullTick) return
     for (const l of tapListeners) l.mutated()
   }
 
@@ -1735,7 +1739,7 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       sigEntitySpawned.emit(id)
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
       return id
     },
@@ -1771,7 +1775,7 @@ export function createWorld(options: WorldOptions = {}): World {
       alive.delete(entity)
       viewCache.delete(entity)
       sigEntityDespawned.emit(entity)
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1803,7 +1807,7 @@ export function createWorld(options: WorldOptions = {}): World {
       nextTypes.add(type.name)
       moveEntity(entity, nextTypes)
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1818,7 +1822,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const nextTypes = currentTypes(entity)
       nextTypes.delete(type.name)
       moveEntity(entity, nextTypes)
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1836,7 +1840,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // recording it would only leave a stamp nothing removes (O-42).
       if (store.has(entity)) {
         record('changed', type.name, entity)
-        tapMutated()
+        if (tapAttached) tapMutated()
       }
       wakeDriver()
     },
@@ -1847,13 +1851,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     setResource<T>(type: ResourceType<T>, value: T): void {
       resourceState.set(type, value)
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
     markResourceChanged<T>(type: ResourceType<T>): void {
       resourceState.markChanged(type)
-      tapMutated()
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -2321,8 +2325,10 @@ export function createWorld(options: WorldOptions = {}): World {
   const tap: ActTap = {
     attach(listener) {
       tapListeners.add(listener)
+      tapAttached = true
       return () => {
         tapListeners.delete(listener)
+        tapAttached = tapListeners.size > 0
       }
     },
     get inTick() {
