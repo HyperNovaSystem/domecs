@@ -2235,8 +2235,11 @@ export function createWorld(options: WorldOptions = {}): World {
           }
         } finally {
           inTick = false
+          // O-48 as after a restore: an idle loop repaints what ran (also
+          // when a system threw) with a heartbeat frame. A wake would make
+          // that frame a step and move tick identity, which priming must not.
+          if (ran.length > 0 || noted) driver.repaint()
         }
-        if (ran.length > 0) wakeDriver()
       }
       const skipped: string[] = []
       const listed = new Set<string>()
