@@ -168,7 +168,7 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   const probes = options.probes !== undefined ? Object.entries(options.probes) : []
   const hasProbes = options.probes !== undefined
   const sampleEvery = options.sampleEvery ?? 1
-  if (hasProbes) checkCount('sampleEvery', sampleEvery, 1)
+  if (options.sampleEvery !== undefined) checkCount('sampleEvery', options.sampleEvery, 1)
   if (options.keyframeEvery !== undefined) checkCount('keyframeEvery', options.keyframeEvery, 1)
   if (options.hashEvery !== undefined) checkCount('hashEvery', options.hashEvery, 1)
 

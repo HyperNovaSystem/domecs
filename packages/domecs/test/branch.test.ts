@@ -460,6 +460,9 @@ describe('runBranch (§7.2)', () => {
     expect(() => runBranch(w, { steps: 1, sampleEvery: 0, probes })).toThrow(TypeError)
     expect(() => runBranch(w, { steps: 1, keyframeEvery: 2.5 })).toThrow(TypeError)
     expect(() => runBranch(w, { steps: 1, hashEvery: -3 })).toThrow(TypeError)
+    // A bad cadence is a bad option whether or not probes are given.
+    expect(() => runBranch(w, { steps: 1, sampleEvery: 0 })).toThrow(TypeError)
+    expect(() => runBranch(w, { steps: 1, sampleEvery: 2.5 })).toThrow(TypeError)
     expect(w.time.tick).toBe(30)
   })
 })
