@@ -26,6 +26,12 @@
  * `atan2`, `hypot`, `countWithin` crowding) and `rules-keep-distance`
  * (`nearest`, `distanceTo`, `pow`, `sum`, `??`) — and `dmath2Fingerprint`
  * (`dmath.atan2` / `hypot` / `pow` bit patterns).
+ * 2.3 (plan E18.1) adds `rules-event-chain`: event rules and effects
+ * (`emit` chains, `spawn`, `despawn`) whose world is snapshotted at step 500
+ * with events in flight (`snapshot({ pendingEvents: true })`, through
+ * `canonicalJson` text), restored into a fresh build and stepped to 1000
+ * beside the live world; the script throws unless both reach the same strict
+ * hash (pending events included), and that hash is the fixture.
  *
  * The test (`test/golden.test.mjs`, `pnpm test:golden`) runs it under Node
  * and, when `DOMECS_ALT_RUNTIME` is set, under that command too, and requires
@@ -94,7 +100,7 @@ register(
     ),
 )
 const core = await import(coreUrl)
-const { BUILD_ID, createWorld, defineComponent, dmath, entry, hashSnapshot, hashValue } = core
+const { BUILD_ID, canonicalJson, createWorld, defineComponent, defineEvent, dmath, entry, hashSnapshot, hashValue } = core
 const { installRules } = await import(pathToFileURL(rulesEntry).href)
 
 /** Inputs where V8 13.6 Math.sin (first three) / Math.cos differ from musl by 1 ulp. */
@@ -243,13 +249,18 @@ function bounce0() {
 
 // ── rules-chase: first(), atan2, hypot, countWithin crowding (2.2) ──────
 
-function rulesWorld(types, defs) {
+function rulesWorld(types, defs, { events = [], prefabs } = {}) {
   const world = createWorld({ headless: true, seed: SEED })
+  if (events.length > 0) {
+    const registered = world.register(...events)
+    if (!registered.ok) throw new Error(`golden events failed to register: ${JSON.stringify(registered.error)}`)
+  }
   const byName = new Map(types.map((t) => [t.name, t]))
   const errors = installRules(world, [], (n) => byName.get(n), {
     order: 'stable',
     rng: 'own',
     spatial: { component: 'GoldPos', cellSize: 4 },
+    ...(prefabs ? { prefabs } : {}),
   }).update(defs)
   if (errors.size > 0) throw new Error(`golden rules failed to compile: ${JSON.stringify([...errors])}`)
   return world
@@ -332,6 +343,94 @@ function rulesKeepDistance() {
   return run(world)
 }
 
+// ── rules-event-chain: event rules, effects, a fork with events in flight (2.3) ─
+
+/** Strict hash with the in-flight events: what a fork must reproduce. */
+function strictPending(world) {
+  return hashSnapshot(world.snapshot({ pendingEvents: true }), { includeChanges: true })
+}
+
+function eventChainWorld() {
+  const Pos = defineComponent('GoldPos', { defaults: { x: 0, y: 0 } })
+  const Cell = defineComponent('GoldCell', { defaults: { charge: 0, hits: 0, last: -1 } })
+  const Spark = defineComponent('GoldSpark', { defaults: { life: 0, vx: 0 } })
+  const fields = { target: { kind: 'number' }, power: { kind: 'number' } }
+  const Ping = defineEvent('GoldPing', { schema: { fields } })
+  const Pong = defineEvent('GoldPong', { schema: { fields } })
+  const spark = [entry(Spark, {}), entry(Pos, {})]
+  const world = rulesWorld(
+    [Pos, Cell, Spark],
+    [
+      {
+        // Each cell starts a chain every 37 ticks (staggered by id).
+        name: 'kick', schedule: 'fixed', query: ['GoldCell'], when: '(tick + self.id) % 37 == 0',
+        actions: [],
+        effects: [{ emit: 'GoldPing', payload: { target: 'self.id', power: '0.5 + random() * 0.5' } }],
+      },
+      {
+        // A ping charges its cell, answers the nearest other cell and throws a spark.
+        name: 'ping', schedule: 'event', on: 'GoldPing', self: 'event.target', query: ['GoldCell', 'GoldPos'],
+        actions: [
+          { set: 'GoldCell.charge', expr: 'GoldCell.charge + sin(event.power * 3 + GoldPos.x)' },
+          { set: 'GoldCell.last', expr: 'tick' },
+        ],
+        effects: [
+          { emit: 'GoldPong', payload: { target: 'nearest(GoldCell).id ?? event.target', power: 'event.power * (0.8 + random() * 0.15)' } },
+          {
+            spawn: 'spark',
+            at: { x: 'GoldPos.x + cos(GoldCell.charge) * 2', y: 'GoldPos.y + sin(GoldCell.charge) * 2' },
+            set: { 'GoldSpark.life': '5 + floor(random() * 20)', 'GoldSpark.vx': 'event.power - 0.5' },
+          },
+        ],
+      },
+      { name: 'pong', schedule: 'event', on: 'GoldPong', self: 'event.target', query: ['GoldCell'], actions: [{ set: 'GoldCell.hits', expr: 'GoldCell.hits + 1' }] },
+      {
+        // The chain decays: a pong relays a ping until its power falls under 0.1.
+        name: 'relay', schedule: 'event', on: 'GoldPong', self: 'event.target', query: ['GoldCell'], when: 'event.power > 0.1',
+        actions: [],
+        effects: [{ emit: 'GoldPing', payload: { target: 'self.id', power: 'event.power' } }],
+      },
+      {
+        name: 'drift', schedule: 'fixed', query: ['GoldSpark', 'GoldPos'],
+        actions: [
+          { set: 'GoldSpark.life', expr: 'GoldSpark.life - 1' },
+          { set: 'GoldPos.x', expr: 'GoldPos.x + GoldSpark.vx * 0.1' },
+        ],
+      },
+      {
+        // An expired spark goes (deferred despawn) and pings the first cell weakly.
+        name: 'expire', schedule: 'fixed', query: ['GoldSpark'], when: 'GoldSpark.life <= 0',
+        actions: [],
+        effects: [{ despawn: 'self' }, { emit: 'GoldPong', payload: { target: 'first(GoldCell).id ?? -1', power: '0.05' } }],
+      },
+    ],
+    { events: [Ping, Pong], prefabs: (name) => (name === 'spark' ? spark : undefined) },
+  )
+  return { world, Pos, Cell }
+}
+
+function rulesEventChain() {
+  const { world: live, Pos, Cell } = eventChainWorld()
+  for (let i = 0; i < 8; i++) live.spawn([entry(Cell, {}), entry(Pos, { x: (i % 4) * 6 - 9, y: Math.floor(i / 4) * 6 })])
+  const dt = live.time.fixedStep
+  const half = STEPS / 2
+  for (let i = 0; i < half; i++) live.step(dt)
+  // Fork with events in flight, through the text a studio save would hold.
+  const snap = live.snapshot({ pendingEvents: true })
+  const inFlight = snap.pendingEvents?.length ?? 0
+  if (inFlight === 0) throw new Error('rules-event-chain: no events in flight at the fork point')
+  const { world: fork } = eventChainWorld()
+  fork.restore(JSON.parse(canonicalJson(snap)))
+  for (let i = half; i < STEPS; i++) {
+    live.step(dt)
+    fork.step(dt)
+  }
+  const a = strictPending(live)
+  const b = strictPending(fork)
+  if (a !== b) throw new Error(`rules-event-chain: the fork restored with events in flight diverged (${a} vs ${b})`)
+  return a
+}
+
 // ── dmath fingerprint ───────────────────────────────────────────────────
 
 function dmathFingerprint() {
@@ -410,6 +509,7 @@ const result = {
     'own-streams': ownStreams(),
     bounce0: bounce0(),
     'rules-chase': rulesChase(),
+    'rules-event-chain': rulesEventChain(),
     'rules-keep-distance': rulesKeepDistance(),
   },
   dmathFingerprint: dmathFingerprint(),

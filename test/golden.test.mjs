@@ -26,7 +26,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const script = path.join(root, 'scripts/determinism-golden.mjs')
 const golden = JSON.parse(fs.readFileSync(path.join(root, 'test/golden/determinism.json'), 'utf8'))
 
-const FIXTURES = ['bounce0', 'own-streams', 'random', 'rules-chase', 'rules-keep-distance', 'trig']
+const FIXTURES = ['bounce0', 'own-streams', 'random', 'rules-chase', 'rules-event-chain', 'rules-keep-distance', 'trig']
 
 /** Run the golden script under `argv0 ...prefix` and return [stdout line, parsed]. */
 function runUnder(command, extraArgs = [], cwd = root) {
