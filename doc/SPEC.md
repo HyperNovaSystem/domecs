@@ -247,7 +247,7 @@ interface SystemContext {
   input:    InputSnapshot    // tick-consistent
   events:   EventView        // tick-consistent; emit() schedules for next tick
   world:    WorldAPI         // spawn, despawn, component mutation
-  rand:     Rng              // seeded per-world PRNG
+  rand:     Rng              // world.rand, or the system's own stream (rng: 'own', §2.8)
   state:    unknown          // system-local slot; see SystemDef.state
 }
 ```
@@ -266,8 +266,13 @@ world.system(name, {
   enabled?:  () => boolean,
   state?:    unknown,        // system-local; preserved across hot-swap (§9.5)
   meta?:     JsonValue,      // annotation for tools; cloned, surfaced in describe()
+  rng?:      'shared' | 'own', // which stream ctx.rand is; default 'shared' (§2.8)
 }, fn)
 ```
+
+`rng` picks the generator `ctx.rand` is: `'shared'` (default) is `world.rand`;
+`'own'` is the system's own stream (§2.8). `describe().systems[i].rng` reports
+it. Any other value makes `world.system()` throw before anything is registered.
 
 `meta` is a JSON-safe annotation the runtime never reads; `describe().systems`
 reports a clone of it. `@domecs/rules` sets `{ rule: name }` on each rule's
@@ -340,6 +345,15 @@ Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all function
 ### 2.8 PRNG
 
 `world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
+
+**Per-system streams (2.1, O-77, normative).** `world.rand` is the **shared** stream: every system that draws from it changes what every later draw returns, so adding, removing or editing one random-drawing system reshuffles all the others. A system registered with `rng: 'own'` instead receives its own stream as `ctx.rand`:
+
+- **Root.** The world's root seed state is `seedToState(options.seed ?? 0)`, fixed at `createWorld`; it never advances. `restore()` adopts a snapshot's `rngRoot` (a v2 snapshot, which has none, leaves the world's own root), so systems registered after a restore derive the streams the source world would.
+- **Key.** The stream is keyed by the system's cursor key at registration (§7.1: its name, or `name#k` for the k-th live system sharing it), skipping a key another live own-stream system still holds. Rules are keyed `rule:<name>`.
+- **Derivation.** `deriveStream(root, key)` (exported from `@domecs/core`): `h` = FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`; word `i` of the state is the first `splitmix32` output seeded with `root[i] XOR rotl(h, 8·i)`; an all-zero state is fixed up as `seedToState` does; then 8 outputs are discarded as warm-up. The function is pinned by a golden test and is part of the snapshot contract: changing it requires a `SNAPSHOT_VERSION` bump.
+- **Lifetime is by key.** The world keeps every own stream it has created, by key. A system registering under key *k* resumes the stream if one exists (a removed system's stream is kept), otherwise it derives it from the root. `RulesHandle.update()` removes and re-registers every rule, and the streams survive that, so a live world and a fresh fork stay equal. The map grows by the number of distinct own-stream keys ever used (renaming a rule leaves an orphan entry, which round-trips).
+- **Snapshot.** `snapshot()` writes `rngRoot` always and `rngStreams` (every entry) once a stream exists (§7.1). `restore()` replaces the map with `rngStreams` (absent: empty), rewinding live generators in place so captured `ctx.rand` handles follow (O-46), then re-derives from the restored root the stream of every registered own-stream system whose key is missing and adds it to the map. Reseeding is data-only: `{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }` restores into a world whose shared stream and every own stream derive from `s`.
+- **Scope.** Adding, removing or editing system A does not change own-stream system B's draws. B's own draws still depend on how many entities it visits (one stream per system; per-entity streams are out of scope). An own-stream system that calls `world.rand` directly still draws the shared stream: use `ctx.rand`.
 
 ### 2.9 Change tracking
 
@@ -705,8 +719,10 @@ Keybinding layer is *not* part of core — it is a plugin that translates `Input
 
 ```ts
 interface WorldSnapshot {
-  version:    number                             // current SNAPSHOT_VERSION = 2
-  seed:       [number, number, number, number]  // PRNG state
+  version:    number                             // current SNAPSHOT_VERSION = 3
+  seed:       [number, number, number, number]  // shared PRNG state (world.rand)
+  rngRoot?:   [number, number, number, number]  // root seed own streams derive from (v3; §2.8)
+  rngStreams?: Record<string, [number, number, number, number]> // own streams by key (v3; §2.8)
   tick:       number
   scaledTime?: number                            // cumulative scaled seconds (O-40); see below
   fixedBacklog?: number                          // fixed steps due but not yet run (O-40)
@@ -720,7 +736,7 @@ interface WorldSnapshot {
 }
 ```
 
-`SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults. The optional `pendingEvents` field (2.1, O-90) was added without a version bump, like `nextId`, `scaledTime` and `changes`: a 2.0 engine restoring such a snapshot ignores it and abandons the queue, which is 2.0's documented behaviour.
+`SNAPSHOT_VERSION` is **3**. Version 2 added the optional `resources` map (§2.11). Version 3 (2.1) added the optional `rngRoot` and `rngStreams` (§2.8, O-77) and `pendingEvents` (O-90) fields. **Every snapshot a 2.1 world writes is v3**, whether or not it uses own streams or pending events: `rngRoot` is always written; `rngStreams` is omitted while the world has never created an own stream, and `pendingEvents` while none was recorded (restoring an absent field and an empty one behave identically). 2.0 engines reject v3 snapshots ("newer than this engine supports"). `restore()` accepts any version ≤ 3: a v2 snapshot lacks the v3 fields, so the world keeps its own root, re-derives every own stream and abandons its event queue. The `@domecs/persist` loader ships built-in `1 → 2` and `2 → 3` migrations (§7.3), so a legacy v1 save — which simply lacks `resources` — and a 2.0 save load transparently. `canonicalSnapshot` excludes `version`, so the bump alone changes no hash; `rngRoot` is state and is hashed.
 
 **Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
 
@@ -730,7 +746,7 @@ interface WorldSnapshot {
 
 The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. The restored world also continues the live one exactly only if its systems run in the same order (§3). A live world whose rules were re-registered by `RulesHandle.update()` runs them in a different order from a fresh world built from the same defs, unless the rules were installed with `{ order: 'stable' }`; with stable rules, the rules' run order no longer depends on when `update()` ran, so a fresh world that registers its other systems the same way and installs the current defs is a valid restore target. A snapshot taken while a system is running records that system's position before the run.
 
-**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
+**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `rngRoot` when present four finite numbers, `rngStreams` when present an object whose every value is four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
 
 **What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, query iteration order (§8, ascending entity id), and the change marks systems have not seen (O-42). State outside the envelope is not carried:
 
@@ -747,7 +763,7 @@ Continuation is therefore exact when the snapshot is taken between ticks and eit
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
-**PRNG and driver (O-46, O-48).** `restore()` rewinds the world's generator in place, so a `world.rand` reference captured before the restore draws the restored stream. A restore also gives an idle `startLoop` driver one heartbeat frame, so the restored state is painted while the world stays at the checkpoint, paused or not (§3 Idle suspension).
+**PRNG and driver (O-46, O-48).** `restore()` rewinds the world's generator in place, so a `world.rand` reference captured before the restore draws the restored stream; own streams (§2.8) are rewound in place the same way. A restore also gives an idle `startLoop` driver one heartbeat frame, so the restored state is painted while the world stays at the checkpoint, paused or not (§3 Idle suspension).
 
 **Pending events (normative; O-90).** `restore()` sets aside all pending (undelivered) events before the plugin hooks run: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. **The abandoned timeline's queue is replaced by the snapshot's queue when the snapshot carries one.** Events a plugin emits during its `onRestore` hook are preserved when the restore succeeds, queued after the snapshot's.
 
@@ -806,7 +822,7 @@ createPersistence(world, {
 Migrations are per-component, not per-world.
 The codec system allows one component schema to evolve without forcing monolithic world-level migration.
 
-**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a step that does not produce exactly version N+1, or a snapshot newer than the target (O-63). `world.restore()` itself throws on a snapshot whose `version` is newer than the engine's `SNAPSHOT_VERSION`; older snapshots should go through `migrate()` (as `load()` does). `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
+**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a step that does not produce exactly version N+1, or a snapshot newer than the target (O-63). `world.restore()` itself throws on a snapshot whose `version` is newer than the engine's `SNAPSHOT_VERSION`; older snapshots should go through `migrate()` (as `load()` does). `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships two built-ins, both pure version bumps: `1 → 2` (a v1 snapshot simply lacks `resources`, §7.1) and `2 → 3` (2.1: a v2 snapshot simply lacks `rngRoot`, `rngStreams` and `pendingEvents`). `save()` writes v3.
 
 ### 7.4 Ring buffer (time-travel)
 
@@ -823,7 +839,7 @@ DOMECS promises:
 
 This relies on:
 
-- `world.rand` is the only PRNG used in authoritative systems.
+- `world.rand` — or the system's own stream, `ctx.rand` under `rng: 'own'` (§2.8) — is the only PRNG used in authoritative systems. An own stream is keyed by the system's cursor key and derived from the world's root seed, and its state travels in the snapshot.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
 - Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, `selectViews`, `countEntities`, and `iterEntitiesWith` alike — regardless of the order entities joined a query or archetypes were created. `Where` predicates are evaluated in the same order, so a predicate with side effects makes the same calls. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
 - **Transcendentals go through `dmath` (O-75).** `Math.sin`, `Math.cos`, `Math.tan`, `Math.atan2`, `Math.exp`, `Math.log`, `Math.pow`, `Math.hypot` and the other platform transcendentals are implementation-approximated under ECMA-262 and differ by up to 1 ulp between engine builds (Node 24 and Electron 44 disagree on thousands of inputs per 200k). Authoritative systems use `dmath` from `@domecs/core` instead: `dmath.sin` and `dmath.cos` are a straight-line port of musl libm (generic C, non-FMA) and return the same bits on every ECMA-262 engine; `dmath.sqrt` is `Math.sqrt`. `@domecs/rules` does this automatically: `sin()`/`cos()` evaluate with `dmath` from 2.1 (`atan2`/`hypot`/`pow` join in 2.2). `Math.sqrt`, the arithmetic operators, `Math.floor`, `Math.round`, `Math.abs`, `Math.min` and `Math.max` are exact under ECMA-262 / IEEE-754 and need no wrapper.

@@ -46,8 +46,8 @@ else if (!boot.value) { /* first run */ }
   merged into the envelope and a numeric `savedAt` is stamped.
 - `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`
   (default `SNAPSHOT_VERSION`), then restore. `opts.migrations` is overlaid on
-  `BUILTIN_MIGRATIONS` (caller keys win), so a legacy v1 save upgrades
-  transparently with no caller config. Empty slots return `persist_io` with
+  `BUILTIN_MIGRATIONS` (caller keys win), so legacy v1 and v2 (2.0) saves
+  upgrade transparently with no caller config. Empty slots return `persist_io` with
   `retryable: false` (message includes `empty`).
 - `loadIfPresent(world, storage, slot, opts?)` — boot-friendly (O-28):
   `ok(true)` loaded, `ok(false)` missing slot, `err(...)` for real failures.
@@ -59,7 +59,10 @@ else if (!boot.value) { /* first run */ }
 - `migrate(snapshot, target, migrations)` — run a version migration chain.
 - `BUILTIN_MIGRATIONS` — framework-supplied steps applied as the floor beneath
   any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply
-  lacks `resources`, so the step is a pure version bump).
+  lacks `resources`) and, from 2.1, the `2 → 3` bump (a v2 snapshot simply
+  lacks `rngRoot`, `rngStreams` and `pendingEvents`); both are pure version
+  bumps. A loaded v2 save keeps the world's own root and re-derives every
+  `rng: 'own'` stream. `save()` writes v3, which 2.0 engines reject.
 - `withBuiltinMigrations(user?)` — overlay a caller `MigrationMap` on the
   built-ins (caller keys win); returns the built-ins unchanged when `user` is
   empty. `load()` uses this internally.

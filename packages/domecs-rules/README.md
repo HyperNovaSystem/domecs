@@ -18,7 +18,7 @@ DOMECS (M6).
 See inline doc comments in `src/evaluator.ts` and `src/rules.ts` for the
 documented behavior around missing fields (skip and fault the entity) and determinism
 (`random()` is wired to the per-tick `ctx.rand.uniform()`, never
-`Math.random`).
+`Math.random`; see "Randomness" below for per-rule streams).
 
 Writes are checked and atomic. For each entity, actions are evaluated in
 order — a later action reads the value an earlier one set — against staged
@@ -72,7 +72,7 @@ function widgetFor(e: RuleError): string {
 Rules run as systems named `rule:<name>`. `RuleDef.priority` (default 0)
 places them among other systems; rules of equal priority run in the order of
 the `defs` array last passed to `update()` (see "Ordering" below). A def with an unknown `schedule`
-or a non-finite `priority` is a compile error, and a def repeating an earlier
+a non-finite `priority` or an unknown `rng` is a compile error, and a def repeating an earlier
 def's name is not installed and is reported under that name. Number literals
 too large for a double and unknown string escapes (`\q`) are parse errors.
 
@@ -123,6 +123,35 @@ Electron and every browser. `sin`/`cos` evaluate with `dmath` from
 results can differ from 2.0 by that much once). `min`, `max`, `clamp`, `abs`
 and `floor` are exact, and `random()` draws from the world's seeded RNG
 (SPEC §8).
+
+## Randomness
+
+By default every rule's `random()` draws the world's one shared stream, so
+adding, removing or editing a random-drawing rule changes what every other
+rule draws (an A/B comparison of one rule reshuffles all the others). Since
+2.1, a rule can draw its own stream (SPEC §2.8):
+
+```ts
+installRules(world, defs, resolve, { rng: 'own' })          // every rule
+const def: RuleDef = { name: 'jitter', rng: 'shared', ... }  // per-rule override
+```
+
+- `InstallRulesOptions.rng` (`'shared'` default | `'own'`) sets the mode of
+  every rule; `RuleDef.rng` overrides it for one rule. An unknown
+  `RuleDef.rng` is a `RuleError` on `field: 'rng'`; an unknown install
+  option throws.
+- An own stream is keyed `rule:<name>` and derived from the world's root
+  seed (`deriveStream`), so it does not depend on when the rule was
+  installed. `update()` removes and re-registers every rule; the stream
+  survives that (it is kept by key), so a live world and a fresh fork stay
+  equal. Renaming a rule starts a new stream.
+- The streams travel in the snapshot (`rngStreams`, v3). A world restoring a
+  snapshot that lacks a rule's stream (an A/B arm that adds the rule)
+  derives it from the snapshot's `rngRoot`. Reseed with
+  `{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }`.
+- A rule's own draws still depend on how many entities it visits (one stream
+  per rule, not per entity). `world.describe().systems[i].rng` reports the
+  mode.
 
 Expressions are compiled once to closures, and a rule skips write staging
 when no action reads a field an earlier action wrote. A simple rule over 5k

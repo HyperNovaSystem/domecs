@@ -179,25 +179,25 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E4.1 Root seed, `deriveStream`, stream map
 
 - **Files:** `packages/domecs/src/rng.ts`, `packages/domecs/src/world.ts`, `packages/domecs/src/snapshot.ts` (`SNAPSHOT_VERSION = 3`, `rngRoot`, `rngStreams`), test `packages/domecs/test/rng-streams.test.ts`.
-- [ ] **Red:** golden: `deriveStream([1,2,3,4], 'rule:move')` first four draws; `rng: 'own'` systems keyed by cursor key (`s`, `s#1`); removal keeps the entry; `snapshot()` writes all entries; JSON round trip keeps them; invalid `rngRoot`/`rngStreams` throw before any state change; a v2 snapshot restores and streams re-derive; **always v3**: a world with no own-stream system writes `version: 3` with `rngRoot` and without `rngStreams`, and `snapshot({ pendingEvents: true })` is v3 too; `describe().systems[i].rng` reports `'shared'`/`'own'` (deferred from E5.2).
-- [ ] **Commit:** `feat(core): per-system RNG streams keyed by cursor key; snapshot v3 (E4.1)`
+- [x] **Red:** golden: `deriveStream([1,2,3,4], 'rule:move')` first four draws; `rng: 'own'` systems keyed by cursor key (`s`, `s#1`); removal keeps the entry; `snapshot()` writes all entries; JSON round trip keeps them; invalid `rngRoot`/`rngStreams` throw before any state change; a v2 snapshot restores and streams re-derive; **always v3**: a world with no own-stream system writes `version: 3` with `rngRoot` and without `rngStreams`, and `snapshot({ pendingEvents: true })` is v3 too; `describe().systems[i].rng` reports `'shared'`/`'own'` (deferred from E5.2).
+- [x] **Commit:** `feat(core): per-system RNG streams keyed by cursor key; snapshot v3 (E4.1)`
 
 #### E4.2 Missing-key re-derive and reseeding
 
 - **Files:** `packages/domecs/src/world.ts` (restore), same test file.
-- [ ] **Red:** spec tests 8–9: world B with an extra own-stream rule R3 restores A's snapshot → R3 draws `deriveStream(rngRoot, 'rule:R3')`, B's next snapshot lists it, and snapshot → restore of B continues identically for 100 ticks (strict hash); replacing `rngRoot` + `seed` and clearing `rngStreams` changes every own stream, twice → identical.
-- [ ] **Commit:** `feat(core): re-derive own streams missing from a restored snapshot (E4.2)`
+- [x] **Red:** spec tests 8–9: world B with an extra own-stream rule R3 restores A's snapshot → R3 draws `deriveStream(rngRoot, 'rule:R3')`, B's next snapshot lists it, and snapshot → restore of B continues identically for 100 ticks (strict hash); replacing `rngRoot` + `seed` and clearing `rngStreams` changes every own stream, twice → identical.
+- [x] **Commit:** `feat(core): re-derive own streams missing from a restored snapshot (E4.2)`
 
 #### E4.3 Rules `rng` option and persist migration
 
 - **Files:** `packages/domecs-rules/src/rules.ts` (`RuleDef.rng`, `InstallRulesOptions.rng`), test `packages/domecs-rules/test/rng.test.ts`; `packages/domecs-persist/src/migrate.ts` (`[2, snap => ok({...snap, version: 3})]`), test `migrate.test.ts`.
-- [ ] **Red:** the probe as a test (B's draws unchanged with/without A under `'own'`, changed under `'shared'`); `update(defs)` every tick leaves own sequences unchanged; persist `load` migrates v2 → v3 and a v2 save still loads; `save` writes v3.
-- [ ] **Commit:** `feat(rules,persist): rng option for rules; built-in v2→v3 migration (E4.3)`
+- [x] **Red:** the probe as a test (B's draws unchanged with/without A under `'own'`, changed under `'shared'`); `update(defs)` every tick leaves own sequences unchanged; persist `load` migrates v2 → v3 and a v2 save still loads; `save` writes v3.
+- [x] **Commit:** `feat(rules,persist): rng option for rules; built-in v2→v3 migration (E4.3)`
 
 #### E4.4 Docs
 
 - **Files:** SPEC §2.8, §2.5, §7.1, §7.3; `doc/api.md`; rules and persist READMEs; CHANGELOG (**behaviour change**: every 2.1 snapshot is v3, so 2.0 engines reject 2.1 saves; 2.0 saves still load); `plan/FINDINGS.md` O-77 row.
-- [ ] **Commit:** `docs(core): RNG streams and snapshot v3 (E4.4)`
+- [x] **Commit:** `docs(core): RNG streams and snapshot v3 (E4.4)`
 
 ### E5 — Registry and name lookup (§4.5; O-30, O-78)
 

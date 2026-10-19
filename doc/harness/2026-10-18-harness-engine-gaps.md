@@ -691,7 +691,8 @@ interface InstallRulesOptions { readonly rng?: 'shared' | 'own' }   // default f
   root). Systems registered after a restore then derive the same streams the source world would.
 - **Derivation.** `deriveStream(root, key)`:
   - FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`;
-  - each root word XOR-mixed with the key hash and passed through `splitmix32`;
+  - each root word XOR-mixed with the key hash and passed through `splitmix32` (word *i*: the
+    first output of `splitmix32` seeded with `root[i] XOR rotl(h, 8·i)`; E4 notes);
   - an all-zero result fixed up as `seedToState` does;
   - 8 outputs discarded as warm-up.
 
@@ -2456,6 +2457,25 @@ E4 (snapshot v3) is still on hold; E7 shipped on the v2 envelope.
 | §4.7 twin-named pending event (verify pass, `fix(E7)`) | `snapshot({ pendingEvents: true })` throws `TypeError` naming the event when another known event type shares a pending event's name | Found in adversarial verify: the by-name record could never restore (restore refuses the ambiguous name, even into the same world) or restored silently as the twin type in a world knowing only the other. `register` already refuses twins; `emit`/`on` do not |
 | §4.7 own `"__proto__"` payload key (verify pass, `fix(E7)`) | The payload copy and `cloneSerializable` define `"__proto__"` as an own data key (`setOwn`) | Found in adversarial verify: `out[k] = v` set the copy's prototype, dropping the data from the snapshot, the restored queue and the hash. The shared `cloneSerializable` fix also covers component/resource values |
 | §4.7 idle driver (verify pass) | No change; test added: after restoring a queue the O-48 repaint frame does not tick, the queue keeps the idle loop awake for one delivering step | Coverage gap only |
+
+### Implementation notes — E4 (2026-10-19)
+
+Owner decision (revision 3): `SNAPSHOT_VERSION` is 3 for every 2.1 snapshot.
+
+| Item | Choice | Reason |
+|---|---|---|
+| §4.4 derivation, "each root word XOR-mixed with the key hash" | Word *i* = first `splitmix32` output seeded with `root[i] XOR rotl(h, 8·i)` (`h` the FNV-1a-32 key hash; `rotl` by 0, 8, 16, 24 bits); then the all-zero fix-up and 8 warm-up draws as specified. Golden: `deriveStream([1,2,3,4], 'rule:move')` = `[1860701461, 1711349229, 1513367337, 2826258467]`, first draws `0.09816509275697172, 0.44299133284948766, 0.6445047117304057, 0.22211877536028624`; the test also checks an independent oracle | XOR-ing every word with the same `h` maps equal root words (e.g. a user seed `[7,7,7,7]`) to four equal state words; the per-word rotation keeps them apart at no cost. The spec text now states the exact function |
+| §4.4 stream key | Fixed at registration: the cursor key the system registers under (`nextCursorKey`: `name`, or `name#k` with *k* the number of live systems sharing the name), **skipping any key a live own-stream system still holds** | Cursor keys shift when an earlier same-named system is removed; without the skip, a later registration could take the key of a live system and share its generator |
+| §4.4 stream creation | At registration (claimed after the query is built, so a throwing registration leaves no entry); an own system that never draws still has an entry in `rngStreams` | "registering under key *k* … creates it from `deriveStream(root, k)`" |
+| §4.4 `rng` validation | An `rng` other than `'shared'`/`'own'` throws at `world.system()` before any state change; in rules, an unknown `RuleDef.rng` is a `RuleError` with the new `RuleDefPath` member `'rng'`, an unknown `InstallRulesOptions.rng` throws at `installRules` | Mirrors a non-finite `order` (core), a bad `priority` (rules, O-69 R7) and a bad `order` option (E3). `RuleDefPath` is documented as widening in later minors |
+| §4.4 validation | `rngRoot`/`rngStreams` present but `null` (or any non-conforming value) are rejected like `scaledTime` (only an absent field means "older build"); stream values must be arrays of 4 finite numbers. Root and stream states are normalized with `seedToState` on restore | O-41 / O-40 pattern |
+| §4.4 `deriveStream` export | Exported from `@domecs/core` | Tests 6 and 8 and the reseed recipe need it; it is part of the snapshot contract |
+| Plan E4.1 vs E4.3 split | The persist built-in `2 → 3` step shipped in the E4.1 commit (with its `migrate.test.ts` red), E4.3 added the persist save/load tests and the rules option | With `SNAPSHOT_VERSION = 3` and no step, every persist load of a 1.x/2.0 save failed (two existing persist tests went red), and ground rule 3 forbids committing failing tests |
+| Plan E4.2 red step | Spec tests 3, 8 and 9 passed on first run: the restore path (map replacement plus missing-key re-derive) had to land in E4.1, whose v2-restore test exercises the same code. Each E4.2 test was checked to fail with the re-derive loop or the root adoption disabled | Recorded so the commit history is not read as a skipped red step |
+| §4.5 manifest `rng` (deferred from E5) | **Shipped** in E4.1: `describe().systems[i].rng` is `'shared'` or `'own'` | E5 notes deferred it to E4 |
+| E7 `pendingEvents` envelope | Unchanged; now one of v3's optional fields, with `SNAPSHOT_VERSION` 3 | Owner decision; E7 notes anticipated it |
+| Goldens re-run | E1 hash goldens (`canonical-hash.test.ts` test 5, `GOLDEN_DEFAULT`/`GOLDEN_STRICT_META`) unchanged: the fixture is a literal v2 envelope without `rngRoot`, and `version` is excluded from the canonical form. E7 `pending-events.test.ts` passes unchanged. Updated for the bump: `resources.test.ts` (`SNAPSHOT_VERSION` and `snap.version` 3), persist `save-load.test.ts` wording (1 → 2 → 3) | Only literal version assertions changed; no hash golden pins a world-built snapshot before E8 (§4.4) |
+| Agent docs | AGENTS.md / SKILL.md not edited in E4 | Not in the plan's E4.4 file list; a determinism-checklist line about `rng: 'own'` for A/B comparisons can follow with the E8 release notes |
 
 ### Verification notes — revision-3 docs pass (2026-10-19, adversarial pass)
 

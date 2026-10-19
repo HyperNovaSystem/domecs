@@ -93,10 +93,34 @@ peer ranges still resolve.
   without consuming it. `canonicalSnapshot`/`hashSnapshot` include the field;
   `@domecs/persist` `firstDivergence` reports it (`key: 'pendingEvents'`).
   Default snapshots are unchanged (the option is off in 2.x). The field is
-  added without a `SNAPSHOT_VERSION` bump; a 2.0 engine ignores it.
+  one of snapshot v3's optional fields (below).
+- `@domecs/core`: per-system RNG streams (G6, O-77). `SystemDef.rng?:
+  'shared' | 'own'` (default `'shared'`): an own system's `ctx.rand` is a
+  stream keyed by its cursor key and derived from the world's root seed with
+  the new `deriveStream(root, key)` export, so adding, removing or editing
+  one system no longer changes another own-stream system's draws. Streams
+  outlive their systems (re-registration resumes them) and travel in the
+  snapshot as `WorldSnapshot.rngStreams`, beside the root seed `rngRoot`;
+  `restore()` validates both before any effect, rewinds live generators in
+  place and re-derives the streams the snapshot lacks.
+  `describe().systems[i].rng` reports the mode. SPEC §2.8.
+- `@domecs/rules`: `RuleDef.rng` and `InstallRulesOptions.rng` (`'shared'`
+  default | `'own'`): rule `random()` draws its own stream, keyed
+  `rule:<name>`, and `update()` re-registration resumes it. `RuleDefPath`
+  gains `'rng'` (an unknown `RuleDef.rng` is a `RuleError`).
+- `@domecs/persist`: built-in `2 → 3` migration (pure version bump).
 
 #### Changed
 
+- **Behavior change (snapshot format): `SNAPSHOT_VERSION` is 3.** Every
+  snapshot a 2.1 world writes has `version: 3`, whether or not it uses own
+  streams or pending events, and carries `rngRoot` (`rngStreams` and
+  `pendingEvents` are omitted while empty). **2.0 engines reject 2.1 saves**
+  ("newer than this engine supports"); 2.0 saves still restore and load (v2
+  keeps the restoring world's root and re-derives own streams; persist
+  migrates 2 → 3 in memory, and `save()` writes v3).
+  `describe().snapshotVersion` is 3. `hashSnapshot` excludes `version`, but
+  `rngRoot` is state, so hashes of world-built snapshots change once.
 - **Behavior change (determinism checks):** "same state" now means equal
   `hashSnapshot(snap, { includeChanges: true })`, not equal
   `JSON.stringify(snapshot())` (AGENTS.md checklist, SPEC §8). Canonical JSON

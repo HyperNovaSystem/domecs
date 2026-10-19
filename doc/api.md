@@ -370,13 +370,16 @@ interface World {
   pendingEvents(): EmittedEvent[]
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
-  // The envelope shape (seed, tick, nextId, every entity record's id and
-  // components bag — O-41) and incoming values for *registered* resource
+  // The envelope shape (seed, rngRoot, rngStreams, tick, nextId, every
+  // entity record's id and components bag — O-41) and incoming values for *registered* resource
   // types (their validate hook, mirroring setResource) are checked BEFORE any
   // state is wiped; an invalid snapshot throws and leaves the world
   // untouched. Component values are not re-validated — the live path
   // validates only at Component.create(). world.rand is rewound in place, so
-  // captured references follow the restore (O-46). A snapshot whose version
+  // captured references follow the restore (O-46); so are own streams, after
+  // the map is replaced by snap.rngStreams and every registered own-stream
+  // system whose key is missing is re-derived from the restored root
+  // (snap.rngRoot, or this world's own for a v2 snapshot). A snapshot whose version
   // is newer than SNAPSHOT_VERSION throws (O-63); migrate older ones first.
   // The pending event queue is abandoned — or, when snap.pendingEvents is
   // present, replaced by it after every name resolves through lookupEvent
@@ -419,6 +422,7 @@ interface WorldManifest {
     readonly enabled:    boolean
     readonly priority:   number
     readonly order:      number
+    readonly rng:        'shared' | 'own'   // SystemDef.rng (2.1)
     // Sorted, de-duplicated component names every query / reactsTo leaf
     // names (Not branches included; resource leaves excluded).
     readonly components: string[]
@@ -508,6 +512,10 @@ interface SystemDef {
                                            // (@domecs/rules sets { rule: name }); non-JSON
                                            // (function, undefined, NaN, class instance, cycle)
                                            // → world.system() throws TypeError
+  rng?:      'shared' | 'own'              // which stream ctx.rand is (SPEC §2.8, 2.1): 'shared' (default)
+                                           // = world.rand; 'own' = a stream keyed by the system's cursor
+                                           // key, derived from the world's root seed, kept across
+                                           // removal and snapshotted (rngStreams); else throws
 }
 
 type System = (ctx: SystemContext) => void
@@ -523,7 +531,7 @@ interface SystemContext {
   input:    InputSnapshot
   events:   EventView
   world:    WorldAPI
-  rand:     Rng
+  rand:     Rng                            // world.rand, or the system's own stream (rng: 'own')
   state:    unknown                        // system-local; read SystemDef.state
 }
 
@@ -803,13 +811,22 @@ interface TimeState {
 ### Snapshot
 
 ```ts
-// SNAPSHOT_VERSION === 2. v2 added `resources` (SPEC §2.11); @domecs/persist
-// ships a built-in 1→2 migration so legacy v1 saves load transparently.
-const SNAPSHOT_VERSION = 2
+// SNAPSHOT_VERSION === 3. v2 added `resources` (SPEC §2.11); v3 (2.1) added
+// `rngRoot`, `rngStreams` and `pendingEvents`. Every 2.1 snapshot is v3 (2.0
+// engines reject it); restore() accepts any version <= 3. @domecs/persist
+// ships built-in 1→2 and 2→3 migrations so v1 and v2 saves load transparently.
+const SNAPSHOT_VERSION = 3
 
 interface WorldSnapshot {
   readonly version:  number
-  readonly seed:     readonly [number, number, number, number]
+  readonly seed:     readonly [number, number, number, number]   // shared stream (world.rand)
+  // The root seed own streams derive from (the createWorld seed); never
+  // advances. Written by every 2.1 snapshot; restore() adopts it (absent in
+  // a v2 snapshot → the world keeps its own root). (v3)
+  readonly rngRoot?: RngState
+  // Every own stream the world has created, by key (rng: 'own' systems;
+  // entries outlive their systems). Omitted while there is none. (v3)
+  readonly rngStreams?: Readonly<Record<string, RngState>>
   readonly tick:     number
   // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
   // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
@@ -848,6 +865,11 @@ interface SnapshotPendingEvent {
   readonly payload?: JsonValue
 }
 
+// The initial state of own stream `key` under `root` (SPEC §2.8): FNV-1a-32 of
+// "domecs:stream:" + key, splitmix32 per root word, 8 warm-up draws. Pinned by
+// a golden test; part of the snapshot contract.
+function deriveStream(root: RngState, key: string): RngState
+
 interface ChangesSnapshot {
   readonly marks: ReadonlyArray<
     | readonly ['added' | 'changed' | 'removed', string, Entity]  // kind, component, entity
@@ -865,6 +887,55 @@ interface SnapshotOptions {
   // opt in.
   readonly pendingEvents?: boolean
 }
+```
+
+### Per-system RNG streams
+
+`world.rand` is one shared stream, so one random-drawing system changes
+every other system's draws. A system registered with `rng: 'own'` gets its
+own stream as `ctx.rand` (SPEC §2.8, O-77): keyed by its cursor key (rules:
+`rule:<name>`), derived from the world's root seed with `deriveStream`, kept
+when the system is removed (re-registering resumes it) and carried in the
+snapshot (`rngStreams`; `rngRoot` is in every snapshot). A restored world
+re-derives, from the restored root, the stream of every own-stream system the
+snapshot has no entry for. Reseeding a snapshot is data-only:
+`{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }`.
+
+```ts doctest name=rng-own-streams
+import { strict as assert } from 'node:assert'
+import { createWorld, createRng, defineComponent, deriveStream, entry, seedToState, type World } from '@domecs/core'
+
+const Roll = defineComponent<{ v: number }>('RsRoll', { defaults: { v: 0 } })
+
+function build(withNoise: boolean): { w: World; id: number } {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const id = w.spawn([entry(Roll, { v: 0 })])
+  if (withNoise) w.system('noise', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+  w.system('roll', { rng: 'own' }, (ctx) => {
+    w.getComponent(id, Roll)!.v = ctx.rand.uniform()
+    w.markChanged(id, Roll)
+  })
+  return { w, id }
+}
+
+const a = build(true)
+const b = build(false)
+for (let i = 0; i < 3; i++) {
+  a.w.stepOnce()
+  b.w.stepOnce()
+}
+// 'roll' draws the same values whether or not 'noise' exists
+assert.equal(a.w.getComponent(a.id, Roll)!.v, b.w.getComponent(b.id, Roll)!.v)
+const stream = createRng(deriveStream(seedToState([1, 2, 3, 4]), 'roll'))
+stream.uniform()
+stream.uniform()
+assert.equal(b.w.getComponent(b.id, Roll)!.v, stream.uniform())
+
+const snap = a.w.snapshot()
+assert.equal(snap.version, 3)
+assert.deepEqual(Object.keys(snap.rngStreams!), ['noise', 'roll'])
+assert.deepEqual(snap.rngRoot, seedToState([1, 2, 3, 4]))
+assert.equal(a.w.describe().systems.find((s) => s.name === 'roll')!.rng, 'own')
 ```
 
 ### Determinism tools
@@ -1682,7 +1753,7 @@ function installRules(
   defs: RuleDef[],
   resolve: (name: string) => ComponentType<any> | undefined,
   options?: InstallRulesOptions,
-): RulesHandle   // throws on an unknown `order`, or an `orderBase` that is not finite or exceeds ±2^51
+): RulesHandle   // throws on an unknown `order` or `rng`, or an `orderBase` that is not finite or exceeds ±2^51
 
 interface InstallRulesOptions {
   // 'registration' (default, 2.0 behaviour): rules tie-break by registration
@@ -1693,7 +1764,15 @@ interface InstallRulesOptions {
   // (priority, defs order). A def that fails to compile keeps its index.
   readonly order?: 'registration' | 'stable'
   readonly orderBase?: number   // first order key in 'stable' mode; default 1; |orderBase| <= 2^51
+  // Stream mode for every rule without its own RuleDef.rng (2.1). 'shared'
+  // (default): random() draws world.rand. 'own': each rule draws its own
+  // stream, keyed rule:<name> (SPEC §2.8), so editing one rule never changes
+  // another's draws, and update() re-registration resumes the stream.
+  readonly rng?: 'shared' | 'own'
 }
+
+// RuleDef gains (2.1): rng?: 'shared' | 'own' — overrides the install default
+// for that rule; any other value is a RuleError on field 'rng'.
 
 interface RulesHandle {
   update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
@@ -1710,7 +1789,7 @@ interface RuleError {
 // Which part of a RuleDef an error is about. Later minors add members:
 // keep a default branch.
 type RuleDefPath =
-  | 'name' | 'schedule' | 'priority' | 'when'
+  | 'name' | 'schedule' | 'priority' | 'rng' | 'when'
   | { readonly query: number }
   | { readonly action: number; readonly part: 'set' | 'expr' }
 ```
