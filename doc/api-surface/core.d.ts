@@ -641,6 +641,12 @@ export interface EventBus {
      * so a failed restore leaves the pending events as they were.
      */
     putBackPending(taken: PendingEvents): void;
+    /**
+     * Queue `events` ahead of whatever is pending, in their order (§4.7):
+     * `world.restore()` replaces the restoring world's queue with a snapshot's
+     * `pendingEvents`, keeping after them anything an `onRestore` hook emitted.
+     */
+    prependPending(events: readonly EmittedEvent[]): void;
 }
 /** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
 export type PendingEvents = Map<symbol, unknown[]>;
@@ -753,7 +759,7 @@ export type { Signal } from './signals.js';
 export { definePlugin } from './plugin.js';
 export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js';
 export { SNAPSHOT_VERSION } from './snapshot.js';
-export type { SnapshotOptions, WorldSnapshot } from './snapshot.js';
+export type { SnapshotOptions, SnapshotPendingEvent, WorldSnapshot } from './snapshot.js';
 export { canonicalJson, canonicalSnapshot, hashSnapshot, hashEntities, hashValue, HASH_ALGORITHM, } from './canonical.js';
 export type { CanonicalOptions } from './canonical.js';
 export { dmath } from './dmath.js';
@@ -1446,6 +1452,7 @@ export declare function createSignal<T>(): EmittableSignal<T>;
 
 // file: snapshot.d.ts
 import type { ChangesSnapshot } from './change-log.js';
+import type { JsonValue } from './result.js';
 import type { Entity } from './types.js';
 export declare const SNAPSHOT_VERSION = 2;
 /** Options for `world.snapshot()`. */
@@ -1458,6 +1465,24 @@ export interface SnapshotOptions {
      * `pruneTransientOnlyEntities()` applies it to the no-arg `save()` path.
      */
     readonly pruneEmptyEntities?: boolean;
+    /**
+     * Record the undelivered events in the snapshot's `pendingEvents` field
+     * (§4.7, ED-16). Default `false`: the field is absent and restore abandons
+     * the restoring world's queue, as in 2.0. Every fork, keyframe or
+     * checkpoint whose future must match the live world's should pass `true`.
+     * Throws `TypeError` naming the event when a pending payload is not plain
+     * data.
+     */
+    readonly pendingEvents?: boolean;
+}
+/**
+ * One undelivered event in {@link WorldSnapshot.pendingEvents}: the event
+ * type's name and a plain-data copy of its payload. `payload` is absent when
+ * the payload was `undefined` (a `defineEvent<void>` event).
+ */
+export interface SnapshotPendingEvent {
+    readonly event: string;
+    readonly payload?: JsonValue;
 }
 export interface WorldSnapshot {
     readonly version: number;
@@ -1512,6 +1537,16 @@ export interface WorldSnapshot {
      * Omitted when every system has seen every mark.
      */
     readonly changes?: ChangesSnapshot;
+    /**
+     * Undelivered events, in bus order (by first emit of each type, then
+     * payload order within a type). Present only when snapshotted with
+     * `{ pendingEvents: true }` and at least one event was in flight (§4.7).
+     * Restore resolves each name with `world.lookupEvent` before touching any
+     * state — an unknown or ambiguous name throws — then replaces the
+     * restoring world's queue with these events. Absent, restore abandons the
+     * queue (2.0 behaviour).
+     */
+    readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>;
     readonly meta?: Record<string, unknown>;
 }
 export declare function cloneSerializable<T>(value: T): T;
@@ -1691,7 +1726,8 @@ export declare function createResourceState(recordChange: (name: string) => void
 // file: world-state.d.ts
 import type { ChangeCursor, ChangeLog } from './change-log.js';
 import { type Rng } from './rng.js';
-import { type WorldSnapshot } from './snapshot.js';
+import type { EmittedEvent, EventType } from './events.js';
+import { type SnapshotPendingEvent, type WorldSnapshot } from './snapshot.js';
 import { type TimeState } from './time.js';
 import type { ComponentType, Entity } from './types.js';
 import type { SortedIdSet } from './id-set.js';
@@ -1775,7 +1811,35 @@ export interface WorldStateCtx {
     setNextId(id: Entity): void;
     setEmptyArch(arch: ArchetypeBucket): void;
 }
-export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSnapshot;
+/**
+ * Build the snapshot envelope. `pending` is the bus's undelivered events when
+ * the caller asked for `{ pendingEvents: true }` (§4.7), else `undefined`;
+ * the field is written only when at least one event is in flight, so the
+ * option does not change the hash of a world with an empty queue (restoring
+ * an absent field and an empty one both leave the queue empty).
+ */
+export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, pending?: readonly EmittedEvent[]): WorldSnapshot;
+/**
+ * Plain-data copies of the undelivered events, in bus order. A payload
+ * that is not plain data throws `TypeError` naming the event and the path.
+ *
+ * Plain data: `null`, booleans, strings, finite numbers (`-0` kept), arrays
+ * and objects whose prototype is `Object.prototype` or `null`. An
+ * `undefined` object property is omitted (JSON semantics); an `undefined`
+ * payload omits `payload` (a void event). Anything else — `undefined` in an
+ * array, a non-finite number, BigInt, symbol, function, class instance
+ * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
+ * coerced payload would restore as a different value.
+ */
+export declare function encodePendingEvents(events: readonly EmittedEvent[]): SnapshotPendingEvent[];
+/**
+ * Check a snapshot's `pendingEvents` field and resolve each name through
+ * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
+ * malformed field, an unknown name or an ambiguous one throws. Returns the
+ * events to queue, with payloads cloned so the queue never aliases the
+ * snapshot; `undefined` when the field is absent.
+ */
+export declare function resolvePendingEvents(s: WorldSnapshot, lookup: (name: string) => EventType<unknown> | undefined, known: () => readonly EventType<unknown>[]): EmittedEvent[] | undefined;
 /**
  * Replace world state with `s`. The caller has already passed `s` through
  * {@link validateSnapshot} — before any state is wiped, so an invalid
@@ -2078,7 +2142,26 @@ export interface World {
      */
     use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>;
     capability<K extends string>(name: K): Capability<K>;
+    /**
+     * The undelivered events — emitted this tick or between ticks, delivered
+     * at step 1 of the next tick — in bus order: by first emit of each type,
+     * then payload order within a type (§4.7). A fresh array each call; reading
+     * it consumes nothing. Lets a host report what an act produced without
+     * `action()`'s extra tick.
+     */
+    pendingEvents(): EmittedEvent[];
+    /**
+     * Serialize world state. With `{ pendingEvents: true }` the undelivered
+     * events travel too (§4.7), so a world restored from it delivers them on
+     * its next tick like the live one.
+     */
     snapshot(options?: SnapshotOptions): WorldSnapshot;
+    /**
+     * Replace world state with `snap`. When `snap.pendingEvents` is present,
+     * each name resolves through {@link lookupEvent} before any state changes
+     * (unknown or ambiguous throws) and the queue becomes those events;
+     * otherwise the queue is abandoned (SPEC §7.1).
+     */
     restore(snap: WorldSnapshot): void;
 }
 export interface WorldOptions {

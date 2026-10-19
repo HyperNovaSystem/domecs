@@ -6,6 +6,7 @@ import { createResourceState } from './world-resources.js'
 import {
   applySnapshot,
   buildSnapshot,
+  resolvePendingEvents,
   validateSnapshot,
   type ArchetypeBucket,
   type CompiledQuery,
@@ -418,7 +419,26 @@ export interface World {
    */
   use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
+  /**
+   * The undelivered events — emitted this tick or between ticks, delivered
+   * at step 1 of the next tick — in bus order: by first emit of each type,
+   * then payload order within a type (§4.7). A fresh array each call; reading
+   * it consumes nothing. Lets a host report what an act produced without
+   * `action()`'s extra tick.
+   */
+  pendingEvents(): EmittedEvent[]
+  /**
+   * Serialize world state. With `{ pendingEvents: true }` the undelivered
+   * events travel too (§4.7), so a world restored from it delivers them on
+   * its next tick like the live one.
+   */
   snapshot(options?: SnapshotOptions): WorldSnapshot
+  /**
+   * Replace world state with `snap`. When `snap.pendingEvents` is present,
+   * each name resolves through {@link lookupEvent} before any state changes
+   * (unknown or ambiguous throws) and the queue becomes those events;
+   * otherwise the queue is abandoned (SPEC §7.1).
+   */
   restore(snap: WorldSnapshot): void
 }
 
@@ -2108,8 +2128,16 @@ export function createWorld(options: WorldOptions = {}): World {
       return plugins.capability(name)
     },
 
+    pendingEvents(): EmittedEvent[] {
+      return bus.pendingEvents()
+    },
+
     snapshot(options?: SnapshotOptions): WorldSnapshot {
-      let snap = buildSnapshot(stateCtx, options?.pruneEmptyEntities === true)
+      let snap = buildSnapshot(
+        stateCtx,
+        options?.pruneEmptyEntities === true,
+        options?.pendingEvents === true ? bus.pendingEvents() : undefined,
+      )
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
           snap = entry.handle.onSnapshot(snap) as WorldSnapshot
@@ -2127,6 +2155,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const abandoned = bus.takePending()
       let s = snap
       let clock: SnapshotClock
+      let restored: EmittedEvent[] | undefined
       try {
         for (const entry of plugins.list()) {
           if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
@@ -2136,11 +2165,16 @@ export function createWorld(options: WorldOptions = {}): World {
         // throwing hook — puts the pending events back and throws before
         // world state is touched (O-40).
         clock = validateSnapshot(stateCtx, s)
+        // §4.7: resolve in-flight event names before any effect.
+        restored = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes())
       } catch (cause) {
         bus.putBackPending(abandoned)
         throw cause
       }
       applySnapshot(stateCtx, s, clock)
+      // The snapshot's queue replaces the abandoned one; anything an
+      // onRestore hook emitted stays queued after it.
+      if (restored !== undefined) bus.prependPending(restored)
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()

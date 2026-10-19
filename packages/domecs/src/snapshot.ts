@@ -1,4 +1,5 @@
 import type { ChangesSnapshot } from './change-log.js'
+import type { JsonValue } from './result.js'
 import type { Entity } from './types.js'
 
 // v2 added the optional `resources` field. The persist layer's
@@ -16,6 +17,25 @@ export interface SnapshotOptions {
    * `pruneTransientOnlyEntities()` applies it to the no-arg `save()` path.
    */
   readonly pruneEmptyEntities?: boolean
+  /**
+   * Record the undelivered events in the snapshot's `pendingEvents` field
+   * (§4.7, ED-16). Default `false`: the field is absent and restore abandons
+   * the restoring world's queue, as in 2.0. Every fork, keyframe or
+   * checkpoint whose future must match the live world's should pass `true`.
+   * Throws `TypeError` naming the event when a pending payload is not plain
+   * data.
+   */
+  readonly pendingEvents?: boolean
+}
+
+/**
+ * One undelivered event in {@link WorldSnapshot.pendingEvents}: the event
+ * type's name and a plain-data copy of its payload. `payload` is absent when
+ * the payload was `undefined` (a `defineEvent<void>` event).
+ */
+export interface SnapshotPendingEvent {
+  readonly event: string
+  readonly payload?: JsonValue
 }
 
 export interface WorldSnapshot {
@@ -71,6 +91,16 @@ export interface WorldSnapshot {
    * Omitted when every system has seen every mark.
    */
   readonly changes?: ChangesSnapshot
+  /**
+   * Undelivered events, in bus order (by first emit of each type, then
+   * payload order within a type). Present only when snapshotted with
+   * `{ pendingEvents: true }` and at least one event was in flight (§4.7).
+   * Restore resolves each name with `world.lookupEvent` before touching any
+   * state — an unknown or ambiguous name throws — then replaces the
+   * restoring world's queue with these events. Absent, restore abandons the
+   * queue (2.0 behaviour).
+   */
+  readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>
   readonly meta?: Record<string, unknown>
 }
 

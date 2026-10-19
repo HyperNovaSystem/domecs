@@ -182,6 +182,12 @@ export interface EventBus {
    * so a failed restore leaves the pending events as they were.
    */
   putBackPending(taken: PendingEvents): void
+  /**
+   * Queue `events` ahead of whatever is pending, in their order (§4.7):
+   * `world.restore()` replaces the restoring world's queue with a snapshot's
+   * `pendingEvents`, keeping after them anything an `onRestore` hook emitted.
+   */
+  prependPending(events: readonly EmittedEvent[]): void
 }
 
 /** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
@@ -218,33 +224,31 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     byName.set(type.name, byName.has(type.name) ? null : type)
   }
 
+  /** Append `payload` to the pending queue for `type`. */
+  function enqueue(type: EventType<unknown>, payload: unknown): void {
+    const key = type[eventTag]
+    know(type)
+    let a = pending.get(key)
+    if (!a) {
+      a = []
+      pending.set(key, a)
+    }
+    a.push(payload)
+  }
+
   const makeView = (src: Map<symbol, unknown[]>): EventView => ({
     of<T>(type: EventType<T>): readonly T[] {
       const arr = src.get(type[eventTag])
       return (arr ?? []) as readonly T[]
     },
     emit<T>(type: EventType<T>, payload: T): void {
-      const key = type[eventTag]
-      know(type as EventType<unknown>)
-      let a = pending.get(key)
-      if (!a) {
-        a = []
-        pending.set(key, a)
-      }
-      a.push(payload)
+      enqueue(type as EventType<unknown>, payload)
     },
   })
 
   return {
     emit<T>(type: EventType<T>, payload: T): void {
-      const key = type[eventTag]
-      know(type as EventType<unknown>)
-      let a = pending.get(key)
-      if (!a) {
-        a = []
-        pending.set(key, a)
-      }
-      a.push(payload)
+      enqueue(type as EventType<unknown>, payload)
     },
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
       const key = type[eventTag]
@@ -318,6 +322,16 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
     },
     putBackPending(taken: PendingEvents): void {
       pending = taken
+    },
+    prependPending(events: readonly EmittedEvent[]): void {
+      const after = pending
+      pending = new Map()
+      for (const { type, payload } of events) enqueue(type, payload)
+      for (const [key, arr] of after) {
+        const a = pending.get(key)
+        if (a) a.push(...arr)
+        else pending.set(key, arr)
+      }
     },
   }
 }

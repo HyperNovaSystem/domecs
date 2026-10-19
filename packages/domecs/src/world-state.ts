@@ -1,9 +1,12 @@
 import { internal } from './component.js'
 import type { ChangeCursor, ChangeLog } from './change-log.js'
 import { restoreRng, rewindRng, type Rng } from './rng.js'
+import type { EmittedEvent, EventType } from './events.js'
+import type { JsonValue } from './result.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
+  type SnapshotPendingEvent,
   type WorldSnapshot,
 } from './snapshot.js'
 import { fixedStepsDue, type TimeState } from './time.js'
@@ -92,7 +95,18 @@ export interface WorldStateCtx {
   setEmptyArch(arch: ArchetypeBucket): void
 }
 
-export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSnapshot {
+/**
+ * Build the snapshot envelope. `pending` is the bus's undelivered events when
+ * the caller asked for `{ pendingEvents: true }` (§4.7), else `undefined`;
+ * the field is written only when at least one event is in flight, so the
+ * option does not change the hash of a world with an empty queue (restoring
+ * an absent field and an empty one both leave the queue empty).
+ */
+export function buildSnapshot(
+  ctx: WorldStateCtx,
+  pruneEmpty: boolean,
+  pending?: readonly EmittedEvent[],
+): WorldSnapshot {
   const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
   const sortedAlive = Array.from(ctx.alive).sort((a, b) => a - b)
   for (const id of sortedAlive) {
@@ -130,7 +144,140 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
     ...(changes !== undefined ? { changes } : {}),
+    ...(pending !== undefined && pending.length > 0
+      ? { pendingEvents: encodePendingEvents(pending) }
+      : {}),
   }
+}
+
+// ── Pending events (§4.7, O-90) ─────────────────────────────────────────
+
+/**
+ * Plain-data copies of the undelivered events, in bus order. A payload
+ * that is not plain data throws `TypeError` naming the event and the path.
+ *
+ * Plain data: `null`, booleans, strings, finite numbers (`-0` kept), arrays
+ * and objects whose prototype is `Object.prototype` or `null`. An
+ * `undefined` object property is omitted (JSON semantics); an `undefined`
+ * payload omits `payload` (a void event). Anything else — `undefined` in an
+ * array, a non-finite number, BigInt, symbol, function, class instance
+ * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
+ * coerced payload would restore as a different value.
+ */
+export function encodePendingEvents(events: readonly EmittedEvent[]): SnapshotPendingEvent[] {
+  return events.map((e, i) => {
+    if (e.payload === undefined) return { event: e.type.name }
+    try {
+      return { event: e.type.name, payload: plainCopy(e.payload, []) }
+    } catch (fault) {
+      if (fault instanceof PlainFault) {
+        throw new TypeError(
+          `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) has a payload ` +
+            `that is not plain data at payload${fault.path.reverse().join('')}: ${fault.what}`,
+        )
+      }
+      throw fault
+    }
+  })
+}
+
+class PlainFault {
+  readonly path: string[] = []
+  constructor(readonly what: string) {}
+}
+
+const PATH_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+function plainCopy(v: unknown, ancestors: object[]): JsonValue {
+  switch (typeof v) {
+    case 'string':
+    case 'boolean':
+      return v
+    case 'number':
+      if (!Number.isFinite(v)) throw new PlainFault(`non-finite number ${String(v)}`)
+      return v
+    case 'undefined':
+      throw new PlainFault('undefined')
+    case 'bigint':
+      throw new PlainFault('a BigInt')
+    case 'symbol':
+      throw new PlainFault('a symbol')
+    case 'function':
+      throw new PlainFault('a function')
+  }
+  if (v === null) return null
+  const obj = v as object
+  if (ancestors.includes(obj)) throw new PlainFault('a cycle')
+  ancestors.push(obj)
+  try {
+    if (Array.isArray(obj)) {
+      const out: JsonValue[] = new Array<JsonValue>(obj.length)
+      for (let i = 0; i < obj.length; i++) {
+        try {
+          out[i] = plainCopy(obj[i], ancestors)
+        } catch (fault) {
+          if (fault instanceof PlainFault) fault.path.push(`[${i}]`)
+          throw fault
+        }
+      }
+      return out
+    }
+    const proto = Object.getPrototypeOf(obj) as object | null
+    if (proto !== Object.prototype && proto !== null) {
+      const name = (obj.constructor as { name?: unknown } | undefined)?.name
+      throw new PlainFault(typeof name === 'string' && name !== '' ? `a ${name} instance` : 'a class instance')
+    }
+    const out: Record<string, JsonValue> = {}
+    for (const k of Object.keys(obj)) {
+      const child = (obj as Record<string, unknown>)[k]
+      if (child === undefined) continue
+      try {
+        out[k] = plainCopy(child, ancestors)
+      } catch (fault) {
+        if (fault instanceof PlainFault) {
+          fault.path.push(PATH_IDENT.test(k) ? `.${k}` : `[${JSON.stringify(k)}]`)
+        }
+        throw fault
+      }
+    }
+    return out
+  } finally {
+    ancestors.pop()
+  }
+}
+
+/**
+ * Check a snapshot's `pendingEvents` field and resolve each name through
+ * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
+ * malformed field, an unknown name or an ambiguous one throws. Returns the
+ * events to queue, with payloads cloned so the queue never aliases the
+ * snapshot; `undefined` when the field is absent.
+ */
+export function resolvePendingEvents(
+  s: WorldSnapshot,
+  lookup: (name: string) => EventType<unknown> | undefined,
+  known: () => readonly EventType<unknown>[],
+): EmittedEvent[] | undefined {
+  const field: unknown = (s as { pendingEvents?: unknown }).pendingEvents
+  if (field === undefined) return undefined
+  if (!Array.isArray(field)) throw invalid('pendingEvents', 'an array', field)
+  return field.map((rec: unknown, i): EmittedEvent => {
+    if (!isRecord(rec)) throw invalid(`pendingEvents[${i}]`, 'an object', rec)
+    const name = rec.event
+    if (typeof name !== 'string') throw invalid(`pendingEvents[${i}].event`, 'a string', name)
+    const type = lookup(name)
+    if (type === undefined) {
+      const sharing = known().filter((t) => t.name === name).length
+      throw new Error(
+        sharing > 1
+          ? `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is ambiguous: ` +
+              `${sharing} distinct known event types share the name`
+          : `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is not a known event type ` +
+              `in this world; register it with world.register(...) before restoring`,
+      )
+    }
+    return { type, payload: cloneSerializable(rec.payload) }
+  })
 }
 
 /**
