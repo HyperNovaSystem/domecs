@@ -236,9 +236,17 @@ walkFieldRefs…") pins the export.
 
 **For studio:** once expressions use the 2.2 forms, a component rename must
 also rewrite member reads (`first(P).C.f`), sets and `has` targets, so it
-should splice at `walkComponentRefs` positions (every role) plus `without[]`,
+should visit names with `walkComponentRefs` (every role) plus `without[]`,
 as the harness spec §5.2 "Studio" line says; `walkFieldRefs` alone is only
-complete for self-only (2.1-style) expressions. Studio can drop its mirror once
+complete for self-only (2.1-style) expressions. **Positions are AST node
+positions, not name tokens** (E-fix2 verify): only `C.f` reports the
+component token; `self.C.f` reports `self`, `e.C.f` the start of the entity
+(`first(`, `entity(`, …), and sets, aggregates and `has` the form's name. A
+rename must not splice the new name at `pos` directly: it has to find the
+name token from `pos` (for `self.C.f` it follows `self.`; for `e.C.f` it
+follows the entity's closing `)` and `.`). The engine does not report name
+token positions; if studio wants them, that is an additive engine request
+(e.g. a name position on the visit callback) for the owner. Studio can drop its mirror once
 it pins an engine build that includes this commit; the 2.2.0 release-candidate
 tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
 and do not export it.

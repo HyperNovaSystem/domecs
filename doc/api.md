@@ -2395,8 +2395,11 @@ the same run. `self`, `tick`, `other`, `event` and `pointer` are reserved
 words, and `walkComponentRefs(ast, visit)` visits every component name
 (reads, sets, `has` targets) for tools that rename components.
 `walkFieldRefs(ast, visit)` visits only the evaluated entity's own field
-reads (`C.f`, `self.C.f`, also inside the forms' expression arguments), each
-with its source position.
+reads (`C.f`, `self.C.f`, also inside the forms' expression arguments).
+Both report AST node positions, not always the name token: the component
+token for `C.f`, the `self` token for `self.C.f`, the entity's start for
+`e.C.f`, and the form's name for sets, aggregates and `has`. A tool that
+renames by splicing finds the name token from that position.
 
 ```ts doctest name=rules-cross-entity
 import { strict as assert } from 'node:assert'
@@ -2444,6 +2447,12 @@ assert.deepEqual(seen, ['set:XrPlayer', 'member:XrPos.x', 'self:XrPos.x'])
 const own: string[] = []
 walkFieldRefs(parsed.ast, (c, f, pos) => own.push(`${c}.${f}@${pos}`))
 assert.deepEqual(own, ['XrPos.x@26'])
+// Positions are node positions: `self.C.f` reports the `self` token.
+const selfRead = parseExpression('1 + self.XrPos.x')
+assert.ok('ast' in selfRead)
+const selfPos: number[] = []
+walkFieldRefs(selfRead.ast, (_c, _f, pos) => selfPos.push(pos))
+assert.deepEqual(selfPos, [4]) // 'self.XrPos.x' starts at 4; the component at 9
 ```
 
 **World expressions (2.2; §5.3).** `compileWorldExpression(source, resolve,

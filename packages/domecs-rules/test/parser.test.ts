@@ -534,4 +534,29 @@ describe('E10.2 walkers', () => {
     rules.walkFieldRefs(ok('first(P).Pos.x + Pos.y'), (c, f, pos) => seen.push([c, f, pos]))
     expect(seen).toEqual([['Pos', 'y', 17]])
   })
+
+  // E-fix2 verify: the positions are AST node positions, not always the
+  // component token. A renaming tool that splices at `pos` must find the
+  // name token from there; the docs say so.
+  it('walker positions are node positions: `self` for self.C.f, the entity or form start otherwise', () => {
+    const src = 'self.Pos.x + Pos.y + first(P).Pos.x + sum(S, Hp.hp) + has(first(P), Q)'
+    const own: Array<[string, string, number]> = []
+    walkFieldRefs(ok(src), (c, f, pos) => own.push([c, f, pos]))
+    expect(own).toEqual([['Pos', 'x', 0], ['Pos', 'y', 13]])
+    expect(src.startsWith('self.Pos', 0)).toBe(true)
+    expect(src.startsWith('Pos.y', 13)).toBe(true)
+    const all: Array<[string, string | null, number, string]> = []
+    walkComponentRefs(ok(src), (c, f, pos, role) => all.push([c, f, pos, role]))
+    const at = (pos: number): string => src.slice(pos).match(/^[A-Za-z_]+/)![0]
+    expect(all.map(([c, f, pos, role]) => `${role}:${c}${f ? '.' + f : ''}@${at(pos)}`)).toEqual([
+      'self:Pos.x@self',
+      'self:Pos.y@Pos',
+      'set:P@first',
+      'member:Pos.x@first',
+      'set:S@sum',
+      'member:Hp.hp@sum',
+      'set:P@first',
+      'set:Q@has',
+    ])
+  })
 })

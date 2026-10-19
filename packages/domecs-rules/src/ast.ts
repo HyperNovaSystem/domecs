@@ -168,6 +168,8 @@ function entityChildren(target: EntityNode): AstNode[] {
  * package entry for tools that only need self-field positions (a 2.1-style
  * rename of the evaluated entity's own reads); a rename that must also
  * cover member reads, sets and `has` targets uses `walkComponentRefs`.
+ * `pos` is the node position: the component token for `C.f`, but the
+ * `self` token for `self.C.f` (the component name follows `self.`).
  */
 export function walkFieldRefs(
   node: AstNode,
