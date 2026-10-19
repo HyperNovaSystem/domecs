@@ -177,3 +177,26 @@ test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1, E
   // (scene's spatial index uses createSpatialGrid, rules use dmath.atan2).
   assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.1.0'))
 })
+
+test('every package peers on @domecs/core as workspace:^, so it packs as ^<release> and rejects an older core (E13.1)', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { workspaceRoot } = await import('../scripts/validate-release.mjs')
+  const pkgs = fs
+    .readdirSync(path.join(workspaceRoot, 'packages'), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && fs.existsSync(path.join(workspaceRoot, 'packages', d.name, 'package.json')))
+    .map((d) => JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'packages', d.name, 'package.json'), 'utf8')))
+    .filter((p) => p.name !== '@domecs/core')
+  assert.equal(pkgs.length, 6)
+  for (const p of pkgs) {
+    // `workspace:^` is what `pnpm pack` rewrites to `^<core version>`; a
+    // literal range here would let a 2.2 package install against a 2.1 core.
+    assert.equal(p.peerDependencies?.['@domecs/core'], 'workspace:^', p.name)
+    assert.equal(p.dependencies?.['@domecs/core'], undefined, p.name)
+  }
+  const published = `^${RELEASE_VERSION}`
+  assert.ok(satisfiesCaret(published, RELEASE_VERSION))
+  assert.ok(satisfiesCaret(published, `${RELEASE_VERSION}+g1a2b3c4`))
+  assert.ok(!satisfiesCaret(published, '2.1.0'))
+  assert.ok(!satisfiesCaret(published, '2.1.0+g5cb0290'))
+})
