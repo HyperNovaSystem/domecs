@@ -300,6 +300,16 @@ describe('AgentBridge.reset(options) (E17.2, O-89)', () => {
     expect(world.time.scale).toBe(0.5)
   })
 
+  it('reset({ scale: 0 }) keeps the resume target (setScale(0) semantics, documented)', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    world.setScale(3)
+    bridge.reset({ scale: 0 })
+    expect(world.time.scale).toBe(0)
+    world.resume()
+    expect(world.time.scale).toBe(3)
+  })
+
   it('rejects a bad scale or input option before restoring anything', () => {
     const { world, id } = setup()
     const bridge = createAgentBridge(world)

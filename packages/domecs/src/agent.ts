@@ -28,7 +28,10 @@ export interface AgentResetOptions {
   /**
    * `world.setScale(scale)` after the restore: `0` pauses, a positive scale
    * resumes at it. Omitted: the world keeps its current scale. Must be a
-   * finite number ≥ 0 (checked before anything is restored).
+   * finite number ≥ 0 (checked before anything is restored). `0` has
+   * `setScale(0)` semantics: the resume target stays the last positive
+   * scale, so a later `world.resume()` runs at the previous episode's
+   * speed; pass a positive scale to choose the next episode's speed.
    */
   scale?: number
   /**
