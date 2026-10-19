@@ -193,6 +193,16 @@ event); otherwise it returns the reason fragment that `action()` reports as
 agreement with `world.action()`. Studio can drop its copy once it pins an
 engine build that includes this commit.
 
+**Verify pass (engine, 2026-10-19, `fix(E-fix): validateEventPayload checks
+own keys only`):** the unknown-field check used `key in fields`, so a key
+inherited from `Object.prototype` (`toString`, `constructor`, `__proto__` as
+`JSON.parse` produces it) passed as "declared" and `action()` accepted the
+payload. That matters now that studio validates LLM-built act payloads with
+it. Conversely an absent declared field named like a prototype member was read
+through the chain and rejected. Both checks now use own properties; tests in
+`validate-event-payload.test.ts`. If studio's copy mirrors the old `in`
+check, it has the same hole until it switches to the export.
+
 **Not changed here:** studio's docs still say engine "milestones E1–E18"
 (already noted in the harness spec's revision-3 verification notes). That
 text lives in the studio repo; the follow-up (E1–E21) belongs there.

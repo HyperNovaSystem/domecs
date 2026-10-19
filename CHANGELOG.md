@@ -13,6 +13,15 @@ All notable changes to DOMECS are documented here. The format is based on
   for hosts that pre-validate a command without emitting or stepping (studio
   finding 2026-10-19; studio had kept a copy).
 
+### Fixed
+
+- `@domecs/core`: `validateEventPayload` (and so `world.action()` /
+  `bridge.act()`) checked undeclared keys with `in`, so a payload key that is
+  only inherited from `Object.prototype` (`toString`, `constructor`,
+  `__proto__` from `JSON.parse`, …) was treated as declared and accepted; and
+  an absent declared field with such a name was read through the prototype
+  chain and rejected. Both now use own properties only.
+
 ## [2.1.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the

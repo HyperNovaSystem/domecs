@@ -57,6 +57,8 @@ export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
   return type as InternalEventType<T>
 }
 
+const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key)
+
 /**
  * O-39: shallow payload validation against an event's declared schema, used
  * by `world.action()` / `bridge.act()` so the typed command boundary rejects
@@ -70,8 +72,9 @@ export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
  * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
- * - payload must be a plain object
- * - keys not declared in the schema are rejected (catches typo'd fields)
+ * - payload must be a non-null, non-array object
+ * - own keys not declared in the schema are rejected (catches typo'd
+ *   fields; names inherited from `Object.prototype` count as undeclared)
  * - declared keys, when present, must match their `kind` (`enum` must be a
  *   member of `options`); `unknown` accepts anything
  *
@@ -85,13 +88,16 @@ export function validateEventPayload(type: EventType<unknown>, payload: unknown)
   }
   const fields = schema.fields
   for (const key of Object.keys(payload)) {
-    if (!(key in fields)) {
+    // Own keys only: `key in fields` would treat `toString`, `constructor`,
+    // `__proto__` (inherited from Object.prototype) as declared.
+    if (!hasOwn(fields, key)) {
       const declared = Object.keys(fields).join(', ') || '(none)'
       return `unknown field "${key}" — declared fields: ${declared}`
     }
   }
   for (const [key, spec] of Object.entries(fields)) {
-    const v = (payload as Record<string, unknown>)[key]
+    // Absent ⇒ optional; never read a declared name through the prototype chain.
+    const v = hasOwn(payload, key) ? (payload as Record<string, unknown>)[key] : undefined
     if (v === undefined) continue
     switch (spec.kind) {
       case 'number':

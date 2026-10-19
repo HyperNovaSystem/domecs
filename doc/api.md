@@ -666,9 +666,11 @@ function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
 // The O-39 payload check world.action / bridge.act apply, without emitting or
 // stepping: null when valid (always null for a schema-less event), else a
 // reason fragment. A rejected action reports
-// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a plain
-// object, undeclared keys are rejected, declared keys (all optional) must
-// match their kind / enum options; 'unknown' accepts anything.
+// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a
+// non-null, non-array object; own keys not declared are rejected (names only
+// inherited from Object.prototype, e.g. toString, count as undeclared);
+// declared keys (all optional) must match their kind / enum options;
+// 'unknown' accepts anything.
 function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null
 
 interface EventDefOptions {

@@ -37,6 +37,36 @@ describe('validateEventPayload (public export)', () => {
     expect(validateEventPayload(Move, { dx: 1, mode: 'fly' })).toMatch(/field "mode" must be one of/)
   })
 
+  // Verify pass (E-fix): the unknown-field check used `key in fields`, so a
+  // key inherited from Object.prototype (`toString`, `constructor`,
+  // `__proto__` via JSON.parse) counted as "declared" and the payload was
+  // accepted. Now that hosts call this on agent/LLM-built payloads, inherited
+  // names must be rejected like any other undeclared key.
+  it('rejects keys that are only inherited from Object.prototype', () => {
+    for (const key of ['toString', 'constructor', 'hasOwnProperty', 'valueOf']) {
+      expect(validateEventPayload(Move, { dx: 1, [key]: 1 })).toMatch(new RegExp(`unknown field "${key}"`))
+    }
+    const proto = JSON.parse('{"dx":1,"__proto__":{"polluted":true}}') as unknown
+    expect(Object.keys(proto as object)).toContain('__proto__')
+    expect(validateEventPayload(Move, proto)).toMatch(/unknown field "__proto__"/)
+
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const result = world.action(Move, { dx: 1, constructor: 'x' } as unknown as { dx: number })
+    expect(result.accepted).toBe(false)
+    expect(world.time.tick).toBe(0)
+  })
+
+  it('still accepts a declared field whose name shadows an Object.prototype member', () => {
+    const Named = defineEvent<{ toString?: string }>('Named', {
+      schema: { fields: { toString: { kind: 'string' as const } } },
+    })
+    expect(validateEventPayload(Named, { toString: 'x' })).toBeNull()
+    expect(validateEventPayload(Named, { toString: 1 })).toMatch(/field "toString" must be a string/)
+    // Absent declared field is optional: it must not be read through the
+    // prototype chain (Object.prototype.toString is a function, not a string).
+    expect(validateEventPayload(Named, {})).toBeNull()
+  })
+
   it('agrees with world.action(): the action reason embeds the same fragment', () => {
     const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
     const bad = { dx: 1, dz: 2 } as unknown as { dx: number }

@@ -568,8 +568,9 @@ export declare function internalEvent<T>(type: EventType<T>): InternalEventType<
  * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
- * - payload must be a plain object
- * - keys not declared in the schema are rejected (catches typo'd fields)
+ * - payload must be a non-null, non-array object
+ * - own keys not declared in the schema are rejected (catches typo'd
+ *   fields; names inherited from `Object.prototype` count as undeclared)
  * - declared keys, when present, must match their `kind` (`enum` must be a
  *   member of `options`); `unknown` accepts anything
  *
