@@ -122,9 +122,11 @@ Snapshots stay format v3. Release notes:
   recorded a later despawn's removal marks in different orders, and their
   strict hashes differed while an `OnRemoved` reader had not run. Archetypes
   now keep the names sorted: despawn marks, `componentRemoved`,
-  `world.archetype()` and snapshot component keys follow name order. Hashes
-  and golden values are unchanged; `JSON.stringify(snapshot())` text can
-  change key order.
+  `world.archetype()` and snapshot component keys follow name order. Golden
+  values and default hashes are unchanged; a strict hash
+  (`includeChanges: true`, act-log checkpoints) taken while such removal
+  marks are unread can differ from 2.2's for the same run, and
+  `JSON.stringify(snapshot())` text can change key order.
 
 ## [2.2.0] — release candidate (2026-10-19; not yet published)
 
