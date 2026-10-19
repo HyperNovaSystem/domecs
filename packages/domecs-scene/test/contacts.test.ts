@@ -485,6 +485,32 @@ describe('installContacts (spec §6.2)', () => {
     expect(() => installContacts({ ...base, radius: { component: Body } as never })).toThrow(/radius/)
   })
 
+  it('a malformed or unsorted ContactState (e.g. from a hand-edited save) is read as a set, never throws', () => {
+    const run = (state: unknown): { rows: Row[]; pairs: unknown } => {
+      const w = createWorld({ headless: true })
+      const { next } = setup(w, { radius: 1, stay: true, pairs: [[Player, Enemy]] })
+      const p = w.spawn([entry(Pos, { x: 0, y: 0 }), entry(Player, { p: 1 })])
+      const e = w.spawn([entry(Pos, { x: 1, y: 0 }), entry(Enemy, { e: 1 })])
+      expect([p, e]).toEqual([0, 1])
+      w.setResource(ContactState, state as never)
+      next()
+      return { rows: next(), pairs: w.getResource(ContactState) }
+    }
+    // Unsorted, with a stale pair: [0, 1] stays, [5, 1] ends.
+    expect(run({ pairs: [[5, 1], [0, 1]] })).toEqual({
+      rows: [
+        [5, 1, 'end'],
+        [0, 1, 'stay'],
+      ],
+      pairs: { pairs: [[0, 1]] },
+    })
+    // Duplicates collapse; malformed entries are dropped.
+    for (const bad of [{ pairs: [[0, 1], [0, 1]] }, { pairs: [null, 3, [0], [0, 1], ['0', 1], [0, 1, 2]] }]) {
+      expect(run(bad)).toEqual({ rows: [[0, 1, 'stay']], pairs: { pairs: [[0, 1]] } })
+    }
+    expect(run({ pairs: 'x' })).toEqual({ rows: [[0, 1, 'begin']], pairs: { pairs: [[0, 1]] } })
+  })
+
   it('rejects options that are not component types (e.g. names) instead of never detecting anything', () => {
     const base: ContactsOptions = { position: { component: Pos }, radius: 1, pairs: [[Player, Enemy]] }
     // Rules name components by string; passing a name here must fail loudly.

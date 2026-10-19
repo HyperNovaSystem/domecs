@@ -120,6 +120,43 @@ const isFieldName = (value: unknown): value is string => typeof value === 'strin
 
 const byPair = (s: readonly [Entity, Entity], t: readonly [Entity, Entity]): number => s[0] - t[0] || s[1] - t[1]
 
+const isPair = (p: unknown): p is readonly [Entity, Entity] =>
+  Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number'
+
+/**
+ * The last run's pairs from {@link ContactState}, as a sorted set the diff
+ * can merge against. The plugin always writes it canonical (sorted by
+ * (a, b), no duplicates), which is checked in O(n) and used as is. A value
+ * from elsewhere (a hand-edited save, an agent's `setResource`) is read as a
+ * set: entries that are not two numbers are dropped, the rest sorted and
+ * de-duplicated into a copy, and `canonical` is false so the run writes the
+ * state back. A `pairs` that is not an array reads as empty.
+ */
+function readPairs(state: ContactStateValue | undefined): {
+  readonly pairs: ReadonlyArray<readonly [Entity, Entity]>
+  readonly canonical: boolean
+} {
+  const raw: unknown = state?.pairs
+  if (!Array.isArray(raw)) return { pairs: [], canonical: true }
+  let canonical = true
+  for (let i = 0; i < raw.length; i++) {
+    const p: unknown = raw[i]
+    if (!isPair(p) || (i > 0 && byPair(raw[i - 1] as readonly [Entity, Entity], p) >= 0)) {
+      canonical = false
+      break
+    }
+  }
+  if (canonical) return { pairs: raw as Array<readonly [Entity, Entity]>, canonical }
+  const out = raw.filter(isPair).sort(byPair)
+  let w = 0
+  for (let i = 0; i < out.length; i++) {
+    if (w > 0 && byPair(out[w - 1]!, out[i]!) === 0) continue
+    out[w++] = out[i]!
+  }
+  out.length = w
+  return { pairs: out, canonical }
+}
+
 /**
  * Plugin factory: overlap events for rules (spec §6.2). Each run of its
  * system (`schedule`, default `'fixed'`, at `priority` 150) indexes every
@@ -338,8 +375,7 @@ export function installContacts(options: ContactsOptions): Plugin {
         current.length = w
 
         // 3. Diff against the last run's pairs (sorted by the same order).
-        const state = world.getResource(ContactState)
-        const prev: ReadonlyArray<readonly [Entity, Entity]> = Array.isArray(state?.pairs) ? state.pairs : []
+        const { pairs: prev, canonical } = readPairs(world.getResource(ContactState))
         const ends: Array<readonly [Entity, Entity]> = []
         const begins: Array<[Entity, Entity]> = []
         const stays: Array<[Entity, Entity]> = []
@@ -357,7 +393,7 @@ export function installContacts(options: ContactsOptions): Plugin {
         for (const [a, b] of ends) ctx.events.emit(Contact, { a, b, phase: 'end' })
         for (const [a, b] of begins) ctx.events.emit(Contact, { a, b, phase: 'begin' })
         if (stay) for (const [a, b] of stays) ctx.events.emit(Contact, { a, b, phase: 'stay' })
-        if (ends.length > 0 || begins.length > 0) world.setResource(ContactState, { pairs: current })
+        if (ends.length > 0 || begins.length > 0 || !canonical) world.setResource(ContactState, { pairs: current })
       })
 
       return {
