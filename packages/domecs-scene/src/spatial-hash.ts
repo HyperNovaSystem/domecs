@@ -64,15 +64,32 @@ export function createSpatialHash(world: World, options: SpatialHashOptions): Sp
   const holdsAll = (filter: readonly ComponentType<any>[] | undefined) =>
     filter && filter.length > 0 ? (id: Entity) => filter.every((t) => world.has(id, t)) : undefined
 
+  /** Ids indexed by the last refresh, ascending (iterEntitiesWith order). */
+  let indexed: Entity[] = []
+
   const refresh = (): void => {
     live()
-    grid.clear()
+    // Update in place (a set() that stays in its cell allocates nothing),
+    // then drop the ids the last refresh indexed that are gone now.
+    const seen: Entity[] = []
     for (const { id, value } of world.iterEntitiesWith(component)) {
       const v = value as Record<string, unknown>
       const x = v[fx]
       const y = v[fy]
-      if (typeof x === 'number' && typeof y === 'number') grid.set(id, x, y)
+      if (typeof x === 'number' && typeof y === 'number') {
+        grid.set(id, x, y) // a non-finite coordinate removes the id
+        seen.push(id)
+      } else {
+        grid.delete(id)
+      }
     }
+    // Both lists ascend: one merge walk finds the stale ids.
+    let j = 0
+    for (const id of indexed) {
+      while (j < seen.length && seen[j]! < id) j++
+      if (j >= seen.length || seen[j] !== id) grid.delete(id)
+    }
+    indexed = seen
   }
 
   refresh()
@@ -108,6 +125,7 @@ export function createSpatialHash(world: World, options: SpatialHashOptions): Sp
       if (disposed) return
       disposed = true
       grid.clear()
+      indexed = []
     },
   }
 }

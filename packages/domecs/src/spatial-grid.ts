@@ -61,9 +61,17 @@ interface Item {
   key: CellKey | null
 }
 
-/** Cell coordinates in (-PACK_LIMIT, PACK_LIMIT) pack into one exact number. */
+/**
+ * Cell keys are exact in three tiers chosen by the cell coordinates alone:
+ * |c| < 2^14 packs into a small integer in [0, 2^30) (a V8 small integer,
+ * the fastest Map key); |c| < 2^25 packs into an integer in
+ * [2^30, 2^30 + 2^52); anything larger becomes a string.
+ */
+const SMALL_LIMIT = 2 ** 14
+const SMALL_SPAN = 2 ** 15
 const PACK_LIMIT = 2 ** 25
 const PACK_SPAN = 2 ** 26
+const PACK_BASE = 2 ** 30
 /** Cells beyond ±MAX_CELL (or a non-finite quotient) are kept as outliers. */
 const MAX_CELL = 2 ** 50
 /**
@@ -73,9 +81,12 @@ const MAX_CELL = 2 ** 50
 const SLACK = 2 ** -40
 
 function cellKey(cx: number, cy: number): CellKey {
+  if (cx > -SMALL_LIMIT && cx < SMALL_LIMIT && cy > -SMALL_LIMIT && cy < SMALL_LIMIT) {
+    return (cx + SMALL_LIMIT) * SMALL_SPAN + (cy + SMALL_LIMIT)
+  }
   if (cx > -PACK_LIMIT && cx < PACK_LIMIT && cy > -PACK_LIMIT && cy < PACK_LIMIT) {
-    // (cx + L) and (cy + L) are integers in [0, 2^26): the product stays below 2^52.
-    return (cx + PACK_LIMIT) * PACK_SPAN + (cy + PACK_LIMIT)
+    // (cx + L) and (cy + L) are integers in [0, 2^26): the sum stays below 2^53.
+    return PACK_BASE + (cx + PACK_LIMIT) * PACK_SPAN + (cy + PACK_LIMIT)
   }
   return `${cx},${cy}`
 }

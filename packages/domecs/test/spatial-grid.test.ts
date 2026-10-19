@@ -306,6 +306,13 @@ describe('createSpatialGrid (spec §5.1)', () => {
       { id: 4, x: 2 ** 60 + 2 ** 9, y: -(2 ** 60) },
       { id: 5, x: 0, y: 0 },
       { id: 6, x: 3e-310, y: -3e-310 },
+      // cell keys change representation at |cell| = 2^14 and 2^25: neighbours
+      // across those boundaries must still be found
+      { id: 7, x: 3e5, y: -3e5 },
+      { id: 8, x: 16383.75, y: 0 },
+      { id: 9, x: 16384.25, y: 0 },
+      { id: 10, x: -16384.25, y: 2 ** 25 - 0.25 },
+      { id: 11, x: -16383.75, y: 2 ** 25 + 0.25 },
     ]
     for (const cs of CELL_SIZES) {
       const g = build(cs, extreme)
@@ -315,9 +322,11 @@ describe('createSpatialGrid (spec §5.1)', () => {
         expect(g.nearest(q.x + 1, q.y, { accept: (id) => id !== q.id })).toBe(
           oracle.nearest(extreme, q.x + 1, q.y, { accept: (id) => id !== q.id }),
         )
-        for (const r of [0, 1024, 1e10]) expect(g.within(q.x, q.y, r)).toEqual(oracle.within(extreme, q.x, q.y, r))
+        for (const r of [0, 0.5, 1024, 1e10]) expect(g.within(q.x, q.y, r)).toEqual(oracle.within(extreme, q.x, q.y, r))
       }
       expect(g.pairs(1024)).toEqual(oracle.pairs(extreme, 1024))
+      expect(g.pairs(0.75)).toEqual(oracle.pairs(extreme, 0.75))
+      expect(g.within(16384, 0, 0.5)).toEqual([8, 9])
     }
   })
 

@@ -99,6 +99,12 @@ describe('createSpatialHash (spec §5.1)', () => {
     world.getComponent(s, At)!.px = 3
     index.refresh()
     expect(index.within(0, 0, 100)).toEqual([p, q, s])
+    // an indexed id whose field turns non-finite or non-number drops out
+    world.getComponent(p, At)!.py = Infinity
+    world.getComponent(s, At)!.py = null as unknown as number
+    index.refresh()
+    expect(index.within(0, 0, 100)).toEqual([q])
+    expect(index.nearest(2, 2)).toBe(q)
   })
 
   it('pairs(r, a, b): first element carries a, sorted; a == b gives first < second', () => {
