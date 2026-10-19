@@ -10,7 +10,7 @@ export type {
   PointerField,
   UnaryOp,
 } from './ast.js'
-export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs } from './ast.js'
+export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs, walkFieldRefs } from './ast.js'
 export { MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, parseExpression } from './parser.js'
 export type { ParseError } from './parser.js'
 export { evaluate, RuleEvalError } from './evaluator.js'

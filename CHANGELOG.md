@@ -6,6 +6,14 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `@domecs/rules`: `walkFieldRefs(ast, visit)` is now exported from the
+  package entry (it was only in `dist/ast.js`). Unchanged behaviour: it visits
+  the evaluated entity's own field reads with their positions; use
+  `walkComponentRefs` to also visit member reads, sets and `has` targets
+  (studio finding 2026-10-19; studio had mirrored the walk).
+
 ## [2.2.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.2.0 together. Additive minor:

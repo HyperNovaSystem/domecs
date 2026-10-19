@@ -208,3 +208,37 @@ check, it has the same hole until it switches to the export.
 **Not changed here:** studio's docs still say engine "milestones E1–E18"
 (already noted in the harness spec's revision-3 verification notes). That
 text lives in the studio repo; the follow-up (E1–E21) belongs there.
+
+## 2026-10-19 — `walkFieldRefs` is not exported from `@domecs/rules`
+
+Forwarded from studio's H4 notes (`../studio/FINDINGS.md`, H4.1–H4.3: "the
+engine repo is read-only for this run"). `walkFieldRefs` lives in
+`packages/domecs-rules/src/ast.ts` and is emitted in `dist/ast.js`, but the
+package entry (`src/index.ts`) did not re-export it and `exports` has no
+subpath, so a consumer of the published package could not import it. Studio's
+component-rename rewriting needs the positions of the evaluated entity's own
+field reads to splice new names into expressions, and mirrored the walk over
+`parseExpression`'s AST instead, which can drift from the engine's walker as
+the grammar grows. The 2.2 plan exported `walkComponentRefs` only.
+
+**Resolution (engine, 2026-10-19, `feat(rules): export walkFieldRefs (studio
+finding)`):** `@domecs/rules` exports
+`walkFieldRefs(node: AstNode, visit: (component, field, pos) => void): void`
+from its package entry, unchanged (the harness spec §5.2: "`walkFieldRefs`
+keeps its current behaviour: it visits self fields only"). It visits
+`C.f` and `self.C.f`, including inside the 2.2 forms' expression arguments
+(`nearest(S, Range.r)`, `entity(Target.id)`, `??` operands), in source order
+with each read's position; it never visits other entities' fields, sets or
+`has` targets. Documented in `doc/api.md` (Rules, cross-entity forms; doctest
+`rules-cross-entity`) and the rules README; API surface updated; test
+`packages/domecs-rules/test/parser.test.ts` ("the package entry exports
+walkFieldRefs…") pins the export.
+
+**For studio:** once expressions use the 2.2 forms, a component rename must
+also rewrite member reads (`first(P).C.f`), sets and `has` targets, so it
+should splice at `walkComponentRefs` positions (every role) plus `without[]`,
+as the harness spec §5.2 "Studio" line says; `walkFieldRefs` alone is only
+complete for self-only (2.1-style) expressions. Studio can drop its mirror once
+it pins an engine build that includes this commit; the 2.2.0 release-candidate
+tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
+and do not export it.

@@ -195,8 +195,8 @@ installRules(world, [chase], resolve, { spatial: { component: 'Pos' } })
   aggregate fields) must resolve, and member fields get the
   `__proto__`/`constructor`/`prototype` check. `walkComponentRefs(ast,
   visit)` visits them all (role `'self'`, `'member'` or `'set'`), for tools
-  that rename components; `walkFieldRefs` still visits only the evaluated
-  entity's own fields.
+  that rename components; `walkFieldRefs(ast, visit)` (also exported)
+  still visits only the evaluated entity's own fields.
 
 **Cost model.** Member lists are computed once per rule run per set
 (ascending id). A set aggregate whose field's component the rule does not

@@ -525,4 +525,13 @@ describe('E10.2 walkers', () => {
       ['Sight', 'd', 179],
     ])
   })
+
+  // Studio finding (2026-10-19): the package entry exported walkComponentRefs
+  // but not walkFieldRefs, so studio mirrored the self-field walk itself.
+  it('the package entry exports walkFieldRefs, the same function as ast.ts', () => {
+    expect(rules.walkFieldRefs).toBe(walkFieldRefs)
+    const seen: Array<[string, string, number]> = []
+    rules.walkFieldRefs(ok('first(P).Pos.x + Pos.y'), (c, f, pos) => seen.push([c, f, pos]))
+    expect(seen).toEqual([['Pos', 'y', 17]])
+  })
 })

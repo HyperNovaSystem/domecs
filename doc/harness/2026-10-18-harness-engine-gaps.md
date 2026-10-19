@@ -2680,3 +2680,9 @@ Owner decision (revision 3): `SNAPSHOT_VERSION` is 3 for every 2.1 snapshot.
 | Studio vendor | Re-packed HEAD `4631095` in a scratch directory: all seven 2.2.0 tarballs in `../studio/vendor/domecs/` unpack byte-identical to it, `manifest-2.2.0+g4631095.json` integrities match, the 2.2 golden script under `--engine` on those tarballs gives the committed golden, and studio `npm ls` (2.1.0+g5cb0290) exits 0. The `fix(E13)` commits touch only `test/` and `doc/`, so no package file differs from the `g4631095` tarballs; they were not re-packed (studio files are not edited by engine agents; studio's `engine:refresh` at H8 re-packs at its own HEAD) | Left as packed |
 | Open, owner | "golden updated (owner-reviewed)": the E10 golden change still awaits owner review; publish awaits owner approval | Not an engine defect |
 
+
+### Implementation notes — post-RC engine fixes 2 (E-fix2, 2026-10-19)
+
+| Item | Choice | Reason |
+|---|---|---|
+| Studio finding: `walkFieldRefs` not exported from `@domecs/rules` | Re-exported from the package entry under its existing name and signature, behaviour unchanged (§5.2 "keeps its current behaviour"); `doc/api.md` (cross-entity forms + doctest `rules-cross-entity`), rules README, API surface, CHANGELOG `[Unreleased]`, test in `parser.test.ts`; recorded in `doc/FINDINGS_studio.md` | The spec names both walkers and the plan's E10.2 test covers both, but only `walkComponentRefs` reached the entry point. Exporting it is additive. It goes under `[Unreleased]`, not into the 2.2.0 release notes, because the 2.2.0 RC tarballs (`g4631095`) are already packed without it; if the owner re-packs the RC, move the line into `[2.2.0]` and the release notes' "New APIs" |

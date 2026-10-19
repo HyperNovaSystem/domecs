@@ -2394,11 +2394,14 @@ entities run in ascending id, so an entity sees the writes lower ids made in
 the same run. `self`, `tick`, `other`, `event` and `pointer` are reserved
 words, and `walkComponentRefs(ast, visit)` visits every component name
 (reads, sets, `has` targets) for tools that rename components.
+`walkFieldRefs(ast, visit)` visits only the evaluated entity's own field
+reads (`C.f`, `self.C.f`, also inside the forms' expression arguments), each
+with its source position.
 
 ```ts doctest name=rules-cross-entity
 import { strict as assert } from 'node:assert'
 import { createWorld, defineComponent, entry } from '@domecs/core'
-import { installRules, parseExpression, walkComponentRefs, type RuleDef } from '@domecs/rules'
+import { installRules, parseExpression, walkComponentRefs, walkFieldRefs, type RuleDef } from '@domecs/rules'
 
 const Pos = defineComponent<{ x: number; y: number }>('XrPos', { defaults: { x: 0, y: 0 } })
 const Player = defineComponent<Record<string, never>>('XrPlayer', { defaults: {} })
@@ -2436,6 +2439,11 @@ assert.ok('ast' in parsed)
 const seen: string[] = []
 walkComponentRefs(parsed.ast, (c, f, _pos, role) => seen.push(`${role}:${c}${f ? '.' + f : ''}`))
 assert.deepEqual(seen, ['set:XrPlayer', 'member:XrPos.x', 'self:XrPos.x'])
+
+// Only the evaluated entity's own reads, with their positions:
+const own: string[] = []
+walkFieldRefs(parsed.ast, (c, f, pos) => own.push(`${c}.${f}@${pos}`))
+assert.deepEqual(own, ['XrPos.x@26'])
 ```
 
 **World expressions (2.2; §5.3).** `compileWorldExpression(source, resolve,

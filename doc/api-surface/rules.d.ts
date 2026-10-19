@@ -185,8 +185,10 @@ export type AstNode = {
  * `node`, in left-to-right order: `Component.field` and (2.2) `self.C.f`,
  * including inside the expression arguments of the 2.2 forms. Reads of
  * other entities (`first(S).C.f`), sets and `has` targets are not visited;
- * {@link walkComponentRefs} visits every component name. Used by
- * `compileRule` (rules.ts).
+ * {@link walkComponentRefs} visits every component name. Exported from the
+ * package entry for tools that only need self-field positions (a 2.1-style
+ * rename of the evaluated entity's own reads); a rename that must also
+ * cover member reads, sets and `has` targets uses `walkComponentRefs`.
  */
 export declare function walkFieldRefs(node: AstNode, visit: (component: string, field: string, pos: number) => void): void;
 /**
@@ -358,7 +360,7 @@ export {};
 
 // file: index.d.ts
 export type { AggregateOp, AstNode, BinaryOp, EntityNode, FunctionName, InputOp, LogicalOp, ModifierName, PointerField, UnaryOp, } from './ast.js';
-export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs } from './ast.js';
+export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs, walkFieldRefs } from './ast.js';
 export { MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, parseExpression } from './parser.js';
 export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
