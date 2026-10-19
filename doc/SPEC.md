@@ -1171,7 +1171,8 @@ function are numbers; field reads are unknown).
   without a centre, `distanceTo`, `nearest`, `dt` and `random()` are compile
   errors. `time` = `world.time.elapsed`, `tick` = `world.time.tick`.
   Evaluation reads with `listEntities`/`getComponent` only (no RNG, no
-  change windows, no type registration), so the strict snapshot hash is
-  unchanged; an uncaught error is `err({ kind: 'rule_eval_failed', rule:
-  '<expr>', message })`.
+  change windows, no registration of a type no entity holds), so the strict
+  snapshot hash and `describe().componentCounts` are unchanged; an uncaught
+  error or a non-finite number result is `err({ kind: 'rule_eval_failed',
+  rule: '<expr>', message })`.
 

@@ -8,6 +8,8 @@ import {
   type ComponentType,
   type World,
 } from '@domecs/core'
+import * as v8 from 'node:v8'
+import * as vm from 'node:vm'
 import { compileWorldExpression, type WorldExpression } from '../src/world-expression.js'
 import { installRules, type RuleError } from '../src/index.js'
 
@@ -391,5 +393,98 @@ describe('E11.1 errors are data: no throws for bad input', () => {
     w.spawn([entry(Player, {}), entry(Pos, { x: Number.NaN, y: 0 })])
     w.spawn([entry(Enemy, {}), entry(Pos, { x: 0, y: 0 })])
     expect(value(w, 'countWithin(WxEnemy, 10, first(WxPlayer)) ?? -1')).toBe(-1)
+  })
+})
+
+describe('E11 verify: read-only beyond the hash, and nothing retained', () => {
+  it('a type the world registered but no entity holds is not given a store (describe is unchanged)', () => {
+    // After a restore the registry keeps every type, but stores exist only
+    // for types some restored entity holds. A core read (`has`,
+    // `getComponent`) of a store-less type would create an empty store,
+    // which describe().componentCounts shows.
+    const w = world()
+    w.spawn([entry(Player, {}), entry(Pos, { x: 0, y: 0 })])
+    const gone = w.spawn([entry(Enemy, {}), entry(Hp, { hp: 1 }), entry(Name, { label: 'x' })])
+    w.despawn(gone)
+    w.restore(w.snapshot({}))
+    expect(w.lookupComponent('WxHp')).toBe(Hp)
+    const counts = (): string => JSON.stringify(w.describe().componentCounts)
+    const before = counts()
+    const strict = hashSnapshot(w.snapshot({}), { includeChanges: true })
+    for (const s of [
+      'has(first(WxPlayer), WxHp)',
+      'first(WxPlayer).WxHp.hp ?? 1',
+      'first(WxPlayer).WxName.label ?? ""',
+      'count(WxEnemy) + sum(WxEnemy, WxHp.hp)',
+    ]) {
+      expect(compile(s).evaluate(w).ok).toBe(true)
+    }
+    expect(value(w, 'has(first(WxPlayer), WxHp)')).toBe(false)
+    expect(counts()).toBe(before)
+    expect(hashSnapshot(w.snapshot({}), { includeChanges: true })).toBe(strict)
+  })
+
+  it('the spatial component, registered but held by no entity, is not given a store either', () => {
+    const w = world()
+    w.spawn([entry(Player, {}), entry(Hp, { hp: 1 })])
+    w.despawn(w.spawn([entry(Pos, { x: 0, y: 0 })]))
+    w.restore(w.snapshot({}))
+    const before = JSON.stringify(w.describe().componentCounts)
+    expect(value(w, 'countWithin(WxHp, 5, first(WxPlayer)) ?? -1')).toBe(-1)
+    expect(JSON.stringify(w.describe().componentCounts)).toBe(before)
+  })
+
+  it('a snapshot restored into a fresh world measures the same as its source', () => {
+    // The fresh world has never registered the types: its stores hold the
+    // restored data by name until something attaches a type object.
+    const { w } = arena()
+    const fresh = world()
+    fresh.restore(w.snapshot({}))
+    expect(fresh.lookupComponent('WxEnemy')).toBeUndefined()
+    for (const s of [
+      'count(WxEnemy)',
+      'sum(WxEnemy, WxHp.hp)',
+      'first(WxPlayer).WxHp.hp',
+      'has(first(WxPlayer), WxPos)',
+      'countWithin(WxEnemy, 40, first(WxPlayer))',
+      'count(WxGhost)',
+    ]) {
+      expect(compile(s).evaluate(fresh)).toEqual(compile(s).evaluate(w))
+    }
+    expect(hashSnapshot(fresh.snapshot({}), { includeChanges: true })).toBe(hashSnapshot(w.snapshot({}), { includeChanges: true }))
+    // A type no entity holds is still not registered by a read.
+    expect(fresh.lookupComponent('WxGhost')).toBeUndefined()
+  })
+
+  it('an expression does not keep the last world it measured alive', async () => {
+    v8.setFlagsFromString('--expose_gc')
+    const gc = vm.runInNewContext('gc') as () => void
+    const metrics = ['count(WxEnemy)', 'sum(WxEnemy, WxHp.hp)', 'countWithin(WxEnemy, 40, first(WxPlayer))'].map((s) => compile(s))
+    const refs: Array<WeakRef<World>> = []
+    ;(() => {
+      const { w } = arena()
+      for (const m of metrics) expect(m.evaluate(w).ok).toBe(true)
+      refs.push(new WeakRef(w))
+    })()
+    for (let i = 0; i < 6 && refs[0]!.deref() !== undefined; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      gc()
+    }
+    expect(refs[0]!.deref()).toBeUndefined()
+  })
+
+  it('a non-finite result is an error value; non-finite intermediates are fine', () => {
+    const w = world()
+    w.spawn([entry(Player, {}), entry(Hp, { hp: 0 })])
+    for (const s of ['1 / 0', '-1 / 0', '0 / 0', 'sqrt(-1)', 'count(WxEnemy) / count(WxEnemy)', '1 / first(WxPlayer).WxHp.hp']) {
+      const r = compile(s).evaluate(w)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error.kind).toBe('rule_eval_failed')
+        expect(r.error.message).toMatch(/finite/)
+      }
+    }
+    expect(value(w, '1 / 0 > 5')).toBe(true)
+    expect(value(w, 'count(WxEnemy) > 0 ? 1 / count(WxEnemy) : 0')).toBe(0)
   })
 })

@@ -58,8 +58,10 @@ All notable changes to DOMECS are documented here. The format is based on
   and `random()` are compile errors at their position (`rule: '<expr>'`);
   `time`/`tick` are `world.time.elapsed`/`world.time.tick`.
   `evaluate(world)` returns `Result<number | string | boolean, RuleFault>`
-  and is read-only (no RNG draw, no change windows, no component-type
-  registration): the strict snapshot hash is unchanged.
+  and is read-only (no RNG draw, no change windows, no registration of a
+  component type no entity holds): the strict snapshot hash and
+  `describe().componentCounts` are unchanged. A non-finite number result
+  is an error value.
 - `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
   `rules-keep-distance` (built with `@domecs/rules`) and a
   `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and
@@ -93,6 +95,13 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Fixed
 
+- `@domecs/core`: `restore` keeps an empty store for every registered
+  component type, as the world had before the restore. A type no restored
+  entity held used to lose its store, so `describe().componentCounts`
+  dropped it until the next read of it (`has`, `getComponent`,
+  `listEntities`) brought it back as 0: a read changed `describe()`, which
+  read-only probes (rules world expressions, E11) must not do. Snapshots and
+  hashes are unchanged.
 - `@domecs/core`: `validateEventPayload` (and so `world.action()` /
   `bridge.act()`) checked undeclared keys with `in`, so a payload key that is
   only inherited from `Object.prototype` (`toString`, `constructor`,

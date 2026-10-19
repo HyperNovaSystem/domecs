@@ -234,12 +234,16 @@ if (near.expression) {
   excludes its centre.
 - **Read-only.** `evaluate(world)` reads with `listEntities` and
   `getComponent` (no change windows, no RNG), builds member lists and grids
-  per call, and never registers a component type the world has not seen;
-  `hashSnapshot(world.snapshot({}), { includeChanges: true })` is unchanged
-  by any number of calls. Compile once, evaluate against any world.
+  per call, and never registers a component type no entity holds;
+  `hashSnapshot(world.snapshot({}), { includeChanges: true })` and
+  `describe().componentCounts` are unchanged by any number of calls. A
+  snapshot restored into a fresh world (types not yet registered) measures
+  the same as its source. Compile once, evaluate against any world; the
+  expression keeps no reference to a world after `evaluate` returns.
 - **Errors are data.** Compile errors are `RuleError`s with `rule: '<expr>'`
   and a `position` in `source`, in source order. A no-value read without
-  `??`, a type error, a non-primitive result, or a world holding a
+  `??`, a type error, a non-finite number (`1 / 0`, `0 / 0`: guard with
+  `count(S) > 0 ? … : 0`) or other non-primitive result, or a world holding a
   different component type under a referenced name is
   `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`. Neither
   call throws for bad input.

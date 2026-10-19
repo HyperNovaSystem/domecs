@@ -332,6 +332,11 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   )
   ctx.alive.clear()
   ctx.stores.clear()
+  // Every registered type keeps a (possibly empty) store, as it has before a
+  // restore: otherwise a type no restored entity holds would lose its store
+  // here and get it back on the next read of it, so a read would change
+  // describe().componentCounts.
+  for (const name of ctx.typeRegistry.keys()) ctx.stores.set(name, new Map())
   ctx.archetypes.clear()
   ctx.entityArchetype.clear()
   ctx.changes.clear()

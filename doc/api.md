@@ -2129,8 +2129,9 @@ and `random()` are compile errors at their position (`rule: '<expr>'`);
 read through `first(S)` / `entity(n)` instead. `time` is
 `world.time.elapsed`, `tick` is `world.time.tick`. `expression.evaluate(world)`
 returns `Result<number | string | boolean, RuleFault>`: it is read-only (no
-RNG draw, no change windows, no type registration), so the strict snapshot
-hash is unchanged, and a no-value read without `??` is
+RNG draw, no change windows, no registration of a type no entity holds),
+so the strict snapshot hash and `describe().componentCounts` are unchanged,
+and a no-value read without `??` or a non-finite result (`0 / 0`) is
 `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
 
 ```ts doctest name=rules-world-expression

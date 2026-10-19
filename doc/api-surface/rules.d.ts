@@ -663,8 +663,11 @@ export interface WorldExpression {
      * Evaluate against `world`'s current state. Read-only: never mutates the
      * world, never draws randomness, never moves change windows, so
      * `hashSnapshot(world.snapshot({}), { includeChanges: true })` is the same
-     * after any number of calls. A no-value read without `??`, a type error or
-     * a non-primitive result is `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
+     * after any number of calls, and `describe()` changes only by a type
+     * object attached to data a restore left unregistered. Retains nothing
+     * of `world` after it returns. A no-value read without `??`, a type error,
+     * a non-finite number or a non-primitive result is
+     * `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
      */
     evaluate(world: World): Result<number | string | boolean, RuleFault>;
 }

@@ -37,8 +37,11 @@ export interface WorldExpression {
    * Evaluate against `world`'s current state. Read-only: never mutates the
    * world, never draws randomness, never moves change windows, so
    * `hashSnapshot(world.snapshot({}), { includeChanges: true })` is the same
-   * after any number of calls. A no-value read without `??`, a type error or
-   * a non-primitive result is `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
+   * after any number of calls, and `describe()` changes only by a type
+   * object attached to data a restore left unregistered. Retains nothing
+   * of `world` after it returns. A no-value read without `??`, a type error,
+   * a non-finite number or a non-primitive result is
+   * `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
    */
   evaluate(world: World): Result<number | string | boolean, RuleFault>
 }
@@ -188,38 +191,62 @@ function spatialProblem(option: NonNullable<InstallRulesOptions['spatial']>): st
 }
 
 function evaluateOn(
-  world: World,
+  target: World,
   run: CompiledExpression,
   types: ReadonlyMap<string, ComponentType<any>>,
   spatial: { type: ComponentType<any>; x: string; y: string; cellSize: number } | undefined,
 ): Result<number | string | boolean, RuleFault> {
-  // A type the world has never seen is not asked about: core reads register
-  // the type they are given, which would change the world.
-  const known = (type: ComponentType<any>, spelling: string): boolean => {
-    const registered = world.lookupComponent(type.name)
-    if (registered === undefined) return false
-    if (registered !== type) {
-      throw new RuleEvalError(`Component "${spelling}" is a different component type in this world (same name "${type.name}")`)
+  // The compiled aggregates memoize by environment object and keep the last
+  // one, so nothing the environment reaches may outlive this call: every
+  // closure reads the world through `live`, cleared (with the caches) in
+  // `finally`, and never through the `target` parameter.
+  let live: World | undefined = target
+  const world = (): World => live!
+  // Which referenced types this world can be read through (per call).
+  // - Registered under this name: read. Core keeps a store for every
+  //   registered type (across restore too), so a read changes nothing.
+  //   A *different* type under the name is an error value.
+  // - Not registered, but held by some entity: a snapshot restored into a
+  //   world that never registered the type keeps the data by name. Read it;
+  //   the read attaches the type object to that name, as every core read
+  //   does — no state, snapshot or hash changes.
+  // - Not registered and held by no entity: absent, and not asked about:
+  //   a core read would register a new type with an empty store.
+  const held = new Map<ComponentType<any>, boolean>()
+  let counts: Readonly<Record<string, number>> | undefined
+  const holds = (type: ComponentType<any>, spelling: string): boolean => {
+    let answer = held.get(type)
+    if (answer === undefined) {
+      const registered = world().lookupComponent(type.name)
+      if (registered !== undefined && registered !== type) {
+        throw new RuleEvalError(`Component "${spelling}" is a different component type in this world (same name "${type.name}")`)
+      }
+      if (registered !== undefined) answer = true
+      else {
+        counts ??= world().describe().componentCounts
+        answer = Object.hasOwn(counts, type.name) && counts[type.name]! > 0
+      }
+      held.set(type, answer)
     }
-    return true
+    return answer
   }
   const typeOf = (name: string): ComponentType<any> | undefined => {
     const type = types.get(name)
-    return type !== undefined && known(type, name) ? type : undefined
+    return type !== undefined && holds(type, name) ? type : undefined
   }
   const memberCache = new Map<string, readonly number[]>()
   const members = (set: string): readonly number[] => {
     let list = memberCache.get(set)
     if (list === undefined) {
       const type = typeOf(set)
-      list = type ? world.listEntities([type]) : []
+      list = type ? world().listEntities([type]) : []
       memberCache.set(set, list)
     }
     return list
   }
   const position = (id: number): { x: number; y: number } | undefined => {
-    if (!spatial || !known(spatial.type, spatial.type.name) || !world.isAlive(id)) return undefined
-    const value = world.getComponent(id, spatial.type) as Record<string, unknown> | undefined
+    if (!spatial || !holds(spatial.type, spatial.type.name) || !world().isAlive(id)) return undefined
+    const value = world().getComponent(id, spatial.type) as Record<string, unknown> | undefined
     if (value === undefined || !Object.hasOwn(value, spatial.x) || !Object.hasOwn(value, spatial.y)) return undefined
     const x = value[spatial.x]
     const y = value[spatial.y]
@@ -243,8 +270,8 @@ function evaluateOn(
     // No evaluated entity: bare reads and `self` are rejected at compile time.
     resolveField: () => undefined,
     dt: 0,
-    time: world.time.elapsed,
-    tick: world.time.tick,
+    time: target.time.elapsed,
+    tick: target.time.tick,
     rand: {
       uniform: () => {
         throw new RuleEvalError('random() is not available in a world expression')
@@ -252,21 +279,26 @@ function evaluateOn(
     },
     readField(id, component, field) {
       const type = typeOf(component)
-      const value = type ? (world.getComponent(id, type) as Record<string, unknown> | undefined) : undefined
+      const value = type && world().isAlive(id) ? (world().getComponent(id, type) as Record<string, unknown> | undefined) : undefined
       if (value === undefined || !Object.hasOwn(value, field)) return undefined
       return value[field] as number | string | boolean
     },
     members,
-    isAlive: (id) => world.isAlive(id),
+    isAlive: (id) => world().isAlive(id),
     has(id, component) {
       const type = typeOf(component)
-      return type !== undefined && world.isAlive(id) && world.has(id, type)
+      return type !== undefined && world().isAlive(id) && world().has(id, type)
     },
     position,
     within: (set, x, y, r, exclude) => gridOf(set).within(x, y, r, exclude === undefined ? undefined : (id) => id !== exclude),
   }
   try {
     const value: unknown = run(env)
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      // As for a rule's write (O-67): NaN and ±Infinity do not survive JSON
+      // (they become null), so a metric sample could not be stored or compared.
+      return err({ kind: 'rule_eval_failed', rule: RULE, message: `The expression produced ${value}, not a finite number` })
+    }
     if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') return ok(value)
     return err({
       kind: 'rule_eval_failed',
@@ -276,5 +308,11 @@ function evaluateOn(
   } catch (e) {
     if (!(e instanceof RuleEvalError)) throw e
     return err({ kind: 'rule_eval_failed', rule: RULE, message: e.message })
+  } finally {
+    live = undefined
+    counts = undefined
+    held.clear()
+    memberCache.clear()
+    grids.clear()
   }
 }
