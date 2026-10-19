@@ -271,7 +271,8 @@ export declare function internal<T>(type: ComponentType<T>): InternalComponentTy
  * real engines disagree by up to 1 ulp on thousands of inputs. `dmath` is a
  * straight-line port of **musl libm** (generic C, non-FMA paths):
  * `sin.c`, `cos.c`, `__sin.c`, `__cos.c`, `__rem_pio2.c`,
- * `__rem_pio2_large.c` (themselves from FreeBSD msun / Sun fdlibm).
+ * `__rem_pio2_large.c` (themselves from FreeBSD msun / Sun fdlibm); from
+ * 2.2 also `atan.c`, `atan2.c`, `hypot.c`, plus Sun fdlibm 5.3 `e_pow.c`.
  *
  * Why it is bit-exact everywhere: ECMA-262 numbers are IEEE-754 binary64
  * with round-to-nearest-even, no FMA contraction and no extended precision,
@@ -300,6 +301,11 @@ export declare function internal<T>(type: ComponentType<T>): InternalComponentTy
  *   (Payne–Hanek).
  * - `sqrt`: `Math.sqrt`, which IEEE-754 already makes correctly rounded;
  *   re-exported so authors need one namespace.
+ * - `atan2`, `hypot` (2.2): musl libm ports, < 1 ulp; specials follow C99
+ *   Annex F (the same as `Math.atan2` / two-argument `Math.hypot`).
+ * - `pow` (2.2): a port of fdlibm `e_pow.c`, < 1 ulp; specials follow
+ *   ECMAScript `**` (`(±1) ** ±Infinity` and `1 ** NaN` are NaN, where C99
+ *   Annex F says 1).
  *
  * Authoritative (deterministic) systems use these instead of `Math.sin` /
  * `Math.cos` (SPEC §8). `@domecs/rules` evaluates `sin()` / `cos()` with them.
@@ -309,6 +315,12 @@ export declare const dmath: Readonly<{
     cos(x: number): number;
     /** = Math.sqrt (correctly rounded by IEEE-754; re-exported so authors need one namespace). */
     sqrt(x: number): number;
+    /** Angle of (x, y) from the +x axis in (-π, π] (musl `atan2`; 2.2). */
+    atan2(y: number, x: number): number;
+    /** sqrt(x² + y²) without undue overflow or underflow (musl `hypot`; 2.2). */
+    hypot(x: number, y: number): number;
+    /** x raised to y (fdlibm `e_pow.c`; specials as ECMAScript `**`; 2.2). */
+    pow(x: number, y: number): number;
 }>;
 
 // file: driver.d.ts

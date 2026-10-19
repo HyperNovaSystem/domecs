@@ -26,6 +26,14 @@ All notable changes to DOMECS are documented here. The format is based on
   filters and `exclude`, `pairs(r, a, b)` (first element holds `a`), and
   `dispose()`. Derived state: never snapshotted.
 - `bench`: `spatial` workload (refresh and `nearest` at 1000 entities).
+- `@domecs/core`: `dmath.atan2(y, x)`, `dmath.hypot(x, y)` and
+  `dmath.pow(x, y)` (O-75, harness spec §4.2, ED-18) — bit-reproducible on
+  every ECMA-262 engine. `atan2` (with its `atan` kernel) and `hypot` are
+  musl libm ports, `pow` a port of fdlibm 5.3 `e_pow.c` (no tables, no FMA).
+  `atan2`/`hypot` specials follow C99 Annex F; `pow`'s follow ECMAScript
+  `**` (`(±1) ** ±Infinity` and `1 ** NaN` are `NaN`). `pow` keeps fdlibm's
+  known weak region (`|1 - x| <= 2^-20`, `|y| > 2^31`: relative error up to
+  ~2^-43). Golden vectors in `test/golden/dmath2-vectors.json`.
 
 ### Fixed
 

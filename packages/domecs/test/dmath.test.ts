@@ -264,3 +264,275 @@ describe('dmath: golden vectors (pin the port bit for bit)', () => {
     expect(missing).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// 2.2 additions (spec §4.2, ED-18; plan E10.1): atan2 (musl, with its atan
+// kernel), hypot (musl) and pow (fdlibm e_pow.c). Same method as sin/cos:
+// <= 1 ulp from Math.* over 100k seeded inputs each, C99 Annex F specials
+// (pow follows fdlibm / ECMAScript `**` where those differ from Annex F),
+// and a golden that pins the port bit for bit.
+
+/** Pairs of inputs spread over everyday ranges, wide exponents and the kernels' branch points. */
+function seededPairs(name: 'atan2' | 'hypot' | 'pow', seed: number, count: number): Array<[number, number]> {
+  const next = rng(seed)
+  const unit = (): number => next() / 0x100000000
+  const anyFinite = (minExp = 0, maxExp = 2046): number => {
+    const exp = minExp + (next() % (maxExp - minExp + 1))
+    return fromWords(((next() & 1) << 31) | (exp << 20) | (next() & 0xfffff), next())
+  }
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < count; i++) {
+    const bucket = i % 10
+    if (name === 'atan2') {
+      if (bucket < 4) out.push([(unit() * 2 - 1) * 10, (unit() * 2 - 1) * 10])
+      else if (bucket < 6) out.push([anyFinite(), anyFinite()])
+      else if (bucket < 8) out.push([(unit() * 2 - 1) * 4, 1]) // x = 1: the bare atan path
+      else if (bucket < 9) out.push([anyFinite(0x3c0, 0x440), anyFinite(0x3c0, 0x440)]) // |y/x| near 2^±64
+      else out.push([(unit() * 2 - 1) * 1e6, (unit() * 2 - 1) * 1e-3])
+    } else if (name === 'hypot') {
+      if (bucket < 4) out.push([(unit() * 2 - 1) * 1000, (unit() * 2 - 1) * 1000])
+      else if (bucket < 7) out.push([anyFinite(), anyFinite()])
+      else if (bucket < 8) out.push([anyFinite(0x5f0, 0x7fe), anyFinite(0x5a0, 0x7fe)]) // scale down
+      else if (bucket < 9) out.push([anyFinite(0, 0x200), anyFinite(0, 0x200)]) // scale up, subnormals
+      else {
+        const x = anyFinite(0x300, 0x500)
+        out.push([x, x * 2 ** -(60 + (next() % 10)) * (1 + unit())]) // exponent gap near 64
+      }
+    } else {
+      if (bucket < 3) out.push([unit() * 10, (unit() * 2 - 1) * 20])
+      else if (bucket < 5) out.push([-(unit() * 10), (next() % 41) - 20]) // negative base, integer power
+      else if (bucket < 7) {
+        const x = 0.5 + unit() * 1.5
+        const lim = (next() & 1 ? 1024 : -1074) / Math.log2(x) // results near overflow / subnormal
+        out.push([x, lim * (1 + (unit() * 2 - 1) * 1e-3)])
+      } else if (bucket < 9) out.push([Math.abs(anyFinite()), (unit() * 2 - 1) * 4])
+      else out.push([anyFinite(0, 0x10), (unit() * 2 - 1) * 2]) // subnormal / tiny bases
+    }
+  }
+  return out
+}
+
+describe('dmath 2.2: shape', () => {
+  it('exports atan2, hypot and pow on the frozen namespace', () => {
+    expect(Object.isFrozen(dmath)).toBe(true)
+    expect(typeof dmath.atan2).toBe('function')
+    expect(typeof dmath.hypot).toBe('function')
+    expect(typeof dmath.pow).toBe('function')
+  })
+})
+
+/**
+ * Correctly rounded sqrt(x² + y²), computed exactly with BigInt: the
+ * reference for hypot, because V8's `Math.hypot` is not always within
+ * 1 ulp (e.g. hypot(0x09b6e074d9767ced, 0x08de49eedc149a22): Math.hypot is
+ * off by 1.17 ulp; musl, and so dmath, by 0.83).
+ */
+/** floor(sqrt(n)) by Newton's method on BigInt. */
+function isqrt(n: bigint): bigint {
+  if (n < 2n) return n
+  let x = 1n << BigInt(Math.ceil(n.toString(2).length / 2)) // >= sqrt(n)
+  for (;;) {
+    const y = (x + n / x) >> 1n
+    if (y >= x) return x
+    x = y
+  }
+}
+
+function exactHypot(x: number, y: number): number {
+  x = Math.abs(x)
+  y = Math.abs(y)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return Math.hypot(x, y)
+  if (x === 0 || y === 0) return Math.max(x, y)
+  const parts = (v: number): [bigint, number] => {
+    const b = bitsOf(v)
+    const e = Number(b >> 52n)
+    const m = b & ((1n << 52n) - 1n)
+    return e === 0 ? [m, -1074] : [m | (1n << 52n), e - 1075]
+  }
+  const [ma, ea] = parts(x)
+  const [mb, eb] = parts(y)
+  const e = Math.min(ea, eb)
+  const sum = (ma * ma << BigInt(2 * (ea - e))) + (mb * mb << BigInt(2 * (eb - e)))
+  // sqrt(sum) * 2^e, as r * 2^(e - k) with r = isqrt(sum << 2k) holding >= 64 bits.
+  const k = 64
+  const scaled = sum << BigInt(2 * k)
+  const r = isqrt(scaled)
+  const sticky = r * r !== scaled
+  const exp = e - k // value = r * 2^exp (+ sticky)
+  const bitLen = r.toString(2).length
+  const top = bitLen - 1 + exp // unbiased exponent of the leading bit
+  const lsb = Math.max(top - 52, -1074)
+  const drop = BigInt(lsb - exp)
+  let mant = r >> drop
+  const rem = r - (mant << drop)
+  const half = 1n << (drop - 1n)
+  if (rem > half || (rem === half && (sticky || (mant & 1n) === 1n))) mant += 1n
+  // mant * 2^lsb is representable, so each multiplication below is exact.
+  if (lsb >= -1022) return Number(mant) * fromBits(BigInt(lsb + 1023) << 52n)
+  return Number(mant) * 2 ** (lsb + 1074) * Number.MIN_VALUE
+}
+
+describe('dmath 2.2: accuracy (port fidelity, <= 1 ulp)', () => {
+  const seeds = { atan2: 0xa7a2, hypot: 0x4790, pow: 0x90f } as const
+  // atan2 and pow against Math.*; hypot against the exact result (see exactHypot).
+  const reference = {
+    atan2: Math.atan2,
+    hypot: exactHypot,
+    pow: Math.pow,
+  } as const
+  for (const name of ['atan2', 'hypot', 'pow'] as const) {
+    it(`${name}: 100k seeded input pairs within 1 ulp`, () => {
+      let worst = 0n
+      let worstAt: [number, number] = [0, 0]
+      let differing = 0
+      for (const [a, b] of seededPairs(name, seeds[name], 100_000)) {
+        const d = ulpDistance(dmath[name](a, b), reference[name](a, b))
+        if (d > 0n) differing++
+        if (d > worst) {
+          worst = d
+          worstAt = [a, b]
+        }
+      }
+      expect(
+        worst,
+        `worst ${name}(0x${hex(worstAt[0])}, 0x${hex(worstAt[1])}) off by ${worst} ulp (${differing} differ)`,
+      ).toBeLessThanOrEqual(1n)
+    })
+  }
+
+  it('exactHypot is a correct reference (exact cases, subnormals, and Math.hypot within 2 ulp)', () => {
+    expect(exactHypot(3, 4)).toBe(5)
+    expect(exactHypot(3e-320, 4e-320)).toBe(5e-320)
+    expect(exactHypot(Number.MIN_VALUE, Number.MIN_VALUE)).toBe(Number.MIN_VALUE)
+    expect(exactHypot(1, 1)).toBe(Math.SQRT2)
+    expect(exactHypot(Number.MAX_VALUE, Number.MAX_VALUE)).toBe(Infinity)
+    for (const [a, b] of seededPairs('hypot', 0x4791, 2000)) {
+      expect(ulpDistance(exactHypot(a, b), Math.hypot(a, b))).toBeLessThanOrEqual(2n)
+    }
+  })
+
+  it('pow: |1 - x| <= 2^-20 with |y| > 2^31 keeps fdlibm\'s known error (relative <= 2^-40)', () => {
+    // fdlibm e_pow.c approximates log(x) there by a short series whose first
+    // product (ivln2_h * t) is not exact, so the result can be hundreds of
+    // ulp off (pow(0x3fefffff8f1011a2, 0x41e84954f3000000): ~270 ulp, the
+    // same bits as fdlibm's C). Java's StrictMath.pow has the same property.
+    // dmath keeps the port faithful: bit reproducibility is the contract.
+    const next = rng(0x90f1)
+    const unit = (): number => next() / 0x100000000
+    let worst = 0
+    for (let i = 0; i < 20_000; i++) {
+      // x with a full mantissa (t = x - 1 then has 33 significant bits)
+      const x = fromWords(next() & 1 ? 0x3fefffff : 0x3ff00000, next())
+      const y = i % 2 ? (unit() * 2 - 1) * 2 ** (31 + (next() % 30)) : ((unit() * 2 - 1) * 1080) / Math.log2(x)
+      const got = dmath.pow(x, y)
+      const ref = Math.pow(x, y)
+      if (!Number.isFinite(ref) || !Number.isFinite(got)) {
+        expect(got, `pow(${x}, ${y})`).toBe(ref)
+        continue
+      }
+      // Relative error, measured against 2^-1022 at most in the subnormal range.
+      worst = Math.max(worst, Math.abs(got - ref) / Math.max(ref, 2 ** -1022))
+    }
+    expect(worst).toBeLessThanOrEqual(2 ** -40)
+  })
+
+  it('atan2 is odd in y and hypot is symmetric, bit for bit', () => {
+    for (const [a, b] of seededPairs('atan2', 0x0dd2, 20_000)) {
+      expect(hex(dmath.atan2(-a, b))).toBe(hex(-dmath.atan2(a, b)))
+      expect(hex(dmath.hypot(a, b))).toBe(hex(dmath.hypot(b, a)))
+      expect(hex(dmath.hypot(-a, b))).toBe(hex(dmath.hypot(a, b)))
+    }
+  })
+})
+
+describe('dmath 2.2: special values', () => {
+  const PI = Math.PI
+  const same = (got: number, want: number): void => {
+    expect(Number.isNaN(want) ? Number.isNaN(got) : Object.is(got, want), `${got} vs ${want}`).toBe(true)
+  }
+
+  it('atan2 follows C99 Annex F (= ECMAScript Math.atan2)', () => {
+    const cases: Array<[number, number, number]> = [
+      [0, 1, 0], [-0, 1, -0], [0, -1, PI], [-0, -1, -PI],
+      [0, 0, 0], [-0, 0, -0], [0, -0, PI], [-0, -0, -PI],
+      [1, 0, PI / 2], [-1, 0, -PI / 2], [1, -0, PI / 2],
+      [Infinity, Infinity, PI / 4], [-Infinity, Infinity, -PI / 4],
+      [Infinity, -Infinity, (3 * PI) / 4], [-Infinity, -Infinity, (-3 * PI) / 4],
+      [1, Infinity, 0], [-1, Infinity, -0], [1, -Infinity, PI], [-1, -Infinity, -PI],
+      [Infinity, 1, PI / 2], [-Infinity, -5, -PI / 2],
+      [NaN, 1, NaN], [1, NaN, NaN], [NaN, NaN, NaN],
+      [1, 1, PI / 4], [1e300, 1e-300, PI / 2], [1e-300, -1e300, PI], [-1e-300, -1e300, -PI],
+    ]
+    for (const [y, x, want] of cases) {
+      same(dmath.atan2(y, x), want)
+      same(dmath.atan2(y, x), Math.atan2(y, x))
+    }
+  })
+
+  it('hypot follows C99 Annex F (= ECMAScript Math.hypot for two arguments)', () => {
+    const cases: Array<[number, number, number]> = [
+      [0, 0, 0], [-0, -0, 0], [-0, 0, 0], [3, 4, 5], [-3, 4, 5], [5, 0, 5], [-5, -0, 5],
+      [Infinity, NaN, Infinity], [NaN, -Infinity, Infinity], [NaN, 1, NaN], [1, NaN, NaN],
+      [Number.MAX_VALUE, Number.MAX_VALUE, Infinity], [Number.MIN_VALUE, 0, Number.MIN_VALUE],
+      [Number.MAX_VALUE, 1, Number.MAX_VALUE], [1e300, 1e300, 1.4142135623730952e300],
+      [3e-320, 4e-320, 5e-320],
+    ]
+    for (const [x, y, want] of cases) {
+      same(dmath.hypot(x, y), want)
+      same(dmath.hypot(x, y), Math.hypot(x, y))
+    }
+  })
+
+  it('pow follows fdlibm, which matches ECMAScript ** on every special value', () => {
+    const xs = [0, -0, 1, -1, 0.5, -0.5, 2, -2, 3, -3, Infinity, -Infinity, NaN, Number.MIN_VALUE, -Number.MAX_VALUE]
+    const ys = [0, -0, 1, -1, 0.5, -0.5, 2, -2, 3, -3, 1.5, Infinity, -Infinity, NaN, 2 ** 53, 2 ** 53 + 2, 2 ** 31 + 1]
+    const exactX = new Set([0, 1, Infinity])
+    const exactY = new Set([0, 1, 2, Infinity])
+    for (const x of xs) {
+      for (const y of ys) {
+        const want = x ** y
+        // Special operands and special results are exact; anything else is
+        // implementation-approximated in ECMAScript, so within 1 ulp.
+        if (exactX.has(Math.abs(x)) || exactY.has(Math.abs(y)) || Number.isNaN(x) || Number.isNaN(y) || want === 0 || !Number.isFinite(want)) {
+          same(dmath.pow(x, y), want)
+        } else {
+          expect(ulpDistance(dmath.pow(x, y), want), `pow(${x}, ${y})`).toBeLessThanOrEqual(1n)
+        }
+      }
+    }
+    // Where ECMAScript and C99 Annex F disagree, dmath agrees with **.
+    same(dmath.pow(1, Infinity), NaN)
+    same(dmath.pow(-1, -Infinity), NaN)
+    same(dmath.pow(1, NaN), NaN)
+    same(dmath.pow(NaN, 0), 1)
+    // Exact cases.
+    expect(dmath.pow(2, 10)).toBe(1024)
+    expect(dmath.pow(2, -1074)).toBe(Number.MIN_VALUE)
+    expect(dmath.pow(2, 1024)).toBe(Infinity)
+    expect(dmath.pow(-2, 3)).toBe(-8)
+    expect(dmath.pow(9, 0.5)).toBe(3)
+  })
+})
+
+const VECTORS_2 = new URL('../../../test/golden/dmath2-vectors.json', import.meta.url)
+
+describe('dmath 2.2: golden vectors (pin the port bit for bit)', () => {
+  it('matches every committed vector', () => {
+    expect(existsSync(VECTORS_2), 'run `node scripts/dmath-golden.mjs --write`').toBe(true)
+    const golden = JSON.parse(readFileSync(VECTORS_2, 'utf8')) as {
+      functions: string[]
+      vectors: Record<'atan2' | 'hypot' | 'pow', [string, string, string][]>
+    }
+    expect(golden.functions).toEqual(['atan2', 'hypot', 'pow'])
+    const enc = (v: number): string => (Number.isNaN(v) ? 'nan' : hex(v))
+    const dec = (h: string): number => (h === 'nan' ? NaN : fromBits(BigInt(`0x${h}`)))
+    const mismatches: string[] = []
+    for (const name of ['atan2', 'hypot', 'pow'] as const) {
+      expect(golden.vectors[name].length, name).toBeGreaterThanOrEqual(1000)
+      for (const [a, b, out] of golden.vectors[name]) {
+        if (enc(dmath[name](dec(a), dec(b))) !== out) mismatches.push(`${name}(0x${a}, 0x${b})`)
+      }
+    }
+    expect(mismatches.slice(0, 10)).toEqual([])
+  })
+})

@@ -1080,13 +1080,23 @@ engine builds disagree by up to 1 ulp (O-75; SPEC §8). `dmath` returns the
 same bits on every engine: `sin` and `cos` are a straight-line port of musl
 libm (generic C, non-FMA, < 1 ulp from the true result; ±0, ±∞, NaN and
 subnormals per C99 Annex F; huge arguments reduced exactly). `sqrt` is
-`Math.sqrt`, which IEEE-754 already makes correctly rounded.
+`Math.sqrt`, which IEEE-754 already makes correctly rounded. From 2.2,
+`atan2` and `hypot` are musl ports too (< 1 ulp; specials as C99 Annex F,
+which `Math.atan2` and two-argument `Math.hypot` share), and `pow` is a port
+of fdlibm `e_pow.c` whose special values are ECMAScript `**`'s:
+`(±1) ** ±Infinity` and `1 ** NaN` are `NaN` (C99 says 1). `pow` is < 1 ulp
+except where fdlibm itself is weak — `|1 - x| <= 2^-20` with `|y| > 2^31`,
+relative error up to about 2^-43 (the same bits as fdlibm's C, as Java's
+`StrictMath.pow`).
 
 ```ts
 const dmath: Readonly<{
   sin(x: number): number
   cos(x: number): number
   sqrt(x: number): number   // = Math.sqrt
+  atan2(y: number, x: number): number   // 2.2
+  hypot(x: number, y: number): number   // 2.2 (two arguments)
+  pow(x: number, y: number): number     // 2.2
 }>
 ```
 
@@ -1094,10 +1104,10 @@ const dmath: Readonly<{
   `Math.cos` (or any other platform transcendental). The arithmetic
   operators, `Math.sqrt`, `Math.floor`, `Math.round`, `Math.abs`,
   `Math.min` and `Math.max` are exact and need no wrapper.
-- `@domecs/rules` evaluates `sin()`/`cos()` with `dmath`, so rule outputs
-  are bit-reproducible with no author action.
-- `atan2`, `hypot` and `pow` join in 2.2; `tan`, `atan`, `exp` and `log` are
-  added on demand.
+- `@domecs/rules` evaluates `sin()`/`cos()` with `dmath`, and from 2.2
+  `atan2()`/`hypot()`/`pow()`, so rule outputs are bit-reproducible with no
+  author action.
+- `tan`, `atan`, `exp` and `log` are added on demand.
 
 ```ts doctest name=deterministic-math
 import { strict as assert } from 'node:assert'
@@ -1128,6 +1138,10 @@ assert.equal(dmath.sin(Math.PI / 2), 1)
 assert.equal(dmath.cos(Math.PI), -1)
 assert.ok(Object.is(dmath.sin(-0), -0))
 assert.equal(dmath.sqrt(2), Math.sqrt(2))
+assert.equal(dmath.atan2(1, 1), Math.PI / 4)
+assert.equal(dmath.hypot(3, 4), 5)
+assert.equal(dmath.pow(2, 10), 1024)
+assert.ok(Number.isNaN(dmath.pow(1, Infinity))) // as 1 ** Infinity
 ```
 
 ### Spatial grid
