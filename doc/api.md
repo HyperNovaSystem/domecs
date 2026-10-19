@@ -1524,8 +1524,9 @@ Replay restores `base`, sets `startScale` (and, for a paused start, the
 scale `resume()` returns to), checks `baseHash`, then per frame
 resolves the acts (an unknown or ambiguous name → `unknown_event`, an
 `'action'` payload failing its schema → `rejected_payload`, both before any
-emit), sets scale and input, emits, and steps. A malformed log, or one
-recorded at another `fixedStep`, is `invalid_log`; nothing throws for a bad
+emit), sets scale and input, emits, and steps. A malformed log (including a
+checkpoint that follows no frame end), or one recorded at another
+`fixedStep`, is `invalid_log`; nothing throws for a bad
 log. The replay world must have the same setup minus every stimulus source
 (no input plugin, no hook or subscriber that emits, none that sets the scale
 at tick start: their effects are in the log) and no `once` system the source had already run.

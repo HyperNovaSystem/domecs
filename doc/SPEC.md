@@ -869,7 +869,7 @@ An act log (`ActLog`, `format: 'domecs-actlog'`, `version: 1`) records what ente
 
 **Replay.** `replay(world, log, { base?, toTick?, verify?, onFrame? })` returns `Result<{ ticks, hash }, ReplayError>` and never throws for a bad log:
 
-1. Check the log's shape (`invalid_log`, also for a `fixedStep` other than `world.time.fixedStep`).
+1. Check the log's shape (`invalid_log`, also for a `fixedStep` other than `world.time.fixedStep`, an unknown gap reason, or a checkpoint that does not follow a frame end in frame order — it would leave every later checkpoint uncompared).
 2. `restore(base)` when given, then `setScale(log.resumeScale)` when present and `setScale(log.startScale)`; compare the strict hash with `baseHash` (`base_mismatch`).
 3. Per frame (stopping before the first frame whose `tick >= toTick`): resolve every act with `lookupEvent` (an unknown or ambiguous name is `unknown_event`) and check `via: 'action'` payloads against the event's schema (`rejected_payload`; raw emits are never validated live, so `via: 'emit'` acts are not), both before any emit; set `scale` and `input` (else keep the previous ones); emit the acts in order; `stepOnce()` or `step(dt)`, applying `hookScale` and emitting `startActs` from a one-step `signals.tickStart` subscription and emitting `endActs` from a one-step `signals.tickEnd` subscription.
 4. Compare the checkpoint taken at that frame's end (`diverged`), unless `verify: false`.

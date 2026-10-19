@@ -927,3 +927,22 @@ describe('recording that starts paused', () => {
     }
   })
 })
+
+describe('checkpoint and gap validation', () => {
+  it('a checkpoint that follows no frame end is invalid_log, not silently unverified', () => {
+    const { base, log } = record(30, 5)
+    const cps = log.checkpoints!.map((c, i) => (i === 1 ? { ...c, tick: 99999 } : c))
+    const w = fresh()
+    const r = replay(w, { ...log, checkpoints: cps }, { base })
+    expect(r).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
+    expect(w.time.tick).toBe(0)
+    // Every genuine checkpoint matches a frame end, in order.
+    expect(replay(fresh(), log, { base }).ok).toBe(true)
+  })
+
+  it('a gap with an unknown reason is invalid_log', () => {
+    const { base, log } = record(10)
+    const r = replay(fresh(), { ...log, gaps: [{ tick: 3, reason: 'heartbeat_input' }] } as unknown as ActLog, { base })
+    expect(r).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
+  })
+})

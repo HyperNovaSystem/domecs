@@ -511,6 +511,8 @@ export interface ReplayOptions {
   readonly onFrame?: (tick: number, world: World) => void
 }
 
+const GAP_REASONS: readonly ActLogGapReason[] = ['out_of_tick_mutation', 'unserializable_payload', 'restore']
+
 type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isFinite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -617,8 +619,20 @@ function checkLog(log: unknown): string | null {
       if (!Array.isArray(log.gaps)) return 'gaps is not an array'
       for (let i = 0; i < log.gaps.length; i++) {
         const g: unknown = log.gaps[i]
-        if (!isRec(g) || !isTick(g.tick) || typeof g.reason !== 'string') return `gaps[${i}] is not { tick, reason }`
+        if (!isRec(g) || !isTick(g.tick) || !GAP_REASONS.includes(g.reason as ActLogGapReason)) {
+          return `gaps[${i}] is not { tick, reason } with a known reason`
+        }
       }
+    }
+    // The recorder takes checkpoints at frame ends, in frame order: one that
+    // follows no frame end would stop every later checkpoint from being
+    // compared, so the replay would pass unverified.
+    if (log.checkpoints !== undefined) {
+      const cps = log.checkpoints as ReadonlyArray<{ tick: number }>
+      const frames = log.frames as ReadonlyArray<{ tick: number }>
+      let next = 0
+      for (const f of frames) if (next < cps.length && cps[next]!.tick === f.tick + 1) next++
+      if (next < cps.length) return `checkpoints[${next}] (tick ${cps[next]!.tick}) does not follow a frame end in order`
     }
     return null
   } catch (cause) {
