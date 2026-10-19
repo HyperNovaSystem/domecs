@@ -2643,3 +2643,11 @@ Owner decision (revision 3): `SNAPSHOT_VERSION` is 3 for every 2.1 snapshot.
 | Keyframes and hashes | Keyframes are `snapshot({ pendingEvents: true })` (a non-plain pending payload throws, by that call's contract); hashes and `finalHash` use the act-log strict hash (`actLogHash`, which falls back to no pending events in that case) | A keyframe must restore faithfully or not exist; hashes stay comparable with the recorder's and `replay`'s |
 | `createBranch` `scale: 0` | `setScale(0)` pauses the branch; `resume()` then returns to 1 (the pre-pause scale is not snapshotted and `BranchOptions` has no field for it) | Spec gives only `scale`; a paused source's resume target is a host control |
 | E20.3 red step | `pnpm doctest` was shown to fail on the new `branch-and-compare` fence with a wrong sample-tick assertion (absolute instead of per-call ticks), then passed | E20.2 had already landed, as for E19.4 |
+
+### Verification notes — E20 adversarial verify (2026-10-19)
+
+| Item | Finding | Resolution |
+|---|---|---|
+| §7.2 `BranchOptions.fixedStep` "default `from.fixedStep ?? 1/60`" | **Spec assumption wrong:** a snapshot carries `fixedStep` only together with a non-zero `fixedBacklog` (O-40). After a completed tick it is absent, so a branch of a source at `fixedStep` 1/30 silently defaulted to 1/60 and diverged (its `fixed` systems ran twice as often) | Default kept as specified (making every snapshot carry `fixedStep` would change every snapshot hash). The JSDoc, `doc/api.md`, SPEC §7.5, AGENTS "Branch and compare" and SKILL.md now say to pass the source's `time.fixedStep`; test "a snapshot without a fixed backlog carries no fixedStep" pins the behaviour |
+| `createBranch` `scale: 0` (E20 notes) | A paused source resumes to its pre-pause scale, which no snapshot carries | Documented recipe: pass the resume scale as `scale`, then `pause()` the branch; test "a paused source" shows it matches the live world and that `scale: 0` does not |
+| `runBranch` misuse | `sampleEvery` was validated only when probes were given, contrary to the E20 notes | Fixed: a given `sampleEvery` must be a positive integer (`fix(E20)` commit, red/green) |

@@ -178,7 +178,10 @@ from a snapshot. Do not restore and step the live world for this.
 import { createBranch, runBranch } from '@domecs/core'
 
 const from = live.snapshot({ pendingEvents: true })
-const b = createBranch(setup, from, { scale: live.time.scale })  // setup: same systems, same order; spawns nothing
+const b = createBranch(setup, from, {      // setup: same systems, same order; spawns nothing
+  fixedStep: live.time.fixedStep,          // neither is in the snapshot
+  scale: live.time.scale,
+})
 if (!b.ok) throw new Error(b.error.kind)     // 'restore_failed' | 'once_systems'
 const run = runBranch(b.value.world, {
   steps: 600,
@@ -195,7 +198,9 @@ Compare branches (or a branch with the live world) by `finalHash` / `hashes`
 (strict) and by probe samples. Call `runBranch` again to extend a branch.
 `once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
 gate boot work so it is not re-run, or leave it out of the branch setup.
-Scale is not in the snapshot: pass the source's `time.scale`. A probe that
+Neither `fixedStep` (only with a fixed backlog) nor scale is in the snapshot:
+pass the source's `time.fixedStep` and `time.scale` (for a paused source, its
+resume scale, then `pause()` the branch). A probe that
 changes the world throws at the first sample.
 
 ### Control while paused

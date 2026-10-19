@@ -1622,7 +1622,7 @@ function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, optio
 function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>
 
 interface BranchOptions {
-  readonly fixedStep?: number         // default from.fixedStep ?? 1/60
+  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (snapshots carry it only with a backlog)
   readonly seed?: number | RngState   // only matters for a v2 `from` (no rngRoot)
   readonly scale?: number             // the source's time.scale (not snapshotted); default 1
 }
@@ -1653,7 +1653,11 @@ interface BranchRun {
 ```
 
 `createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
-`setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. A throw from
+`setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. Pass the
+source's `time.fixedStep` and `time.scale`: a snapshot carries `fixedStep`
+only when it owes fixed steps, and never the scale. For a paused source pass
+the scale it resumes to and `pause()` the branch (`scale: 0` resumes to 1).
+A throw from
 `setup` is a bug and propagates; a throw from `restore` is `restore_failed`.
 If `setup` registers an enabled `once` system and `from.tick > 0`, the branch
 would run it while the source already had, so it is `once_systems`. Take

@@ -131,6 +131,46 @@ describe('createBranch (§7.2)', () => {
     expect(createBranch(withOnce, atZero).ok).toBe(true)
   })
 
+  it('a snapshot without a fixed backlog carries no fixedStep: a source at 1/30 needs the option', () => {
+    const live = createWorld({ headless: true, fixedStep: 1 / 30, seed: [9, 8, 7, 6] })
+    setup(live)
+    live.spawn([entry(Body, { x: 5, v: -1 }), entry(Stats, { t: 0, hits: 0, r: 0, fixed: 0 })])
+    steps(live, 6)
+    const snap = live.snapshot({ pendingEvents: true })
+    expect(snap.fixedStep).toBeUndefined()
+    steps(live, 12)
+    const plain = createBranch(setup, snap)
+    const given = createBranch(setup, snap, { fixedStep: live.time.fixedStep })
+    if (!plain.ok || !given.ok) throw new Error('branch failed')
+    expect(plain.value.world.time.fixedStep).toBe(1 / 60)
+    steps(plain.value.world, 12)
+    steps(given.value.world, 12)
+    expect(strict(plain.value.world)).not.toBe(strict(live))
+    expect(strict(given.value.world)).toBe(strict(live))
+  })
+
+  it('a paused source: scale is its resume target, then pause() (scale 0 resumes to 1)', () => {
+    const live = source()
+    live.setScale(3)
+    live.pause()
+    steps(live, 4)
+    const snap = live.snapshot({ pendingEvents: true })
+    live.resume()
+    steps(live, 10)
+    const target = createBranch(setup, snap, { scale: 3 })
+    const zero = createBranch(setup, snap, { scale: 0 })
+    if (!target.ok || !zero.ok) throw new Error('branch failed')
+    target.value.world.pause()
+    for (const b of [target.value.world, zero.value.world]) {
+      expect(b.time.scale).toBe(0)
+      b.resume()
+      steps(b, 10)
+    }
+    expect(strict(target.value.world)).toBe(strict(live))
+    expect(zero.value.world.time.scale).toBe(1)
+    expect(strict(zero.value.world)).not.toBe(strict(live))
+  })
+
   it('a source at scale 2 matches createBranch(…, { scale: 2 }), not the default (test 8)', () => {
     const live = source()
     live.setScale(2)

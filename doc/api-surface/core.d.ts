@@ -157,11 +157,19 @@ import { type World } from './world.js';
 export type WorldSetup<T = void> = (world: World) => T;
 /** Options for {@link createBranch}. */
 export interface BranchOptions {
-    /** Default `from.fixedStep ?? 1/60`. */
+    /**
+     * Default `from.fixedStep ?? 1/60`. A snapshot carries `fixedStep` only
+     * with a fixed backlog, so pass the source's `time.fixedStep` whenever it
+     * is not 1/60.
+     */
     readonly fixedStep?: number;
     /** The `createWorld` seed; only matters for a v2 `from` (no `rngRoot`). */
     readonly seed?: number | RngState;
-    /** `time.scale` of the source; default 1. Scale is not snapshotted. */
+    /**
+     * `time.scale` of the source; default 1. Scale is not snapshotted. For a
+     * paused source, pass the scale it resumes to and `pause()` the branch:
+     * `scale: 0` resumes to 1.
+     */
     readonly scale?: number;
 }
 /** Why {@link createBranch} could not build a branch. */
@@ -186,7 +194,8 @@ export type BranchError = {
  *
  * Take `from` with `snapshot({ pendingEvents: true })` and without
  * snapshot-rewriting plugins (redaction), or the branch starts from a
- * different state than the source had.
+ * different state than the source had. Pass the source's `fixedStep` and
+ * `scale`: neither is in a snapshot (`fixedStep` only with a backlog).
  */
 export declare function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, options?: BranchOptions): Result<{
     readonly world: World;
