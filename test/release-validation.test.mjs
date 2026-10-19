@@ -135,11 +135,11 @@ test('findLegacyDomecsImportSpecifiers flags old runtime imports only', () => {
   assert.deepEqual(matches, ['domecs', 'domecs-dom', 'domecs-input'])
 })
 
-// E1.1: the harness branch ships 2.1.0 in lockstep. Every package shares one
-// version, and that version still satisfies the `^2.0.0` peer ranges apps and
-// sibling packages declare (build metadata, as pack-for-studio stamps it, is
-// ignored by range checks).
-const RELEASE_VERSION = '2.1.0'
+// E1.1 / E13.1: the harness branch ships 2.2.0 in lockstep (2.1.0 before
+// E13). Every package shares one version, and that version still satisfies
+// the `^2.0.0` peer ranges apps and sibling packages declare (build metadata,
+// as pack-for-studio stamps it, is ignored by range checks).
+const RELEASE_VERSION = '2.2.0'
 
 function parseVersion(v) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(v)
@@ -156,7 +156,7 @@ function satisfiesCaret(range, version) {
   return v.patch >= r.patch
 }
 
-test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1)', async () => {
+test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1, E13.1)', async () => {
   const fs = await import('node:fs')
   const path = await import('node:path')
   const { workspaceRoot } = await import('../scripts/validate-release.mjs')
@@ -172,5 +172,8 @@ test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1)',
   assert.ok(satisfiesCaret('^2.0.0', RELEASE_VERSION))
   assert.ok(satisfiesCaret('^2.0.0', `${RELEASE_VERSION}+g1a2b3c4-dirty`))
   assert.ok(!satisfiesCaret('^2.0.0', '3.0.0'))
-  assert.ok(!satisfiesCaret('^2.0.0', '2.1.0-pre.1'))
+  assert.ok(!satisfiesCaret('^2.0.0', '2.2.0-pre.1'))
+  // workspace:^ peers publish as ^<version>: a 2.2 package needs a 2.2 core
+  // (scene's spatial index uses createSpatialGrid, rules use dmath.atan2).
+  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.1.0'))
 })
