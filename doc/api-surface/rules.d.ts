@@ -13,8 +13,9 @@ export type FunctionName = (typeof FUNCTION_NAMES)[number];
 /** Expected argument count for each whitelisted function. */
 export declare const FUNCTION_ARITY: Readonly<Record<FunctionName, number>>;
 /**
- * The special forms (2.2, §5.2): calls whose arguments are not all
- * expressions. `args` lists each argument's role — `'set'` (a component
+ * The special forms (2.2, §5.2, §5.4): calls that are not plain numeric
+ * functions, because their arguments are not all number expressions.
+ * `args` lists each argument's role — `'set'` (a component
  * name: the entities holding it), `'entity'` (`self`, `first(S)`,
  * `nearest(S[, d])` or `entity(n)`), `'expr'`, or `'memberField'` (a
  * `Component.field` read on each member). `optional` counts the arguments
@@ -22,16 +23,17 @@ export declare const FUNCTION_ARITY: Readonly<Record<FunctionName, number>>;
  * argument is the leading entity (`has(C)` is `has(self, C)`).
  * `first`, `nearest` and `entity` are selectors: they produce an entity,
  * which is only usable as `.Component.field`, `.id`, or an entity argument.
+ * `key`, `pressed`, `released` and `mod` read the world's input (§5.4).
  */
 export declare const SPECIAL_FORMS: Readonly<Record<string, {
     readonly args: ReadonlyArray<'set' | 'entity' | 'expr' | 'memberField'>;
     readonly optional: number;
 }>>;
 /**
- * Names the parser reserves (2.2, §5.2, ED-9): `self` and `tick` now,
- * `other`, `event` and `pointer` for later minors. A component with one of
- * these names cannot be referenced in an expression. After an entity, `id`
- * is reserved too (`e.id` is the entity id).
+ * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick` and (§5.4)
+ * `pointer` (`pointer.x`), plus `other` and `event` for later minors. A
+ * component with one of these names cannot be referenced in an expression.
+ * After an entity, `id` is reserved too (`e.id` is the entity id).
  */
 export declare const RESERVED_WORDS: ReadonlySet<string>;
 /** What a selector or `self` refers to (2.2). */
@@ -50,6 +52,13 @@ export type EntityNode = {
     pos: number;
 };
 export type AggregateOp = 'count' | 'exists' | 'sum' | 'avg' | 'minOf' | 'maxOf';
+/** An input read (2.2, §5.4): held key, key edge, or modifier. */
+export type InputOp = 'key' | 'pressed' | 'released' | 'mod';
+/** The modifier names `mod(n)` accepts (2.2, §5.4). */
+export type ModifierName = 'ctrl' | 'alt' | 'shift' | 'meta';
+export declare const MODIFIER_NAMES: ReadonlySet<string>;
+/** The pointer fields a rule can read (2.2, §5.4). */
+export type PointerField = 'x' | 'y' | 'buttons' | 'wheel';
 export type BinaryOp = '+' | '-' | '*' | '/' | '%' | '<' | '<=' | '>' | '>=' | '==' | '!=';
 export type LogicalOp = '&&' | '||';
 export type UnaryOp = '!' | '-';
@@ -157,6 +166,19 @@ export type AstNode = {
     left: AstNode;
     right: AstNode;
     pos: number;
+}
+/** `key(n)` (held), `pressed(n)` / `released(n)` (edges this tick), `mod(n)`. */
+ | {
+    kind: 'input';
+    op: InputOp;
+    arg: AstNode;
+    pos: number;
+}
+/** `pointer.x`, `pointer.y`, `pointer.buttons`, `pointer.wheel`. */
+ | {
+    kind: 'pointer';
+    field: PointerField;
+    pos: number;
 };
 /**
  * Walk every read of the evaluated entity's own fields reachable from
@@ -195,7 +217,7 @@ export declare function childNodes(node: AstNode | EntityNode): Array<AstNode | 
 export declare const BUILD_ID: string;
 
 // file: evaluator.d.ts
-import type { AstNode } from './ast.js';
+import { type AstNode, type ModifierName } from './ast.js';
 /** A value an expression produces. */
 type Value = number | string | boolean;
 /**
@@ -249,6 +271,24 @@ export interface EvalEnv {
     within?(set: string, x: number, y: number, r: number, exclude: number | undefined): readonly number[];
     /** `world.time.tick` (`tick`). */
     tick?: number;
+    /**
+     * Input state (2.2, §5.4), for `key(n)` (held), `pressed(n)` /
+     * `released(n)` (edges), `mod(n)` and `pointer.x|y|buttons|wheel`. Rules
+     * wire it from `ctx.input` (`keys`, `keyDelta`, `mods`, `pointer`).
+     * `mod` is only called with one of the four names.
+     */
+    input?: {
+        key(name: string): boolean;
+        pressed(name: string): boolean;
+        released(name: string): boolean;
+        mod(name: ModifierName): boolean;
+        readonly pointer: {
+            readonly x: number;
+            readonly y: number;
+            readonly buttons: number;
+            readonly wheel: number;
+        };
+    };
 }
 /**
  * Thrown by `evaluate` when it cannot produce a value — for
@@ -317,7 +357,7 @@ export declare function compileExpression(ast: AstNode, options?: CompileOptions
 export {};
 
 // file: index.d.ts
-export type { AggregateOp, AstNode, BinaryOp, EntityNode, FunctionName, LogicalOp, UnaryOp } from './ast.js';
+export type { AggregateOp, AstNode, BinaryOp, EntityNode, FunctionName, InputOp, LogicalOp, ModifierName, PointerField, UnaryOp, } from './ast.js';
 export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs } from './ast.js';
 export { MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, parseExpression } from './parser.js';
 export type { ParseError } from './parser.js';
@@ -369,6 +409,7 @@ import { type AstNode } from './ast.js';
  *               | IDENT '.' IDENT                              // Component.field
  *               | entity '.' IDENT '.' IDENT                   (+) another entity's field
  *               | entity '.' 'id'                              (+) entity id
+ *               | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) §5.4
  *               | call
  *               | '(' expr ')'
  *   entity     := 'self' | 'first' '(' SET ')'                 (+)
@@ -380,6 +421,7 @@ import { type AstNode } from './ast.js';
  *               | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
  *               | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'  (+)
  *               | 'distanceTo' '(' entity ')'                  (+)
+ *               | ('key' | 'pressed' | 'released' | 'mod') '(' expr ')'  (+) §5.4, arg: a string
  *   args       := expr ( ',' expr )*
  *   SET        := IDENT                                        (+) a component name: its holders
  *
@@ -394,7 +436,9 @@ import { type AstNode } from './ast.js';
  * name a component in an expression, and `id` cannot after an entity. Only
  * `first(`, `nearest(` and `entity(` start a selector: `first.x` is still
  * `Component.field`. An entity is not a value: use `.id` or
- * `.Component.field`.
+ * `.Component.field`. Input reads (2.2, §5.4): `key(n)`, `pressed(n)`,
+ * `released(n)`, `mod(n)` and `pointer.x|y|buttons|wheel`; `key`,
+ * `pressed`, `released` and `mod` start an input read only before `(`.
  */
 /**
  * O-66: limits that keep rule data from overflowing the stack. The parser,
@@ -625,7 +669,7 @@ export interface InstallRulesOptions {
 export declare function installRules(world: World, defs: RuleDef[], resolve: (name: string) => ComponentType<any> | undefined, options?: InstallRulesOptions): RulesHandle;
 
 // file: typecheck.d.ts
-import type { AstNode } from './ast.js';
+import { type AstNode } from './ast.js';
 /** What an expression is known to produce before it runs. */
 export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown';
 /**
@@ -642,6 +686,9 @@ export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown';
  * `distanceTo`, `e.id`, `tick` and the aggregates are numbers; member reads
  * are `'unknown'`. An entity is never a value: the parser already rejects
  * one outside a member base, selector argument or `has` target ("use .id").
+ * Input reads (§5.4) are boolean (`key`, `pressed`, `released`, `mod`) or
+ * number (`pointer.*`); their argument must be a string, and a literal
+ * `mod` name must be one of ctrl, alt, shift, meta.
  */
 export declare function inferKind(node: AstNode, report: (pos: number, message: string) => void): StaticKind;
 
@@ -676,8 +723,9 @@ export interface WorldExpression {
  * evaluated entity. Rejected at compile time, at the form's position:
  * bare `Component.field`, `self`, `has(C)` without an entity, `distanceTo`
  * and `nearest` (both measure from the evaluated entity), `countWithin`
- * without a centre, `dt`, and `random()` (measuring a world must not
- * advance its randomness). `time` is `world.time.elapsed` and `tick` is
+ * without a centre, `dt`, `random()` (measuring a world must not
+ * advance its randomness), and the input reads `key`, `pressed`,
+ * `released`, `mod` and `pointer.*` (a metric must not depend on input). `time` is `world.time.elapsed` and `tick` is
  * `world.time.tick`. Everything else — selectors `first(S)` and
  * `entity(n)` with `.C.f` / `.id` reads, `has(e, C)`, aggregates,
  * `countWithin(S, r, e)` (needs `options.spatial`), math and `??` —

@@ -109,6 +109,11 @@ bridge.reset()                         // episode boundary
   `installRules(..., { spatial: { component: 'Pos' } })` for `nearest` /
   `countWithin` / `distanceTo`. Rules write only their own entity; `self`,
   `tick`, `other`, `event`, `pointer` are reserved words
+- **Player control as rules:** `key("ArrowLeft")` (held), `pressed("Space")` /
+  `released("Space")` (edges; `tick` rules only, compile error in `fixed`), `mod("shift")`,
+  `pointer.x|y|buttons|wheel` read the tick's `world.input` (`KeyboardEvent.code` names); drive
+  headless runs with `world.setInput(snapshot)` before each step and record those snapshots to
+  replay. Not allowed in world expressions
 - **Metrics as world expressions:** `compileWorldExpression('countWithin(Enemy, 40, first(Player))',
   resolve, { spatial: { component: 'Pos' } })` → `expression.evaluate(world)` (a `Result`;
   read-only, hash unchanged). No entity: use `first(S).C.f`, never bare `C.f`, `self`, `dt`,

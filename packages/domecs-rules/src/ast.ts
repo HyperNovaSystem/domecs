@@ -53,8 +53,9 @@ export const FUNCTION_ARITY: Readonly<Record<FunctionName, number>> = {
 }
 
 /**
- * The special forms (2.2, §5.2): calls whose arguments are not all
- * expressions. `args` lists each argument's role — `'set'` (a component
+ * The special forms (2.2, §5.2, §5.4): calls that are not plain numeric
+ * functions, because their arguments are not all number expressions.
+ * `args` lists each argument's role — `'set'` (a component
  * name: the entities holding it), `'entity'` (`self`, `first(S)`,
  * `nearest(S[, d])` or `entity(n)`), `'expr'`, or `'memberField'` (a
  * `Component.field` read on each member). `optional` counts the arguments
@@ -62,6 +63,7 @@ export const FUNCTION_ARITY: Readonly<Record<FunctionName, number>> = {
  * argument is the leading entity (`has(C)` is `has(self, C)`).
  * `first`, `nearest` and `entity` are selectors: they produce an entity,
  * which is only usable as `.Component.field`, `.id`, or an entity argument.
+ * `key`, `pressed`, `released` and `mod` read the world's input (§5.4).
  */
 export const SPECIAL_FORMS: Readonly<
   Record<string, { readonly args: ReadonlyArray<'set' | 'entity' | 'expr' | 'memberField'>; readonly optional: number }>
@@ -78,13 +80,19 @@ export const SPECIAL_FORMS: Readonly<
   minOf: Object.freeze({ args: Object.freeze(['set', 'memberField'] as const), optional: 0 }),
   maxOf: Object.freeze({ args: Object.freeze(['set', 'memberField'] as const), optional: 0 }),
   distanceTo: Object.freeze({ args: Object.freeze(['entity'] as const), optional: 0 }),
+  // 2.2 (§5.4): input reads. The argument is an expression producing a
+  // string (a key name, or 'ctrl' | 'alt' | 'shift' | 'meta' for `mod`).
+  key: Object.freeze({ args: Object.freeze(['expr'] as const), optional: 0 }),
+  pressed: Object.freeze({ args: Object.freeze(['expr'] as const), optional: 0 }),
+  released: Object.freeze({ args: Object.freeze(['expr'] as const), optional: 0 }),
+  mod: Object.freeze({ args: Object.freeze(['expr'] as const), optional: 0 }),
 })
 
 /**
- * Names the parser reserves (2.2, §5.2, ED-9): `self` and `tick` now,
- * `other`, `event` and `pointer` for later minors. A component with one of
- * these names cannot be referenced in an expression. After an entity, `id`
- * is reserved too (`e.id` is the entity id).
+ * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick` and (§5.4)
+ * `pointer` (`pointer.x`), plus `other` and `event` for later minors. A
+ * component with one of these names cannot be referenced in an expression.
+ * After an entity, `id` is reserved too (`e.id` is the entity id).
  */
 export const RESERVED_WORDS: ReadonlySet<string> = new Set(['self', 'tick', 'other', 'event', 'pointer'])
 
@@ -95,6 +103,16 @@ export type EntityNode =
   | { kind: 'entityById'; id: AstNode; pos: number }
 
 export type AggregateOp = 'count' | 'exists' | 'sum' | 'avg' | 'minOf' | 'maxOf'
+
+/** An input read (2.2, §5.4): held key, key edge, or modifier. */
+export type InputOp = 'key' | 'pressed' | 'released' | 'mod'
+
+/** The modifier names `mod(n)` accepts (2.2, §5.4). */
+export type ModifierName = 'ctrl' | 'alt' | 'shift' | 'meta'
+export const MODIFIER_NAMES: ReadonlySet<string> = new Set<ModifierName>(['ctrl', 'alt', 'shift', 'meta'])
+
+/** The pointer fields a rule can read (2.2, §5.4). */
+export type PointerField = 'x' | 'y' | 'buttons' | 'wheel'
 
 export type BinaryOp = '+' | '-' | '*' | '/' | '%' | '<' | '<=' | '>' | '>=' | '==' | '!='
 export type LogicalOp = '&&' | '||'
@@ -128,6 +146,11 @@ export type AstNode =
   | { kind: 'distanceTo'; target: EntityNode; pos: number }
   /** `a ?? b`: `b` when evaluating `a` yields no value. */
   | { kind: 'nullish'; left: AstNode; right: AstNode; pos: number }
+  // 2.2 (§5.4): input reads.
+  /** `key(n)` (held), `pressed(n)` / `released(n)` (edges this tick), `mod(n)`. */
+  | { kind: 'input'; op: InputOp; arg: AstNode; pos: number }
+  /** `pointer.x`, `pointer.y`, `pointer.buttons`, `pointer.wheel`. */
+  | { kind: 'pointer'; field: PointerField; pos: number }
 
 /** The expression children of an entity node, in source order. */
 function entityChildren(target: EntityNode): AstNode[] {
@@ -218,10 +241,14 @@ export function walkComponentRefs(
     case 'call':
       for (const arg of node.args) walkComponentRefs(arg, visit)
       return
+    case 'input':
+      walkComponentRefs(node.arg, visit)
+      return
     case 'number':
     case 'string':
     case 'boolean':
     case 'identifier':
+    case 'pointer':
       return
   }
 }
@@ -239,6 +266,8 @@ export function childNodes(node: AstNode | EntityNode): Array<AstNode | EntityNo
       return [node.cond, node.then, node.else]
     case 'call':
       return node.args
+    case 'input':
+      return [node.arg]
     case 'member':
     case 'entityId':
     case 'has':

@@ -126,12 +126,14 @@ primary    := number | string | true | false | dt | time | tick (2.2)
             | Component.field                       the evaluated entity's field
             | entity '.' Component '.' field        2.2: another entity's field
             | entity '.' 'id'                       2.2: its id (a number)
+            | pointer.x | pointer.y | pointer.buttons | pointer.wheel   2.2: input
             | call | '(' expr ')'
 entity     := self | first(S) | nearest(S[, maxDistance]) | entity(n)      2.2
 call       := min max clamp abs sin cos floor random
             | sqrt pow atan2 hypot sign round ceil lerp distance           2.2
             | has([e,] C) | count(S) | exists(S) | countWithin(S, r[, e])  2.2
             | sum|avg|minOf|maxOf(S, C.f) | distanceTo(e)                   2.2
+            | key(n) | pressed(n) | released(n) | mod(n)                    2.2: input
 ```
 
 `S` is a component name standing for its holders (a set); use a tag
@@ -142,6 +144,8 @@ cannot name a component in an expression (a "reserved word" parse error at
 the name), and `id` cannot after an entity. Only `first(`, `nearest(` and
 `entity(` start a selector, so `first.x` is still `Component.field`. An
 entity is not a value: `first(Player)` alone is a parse error ("use .id").
+`key`, `pressed`, `released` and `mod` are not reserved: only a call
+(`key(`) reads input.
 
 ## Cross-entity reads (2.2)
 
@@ -223,7 +227,8 @@ if (near.expression) {
 - **Same grammar, minus the entity.** Bare `Component.field`, `self`,
   `has(C)` without an entity, `countWithin(S, r)` without a centre,
   `distanceTo(e)` and `nearest(S)` (both measure from the evaluated entity),
-  `dt`, and `random()` are compile errors at their position. Read through
+  `dt`, `random()`, and the input reads (`key`, `pressed`, `released`,
+  `mod`, `pointer.*`) are compile errors at their position. Read through
   `first(S)` or `entity(n)` instead: `first(Player).Hp.hp`,
   `has(first(Player), Shield)`, `countWithin(Enemy, 40, first(Player))`.
 - **`random()` is rejected** because drawing would advance the world's RNG:
@@ -247,6 +252,49 @@ if (near.expression) {
   different component type under a referenced name is
   `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`. Neither
   call throws for bad input.
+
+## Input (2.2)
+
+Rules read the world's input (`world.input`, the `InputSnapshot` that
+`setInput` or the `@domecs/input` plugin installed for the tick), so a
+player can be controlled by data alone:
+
+```ts
+const steer: RuleDef = {
+  name: 'steer', schedule: 'tick', query: ['Player', 'Vel'],
+  actions: [
+    { set: 'Vel.x', expr: '(key("ArrowRight") ? 1 : 0) - (key("ArrowLeft") ? 1 : 0)' },
+    { set: 'Player.jumps', expr: 'Player.jumps + (pressed("Space") ? 1 : 0)' },
+  ],
+}
+```
+
+- **Held state.** `key(n)` is `input.keys.has(n)`; `mod(n)` reads
+  `input.mods` for `n` one of `'ctrl'`, `'alt'`, `'shift'`, `'meta'`.
+- **Edges.** `pressed(n)` / `released(n)` read `input.keyDelta`: true for
+  the one render tick in which the key went down / up.
+- **Pointer.** `pointer.x`, `pointer.y`, `pointer.buttons` (DOM bitmask)
+  and `pointer.wheel` (accumulated this tick) are numbers. `pointer` is a
+  reserved word; any other field is a parse error.
+- **Names.** Key names are what `InputSnapshot.keys` carries: the
+  `KeyboardEvent.code` values the `@domecs/input` plugin records
+  (`'KeyW'`, `'ArrowUp'`, `'Space'`; see its README). The argument is any
+  expression producing a string, so bindings can live in a component:
+  `key(Bind.up)`. A non-string argument, or a `mod` name other than the
+  four, is a type error (a compile error when certain, else a
+  `rule_eval_failed` fault on the entity).
+- **Fixed rules.** `pressed`, `released` and `pointer.wheel` in a `fixed`
+  rule are compile errors on the part that uses them: edges and the wheel
+  last one render tick, so a fixed step (zero, one or several per frame)
+  can miss them or see them twice (AGENTS.md rule 4). Held reads, `mod` and
+  the pointer position are fine there.
+- **Not in world expressions.** A metric must not depend on input: every
+  input form is a compile error in `compileWorldExpression`.
+- **Determinism.** Input is whatever was installed before the step. A host
+  that records the input it applies (with `setInput` before each step)
+  reproduces the run, on a fork restored from a snapshot too. A headless
+  world without an input plugin reads an empty snapshot: no key held,
+  pointer at 0.
 
 ## Timing and functions
 

@@ -1093,6 +1093,7 @@ primary        := number | string | 'true' | 'false' | 'dt' | 'time'
                 | IDENT '.' IDENT                                 self Component.field
                 | entity '.' IDENT '.' IDENT                      (+)
                 | entity '.' 'id'                                 (+)
+                | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) input
                 | call | '(' expr ')'
 entity         := 'self' | 'first' '(' SET ')'                    (+)
                 | 'nearest' '(' SET ( ',' expr )? ')'             (+)
@@ -1103,6 +1104,7 @@ call           := FUNC '(' ( expr ( ',' expr )* )? ')'
                 | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
                 | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'   (+)
                 | 'distanceTo' '(' entity ')'                     (+)
+                | ('key' | 'pressed' | 'released' | 'mod') '(' expr ')'   (+) input; arg a string
 SET            := IDENT                                           (+) the holders of that component
 FUNC           := min/2 max/2 clamp/3 abs/1 sin/1 cos/1 floor/1 random/0
                 | sqrt/1 pow/2 atan2/2 hypot/2 sign/1 round/1 ceil/1 lerp/3 distance/4   (+)
@@ -1115,8 +1117,10 @@ and wrong arities are parse errors.
 **Reserved words (2.2).** `self`, `tick`, `other`, `event`, `pointer` cannot
 name a component in an expression ("reserved word" at the name); after an
 entity, `id` is reserved. Only `first(`, `nearest(`, `entity(` start a
-selector (`first.x` is `Component.field`). An entity is not a value: outside
-a member base, `has`/`countWithin`/`distanceTo` argument it is a parse error.
+selector (`first.x` is `Component.field`), and only `key(`, `pressed(`,
+`released(`, `mod(` read input (`key.x` is `Component.field`). An entity is
+not a value: outside a member base, `has`/`countWithin`/`distanceTo`
+argument it is a parse error.
 
 **Values and kinds.** Values are numbers, strings and booleans. Arithmetic,
 comparison and function arguments require numbers (a `RuleEvalError`
@@ -1124,7 +1128,8 @@ otherwise); `==`/`!=` compare with `===`; `!`, `&&`, `||`, `?:` use JS
 truthiness and short-circuit, as does `??`. Type errors certain before the
 rule runs are compile errors (`has`/`exists` are boolean; `count`,
 `countWithin`, `distanceTo`, `e.id`, `tick`, the aggregates and every
-function are numbers; field reads are unknown).
+function are numbers; `key`/`pressed`/`released`/`mod` are boolean and take
+a string; `pointer.*` are numbers; field reads are unknown).
 
 **Semantics (2.2).**
 
@@ -1166,10 +1171,19 @@ function are numbers; field reads are unknown).
 - **Determinism**: iteration is ascending id, distances are exact double
   arithmetic with id tie-breaks, caches never outlive a run, nothing
   derived is snapshotted, and `random()` draws the rule's stream (§2.8).
+- **Input** (2.2): rules read `ctx.input`, the snapshot installed for the
+  tick (`setInput` or an input plugin). `key(n)` = `keys.has(n)` (held);
+  `pressed(n)` / `released(n)` = `keyDelta.pressed/released.has(n)` (edges,
+  one render tick); `mod(n)` = `mods[n]` for `n` in `ctrl`, `alt`, `shift`,
+  `meta` (another name is a type error); `pointer.x|y|buttons|wheel` are the
+  pointer's numbers. A non-string argument is a type error. `pressed`,
+  `released` and `pointer.wheel` in a `fixed` rule are compile errors (§6:
+  edges and the wheel last one render tick). Input is not snapshotted: a
+  host replays it by installing the same snapshots before the same steps.
 - **World expressions** (`compileWorldExpression`, 2.2): the same grammar
   with no evaluated entity. Bare `C.f`, `self`, `has(C)`, `countWithin(S, r)`
-  without a centre, `distanceTo`, `nearest`, `dt` and `random()` are compile
-  errors. `time` = `world.time.elapsed`, `tick` = `world.time.tick`.
+  without a centre, `distanceTo`, `nearest`, `dt`, `random()` and every
+  input form are compile errors. `time` = `world.time.elapsed`, `tick` = `world.time.tick`.
   Evaluation reads with `listEntities`/`getComponent` only (no RNG, no
   change windows, no registration of a type no entity holds), so the strict
   snapshot hash and `describe().componentCounts` are unchanged; an uncaught

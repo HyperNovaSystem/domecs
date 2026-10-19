@@ -329,8 +329,8 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E12.1 `key`/`pressed`/`released`/`mod`/`pointer`
 
 - **Files:** `packages/domecs-rules/src/{parser.ts,evaluator.ts,typecheck.ts,rules.ts}`, test `input.test.ts`.
-- [ ] **Red:** held and edge reads against `setInput`; `pressed`/`released` in a `fixed` rule → compile error; input forms in world expressions → compile error; the same `setInput` sequence applied to live and to a fork restored mid-sequence → equal strict hashes.
-- [ ] **Commit:** `feat(rules): input reads in rules (E12.1)`
+- [x] **Red:** held and edge reads against `setInput`; `pressed`/`released` in a `fixed` rule → compile error; input forms in world expressions → compile error; the same `setInput` sequence applied to live and to a fork restored mid-sequence → equal strict hashes.
+- [x] **Commit:** `feat(rules): input reads in rules (E12.1)`
 
 ### E19 — Act log recording and replay (§7.1; O-80)
 

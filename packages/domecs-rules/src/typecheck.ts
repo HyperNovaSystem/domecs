@@ -1,4 +1,4 @@
-import type { AstNode, EntityNode } from './ast.js'
+import { MODIFIER_NAMES, type AstNode, type EntityNode } from './ast.js'
 
 /** What an expression is known to produce before it runs. */
 export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown'
@@ -17,6 +17,9 @@ export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown'
  * `distanceTo`, `e.id`, `tick` and the aggregates are numbers; member reads
  * are `'unknown'`. An entity is never a value: the parser already rejects
  * one outside a member base, selector argument or `has` target ("use .id").
+ * Input reads (§5.4) are boolean (`key`, `pressed`, `released`, `mod`) or
+ * number (`pointer.*`); their argument must be a string, and a literal
+ * `mod` name must be one of ctrl, alt, shift, meta.
  */
 export function inferKind(node: AstNode, report: (pos: number, message: string) => void): StaticKind {
   return infer(node, report, true)
@@ -93,6 +96,17 @@ function infer(
     case 'countWithin':
       numeric(node.radius, 'countWithin()')
       if (node.centre) entity(node.centre)
+      return 'number'
+    case 'input': {
+      const kind = infer(node.arg, report, certain)
+      if (certain && kind !== 'string' && kind !== 'unknown') {
+        report(node.arg.pos, `Expected a string for ${node.op}(), got ${kind}`)
+      } else if (certain && node.op === 'mod' && node.arg.kind === 'string' && !MODIFIER_NAMES.has(node.arg.value)) {
+        report(node.arg.pos, `mod() takes "ctrl", "alt", "shift" or "meta", got ${JSON.stringify(node.arg.value)}`)
+      }
+      return 'boolean'
+    }
+    case 'pointer':
       return 'number'
   }
 

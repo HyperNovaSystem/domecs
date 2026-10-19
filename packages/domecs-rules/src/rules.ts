@@ -225,6 +225,16 @@ export function compileRule(
       resolveAndTrack(component, pos, context, path)
     })
     forEachNode(ast, (node) => {
+      // §5.4 (AGENTS.md rule 4): key edges and the wheel are per render
+      // tick, so a fixed step (zero, one or several per frame) would miss
+      // them or see them twice.
+      if (def.schedule === 'fixed') {
+        if (node.kind === 'input' && (node.op === 'pressed' || node.op === 'released')) {
+          fail(path, node.pos, `${node.op}() in a fixed rule: key edges last one render tick, so a fixed step can miss one or see it twice; read key() (held) or put the rule on the tick schedule`)
+        } else if (node.kind === 'pointer' && node.field === 'wheel') {
+          fail(path, node.pos, 'pointer.wheel in a fixed rule: the wheel accumulates over one render tick, so a fixed step can miss it or see it twice; put the rule on the tick schedule')
+        }
+      }
       const form = spatialForm(node)
       if (form === null) return
       if (node.kind === 'select' || node.kind === 'countWithin') spatialSets.add(node.set)
@@ -491,6 +501,8 @@ function registerRuleSystem(
           ? { x, y }
           : undefined
       }
+      // §5.4: the input `setInput` (or an input plugin) installed for this tick.
+      const input = ctx.input
       const excluding = (exclude: number | undefined): ((id: number) => boolean) | undefined =>
         exclude === undefined ? undefined : (id) => id !== exclude
       const env: EvalEnv = {
@@ -530,6 +542,13 @@ function registerRuleSystem(
         within(set, x, y, r, exclude) {
           const grid = grids.get(set)
           return grid ? grid.within(x, y, r, excluding(exclude)) : []
+        },
+        input: {
+          key: (name) => input.keys.has(name),
+          pressed: (name) => input.keyDelta.pressed.has(name),
+          released: (name) => input.keyDelta.released.has(name),
+          mod: (name) => input.mods[name] === true,
+          pointer: input.pointer,
         },
       }
       // §5.2 spatial selection: grids from positions at the start of the run.

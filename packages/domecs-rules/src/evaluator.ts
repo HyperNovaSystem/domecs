@@ -1,5 +1,5 @@
 import { dmath } from '@domecs/core'
-import type { AstNode, EntityNode, FunctionName } from './ast.js'
+import { MODIFIER_NAMES, type AstNode, type EntityNode, type FunctionName, type InputOp, type ModifierName, type PointerField } from './ast.js'
 
 /** A value an expression produces. */
 type Value = number | string | boolean
@@ -50,6 +50,19 @@ export interface EvalEnv {
   within?(set: string, x: number, y: number, r: number, exclude: number | undefined): readonly number[]
   /** `world.time.tick` (`tick`). */
   tick?: number
+  /**
+   * Input state (2.2, §5.4), for `key(n)` (held), `pressed(n)` /
+   * `released(n)` (edges), `mod(n)` and `pointer.x|y|buttons|wheel`. Rules
+   * wire it from `ctx.input` (`keys`, `keyDelta`, `mods`, `pointer`).
+   * `mod` is only called with one of the four names.
+   */
+  input?: {
+    key(name: string): boolean
+    pressed(name: string): boolean
+    released(name: string): boolean
+    mod(name: ModifierName): boolean
+    readonly pointer: { readonly x: number; readonly y: number; readonly buttons: number; readonly wheel: number }
+  }
 }
 
 /**
@@ -161,6 +174,31 @@ function distanceBetween(x1: number, y1: number, x2: number, y2: number): number
   const dx = x2 - x1
   const dy = y2 - y1
   return Math.sqrt(dx * dx + dy * dy)
+}
+
+/** `key(n)`, `pressed(n)`, `released(n)`, `mod(n)` (§5.4); `name` is the evaluated argument. */
+function readInput(op: InputOp, name: Value, env: EvalEnv): boolean {
+  const input = env.input
+  if (input === undefined) throw notAvailable(`${op}()`)
+  if (typeof name !== 'string') {
+    throw new RuleEvalError(`Expected a string for ${op}(), got ${typeof name} (${describeValue(name)})`)
+  }
+  if (op === 'mod') {
+    if (!MODIFIER_NAMES.has(name)) {
+      throw new RuleEvalError(`mod() takes "ctrl", "alt", "shift" or "meta", got ${describeValue(name)}`)
+    }
+    return Boolean(input.mod(name as ModifierName))
+  }
+  return Boolean(input[op](name))
+}
+
+/** `pointer.x|y|buttons|wheel` (§5.4). */
+function readPointer(field: PointerField, env: EvalEnv): number {
+  const input = env.input
+  if (input === undefined) throw notAvailable(`pointer.${field}`)
+  const value: unknown = input.pointer[field]
+  if (typeof value !== 'number') throw new RuleEvalError(`pointer.${field} is not a number (${describeValue(value)})`)
+  return value
 }
 
 /** Resolve an entity node to an id. `expr` evaluates its expression arguments. */
@@ -372,6 +410,12 @@ export function evaluate(ast: AstNode, env: EvalEnv): Value {
 
     case 'distanceTo':
       return distanceTo(ast, env, expr)
+
+    case 'input':
+      return readInput(ast.op, evaluate(ast.arg, env), env)
+
+    case 'pointer':
+      return readPointer(ast.field, env)
   }
 }
 
@@ -582,6 +626,15 @@ export function compileExpression(ast: AstNode, options: CompileOptions = {}): C
             return distanceTo(node, env, expr)
         }
       }
+    }
+    case 'input': {
+      const op = ast.op
+      const arg = compile(ast.arg)
+      return (env) => readInput(op, arg(env), env)
+    }
+    case 'pointer': {
+      const field = ast.field
+      return (env) => readPointer(field, env)
     }
     case 'aggregate': {
       const node = ast

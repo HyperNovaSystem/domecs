@@ -356,8 +356,11 @@ describe('E10.2 grammar: new primaries', () => {
 
   it('SPECIAL_FORMS describes every special form', () => {
     expect(Object.keys(SPECIAL_FORMS).sort()).toEqual(
-      ['avg', 'count', 'countWithin', 'distanceTo', 'entity', 'exists', 'first', 'has', 'maxOf', 'minOf', 'nearest', 'sum'].sort(),
+      ['avg', 'count', 'countWithin', 'distanceTo', 'entity', 'exists', 'first', 'has', 'maxOf', 'minOf', 'nearest', 'sum',
+        // 2.2 §5.4 input reads
+        'key', 'pressed', 'released', 'mod'].sort(),
     )
+    expect(SPECIAL_FORMS.key).toEqual({ args: ['expr'], optional: 0 })
     expect(SPECIAL_FORMS.countWithin).toEqual({ args: ['set', 'expr', 'entity'], optional: 1 })
     expect(SPECIAL_FORMS.sum).toEqual({ args: ['set', 'memberField'], optional: 0 })
     expect(SPECIAL_FORMS.has).toEqual({ args: ['entity', 'set'], optional: 1 })

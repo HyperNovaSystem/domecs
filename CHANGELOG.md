@@ -62,6 +62,16 @@ All notable changes to DOMECS are documented here. The format is based on
   component type no entity holds): the strict snapshot hash and
   `describe().componentCounts` are unchanged. A non-finite number result
   is an error value.
+- `@domecs/rules`: input in rules (G16, O-86, harness spec §5.4; SPEC
+  Appendix A). `key(n)` (held, `input.keys`), `pressed(n)` / `released(n)`
+  (edges, `input.keyDelta`), `mod(n)` (`'ctrl' | 'alt' | 'shift' | 'meta'`)
+  and `pointer.x|y|buttons|wheel` read the tick's `world.input`; the argument
+  is any string expression (`key(Bind.up)`). `pressed`, `released` and
+  `pointer.wheel` in a `fixed` rule are compile errors (edges and the wheel
+  last one render tick), and every input form is a compile error in
+  `compileWorldExpression`. `EvalEnv.input` (optional; rules wire it from
+  `ctx.input`), `SPECIAL_FORMS` gains `key`/`pressed`/`released`/`mod`,
+  types `InputOp`, `PointerField`, `ModifierName`.
 - `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
   `rules-keep-distance` (built with `@domecs/rules`) and a
   `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and
@@ -87,8 +97,9 @@ All notable changes to DOMECS are documented here. The format is based on
 
 - `@domecs/rules`: `FUNCTION_NAMES` gains nine names, so `FunctionName`
   widens and `FUNCTION_ARITY` gains keys; `AstNode` gains `member`,
-  `entityId`, `has`, `aggregate`, `countWithin`, `distanceTo` and `nullish`
-  nodes and `identifier.name` gains `'tick'`; `RuleDefPath` gains
+  `entityId`, `has`, `aggregate`, `countWithin`, `distanceTo`, `nullish`
+  and (input, §5.4) `input` and `pointer` nodes; `EvalEnv` gains the
+  optional `input`; and `identifier.name` gains `'tick'`; `RuleDefPath` gains
   `{ without: number }`. Exhaustive switches over `FunctionName`,
   `AstNode['kind']` or `RuleDefPath` need a case or a default branch (the
   rules README recommends a default branch).

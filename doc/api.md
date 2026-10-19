@@ -2173,6 +2173,56 @@ assert.equal(bad.expression, null)
 assert.deepEqual(bad.errors.map((e) => e.position), [0, 16])
 ```
 
+**Input in rules (2.2; §5.4).** Rules read the tick's `world.input`:
+`key(n)` (held, `keys`), `pressed(n)` / `released(n)` (edges, `keyDelta`),
+`mod(n)` (`'ctrl' | 'alt' | 'shift' | 'meta'`) and
+`pointer.x|y|buttons|wheel`. The argument is any string expression (`key(Bind.up)`).
+`pressed`, `released` and `pointer.wheel` in a `fixed` rule are compile
+errors (edges last one render tick), and every input form is a compile error
+in a world expression. Input is not part of the snapshot: install the same
+`setInput` snapshots before the same steps to reproduce a run.
+
+```ts doctest name=rules-input
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, type InputSnapshot } from '@domecs/core'
+import { compileRule, compileWorldExpression, installRules, type RuleDef } from '@domecs/rules'
+
+const Ship = defineComponent<{ vx: number; shots: number }>('InDocShip', { defaults: { vx: 0, shots: 0 } })
+const resolve = (n: string) => (n === 'InDocShip' ? Ship : undefined)
+
+const input = (keys: string[], pressed: string[] = []): InputSnapshot => ({
+  keys: new Set(keys),
+  keyDelta: { pressed: new Set(pressed), released: new Set() },
+  mods: { ctrl: false, alt: false, shift: false, meta: false },
+  pointer: { x: 0, y: 0, buttons: 0, delta: { x: 0, y: 0 }, wheel: 0, entered: [] },
+  gamepads: [],
+  focus: { activeTag: '', consumesKeys: false },
+})
+
+const steer: RuleDef = {
+  name: 'steer', schedule: 'tick', query: ['InDocShip'],
+  actions: [
+    { set: 'InDocShip.vx', expr: '(key("ArrowRight") ? 1 : 0) - (key("ArrowLeft") ? 1 : 0)' },
+    { set: 'InDocShip.shots', expr: 'InDocShip.shots + (pressed("Space") ? 1 : 0)' },
+  ],
+}
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+assert.equal(installRules(w, [], resolve).update([steer]).size, 0)
+const ship = w.spawn([entry(Ship, { vx: 0, shots: 0 })])
+
+w.setInput(input(['ArrowRight', 'Space'], ['Space']))
+w.stepOnce()
+assert.deepEqual(w.getComponent(ship, Ship), { vx: 1, shots: 1 })
+w.setInput(input(['Space'])) // still held, no new edge
+w.stepOnce()
+assert.deepEqual(w.getComponent(ship, Ship), { vx: 0, shots: 1 })
+
+// Edges in a fixed rule, and input in a metric, are compile errors.
+const fixed = compileRule({ ...steer, schedule: 'fixed' }, resolve)
+assert.deepEqual(fixed.errors.map((e) => e.field), [{ action: 1, part: 'expr' }])
+assert.equal(compileWorldExpression('key("Space") ? 1 : 0', resolve).expression, null)
+```
+
 ---
 
 ## Framework integration

@@ -8,6 +8,8 @@ import {
   type BinaryOp,
   type EntityNode,
   type FunctionName,
+  type InputOp,
+  type PointerField,
 } from './ast.js'
 import { LexError, tokenize, type Token } from './lexer.js'
 
@@ -30,6 +32,7 @@ import { LexError, tokenize, type Token } from './lexer.js'
  *               | IDENT '.' IDENT                              // Component.field
  *               | entity '.' IDENT '.' IDENT                   (+) another entity's field
  *               | entity '.' 'id'                              (+) entity id
+ *               | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) §5.4
  *               | call
  *               | '(' expr ')'
  *   entity     := 'self' | 'first' '(' SET ')'                 (+)
@@ -41,6 +44,7 @@ import { LexError, tokenize, type Token } from './lexer.js'
  *               | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
  *               | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'  (+)
  *               | 'distanceTo' '(' entity ')'                  (+)
+ *               | ('key' | 'pressed' | 'released' | 'mod') '(' expr ')'  (+) §5.4, arg: a string
  *   args       := expr ( ',' expr )*
  *   SET        := IDENT                                        (+) a component name: its holders
  *
@@ -55,7 +59,9 @@ import { LexError, tokenize, type Token } from './lexer.js'
  * name a component in an expression, and `id` cannot after an entity. Only
  * `first(`, `nearest(` and `entity(` start a selector: `first.x` is still
  * `Component.field`. An entity is not a value: use `.id` or
- * `.Component.field`.
+ * `.Component.field`. Input reads (2.2, §5.4): `key(n)`, `pressed(n)`,
+ * `released(n)`, `mod(n)` and `pointer.x|y|buttons|wheel`; `key`,
+ * `pressed`, `released` and `mod` start an input read only before `(`.
  */
 
 /**
@@ -103,6 +109,8 @@ const LOGICAL_OPS = new Set(['&&', '||'])
 
 const FUNCTION_NAME_SET = new Set<string>(FUNCTION_NAMES)
 const SELECTORS = new Set(['first', 'nearest', 'entity'])
+const INPUT_OPS = new Set<string>(['key', 'pressed', 'released', 'mod'])
+const POINTER_FIELDS = new Set<string>(['x', 'y', 'buttons', 'wheel'])
 
 function reserved(name: string): string {
   return `"${name}" is a reserved word: it cannot name a component in an expression`
@@ -258,6 +266,7 @@ class Parser {
       if (t.value === 'self' || (SELECTORS.has(t.value) && nextIs('('))) {
         return this.parseEntityAccess(this.parseEntity())
       }
+      if (t.value === 'pointer') return this.parsePointer()
       if (RESERVED_WORDS.has(t.value)) throw new ParseFailure(t.pos, reserved(t.value))
 
       // Component.field
@@ -284,6 +293,27 @@ class Parser {
     }
 
     throw new ParseFailure(t.pos, `Unexpected token "${t.value}"`)
+  }
+
+  /** 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel') (§5.4) */
+  private parsePointer(): AstNode {
+    const t = this.advance() // 'pointer'
+    const dot = this.peek()
+    if (!(dot.type === 'punct' && dot.value === '.')) {
+      throw new ParseFailure(
+        t.pos,
+        `"pointer" is not a value: read pointer.x, pointer.y, pointer.buttons or pointer.wheel (${reserved('pointer')})`,
+      )
+    }
+    this.advance() // '.'
+    const field = this.expectIdentifier('a pointer field (x, y, buttons or wheel)')
+    if (!POINTER_FIELDS.has(field.value)) {
+      throw new ParseFailure(
+        t.pos,
+        `"pointer.${field.value}": pointer has only x, y, buttons and wheel (${reserved('pointer')})`,
+      )
+    }
+    return { kind: 'pointer', field: field.value as PointerField, pos: t.pos }
   }
 
   private expectIdentifier(what: string): Token {
@@ -453,6 +483,10 @@ class Parser {
     }
     this.expectPunct(')')
 
+    if (INPUT_OPS.has(name)) {
+      if (args.length !== 1) throw new ParseFailure(pos, `Function "${name}" expects 1 argument, got ${args.length}`)
+      return { kind: 'input', op: name as InputOp, arg: args[0]!, pos }
+    }
     if (!FUNCTION_NAME_SET.has(name)) {
       throw new ParseFailure(pos, `Unknown function "${name}"`)
     }
