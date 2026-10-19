@@ -50,6 +50,16 @@ All notable changes to DOMECS are documented here. The format is based on
   types `EntityNode`, `AggregateOp`, `SpatialOption`, `CompileRuleOptions`.
   Reads are live in ascending id (an entity sees lower ids' writes from the
   same run); set aggregates that cannot change during a run are memoized.
+- `@domecs/rules`: `compileWorldExpression(source, resolve, { spatial? })`
+  → `WorldExpression` (G13, O-83, harness spec §5.3): the rules grammar with
+  no evaluated entity, for metrics and probes
+  (`countWithin(Enemy, 40, first(Player))`). Bare `Component.field`,
+  `self`, `has(C)`, centre-less `countWithin`, `distanceTo`, `nearest`, `dt`
+  and `random()` are compile errors at their position (`rule: '<expr>'`);
+  `time`/`tick` are `world.time.elapsed`/`world.time.tick`.
+  `evaluate(world)` returns `Result<number | string | boolean, RuleFault>`
+  and is read-only (no RNG draw, no change windows, no component-type
+  registration): the strict snapshot hash is unchanged.
 - `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
   `rules-keep-distance` (built with `@domecs/rules`) and a
   `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and

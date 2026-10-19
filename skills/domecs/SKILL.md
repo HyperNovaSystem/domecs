@@ -109,6 +109,10 @@ bridge.reset()                         // episode boundary
   `installRules(..., { spatial: { component: 'Pos' } })` for `nearest` /
   `countWithin` / `distanceTo`. Rules write only their own entity; `self`,
   `tick`, `other`, `event`, `pointer` are reserved words
+- **Metrics as world expressions:** `compileWorldExpression('countWithin(Enemy, 40, first(Player))',
+  resolve, { spatial: { component: 'Pos' } })` → `expression.evaluate(world)` (a `Result`;
+  read-only, hash unchanged). No entity: use `first(S).C.f`, never bare `C.f`, `self`, `dt`,
+  `nearest` or `random()` (compile errors)
 
 ## Done when
 

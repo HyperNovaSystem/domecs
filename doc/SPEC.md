@@ -1166,4 +1166,12 @@ function are numbers; field reads are unknown).
 - **Determinism**: iteration is ascending id, distances are exact double
   arithmetic with id tie-breaks, caches never outlive a run, nothing
   derived is snapshotted, and `random()` draws the rule's stream (§2.8).
+- **World expressions** (`compileWorldExpression`, 2.2): the same grammar
+  with no evaluated entity. Bare `C.f`, `self`, `has(C)`, `countWithin(S, r)`
+  without a centre, `distanceTo`, `nearest`, `dt` and `random()` are compile
+  errors. `time` = `world.time.elapsed`, `tick` = `world.time.tick`.
+  Evaluation reads with `listEntities`/`getComponent` only (no RNG, no
+  change windows, no type registration), so the strict snapshot hash is
+  unchanged; an uncaught error is `err({ kind: 'rule_eval_failed', rule:
+  '<expr>', message })`.
 

@@ -20,7 +20,7 @@ import { inferKind } from './typecheck.js'
  * O-67: field names a rule may never read or write. Reads are own-property
  * only, and these names would reach the object's prototype machinery.
  */
-const FORBIDDEN_FIELDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
+export const FORBIDDEN_FIELDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
 export interface RuleActionDef {
   /** Dotted "Component.field" target, same JSON shape as Studio's SystemData.actions. */
@@ -323,7 +323,7 @@ export function compileRule(
 }
 
 /** Default `spatial.cellSize`: a pure performance setting (results never depend on it). */
-const DEFAULT_CELL_SIZE = 32
+export const DEFAULT_CELL_SIZE = 32
 
 /** Where positions come from (§5.2), resolved against real component types. */
 interface ResolvedSpatial {
@@ -359,7 +359,7 @@ function spatialForm(node: AstNode | EntityNode): string | null {
 }
 
 /** Visit `root` and every node below it (expressions and entity nodes), parents first. */
-function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void {
+export function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void {
   const stack: Array<AstNode | EntityNode> = [root]
   while (stack.length > 0) {
     const node = stack.pop()!

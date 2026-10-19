@@ -325,6 +325,8 @@ export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
 export { compileRule, installRules } from './rules.js';
 export type { CompiledRule, CompileRuleOptions, InstallRulesOptions, RuleActionDef, RuleDef, RuleDefPath, RuleError, RuleFault, RulesHandle, SpatialOption, } from './rules.js';
+export { compileWorldExpression } from './world-expression.js';
+export type { WorldExpression } from './world-expression.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
@@ -421,6 +423,12 @@ export type { AstNode } from './ast.js';
 
 // file: rules.d.ts
 import { type ComponentType, type World } from '@domecs/core';
+import { type AstNode, type EntityNode } from './ast.js';
+/**
+ * O-67: field names a rule may never read or write. Reads are own-property
+ * only, and these names would reach the object's prototype machinery.
+ */
+export declare const FORBIDDEN_FIELDS: ReadonlySet<string>;
 export interface RuleActionDef {
     /** Dotted "Component.field" target, same JSON shape as Studio's SystemData.actions. */
     set: string;
@@ -531,6 +539,8 @@ export declare function compileRule(def: RuleDef, resolve: (name: string) => Com
     rule: null;
     errors: RuleError[];
 };
+/** Default `spatial.cellSize`: a pure performance setting (results never depend on it). */
+export declare const DEFAULT_CELL_SIZE = 32;
 /** The position source for `nearest`, `countWithin` and `distanceTo`. */
 export interface SpatialOption {
     /** Component holding each entity's position. */
@@ -546,6 +556,8 @@ export interface CompileRuleOptions {
     /** Position source; required if the rule uses `nearest`, `countWithin` or `distanceTo`. */
     readonly spatial?: SpatialOption;
 }
+/** Visit `root` and every node below it (expressions and entity nodes), parents first. */
+export declare function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void;
 export interface RulesHandle {
     /**
      * Replace the full active rule set: compiles every def, installs (as
@@ -632,3 +644,52 @@ export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown';
  * one outside a member base, selector argument or `has` target ("use .id").
  */
 export declare function inferKind(node: AstNode, report: (pos: number, message: string) => void): StaticKind;
+
+// file: world-expression.d.ts
+import { type ComponentType, type Result, type World } from '@domecs/core';
+import { type AstNode } from './ast.js';
+import { type InstallRulesOptions, type RuleError, type RuleFault } from './rules.js';
+/**
+ * A compiled world expression (2.2, §5.3): a rules expression with no
+ * evaluated entity, for metrics, probes and outcomes measured over a whole
+ * world.
+ */
+export interface WorldExpression {
+    /** The source it was compiled from. */
+    readonly source: string;
+    /** The parsed expression. */
+    readonly ast: AstNode;
+    /**
+     * Evaluate against `world`'s current state. Read-only: never mutates the
+     * world, never draws randomness, never moves change windows, so
+     * `hashSnapshot(world.snapshot({}), { includeChanges: true })` is the same
+     * after any number of calls. A no-value read without `??`, a type error or
+     * a non-primitive result is `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
+     */
+    evaluate(world: World): Result<number | string | boolean, RuleFault>;
+}
+/**
+ * Compile a world expression (2.2, §5.3): the rules grammar without an
+ * evaluated entity. Rejected at compile time, at the form's position:
+ * bare `Component.field`, `self`, `has(C)` without an entity, `distanceTo`
+ * and `nearest` (both measure from the evaluated entity), `countWithin`
+ * without a centre, `dt`, and `random()` (measuring a world must not
+ * advance its randomness). `time` is `world.time.elapsed` and `tick` is
+ * `world.time.tick`. Everything else — selectors `first(S)` and
+ * `entity(n)` with `.C.f` / `.id` reads, `has(e, C)`, aggregates,
+ * `countWithin(S, r, e)` (needs `options.spatial`), math and `??` —
+ * means what it means in a rule.
+ *
+ * Unknown components, forbidden fields and certain type errors are errors
+ * too, as in `compileRule`. Errors carry `rule: '<expr>'` and a `position`
+ * in `source`, in source order. Never throws.
+ */
+export declare function compileWorldExpression(source: string, resolve: (name: string) => ComponentType<any> | undefined, options?: {
+    readonly spatial?: InstallRulesOptions['spatial'];
+}): {
+    expression: WorldExpression;
+    errors: [];
+} | {
+    expression: null;
+    errors: RuleError[];
+};

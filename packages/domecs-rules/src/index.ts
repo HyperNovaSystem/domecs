@@ -17,4 +17,6 @@ export type {
   RulesHandle,
   SpatialOption,
 } from './rules.js'
+export { compileWorldExpression } from './world-expression.js'
+export type { WorldExpression } from './world-expression.js'
 export { BUILD_ID } from './build-id.js'

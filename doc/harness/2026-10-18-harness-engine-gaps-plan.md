@@ -321,8 +321,8 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E11.1 `compileWorldExpression`
 
 - **Files:** create `packages/domecs-rules/src/world-expression.ts`; test `world-expression.test.ts`.
-- [ ] **Red:** rejected forms (bare `C.f`, `self`, `has(C)`, centre-less `distanceTo`/`countWithin`, `dt`, `random()`) with positions; values match JS oracles; strict hash unchanged after 1000 evaluations; `??` fallback; no throws for bad input.
-- [ ] **Commit:** `feat(rules): world expressions for metrics (E11.1)`
+- [x] **Red:** rejected forms (bare `C.f`, `self`, `has(C)`, centre-less `distanceTo`/`countWithin`, `dt`, `random()`) with positions; values match JS oracles; strict hash unchanged after 1000 evaluations; `??` fallback; no throws for bad input.
+- [x] **Commit:** `feat(rules): world expressions for metrics (E11.1)`
 
 ### E12 — Input in rules (§5.4; O-86)
 

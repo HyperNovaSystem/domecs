@@ -204,6 +204,46 @@ a `nearest(Player)` rule costs about 1.7× a self-only rule and a memoized
 --workload rules`; targets 3× and 1.2×). Avoid unmemoized aggregates in
 large rules: they are O(members) per entity.
 
+## World expressions (2.2)
+
+`compileWorldExpression(source, resolve, options?)` compiles an expression
+with no evaluated entity: a metric, probe or outcome measured over a whole
+world.
+
+```ts
+const near = compileWorldExpression('countWithin(Enemy, 40, first(Player))', resolve, {
+  spatial: { component: 'Pos' },
+})
+if (near.expression) {
+  const r = near.expression.evaluate(world) // Result<number | string | boolean, RuleFault>
+  if (r.ok) console.log(r.value)
+}
+```
+
+- **Same grammar, minus the entity.** Bare `Component.field`, `self`,
+  `has(C)` without an entity, `countWithin(S, r)` without a centre,
+  `distanceTo(e)` and `nearest(S)` (both measure from the evaluated entity),
+  `dt`, and `random()` are compile errors at their position. Read through
+  `first(S)` or `entity(n)` instead: `first(Player).Hp.hp`,
+  `has(first(Player), Shield)`, `countWithin(Enemy, 40, first(Player))`.
+- **`random()` is rejected** because drawing would advance the world's RNG:
+  measuring a world must never change its future.
+- **Values.** `time` is `world.time.elapsed`, `tick` is `world.time.tick`.
+  Aggregates, selectors, math and `??` mean what they mean in a rule.
+  `countWithin` needs the `spatial` option, as in `installRules`, and
+  excludes its centre.
+- **Read-only.** `evaluate(world)` reads with `listEntities` and
+  `getComponent` (no change windows, no RNG), builds member lists and grids
+  per call, and never registers a component type the world has not seen;
+  `hashSnapshot(world.snapshot({}), { includeChanges: true })` is unchanged
+  by any number of calls. Compile once, evaluate against any world.
+- **Errors are data.** Compile errors are `RuleError`s with `rule: '<expr>'`
+  and a `position` in `source`, in source order. A no-value read without
+  `??`, a type error, a non-primitive result, or a world holding a
+  different component type under a referenced name is
+  `err({ kind: 'rule_eval_failed', rule: '<expr>', message })`. Neither
+  call throws for bad input.
+
 ## Timing and functions
 
 `dt` for a `fixed` rule is the fixed step, but `time` is the frame's elapsed

@@ -2120,6 +2120,58 @@ walkComponentRefs(parsed.ast, (c, f, _pos, role) => seen.push(`${role}:${c}${f ?
 assert.deepEqual(seen, ['set:XrPlayer', 'member:XrPos.x', 'self:XrPos.x'])
 ```
 
+**World expressions (2.2; §5.3).** `compileWorldExpression(source, resolve,
+options?)` → `{ expression: WorldExpression, errors: [] }` or
+`{ expression: null, errors: RuleError[] }` compiles an expression with no
+evaluated entity (a metric or probe). Bare `Component.field`, `self`,
+`has(C)`, `countWithin(S, r)` without a centre, `distanceTo`, `nearest`, `dt`
+and `random()` are compile errors at their position (`rule: '<expr>'`);
+read through `first(S)` / `entity(n)` instead. `time` is
+`world.time.elapsed`, `tick` is `world.time.tick`. `expression.evaluate(world)`
+returns `Result<number | string | boolean, RuleFault>`: it is read-only (no
+RNG draw, no change windows, no type registration), so the strict snapshot
+hash is unchanged, and a no-value read without `??` is
+`err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
+
+```ts doctest name=rules-world-expression
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { compileWorldExpression } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('WeDocPos', { defaults: { x: 0, y: 0 } })
+const Player = defineComponent<Record<string, never>>('WeDocPlayer', { defaults: {} })
+const Enemy = defineComponent<{ hp: number }>('WeDocEnemy', { defaults: { hp: 1 } })
+const types = new Map([Pos, Player, Enemy].map((t) => [t.name, t]))
+const resolve = (n: string) => types.get(n)
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+w.spawn([entry(Player, {}), entry(Pos, { x: 0, y: 0 })])
+w.spawn([entry(Enemy, { hp: 3 }), entry(Pos, { x: 3, y: 4 })])
+w.spawn([entry(Enemy, { hp: 5 }), entry(Pos, { x: 30, y: 0 })])
+
+const near = compileWorldExpression('countWithin(WeDocEnemy, 10, first(WeDocPlayer))', resolve, {
+  spatial: { component: 'WeDocPos' },
+})
+assert.ok(near.expression)
+const before = hashSnapshot(w.snapshot({}), { includeChanges: true })
+assert.deepEqual(near.expression.evaluate(w), { ok: true, value: 1 })
+assert.equal(hashSnapshot(w.snapshot({}), { includeChanges: true }), before) // read-only
+
+const total = compileWorldExpression('sum(WeDocEnemy, WeDocEnemy.hp) + tick', resolve)
+assert.deepEqual(total.expression!.evaluate(w), { ok: true, value: 8 })
+
+// No value without ?? is an error value; ?? supplies a fallback.
+const missing = compileWorldExpression('first(WeDocEnemy).WeDocPos.z', resolve).expression!
+assert.equal(missing.evaluate(w).ok, false)
+const fallback = compileWorldExpression('first(WeDocEnemy).WeDocPos.z ?? -1', resolve).expression!
+assert.deepEqual(fallback.evaluate(w), { ok: true, value: -1 })
+
+// No evaluated entity, and no randomness: rejected with positions.
+const bad = compileWorldExpression('WeDocEnemy.hp + random()', resolve)
+assert.equal(bad.expression, null)
+assert.deepEqual(bad.errors.map((e) => e.position), [0, 16])
+```
+
 ---
 
 ## Framework integration
