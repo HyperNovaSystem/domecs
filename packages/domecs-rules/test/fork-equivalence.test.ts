@@ -18,7 +18,17 @@ import {
   type World,
   type WorldSnapshot,
 } from '@domecs/core'
-import { composeTransforms, Parent } from '@domecs/scene'
+import {
+  ContactState,
+  composeTransforms,
+  installContacts,
+  installHierarchy,
+  instantiateScene,
+  Parent,
+  sceneEntities,
+  unloadScene,
+  type SceneData,
+} from '@domecs/scene'
 import { compileWorldExpression, installRules, type InstallRulesOptions, type RuleDef, type RulesHandle } from '../src/index.js'
 
 // Spec §9 "Fork equivalence" (2.1; plan E8.2): a live world edited mid-run
@@ -622,5 +632,389 @@ describe('fork equivalence (spec §9, 2.2): chase rules, act logs and branches',
     if (!b.ok) throw new Error(JSON.stringify(b.error))
     const run = runBranch(b.value.world, { steps: log.frames.length })
     expect(run.ok && run.value.finalHash).not.toBe(chHash(live.w))
+  })
+})
+
+// ── 2.3 (plan E18.1): effects, contacts and a scene swap ────────────────
+//
+// Event rules on contacts and commands, deferred effects (emit, spawn,
+// despawn, add, remove) on own streams, `installContacts` on composed world
+// positions (compose at 100, contacts at 150 on the tick schedule), and a
+// host that swaps scenes (`unloadScene` + `instantiateScene`) after a step
+// whenever the `goto` event rule (priority 1000) recorded a request. The doc
+// is edited at driver steps 10/20/30; forks are taken at steps with
+// contacts and rule emits in flight and around swaps, so swaps happen
+// between snapshots and after them.
+
+const GzPos = defineComponent<{ x: number; y: number }>('GzPos', { defaults: { x: 0, y: 0 } })
+const GzWPos = defineComponent<{ x: number; y: number }>('GzWPos', { defaults: { x: 0, y: 0 } })
+const GzBase = defineComponent<{ phase: number }>('GzBase', { defaults: { phase: 0 } })
+const GzGun = defineComponent<{ t: number; rate: number; aim: number }>('GzGun', { defaults: { t: 0, rate: 5, aim: -1 } })
+const GzBullet = defineComponent<{ vx: number; vy: number; life: number }>('GzBullet', { defaults: { vx: 0, vy: 0, life: 0 } })
+const GzTarget = defineComponent<{ hp: number }>('GzTarget', { defaults: { hp: 3 } })
+const GzDown = defineComponent<{ at: number }>('GzDown', { defaults: { at: 0 } })
+const GzScore = defineComponent<{ hits: number; sum: number; misses: number; mx: number }>('GzScore', {
+  defaults: { hits: 0, sum: 0, misses: 0, mx: 0 },
+})
+const GzLevel = defineComponent<{ current: string; requested: string }>('GzLevel', { defaults: { current: '', requested: '' } })
+const GzGoto = defineEvent<{ scene: string }>('GzGoto', { schema: { fields: { scene: { kind: 'string' } } } })
+const GzScored = defineEvent<{ hp: number; by: number }>('GzScored', {
+  schema: { fields: { hp: { kind: 'number' }, by: { kind: 'number' } } },
+})
+const GzMiss = defineEvent<{ x: number }>('GzMiss', { schema: { fields: { x: { kind: 'number' } } } })
+
+const GZ_TYPES: ComponentType<any>[] = [GzPos, GzWPos, GzBase, GzGun, GzBullet, GzTarget, GzDown, GzScore, GzLevel]
+const gzResolve = (name: string): ComponentType<any> | undefined => GZ_TYPES.find((t) => t.name === name)
+const GZ_OPTIONS: InstallRulesOptions = {
+  order: 'stable',
+  rng: 'own',
+  spatial: { component: 'GzPos', cellSize: 4 },
+  prefabs: (name) => (name === 'bullet' ? [entry(GzPos, { x: 0, y: 0 }), entry(GzBullet, { vx: 0, vy: 0, life: 0 })] : undefined),
+}
+
+const GZ_CATALOG: Record<string, SceneData> = {
+  range: {
+    name: 'range',
+    entities: [
+      { key: 'base', components: { GzPos: { x: -6, y: 0 }, GzBase: { phase: 0 } } },
+      { key: 'gun1', components: { GzPos: { x: 0, y: 1 }, GzGun: { rate: 5, aim: 't1' } }, parent: 'base' },
+      { key: 't1', components: { GzPos: { x: 4, y: 1 }, GzTarget: { hp: 2 } } },
+      { key: 't2', components: { GzPos: { x: 5, y: -2 }, GzTarget: { hp: 3 } } },
+      { key: 'gun2', components: { GzPos: { x: 0, y: -1 }, GzGun: { rate: 7, aim: 't2' } }, parent: 'base' },
+    ],
+  },
+  yard: {
+    name: 'yard',
+    entities: [
+      { key: 'base', components: { GzPos: { x: 0, y: -5 }, GzBase: { phase: 1 } } },
+      { key: 'gun', components: { GzPos: { x: 1, y: 0 }, GzGun: { rate: 4, aim: 'flag' } }, parent: 'base' },
+      { key: 'post', components: { GzPos: { x: 0, y: 3 }, GzTarget: { hp: 4 } } },
+      { key: 'flag', components: { GzPos: { x: 0.5, y: 0.5 }, GzTarget: { hp: 1 } }, parent: 'post' },
+    ],
+  },
+}
+
+const sway: RuleDef = {
+  name: 'sway', schedule: 'fixed', query: ['GzBase', 'GzPos'],
+  actions: [
+    { set: 'GzBase.phase', expr: 'GzBase.phase + 0.05' },
+    { set: 'GzPos.y', expr: 'sin(GzBase.phase) * 2' },
+  ],
+}
+const reload: RuleDef = { name: 'reload', schedule: 'fixed', query: ['GzGun'], actions: [{ set: 'GzGun.t', expr: 'GzGun.t + 1' }] }
+const fire: RuleDef = {
+  name: 'fire', schedule: 'fixed', query: ['GzGun', 'GzWPos'], when: 'GzGun.t >= GzGun.rate',
+  actions: [{ set: 'GzGun.t', expr: '0 - floor(random() * 3)' }],
+  effects: [{
+    spawn: 'bullet',
+    at: { x: 'GzWPos.x', y: 'GzWPos.y' },
+    set: {
+      'GzBullet.vx': '(entity(GzGun.aim).GzWPos.x - GzWPos.x) * 0.08 ?? 0.3',
+      'GzBullet.vy': '(entity(GzGun.aim).GzWPos.y - GzWPos.y) * 0.08 + (random() - 0.5) * 0.2 ?? 0',
+      'GzBullet.life': '20',
+    },
+  }],
+}
+const fly: RuleDef = {
+  name: 'fly', schedule: 'fixed', query: ['GzBullet', 'GzPos'],
+  actions: [
+    { set: 'GzPos.x', expr: 'GzPos.x + GzBullet.vx' },
+    { set: 'GzPos.y', expr: 'GzPos.y + GzBullet.vy' },
+    { set: 'GzBullet.life', expr: 'GzBullet.life - 1' },
+  ],
+}
+const expire: RuleDef = {
+  name: 'expire', schedule: 'fixed', query: ['GzBullet', 'GzPos'], when: 'GzBullet.life <= 0',
+  actions: [],
+  effects: [{ despawn: 'self' }, { emit: 'GzMiss', payload: { x: 'GzPos.x' } }],
+}
+const hit: RuleDef = {
+  name: 'hit', schedule: 'event', on: 'Contact', self: 'event.b', other: 'event.a', query: ['GzTarget'],
+  when: "event.phase == 'begin'",
+  actions: [{ set: 'GzTarget.hp', expr: 'GzTarget.hp - 1' }],
+  effects: [{ despawn: 'other' }, { emit: 'GzScored', payload: { hp: 'GzTarget.hp', by: 'other.id ?? -1' } }],
+}
+const down: RuleDef = {
+  name: 'down', schedule: 'fixed', query: ['GzTarget'], when: 'GzTarget.hp <= 0',
+  actions: [],
+  effects: [{ remove: 'GzTarget' }, { add: 'GzDown', set: { at: 'tick' } }],
+}
+const revive: RuleDef = {
+  name: 'revive', schedule: 'fixed', query: ['GzDown'], when: 'tick - GzDown.at > 8',
+  actions: [],
+  effects: [{ remove: 'GzDown' }, { add: 'GzTarget', set: { hp: '1 + floor(random() * 3)' } }],
+}
+const tallyRule: RuleDef = {
+  name: 'tally', schedule: 'event', on: 'GzScored', query: ['GzScore'],
+  actions: [
+    { set: 'GzScore.hits', expr: 'GzScore.hits + 1' },
+    { set: 'GzScore.sum', expr: 'GzScore.sum + event.hp' },
+  ],
+}
+const missRule: RuleDef = {
+  name: 'miss', schedule: 'event', on: 'GzMiss', query: ['GzScore'],
+  actions: [
+    { set: 'GzScore.misses', expr: 'GzScore.misses + 1' },
+    { set: 'GzScore.mx', expr: 'GzScore.mx + event.x' },
+  ],
+}
+const gotoRule: RuleDef = {
+  name: 'goto', schedule: 'event', on: 'GzGoto', priority: 1000, query: ['GzLevel'],
+  actions: [{ set: 'GzLevel.requested', expr: 'event.scene' }],
+}
+
+const GZ_VERSIONS: RuleDef[][] = [
+  [sway, reload, fire, fly, expire, gotoRule],
+  [sway, reload, fire, fly, expire, hit, tallyRule, gotoRule],
+  [gotoRule, fly, reload, fire, expire, hit, down, revive, tallyRule, missRule], // sway removed; its stream stays
+  [sway, gotoRule, fly, reload, fire, expire, hit, down, revive, tallyRule, missRule], // sway back
+]
+const GZ_FINAL = GZ_VERSIONS[GZ_VERSIONS.length - 1]!
+const GZ_SEED: [number, number, number, number] = [13, 21, 34, 55]
+
+/** Types, plugins and rules; spawns nothing. */
+function gzSetup(w: World, defs: RuleDef[]): RulesHandle {
+  expect(w.register(GzGoto, GzScored, GzMiss).ok).toBe(true)
+  expect(w.use(installHierarchy()).ok).toBe(true)
+  expect(w.use(composeTransforms(GzPos, GzWPos, (parent, local) => (parent ? { x: parent.x + local.x, y: parent.y + local.y } : { ...local }), { priority: 100 })).ok).toBe(true)
+  expect(w.use(installContacts({ position: { component: GzWPos }, radius: 0.75, pairs: [[GzBullet, GzTarget]], schedule: 'tick' })).ok).toBe(true)
+  const h = installRules(w, [], gzResolve, GZ_OPTIONS)
+  expect([...h.update(defs).entries()]).toEqual([])
+  return h
+}
+
+/** The host's part after a step: swap scenes when the goto rule recorded a request. */
+function gzHost(w: World): number {
+  const [level] = [...w.iterEntitiesWith(GzLevel)]
+  const state = level!.value
+  if (state.requested === state.current) return 0
+  const data = GZ_CATALOG[state.requested]
+  if (!data) {
+    state.requested = state.current // refuse an unknown scene
+    w.markChanged(level!.id, GzLevel)
+    return 0
+  }
+  if (state.current) unloadScene(w, state.current)
+  const { problems } = instantiateScene(w, data, { resolve: gzResolve, refFields: [['GzGun', 'aim']] })
+  expect(problems).toEqual([])
+  state.current = state.requested
+  w.markChanged(level!.id, GzLevel)
+  return 1
+}
+
+function gzPopulate(w: World): void {
+  w.spawn([entry(GzLevel, { current: '', requested: 'range' })])
+  w.spawn([entry(GzScore, { hits: 0, sum: 0, misses: 0, mx: 0 })])
+  expect(gzHost(w)).toBe(1)
+}
+
+const GZ_SCENES = ['yard', 'range', 'nowhere', 'yard', 'range']
+
+/**
+ * One driver step `t`: a goto command is emitted every 17 steps and sent
+ * through `world.action` (its own tick, then the host) every 29; then a
+ * step of varying length and the host. Returns the number of swaps.
+ */
+function gzDrive(w: World, t: number, host: (w: World) => number = gzHost): number {
+  let swaps = 0
+  if (t % 17 === 5) w.emit(GzGoto, { scene: GZ_SCENES[Math.floor(t / 17) % GZ_SCENES.length]! })
+  if (t % 29 === 11) {
+    expect(w.action(GzGoto, { scene: t % 2 === 0 ? 'range' : 'yard' }).accepted).toBe(true)
+    swaps += host(w)
+  }
+  w.step(DT[t % DT.length]! * w.time.fixedStep)
+  return swaps + host(w)
+}
+
+const gzHash = (w: World): string => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+interface GzLive {
+  w: World
+  t: number
+  swaps: number
+}
+
+/** Live run: the doc edited at driver steps 10, 20, 30 under stimulus. */
+function gzLiveRun(): GzLive {
+  const w = createWorld({ headless: true, seed: GZ_SEED })
+  const h = gzSetup(w, GZ_VERSIONS[0]!)
+  gzPopulate(w)
+  let t = 0
+  let swaps = 0
+  for (; t < EDIT_TICKS * (GZ_VERSIONS.length - 1); t++) {
+    swaps += gzDrive(w, t)
+    if ((t + 1) % EDIT_TICKS === 0) expect([...h.update(GZ_VERSIONS[(t + 1) / EDIT_TICKS]!).entries()]).toEqual([])
+  }
+  return { w, t, swaps }
+}
+
+const gzFinalBuild = (): World => {
+  const w = createWorld({ headless: true, seed: GZ_SEED })
+  gzSetup(w, GZ_FINAL)
+  return w
+}
+
+const GZ_STEPS = 150
+
+interface GzFollower {
+  /** Driver step the follower was forked before. */
+  at: number
+  w: World
+  /** Its driver; default `gzDrive` (the host swaps scenes). */
+  drive: (w: World, t: number) => number
+  /** Driver steps after which its hash differed from live. */
+  diverged: number[]
+}
+
+interface GzTrace {
+  /** Live hash after every driver step of the continuation. */
+  hashes: string[]
+  swapsAt: number[]
+  /** Steps whose fork point had a Contact, a GzScored or a GzMiss in flight. */
+  inFlight: Array<{ t: number; events: string[] }>
+  maxContactPairs: number
+}
+
+type GzForkAt = (t: number, w: World) => { w: World; drive?: (w: World, t: number) => number } | undefined
+
+/**
+ * Continue `live` GZ_STEPS driver steps; before step `t`, `forkAt(t, live)`
+ * may return a world to follow (driven alongside, hashed after every step).
+ */
+function gzContinue(live: GzLive, forkAt: GzForkAt = () => undefined): { trace: GzTrace; followers: GzFollower[] } {
+  const followers: GzFollower[] = []
+  const trace: GzTrace = { hashes: [], swapsAt: [], inFlight: [], maxContactPairs: 0 }
+  for (let i = 0; i < GZ_STEPS; i++, live.t++) {
+    const events = live.w.pendingEvents().map((e) => e.type.name)
+    if (events.some((n) => n === 'Contact' || n === 'GzScored' || n === 'GzMiss')) trace.inFlight.push({ t: live.t, events })
+    const fork = forkAt(live.t, live.w)
+    if (fork) followers.push({ at: live.t, w: fork.w, drive: fork.drive ?? gzDrive, diverged: [] })
+    const swaps = gzDrive(live.w, live.t)
+    live.swaps += swaps
+    if (swaps > 0) trace.swapsAt.push(live.t)
+    trace.maxContactPairs = Math.max(trace.maxContactPairs, live.w.getResource(ContactState)?.pairs.length ?? 0)
+    const h = gzHash(live.w)
+    trace.hashes.push(h)
+    for (const f of followers) {
+      f.drive(f.w, live.t)
+      if (gzHash(f.w) !== h) f.diverged.push(live.t)
+    }
+  }
+  return { trace, followers }
+}
+
+/** A fresh build of the final doc restored from `snap` (optionally through canonicalJson text). */
+function gzFork(snap: WorldSnapshot, viaText = false): World {
+  const w = gzFinalBuild()
+  w.restore(viaText ? (JSON.parse(canonicalJson(snap)) as WorldSnapshot) : snap)
+  return w
+}
+
+const pendingNames = (w: World): string[] => w.pendingEvents().map((e) => e.type.name)
+
+describe('fork equivalence (spec §9, 2.3): effects, contacts and a scene swap', () => {
+  it('the scenario is not vacuous: contacts, effects, swaps, events in flight', () => {
+    const live = gzLiveRun()
+    let downs = 0
+    let revives = 0
+    let prevDown = new Set<number>()
+    live.w.signals.tickEnd.subscribe(() => {
+      const now = new Set([...live.w.iterEntitiesWith(GzDown)].map((e) => e.id))
+      for (const id of now) if (!prevDown.has(id)) downs++
+      for (const id of prevDown) if (!now.has(id) && live.w.has(id, GzTarget)) revives++
+      prevDown = now
+    })
+    const { trace } = gzContinue(live)
+    // Scene swaps after the edits, from emitted and action commands.
+    expect(trace.swapsAt.length).toBeGreaterThanOrEqual(4)
+    expect(trace.maxContactPairs).toBeGreaterThan(0)
+    // Contacts and rule emits in flight at many fork points.
+    expect(trace.inFlight.filter((f) => f.events.includes('Contact')).length).toBeGreaterThan(5)
+    expect(trace.inFlight.filter((f) => f.events.includes('GzScored')).length).toBeGreaterThan(5)
+    expect(trace.inFlight.filter((f) => f.events.includes('GzMiss')).length).toBeGreaterThan(5)
+    const score = [...live.w.iterEntitiesWith(GzScore)][0]!.value
+    expect(score.hits).toBeGreaterThan(5) // contact → hit → emit → tally
+    expect(score.misses).toBeGreaterThan(5) // expire → emit → miss
+    // add/remove effects: targets went down and came back.
+    expect(downs).toBeGreaterThan(0)
+    expect(revives).toBeGreaterThan(0)
+    // Spawn/despawn effects: ids moved well past the live count.
+    const snap = live.w.snapshot()
+    expect(snap.nextId).toBeGreaterThan(snap.entities.length + 50)
+    expect(Object.keys(snap.rngStreams ?? {}).sort()).toEqual(
+      ['rule:down', 'rule:expire', 'rule:fire', 'rule:fly', 'rule:goto', 'rule:hit', 'rule:miss', 'rule:reload', 'rule:revive', 'rule:sway', 'rule:tally'],
+    )
+    // The current scene's members are all there; the other scene is gone.
+    const level = [...live.w.iterEntitiesWith(GzLevel)][0]!.value
+    expect(['range', 'yard']).toContain(level.current)
+    expect(sceneEntities(live.w, level.current).length).toBe(GZ_CATALOG[level.current]!.entities.length)
+    expect(sceneEntities(live.w, level.current === 'range' ? 'yard' : 'range')).toEqual([])
+  })
+
+  it(`live after edits == fresh build of the final doc restored (pendingEvents), ${GZ_STEPS} steps, every tick`, () => {
+    const live = gzLiveRun()
+    const fork = gzFork(live.w.snapshot({ pendingEvents: true }))
+    expect(gzHash(fork)).toBe(gzHash(live.w))
+    const tickHashes = (w: World): Map<number, string> => {
+      const m = new Map<number, string>()
+      w.signals.tickEnd.subscribe(() => void m.set(w.time.tick, gzHash(w)))
+      return m
+    }
+    const liveTicks = tickHashes(live.w)
+    const forkTicks = tickHashes(fork)
+    const start = live.t
+    const { followers } = gzContinue(live, (t) => (t === start ? { w: fork } : undefined))
+    expect(followers).toHaveLength(1)
+    expect(followers[0]!.diverged).toEqual([])
+    expect(liveTicks.size).toBeGreaterThan(GZ_STEPS) // action ticks too
+    expect([...forkTicks]).toEqual([...liveTicks])
+  })
+
+  it('forks with contacts and rule emits in flight, between scene swaps, stay equal to the end (also via canonicalJson text)', () => {
+    const live = gzLiveRun()
+    const taken: number[] = []
+    const { trace, followers } = gzContinue(live, (t, w) => {
+      if (taken.length >= 12 || (taken.length > 0 && t - taken[taken.length - 1]! < 9)) return undefined
+      const names = pendingNames(w)
+      if (!names.includes('Contact') && !names.includes('GzScored')) return undefined
+      taken.push(t)
+      const fork = gzFork(w.snapshot({ pendingEvents: true }), taken.length % 2 === 0)
+      expect(gzHash(fork)).toBe(gzHash(w))
+      return { w: fork }
+    })
+    expect(followers.length).toBeGreaterThanOrEqual(8)
+    for (const f of followers) expect({ at: f.at, diverged: f.diverged }).toEqual({ at: f.at, diverged: [] })
+    // Scene swaps happened between fork points, so later forks carry swapped scenes
+    // and earlier ones swapped after their snapshot.
+    const first = followers[0]!.at
+    const last = followers[followers.length - 1]!.at
+    expect(trace.swapsAt.filter((s) => s >= first && s < last).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("control: a fork restored without pendingEvents while a Contact 'begin' is in flight diverges for good", () => {
+    const live = gzLiveRun()
+    let lossy: World | undefined
+    gzContinue(live, (_t, w) => {
+      const begin = w.pendingEvents().some((e) => e.type.name === 'Contact' && (e.payload as { phase: string }).phase === 'begin')
+      if (lossy || !begin) return undefined
+      lossy = gzFinalBuild()
+      lossy.restore(w.snapshot())
+      return { w: lossy }
+    })
+    expect(lossy).toBeDefined()
+    expect(strict(lossy!)).not.toBe(strict(live.w)) // state, not only the pending queue
+  })
+
+  it('control: a fork whose host never swaps (or refuses) scenes diverges (the host is part of the run)', () => {
+    const live = gzLiveRun()
+    const start = live.t
+    const { trace, followers } = gzContinue(live, (t, w) =>
+      t === start ? { w: gzFork(w.snapshot({ pendingEvents: true })), drive: (fw, ft) => gzDrive(fw, ft, () => 0) } : undefined,
+    )
+    expect(trace.swapsAt.length).toBeGreaterThan(0)
+    // Different from the host's first act on (a refused request or a swap) to the end.
+    const d = followers[0]!.diverged
+    expect(d[0]).toBeLessThanOrEqual(trace.swapsAt[0]!)
+    expect(d[d.length - 1]).toBe(live.t - 1)
   })
 })
