@@ -8,6 +8,21 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `@domecs/core` transient resources (2.3, harness spec §6.4, O-36):
+  `defineResource(name, { transient: true })` (new `ResourceOptions.transient`).
+  `snapshot()` leaves the value and its change marks out, so a camera or HUD
+  cache changes neither the default nor the strict `hashSnapshot` and
+  `@domecs/persist` never saves it; `restore()` keeps the live value (a
+  snapshot value for it is ignored, not validated). `ResourceDescriptor`
+  gains `transient`. Docs: SPEC §2.11, `doc/api.md` doctest
+  `transient-resources`, persist README.
+- `@domecs/core` `AgentBridge.reset(options?: AgentResetOptions)` (2.3,
+  harness spec §6.4, O-89): `{ scale?, input?: 'keep' | 'empty' }` re-applies
+  the scale and empties the input after restoring the baseline, so an
+  episode that ends paused or with a key held does not leak into the next.
+  No options keeps the 2.0 behaviour. `once` systems do not re-run (SPEC
+  §7.1). Docs: `doc/api.md` doctest `agent-reset-options`.
+
 - `@domecs/core` `World.runSystems(names)` and `World.render()` (2.3, harness
   spec §6.3, O-88). `runSystems` runs the named enabled `tick`/`fixed`
   systems once, in run order, without advancing time, flushing events or

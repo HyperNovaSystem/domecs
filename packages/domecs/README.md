@@ -65,6 +65,8 @@ for (const entity of world.query(Has(Position)).entities) {
 - `defineResource<T>(name, options?)` — define a world-level named value
   (score, level, gravity); `world.getResource(R)` / `setResource(R, v)` /
   `markResourceChanged(R)`. React to changes with `OnChangedResource(R)`.
+  `{ transient: true }` (2.3) keeps render-only state (a camera) out of
+  snapshots and hashes; `restore()` keeps its live value.
 - `entry(component, value)` — typed helper for heterogeneous spawn arrays.
 - `world.spawn(...)` / `world.despawn(...)` — manage entities.
 - `world.addComponent(...)`, `getComponent(...)`, `removeComponent(...)` —
@@ -80,6 +82,9 @@ for (const entity of world.query(Has(Position)).entities) {
   `{ accepted, consumedTurn, reason?, events, snapshot? }` result; the verdict
   comes from an optional `opts.resolve`.
 - `world.snapshot()` / `world.restore(...)` — serialize and restore world state.
+- `createAgentBridge(world)` — `reset / observe / act / step / snapshot` for
+  agent episodes; `reset({ scale: 1, input: 'empty' })` (2.3) also resets the
+  host controls a snapshot does not carry. `once` systems do not re-run.
 - `world.runSystems(names)` / `world.render()` — after a restore or scrub,
   run named `tick`/`fixed` systems once (prime derived state such as
   `composeTransforms` output) and repaint through plugin `onRender`, without

@@ -440,8 +440,9 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 
 ### E17 — Small items (§6.4; O-36, O-89)
 
-- [ ] **E17.1** `defineResource(name, {transient: true})` (**new option**): snapshot omits it; restore keeps the live value; hash stable when a camera resource changes. **Commit:** `feat(core): transient resources (E17.1)`
-- [ ] **E17.2** `AgentBridge.reset({scale, input})`: episode-boundary hygiene test in `agent-bridge.test.ts`; `once` systems documented as not re-run. **Commit:** `feat(core): bridge reset options (E17.2)`
+- [x] **E17.1** `defineResource(name, {transient: true})` (**new option**): snapshot omits it; restore keeps the live value; hash stable when a camera resource changes. **Commit:** `feat(core): transient resources (E17.1)`. Tests `packages/domecs/test/transient-resources.test.ts`, `packages/domecs-persist/test/transient-resources.test.ts`
+- [x] **E17.2** `AgentBridge.reset({scale, input})`: episode-boundary hygiene test in `agent-bridge.test.ts`; `once` systems documented as not re-run. **Commit:** `feat(core): bridge reset options (E17.2)`
+- [x] **Docs:** SPEC §2.11 ("Transient resources") and §7.1 (`once` after an in-place restore, bridge reset), `doc/api.md` doctests `transient-resources` and `agent-reset-options`, `doc/api-surface/core.d.ts`, core and persist READMEs, SKILL.md, CHANGELOG, `plan/FINDINGS.md` O-36 closed and O-89 added (closed). AGENTS.md left to the owner (proposed text in spec Appendix C, "Implementation notes — E17"). **Commit:** `docs(core): transient resources and bridge reset in SPEC, api.md and findings (E17)`
 
 ### E21 — `instantiateScene` / `unloadScene` (§7.3; O-13)
 

@@ -66,6 +66,11 @@ else if (!boot.value) { /* first run */ }
 - `withBuiltinMigrations(user?)` — overlay a caller `MigrationMap` on the
   built-ins (caller keys win); returns the built-ins unchanged when `user` is
   empty. `load()` uses this internally.
+- Transient resources (`defineResource(name, { transient: true })`, core 2.3,
+  O-36) are never written by `save()` or kept by `createSnapshotHistory`, and
+  `load()` / `undo()` keep their live values — a camera or HUD cache is not
+  restored over freshly derived state. A save written before a resource was
+  declared transient still loads; its stale value is ignored.
 - `pruneTransientOnlyEntities()` — plugin; install once to strip
   transient-only / bare entities from every saved envelope (the persisted-path
   equivalent of core's `snapshot({ pruneEmptyEntities: true })`). It hooks

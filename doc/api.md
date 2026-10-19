@@ -130,6 +130,9 @@ interface ResourceOptions<T> {
   // Run by setResource and by a materialized default. Return true to accept,
   // or a string message to throw.
   validate?: (value: T) => true | string
+  // Render-only / derived state (camera, HUD cache): left out of snapshot()
+  // with its change marks; restore() keeps the live value (2.3, O-36).
+  transient?: boolean
 }
 
 interface ResourceType<T, Name extends string = string> {
@@ -153,6 +156,43 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 Reactive systems observe resource edges via `OnChangedResource(R)` in `reactsTo`
 (see Query builder below and SPEC §4 step 6). Resources are part of
 `snapshot()` / `restore()` (Snapshot below).
+
+**Transient resources (2.3, O-36).** `defineResource(name, { transient: true })`
+is for render-only or derived values a host rebuilds rather than saves (a
+camera, a HUD cache). `snapshot()` leaves the value out, and its change marks
+too, so moving the camera changes neither the default nor the strict hash, and
+`@domecs/persist` never writes it to a slot. `restore()` keeps the live value
+(a value a snapshot carries for it is ignored and not validated); a fresh
+world restored from a snapshot falls back to the default. Reads, writes,
+`validate` and `OnChangedResource` work as for any resource, and
+`describeResource(R).transient` reports the flag (SPEC §2.11).
+
+```ts doctest name=transient-resources
+import { strict as assert } from 'node:assert'
+import { createWorld, defineResource, hashSnapshot } from '@domecs/core'
+
+const Camera = defineResource<{ x: number; zoom: number }>('DtCamera', {
+  default: () => ({ x: 0, zoom: 1 }),
+  transient: true,
+})
+const Gold = defineResource<number>('DtGold', { default: 0 })
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+w.setResource(Gold, 10)
+w.stepOnce()
+const snap = w.snapshot()
+assert.deepEqual(snap.resources, { DtGold: 10 })          // no camera
+const strict = hashSnapshot(snap, { includeChanges: true })
+
+w.setResource(Camera, { x: 120, zoom: 2 })                // the user pans
+assert.equal(hashSnapshot(w.snapshot(), { includeChanges: true }), strict)
+
+w.setResource(Gold, 99)
+w.restore(snap)
+assert.equal(w.getResource(Gold), 10)                     // state restored
+assert.deepEqual(w.getResource(Camera), { x: 120, zoom: 2 }) // view kept
+assert.equal(w.describeResource(Camera).transient, true)
+```
 
 ### `World`
 
@@ -936,7 +976,8 @@ interface WorldSnapshot {
   readonly nextId?: number
   // name → deep-cloned value. Omitted entirely when no resource has a value.
   // restore() clears live resources first, so an absent map falls back to
-  // resource defaults. (v2+)
+  // resource defaults. Transient resources are never written, and restore()
+  // keeps their live values (2.3, O-36). (v2+)
   readonly resources?: Record<string, unknown>
   // Change marks some system had not seen yet, in the order they were made,
   // and how many of them each such system had seen (O-42). restore()
@@ -1420,9 +1461,14 @@ interface AgentObservation {
   readonly manifest:    WorldManifest   // = world.describe()
 }
 
+interface AgentResetOptions {
+  scale?: number                       // setScale(scale) after the restore (0 pauses)
+  input?: 'keep' | 'empty'             // 'empty': setInput(an empty input); default 'keep'
+}
+
 interface AgentBridge {
   readonly world: World                // escape hatch for setup/queries
-  reset(): void                        // restore baseline (see notes below)
+  reset(options?: AgentResetOptions): void // restore baseline (see notes below)
   captureBaseline(): void              // re-capture baseline from current state
   observe(): AgentObservation
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
@@ -1436,11 +1482,19 @@ interface AgentBridge {
 
 Notes:
 - `reset()` does **not** restore `time.scale` or input state (the snapshot
-  does not carry them); restore those explicitly at episode boundaries if
-  episodes touch either. Entity-id assignment is stable across `reset()`
+  does not carry them). Pass them at the episode boundary (2.3, O-89):
+  `reset({ scale: 1, input: 'empty' })` restores the baseline, then calls
+  `setScale(1)` (a paused episode resumes; `scale: 0` pauses) and replaces
+  `world.input` with an empty input (no keys held, no edges). Omitted
+  options leave scale and input as the last episode left them; a bad
+  `scale` (not finite, or < 0) or `input` throws `TypeError` before
+  anything is restored. Entity-id assignment is stable across `reset()`
   (the snapshot carries the id cursor, O-38) and pending events from the
   abandoned episode are discarded by `restore()` (the baseline is a
   default snapshot, which carries no pending events).
+- `once` systems do **not** re-run after `reset()`: they ran on the world's
+  first tick and an in-place restore leaves them as run (SPEC §7.1). Put
+  per-episode setup in the baseline, not in a `once` system.
 - `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
   same as `step()` — guard computed dt values that can round to 0.
 - `act()` validates the payload when the event declares a `schema`
@@ -1452,6 +1506,34 @@ Notes:
   `{ accepted: false, consumedTurn: false, reason, events: [] }` with no emit
   and no tick. `world.register` the command events at setup so they resolve
   before anything emits them.
+
+```ts doctest name=agent-reset-options
+import { strict as assert } from 'node:assert'
+import { createAgentBridge, createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('DrPos', { defaults: { x: 0 } })
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+world.system('walk', {}, ({ world: w, time }) => {
+  if (!w.input.keys.has('ArrowRight')) return
+  for (const id of w.listEntities([Pos])) {
+    w.getComponent(id, Pos)!.x += time.scale
+    w.markChanged(id, Pos)
+  }
+})
+world.spawn([entry(Pos, { x: 0 })])
+const bridge = createAgentBridge(world)
+
+const episode = (): string => {
+  bridge.reset({ scale: 1, input: 'empty' })   // same host state every time
+  world.setInput({ ...world.input, keys: new Set(['ArrowRight']) })
+  bridge.step()
+  return hashSnapshot(bridge.snapshot(), { includeChanges: true })
+}
+const first = episode()
+world.pause()                                   // episode 1 ends paused, key held
+assert.equal(episode(), first)
+assert.equal(world.time.scale, 1)
+```
 
 ```ts doctest name=agent-act-by-name
 import { strict as assert } from 'node:assert'

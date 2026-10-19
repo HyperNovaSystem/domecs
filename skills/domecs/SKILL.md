@@ -45,7 +45,7 @@ const obs = bridge.observe()           // world.describe() + tick/scale
 const result = bridge.act(MyCmd, payload)
 bridge.step()                          // stepOnce; use step(dt) for fixed
 const snap = bridge.snapshot()
-bridge.reset()                         // episode boundary
+bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are not snapshotted)
 ```
 
 | Method | Delegates to |
@@ -55,7 +55,7 @@ bridge.reset()                         // episode boundary
 | `act(name, payload, opts?)` | `world.lookupEvent(name)` → `world.action(...)`; unknown/ambiguous name → `accepted: false`, no tick |
 | `step()` / `step(dt)` | `stepOnce()` / `step(dt)` |
 | `snapshot(opts?)` | `world.snapshot(...)` |
-| `reset()` | `world.restore(baseline)` |
+| `reset(opts?)` | `world.restore(baseline)`, then `setScale(opts.scale)` / empty input (`input: 'empty'`); `once` systems do not re-run |
 
 ## Authoring order
 
@@ -113,6 +113,8 @@ bridge.reset()                         // episode boundary
   derived state (e.g. `composeTransforms`; `{ ran, skipped }`, only enabled `tick`/`fixed`)
   and `world.render()` repaints via `onRender` only — neither advances `time.tick` nor fires
   `tickStart`/`tickEnd` (unlike `step(0)`). Derived/transient state only: a recorder notes a gap
+- **Render state:** `defineResource('Camera', { default, transient: true })` keeps a camera /
+  HUD cache out of snapshots and hashes; `restore()` keeps its live value
 - **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
   step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
 - **Contacts (hits, pickups):** `world.use(installContacts({ position: { component: Pos },
