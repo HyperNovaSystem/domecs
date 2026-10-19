@@ -260,6 +260,96 @@ describe('§4.4 per-system RNG streams', () => {
   })
 })
 
+describe('§4.4 restore: missing keys re-derive; reseeding', () => {
+  const RULES = ['R1', 'R2', 'R3'] as const
+  /** One entity per rule; each own-stream "rule" appends a draw per tick. */
+  function build(seed: number | RngState, rules: readonly string[]): { w: World; ids: Map<string, number> } {
+    const w = createWorld({ headless: true, seed })
+    const ids = new Map<string, number>()
+    for (const r of RULES) ids.set(r, w.spawn([entry(Draws, { log: [] })]))
+    for (const r of rules) drawer(w, `rule:${r}`, 'own', ids.get(r)!)
+    return { w, ids }
+  }
+  const strict = (w: World): string => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+  it('8: a rule only the restoring world has draws deriveStream(rngRoot, key), is snapshotted, and forks identically', () => {
+    const a = build(101, ['R1', 'R2'])
+    for (let i = 0; i < 15; i++) a.w.stepOnce()
+    const snapA = a.w.snapshot()
+    expect(Object.keys(snapA.rngStreams!)).toEqual(['rule:R1', 'rule:R2'])
+
+    // B is built from another seed and has advanced R3 before restoring
+    const b = build(202, ['R1', 'R2', 'R3'])
+    for (let i = 0; i < 4; i++) b.w.stepOnce()
+    b.w.restore(snapA)
+    const r3 = b.ids.get('R3')!
+    const before = logOf(b.w, r3).length
+    for (let i = 0; i < 5; i++) b.w.stepOnce()
+    expect(logOf(b.w, r3).slice(before)).toEqual(firstDraws(deriveStream(snapA.rngRoot!, 'rule:R3'), 5))
+    // R1/R2 continue A's streams
+    for (let i = 0; i < 5; i++) a.w.stepOnce()
+    expect(logOf(b.w, b.ids.get('R1')!)).toEqual(logOf(a.w, a.ids.get('R1')!))
+
+    // a system registered after the restore derives from the restored root
+    b.w.system('late', { rng: 'own' }, () => {})
+    expect(b.w.snapshot().rngStreams!['late']).toEqual(deriveStream(seedToState(101), 'late'))
+    b.w.getSystem('late')!.remove()
+
+    const snapB = b.w.snapshot({ pendingEvents: true })
+    expect(Object.keys(snapB.rngStreams!).sort()).toEqual(['late', 'rule:R1', 'rule:R2', 'rule:R3'])
+    const c = build(303, ['R1', 'R2', 'R3'])
+    c.w.restore(JSON.parse(JSON.stringify(snapB)) as WorldSnapshot)
+    expect(strict(c.w)).toBe(strict(b.w))
+    for (let i = 0; i < 100; i++) {
+      b.w.stepOnce()
+      c.w.stepOnce()
+      expect(strict(c.w)).toBe(strict(b.w))
+    }
+  })
+
+  it('3: a rule registered mid-run forks equal: live adds C at tick 20, fork has A, B, C from the start', () => {
+    const live = build(7, ['R1', 'R2'])
+    for (let i = 0; i < 20; i++) live.w.stepOnce()
+    drawer(live.w, 'rule:R3', 'own', live.ids.get('R3')!)
+    for (let i = 0; i < 20; i++) live.w.stepOnce()
+    const snap = live.w.snapshot({ pendingEvents: true })
+    const fork = build(8, ['R1', 'R2', 'R3'])
+    fork.w.restore(snap)
+    for (let i = 0; i < 100; i++) {
+      live.w.stepOnce()
+      fork.w.stepOnce()
+      expect(strict(fork.w)).toBe(strict(live.w))
+    }
+  })
+
+  it('9: reseeding (rngRoot + seed replaced, rngStreams cleared) changes every own stream; twice → identical', () => {
+    const src = build(1, ['R1', 'R2'])
+    for (let i = 0; i < 10; i++) src.w.stepOnce()
+    const snap = src.w.snapshot()
+    const reseed = (s: WorldSnapshot, seed: RngState): WorldSnapshot => ({
+      ...s,
+      seed,
+      rngRoot: seed,
+      rngStreams: undefined,
+    })
+    const run = (s: WorldSnapshot): Map<string, number[]> => {
+      const f = build(99, ['R1', 'R2'])
+      f.w.restore(s)
+      const start = new Map(RULES.map((r) => [r, logOf(f.w, f.ids.get(r)!).length]))
+      for (let i = 0; i < 10; i++) f.w.stepOnce()
+      return new Map(RULES.map((r) => [r, logOf(f.w, f.ids.get(r)!).slice(start.get(r))]))
+    }
+    const base = run(snap)
+    const s1 = run(reseed(snap, [9, 8, 7, 6]))
+    const s2 = run(reseed(snap, [9, 8, 7, 6]))
+    for (const r of ['R1', 'R2']) {
+      expect(s1.get(r)).not.toEqual(base.get(r))
+      expect(s1.get(r)).toEqual(firstDraws(deriveStream([9, 8, 7, 6], `rule:${r}`), 10))
+      expect(s2.get(r)).toEqual(s1.get(r))
+    }
+  })
+})
+
 // Pinned first four uniform() draws of deriveStream([1,2,3,4], 'rule:move').
 // Part of the snapshot contract: a change here needs a SNAPSHOT_VERSION bump.
 const GOLDEN_RULE_MOVE: number[] = [
