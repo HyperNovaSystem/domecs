@@ -33,7 +33,7 @@ export interface EvalEnv {
   /** Deterministic RNG hook for the `random()` builtin. */
   rand: { uniform(): number }
   /** The evaluated entity's id (`self`, `self.id`; excluded by selectors). */
-  self?: number
+  self?: number | undefined
   /** `C.f` on another entity, own properties only; `undefined` when absent. */
   readField?(entity: number, component: string, field: string): Value | undefined
   /** The entities holding component `set`, ascending id, stable within a run. */
@@ -63,6 +63,16 @@ export interface EvalEnv {
     mod(name: ModifierName): boolean
     readonly pointer: { readonly x: number; readonly y: number; readonly buttons: number; readonly wheel: number }
   }
+  /**
+   * Event rules (2.3, §6.1): the triggering payload's field `f` for
+   * `event.f`; `undefined` when the payload has no such field (no value).
+   */
+  eventField?(field: string): Value | undefined
+  /**
+   * Event rules (2.3, §6.1): the entity the `other` binding gave, or
+   * `undefined` when it gave none (no value). A dead entity is no value too.
+   */
+  other?: number | undefined
 }
 
 /**
@@ -192,6 +202,13 @@ function readInput(op: InputOp, name: Value, env: EvalEnv): boolean {
   return Boolean(input[op](name))
 }
 
+/** `event.f` (2.3, §6.1). */
+function readEvent(field: string, env: EvalEnv): Value {
+  const value = hook(env, 'eventField', `event.${field}`)(field)
+  if (value === undefined) throw new RuleNoValueError(`"event.${field}" is not in the payload`)
+  return value
+}
+
 /** `pointer.x|y|buttons|wheel` (§5.4). */
 function readPointer(field: PointerField, env: EvalEnv): number {
   const input = env.input
@@ -210,6 +227,12 @@ function resolveEntity(node: EntityNode, env: EvalEnv, expr: (n: AstNode) => Val
   switch (node.kind) {
     case 'self':
       return selfId(env)
+    case 'other': {
+      const id = env.other
+      if (id === undefined) throw new RuleNoValueError('"other" is not bound to an entity')
+      if (!hook(env, 'isAlive', 'other')(id)) throw new RuleNoValueError(`other (entity ${id}) is not alive`)
+      return id
+    }
     case 'entityById': {
       const n = expectNumber(expr(node.id), 'entity()')
       if (!Number.isInteger(n)) throw new RuleEvalError(`entity() needs an integer id, got ${n}`)
@@ -420,6 +443,9 @@ export function evaluate(ast: AstNode, env: EvalEnv): Value {
 
     case 'pointer':
       return readPointer(ast.field, env)
+
+    case 'event':
+      return readEvent(ast.field, env)
   }
 }
 
@@ -639,6 +665,10 @@ export function compileExpression(ast: AstNode, options: CompileOptions = {}): C
     case 'pointer': {
       const field = ast.field
       return (env) => readPointer(field, env)
+    }
+    case 'event': {
+      const field = ast.field
+      return (env) => readEvent(field, env)
     }
     case 'aggregate': {
       const node = ast

@@ -3,18 +3,21 @@ import {
   Has,
   Not,
   createSpatialGrid,
+  validateEventPayload,
   type ComponentType,
   type EntityView,
+  type EventType,
   type InputSnapshot,
   type QueryDef,
   type SpatialGrid,
+  type SystemDef,
   type SystemFault,
   type SystemHandle,
   type World,
 } from '@domecs/core'
 import { childNodes, walkComponentRefs, type AstNode, type EntityNode } from './ast.js'
 import { parseExpression } from './parser.js'
-import { compileExpression, RuleEvalError, type CompiledExpression, type EvalEnv } from './evaluator.js'
+import { compileExpression, RuleEvalError, RuleNoValueError, type CompiledExpression, type EvalEnv } from './evaluator.js'
 import { inferKind } from './typecheck.js'
 
 /**
@@ -31,7 +34,36 @@ export interface RuleActionDef {
 
 export interface RuleDef {
   name: string
-  schedule: 'tick' | 'fixed'
+  /**
+   * `'tick'` / `'fixed'`: the rule polls every entity matching `query` on
+   * that schedule. `'event'` (2.3, §6.1): the rule runs when the event named
+   * by {@link on} is delivered — once per payload, in emission order — for
+   * the entity {@link self} names, else for every entity matching `query`
+   * (broadcast, ascending id), else once with no entity (world scope: empty
+   * `query`, no `self`).
+   */
+  schedule: 'tick' | 'fixed' | 'event'
+  /**
+   * Event rules (2.3): the name of the event that triggers the rule,
+   * resolved through {@link InstallRulesOptions.resolveEvent} (default
+   * `world.lookupEvent`). Required iff `schedule` is `'event'`.
+   */
+  on?: string
+  /**
+   * Event rules (2.3): an expression giving self's entity id from the
+   * payload, e.g. `"event.target"`. When it names an entity that is not
+   * alive or does not match `query`/`without`, the payload is skipped
+   * silently; when it gives no value or no integer, that is a systemic
+   * `rule_eval_failed` fault (`event.target ?? -1` skips silently instead).
+   * It cannot read an evaluated entity (`C.f`, `self`, ...) or `other`.
+   */
+  self?: string
+  /**
+   * Event rules (2.3): an expression giving the entity `other` refers to,
+   * e.g. `"event.b"`. When it gives no value, or the entity is dead,
+   * reads of `other` are no value. Same restrictions as {@link self}.
+   */
+  other?: string
   /**
    * System priority (lower runs first; default 0). Rules of equal priority
    * run in the order of the `defs` array last passed to `update()` (O-69).
@@ -70,6 +102,10 @@ export type RuleDefPath =
   | 'priority'
   | 'rng'
   | 'when'
+  // 2.3 (§6.1): event rules.
+  | 'on'
+  | 'self'
+  | 'other'
   | { readonly query: number }
   | { readonly without: number }
   | { readonly action: number; readonly part: 'set' | 'expr' }
@@ -114,6 +150,13 @@ interface CompiledAction {
 }
 
 interface CompiledRuleInternal extends CompiledRule {
+  /** Event rules: the resolved trigger. */
+  eventType: EventType<unknown> | undefined
+  /** Event rules: the compiled `self` / `other` bindings. */
+  selfBinding: CompiledExpression | undefined
+  otherBinding: CompiledExpression | undefined
+  /** Event rule with no `self` and an empty `query`: runs once per payload with no entity. */
+  worldScope: boolean
   queryTypes: ComponentType<any>[]
   withoutTypes: ComponentType<any>[]
   /** Sets read by `nearest`/`countWithin`: one grid each per run. */
@@ -149,8 +192,18 @@ interface CompiledRuleInternal extends CompiledRule {
  *   operator result of that kind, where arithmetic, a comparison or a
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
+ * - Event rules (2.3, §6.1): `on` must resolve through
+ *   `options.resolveEvent` (`field: 'on'`); `on`, `self` and `other` on a
+ *   polling rule are errors at that field. `event.f` outside an event rule,
+ *   or naming a field the event's schema does not declare, and `other`
+ *   without an `other` binding, are errors at their position. The `self` /
+ *   `other` bindings and every expression of a world-scope rule (no `self`,
+ *   empty `query`) cannot read an evaluated entity (`C.f`, `self`,
+ *   `has(C)`, `nearest`, `distanceTo`, a centre-less `countWithin`); a
+ *   world-scope rule cannot `set` (`{ action: i, part: 'set' }`) or use
+ *   `without`.
  * - Every error carries `field` (§4.6), the one part of the def it is about:
- *   `'schedule'`, `'priority'`, `'rng'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   `'schedule'`, `'priority'`, `'rng'`, `'on'`, `'self'`, `'other'`, `{ query: i }`, `'when'` (parse, resolve and
  *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
  *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
  *   (every error inside that expression). `position` is an offset within
@@ -173,9 +226,31 @@ export function compileRule(
     errors.push({ rule: def.name, position, message, field })
   }
 
-  if (def.schedule !== 'tick' && def.schedule !== 'fixed') {
-    fail('schedule', -1, `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick" or "fixed")`)
+  if (def.schedule !== 'tick' && def.schedule !== 'fixed' && def.schedule !== 'event') {
+    fail('schedule', -1, `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick", "fixed" or "event")`)
   }
+  // §6.1: event rules name their trigger; polling rules have no payload.
+  const isEvent = def.schedule === 'event'
+  let eventType: EventType<unknown> | undefined
+  if (isEvent) {
+    if (def.on === undefined) {
+      fail('on', -1, 'An event rule needs "on": the name of the event that triggers it')
+    } else if (typeof def.on !== 'string' || def.on.length === 0) {
+      fail('on', -1, `"on" must be an event name, got ${JSON.stringify(def.on)}`)
+    } else {
+      eventType = options.resolveEvent?.(def.on)
+      if (!eventType) {
+        fail('on', -1, options.resolveEvent
+          ? `Unknown event "${def.on}"`
+          : `Unknown event "${def.on}" (no resolveEvent was given; installRules uses world.lookupEvent)`)
+      }
+    }
+  } else {
+    for (const key of ['on', 'self', 'other'] as const) {
+      if (def[key] !== undefined) fail(key, -1, `"${key}" is only for event rules (schedule "event")`)
+    }
+  }
+  const worldScope = isEvent && def.self === undefined && def.query.length === 0
   if (def.priority !== undefined && !Number.isFinite(def.priority)) {
     fail('priority', -1, 'priority must be a finite number')
   }
@@ -211,6 +286,10 @@ export function compileRule(
   }
   const withoutTypes: ComponentType<any>[] = []
   for (let i = 0; i < (def.without ?? []).length; i++) {
+    if (worldScope) {
+      fail({ without: i }, -1, 'A world-scope event rule (no "self", empty "query") has no entities to exclude')
+      continue
+    }
     const t = resolveAndTrack(def.without![i]!, -1, 'referenced in without', { without: i })
     if (t) withoutTypes.push(t)
   }
@@ -220,12 +299,42 @@ export function compileRule(
   // the O-67 check too. Spatial forms need the `spatial` option.
   const spatialSets = new Set<string>()
   let spatial: ResolvedSpatial | undefined
-  function checkExpression(ast: AstNode, path: RuleDefPath, context: string): void {
+  // §6.1: where an expression has no evaluated entity — a `self`/`other`
+  // binding (evaluated before self is known) or a world-scope rule.
+  type NoEntity = 'binding' | 'world' | undefined
+  const NO_ENTITY: Record<'binding' | 'world', string> = {
+    binding: 'in a "self"/"other" binding (it runs before self is bound)',
+    world: 'in a world-scope event rule (no "self", empty "query")',
+  }
+  function checkExpression(ast: AstNode, path: RuleDefPath, context: string, source: string, noEntity?: NoEntity): void {
     walkComponentRefs(ast, (component, field, pos) => {
       if (field !== null) checkField(field, pos, path)
       resolveAndTrack(component, pos, context, path)
     })
     forEachNode(ast, (node) => {
+      if (node.kind === 'event') {
+        if (!isEvent) {
+          fail(path, node.pos, `"event.${node.field}" reads the triggering event's payload: only event rules (schedule "event") have one`)
+        } else if (FORBIDDEN_FIELDS.has(node.field)) {
+          checkField(node.field, node.pos, path)
+        } else if (eventType) {
+          // A declared schema fixes the payload's fields (absent = optional).
+          const problem = validateEventPayload(eventType, Object.fromEntries([[node.field, undefined]]))
+          if (problem !== null) fail(path, node.pos, `Event "${def.on}": ${problem}`)
+        }
+      } else if (node.kind === 'other') {
+        if (!isEvent) {
+          fail(path, node.pos, '"other": only event rules (schedule "event") with an "other" binding have one')
+        } else if (noEntity === 'binding') {
+          fail(path, node.pos, '"other" cannot be read in a "self"/"other" binding (neither is bound yet); use entity(n)')
+        } else if (def.other === undefined) {
+          fail(path, node.pos, '"other" needs an "other" binding on the rule (e.g. other: "event.b")')
+        }
+      }
+      if (noEntity !== undefined) {
+        const what = entityForm(node, source)
+        if (what !== null) fail(path, node.pos, `${what} reads the evaluated entity, but there is no evaluated entity ${NO_ENTITY[noEntity]}`)
+      }
       // §5.4 (AGENTS.md rule 4): key edges and the wheel are per render
       // tick, so a fixed step (zero, one or several per frame) would miss
       // them or see them twice.
@@ -249,6 +358,27 @@ export function compileRule(
     })
   }
 
+  // §6.1: the `self` / `other` bindings of an event rule.
+  const bindingAsts: { self?: AstNode; other?: AstNode } = {}
+  if (isEvent) {
+    for (const key of ['self', 'other'] as const) {
+      const source = def[key]
+      if (source === undefined) continue
+      if (typeof source !== 'string') {
+        fail(key, -1, `"${key}" must be an expression string, got ${JSON.stringify(source)}`)
+        continue
+      }
+      const parsed = parseExpression(source)
+      if ('errors' in parsed) {
+        for (const e of parsed.errors) fail(key, e.position, e.message)
+        continue
+      }
+      bindingAsts[key] = parsed.ast
+      checkExpression(parsed.ast, key, `referenced in "${key}"`, source, 'binding')
+    }
+  }
+  const exprScope: NoEntity = worldScope ? 'world' : undefined
+
   let whenAst: AstNode | undefined
   if (def.when !== undefined) {
     const parsed = parseExpression(def.when)
@@ -256,7 +386,7 @@ export function compileRule(
       for (const e of parsed.errors) fail('when', e.position, e.message)
     } else {
       whenAst = parsed.ast
-      checkExpression(whenAst, 'when', 'referenced in "when"')
+      checkExpression(whenAst, 'when', 'referenced in "when"', def.when, exprScope)
     }
   }
 
@@ -267,6 +397,10 @@ export function compileRule(
     const action = def.actions[i]!
     const setPath: RuleDefPath = { action: i, part: 'set' }
     const exprPath: RuleDefPath = { action: i, part: 'expr' }
+    if (worldScope) {
+      fail(setPath, -1, `A world-scope event rule (no "self", empty "query") has no entity to set; give it a "self" or a "query", or emit an event`)
+      continue
+    }
     const dotIdx = action.set.indexOf('.')
     if (dotIdx <= 0 || dotIdx === action.set.length - 1) {
       fail(setPath, -1, `Action "set" must be "Component.field", got "${action.set}"`)
@@ -282,7 +416,7 @@ export function compileRule(
       for (const e of parsed.errors) fail(exprPath, e.position, e.message)
       continue
     }
-    checkExpression(parsed.ast, exprPath, `referenced in action "${action.set}" expr`)
+    checkExpression(parsed.ast, exprPath, `referenced in action "${action.set}" expr`, action.expr)
     if (targetType) {
       compiledIndex.push(i)
       compiledActions.push({
@@ -300,6 +434,12 @@ export function compileRule(
   // O-68 (R4): reject type errors certain before the rule runs (see
   // typecheck.ts). Field kinds are not inferred: defaults do not fix them.
   if (whenAst) inferKind(whenAst, (position, message) => fail('when', position, message))
+  for (const key of ['self', 'other'] as const) {
+    const ast = bindingAsts[key]
+    if (!ast) continue
+    const kind = inferKind(ast, (position, message) => fail(key, position, message))
+    if (kind === 'string' || kind === 'boolean') fail(key, ast.pos, `"${key}" must give an entity id (a number), not a ${kind}`)
+  }
   for (let j = 0; j < compiledActions.length; j++) {
     const exprPath: RuleDefPath = { action: compiledIndex[j]!, part: 'expr' }
     inferKind(compiledActions[j]!.ast, (position, message) => fail(exprPath, position, message))
@@ -321,6 +461,10 @@ export function compileRule(
 
   const rule: CompiledRuleInternal = {
     def,
+    eventType,
+    selfBinding: bindingAsts.self ? compileExpression(bindingAsts.self, memo) : undefined,
+    otherBinding: bindingAsts.other ? compileExpression(bindingAsts.other, memo) : undefined,
+    worldScope,
     queryTypes,
     withoutTypes,
     spatialSets: [...spatialSets],
@@ -359,6 +503,34 @@ export interface SpatialOption {
 export interface CompileRuleOptions {
   /** Position source; required if the rule uses `nearest`, `countWithin` or `distanceTo`. */
   readonly spatial?: SpatialOption
+  /**
+   * Event types by name (2.3, §6.1), for an event rule's `on`.
+   * `installRules` defaults it to `world.lookupEvent`; `compileRule` has
+   * no default, so an event rule compiled without it reports `on`.
+   */
+  readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
+}
+
+/**
+ * The form that reads the evaluated entity, described for an error, or
+ * null (2.3, §6.1): where there is none — a binding or a world-scope rule.
+ */
+function entityForm(node: AstNode | EntityNode, source: string): string | null {
+  switch (node.kind) {
+    case 'field':
+      return `"${node.component}.${node.field}"`
+    case 'self':
+      // `has(C)` parses with an implicit self at the `has` token.
+      return source.startsWith('self', node.pos) ? '"self"' : `has(C) (it tests self; write has(e, C))`
+    case 'select':
+      return node.op === 'nearest' ? `nearest(${node.set}) (it measures from self)` : null
+    case 'distanceTo':
+      return 'distanceTo(e) (it measures from self)'
+    case 'countWithin':
+      return node.centre ? null : `countWithin(${node.set}, r) (it counts around self; give a centre)`
+    default:
+      return null
+  }
 }
 
 /** The name of the spatial form `node` is, or null. */
@@ -433,7 +605,8 @@ function registerRuleSystem(
   order: number,
   rng: 'shared' | 'own',
 ): SystemHandle {
-  const { def, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
+  const { def, eventType, selfBinding, otherBinding, worldScope, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
+  const isEvent = def.schedule === 'event'
   // Staging keys name the resolved component type, not the rule's spelling:
   // `resolve` may map two names to one component, and a read under either
   // name must see the other's staged write.
@@ -463,20 +636,30 @@ function registerRuleSystem(
   const grids = new Map<string, SpatialGrid>()
   if (spatial) for (const set of spatialSets) grids.set(set, createSpatialGrid(spatial.cellSize))
 
+  const common = {
+    priority: def.priority ?? 0,
+    order,
+    // §4.4: an own stream is keyed by the cursor key `rule:<name>`, and
+    // outlives the system, so update() re-registration resumes it.
+    rng: def.rng ?? rng,
+    enabled: () => def.enabled !== false,
+    // §4.5: lets describe().systems map the system back to its rule.
+    meta: { rule: def.name },
+  }
+  // §6.1: an event rule is a core event system triggered by its event (so
+  // describe() lists the event); a world-scope one has no query.
+  const systemDef: SystemDef = isEvent
+    ? { schedule: 'event', triggers: [eventType!], ...(worldScope ? {} : { query }), ...common }
+    : { schedule: def.schedule as 'tick' | 'fixed', query, ...common }
+  const matches = (id: number): boolean => {
+    for (const t of queryTypes) if (!world.has(id, t)) return false
+    for (const t of withoutTypes) if (world.has(id, t)) return false
+    return true
+  }
+
   return world.system(
     `rule:${def.name}`,
-    {
-      schedule: def.schedule,
-      query,
-      priority: def.priority ?? 0,
-      order,
-      // §4.4: an own stream is keyed by the cursor key `rule:<name>`, and
-      // outlives the system, so update() re-registration resumes it.
-      rng: def.rng ?? rng,
-      enabled: () => def.enabled !== false,
-      // §4.5: lets describe().systems map the system back to its rule.
-      meta: { rule: def.name },
-    },
+    systemDef,
     (ctx) => {
       // Fixed-rate rules fire once per fixed-step tick, independent of the
       // frame's wall dt — dt is that fixed step. Tick-rate rules use the
@@ -498,7 +681,10 @@ function registerRuleSystem(
       const targets: Array<Record<string, unknown>> = []
       const values: Array<number | string | boolean> = []
       const committed = new Set<string>()
-      let entity!: EntityView
+      // The evaluated entity; undefined in a world-scope event rule.
+      let entity: EntityView | undefined
+      // §6.1: the payload being handled (event rules).
+      let payload: unknown
       // §5.2: member lists, once per run per set (ascending id; structure
       // never changes during a run).
       const memberCache = new Map<string, readonly number[]>()
@@ -575,8 +761,19 @@ function registerRuleSystem(
           pointer: input?.pointer as NonNullable<EvalEnv['input']>['pointer'],
         },
       }
+      if (isEvent) {
+        // §6.1 `event.f`: an own field of the payload; absent, undefined or
+        // null is no value; anything else that is not a primitive is a type error.
+        env.eventField = (field) => {
+          if (payload === null || typeof payload !== 'object' || !Object.hasOwn(payload, field)) return undefined
+          const value: unknown = (payload as Record<string, unknown>)[field]
+          if (value === undefined || value === null) return undefined
+          if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') return value
+          throw new RuleEvalError(`"event.${field}" is not a number, string or boolean (${typeof value})`)
+        }
+      }
       // §5.2 spatial selection: grids from positions at the start of the run.
-      if (grids.size > 0 && ctx.entities.length > 0) {
+      if (grids.size > 0 && (isEvent || ctx.entities.length > 0)) {
         for (const [set, grid] of grids) {
           grid.clear()
           for (const id of members(set)) {
@@ -588,6 +785,7 @@ function registerRuleSystem(
       // The entity's component: from its query view when the query holds
       // it, else looked up.
       function componentOf(name: string): Record<string, unknown> | undefined {
+        if (entity === undefined) return undefined
         if (name !== 'id') {
           const v = (entity as unknown as Record<string, unknown>)[name]
           if (v !== undefined) return v as Record<string, unknown>
@@ -596,15 +794,16 @@ function registerRuleSystem(
         return type ? (world.getComponent(entity.id, type) as Record<string, unknown> | undefined) : undefined
       }
 
-      for (const view of ctx.entities) {
+      // Run the rule for one entity (undefined: a world-scope event rule).
+      // One bad entity (e.g. a query match missing a field referenced by
+      // `when`/an action) must never stop the rest of the query from being
+      // processed this tick — see evaluator.ts's RuleEvalError doc.
+      function runEntity(view: EntityView | undefined): void {
         entity = view
-        env.self = view.id
+        env.self = view?.id
         if (readsStaged) staged.clear()
-        // One bad entity (e.g. a query match missing a field referenced by
-        // `when`/an action) must never stop the rest of the query from
-        // being processed this tick — see evaluator.ts's RuleEvalError doc.
         try {
-          if (when && !when(env)) continue
+          if (when && !when(env)) return
 
           // O-68 (R3): evaluate and check every action, in order, before
           // writing any, so a failing action leaves the entity untouched.
@@ -629,9 +828,9 @@ function registerRuleSystem(
               const field = actions[i]!.field
               if (Object.is(target[field], values[i])) continue
               target[field] = values[i]
-              world.markChanged(entity.id, actions[i]!.component)
+              world.markChanged(view!.id, actions[i]!.component)
             }
-            continue
+            return
           }
           committed.clear()
           for (let i = actions.length - 1; i >= 0; i--) {
@@ -643,16 +842,64 @@ function registerRuleSystem(
             const value = values[i]
             if (Object.is(target[action.field], value)) continue
             target[action.field] = value
-            world.markChanged(entity.id, action.component)
+            world.markChanged(view!.id, action.component)
           }
         } catch (e) {
           if (!(e instanceof RuleEvalError)) throw e
-          faults.push({
-            entity: entity.id,
-            error: { kind: 'rule_eval_failed', rule: def.name, message: e.message },
-            recoverable: true,
-          })
+          fault(view?.id, e.message)
         }
+      }
+      // A fault on the entity, or a systemic one (`signals.faultRaised`)
+      // when there is none: a world-scope rule or a failed binding.
+      function fault(id: number | undefined, message: string): void {
+        const error: RuleFault = { kind: 'rule_eval_failed', rule: def.name, message }
+        faults.push(id === undefined ? { error, recoverable: true } : { entity: id, error, recoverable: true })
+      }
+      // §6.1: a binding's entity id; no value is undefined when allowed.
+      function bind(expr: CompiledExpression, key: 'self' | 'other'): number | undefined {
+        let value: unknown
+        try {
+          value = expr(env)
+        } catch (e) {
+          if (key === 'other' && e instanceof RuleNoValueError) return undefined
+          if (e instanceof RuleEvalError) throw new RuleEvalError(`"${key}" (${def[key]}): ${e.message}`)
+          throw e
+        }
+        if (typeof value !== 'number' || !Number.isInteger(value)) {
+          throw new RuleEvalError(`"${key}" (${def[key]}) must give an entity id (an integer), got ${typeof value === 'number' ? value : typeof value}`)
+        }
+        return value
+      }
+
+      if (!isEvent) {
+        for (const view of ctx.entities) runEntity(view)
+      } else {
+        // §6.1: each payload of this tick, in emission order.
+        for (const p of ctx.events.of(eventType!)) {
+          payload = p
+          entity = undefined
+          env.self = undefined
+          env.other = undefined
+          let selfId: number | undefined
+          try {
+            if (otherBinding) env.other = bind(otherBinding, 'other')
+            if (selfBinding) selfId = bind(selfBinding, 'self')
+          } catch (e) {
+            if (!(e instanceof RuleEvalError)) throw e
+            fault(undefined, e.message)
+            continue
+          }
+          if (selfBinding) {
+            // Not alive or not matching: a deterministic no-op.
+            if (!world.isAlive(selfId!) || !matches(selfId!)) continue
+            runEntity(world.getView(selfId!))
+          } else if (worldScope) {
+            runEntity(undefined)
+          } else {
+            for (const view of ctx.entities) runEntity(view)
+          }
+        }
+        payload = undefined
       }
       if (faults.length > 0) return { errors: faults }
     },
@@ -719,6 +966,13 @@ export interface InstallRulesOptions {
    * position fields are missing or not finite numbers has no position.
    */
   readonly spatial?: SpatialOption
+  /**
+   * Event types by name, for event rules' `on` (2.3, §6.1). Default
+   * `world.lookupEvent`: the event must be known to the world (registered,
+   * emitted, subscribed to or a trigger) when `update()` compiles the rule,
+   * and its name must not be ambiguous.
+   */
+  readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
 }
 
 /**
@@ -772,6 +1026,10 @@ export function installRules(
     }
   }
   const active = new Map<string, SystemHandle>()
+  const compileOptions: CompileRuleOptions = {
+    ...(spatialOption ? { spatial: spatialOption } : {}),
+    resolveEvent: options.resolveEvent ?? ((name) => world.lookupEvent(name)),
+  }
 
   function update(newDefs: RuleDef[]): Map<string, RuleError[]> {
     const errorsByName = new Map<string, RuleError[]>()
@@ -806,7 +1064,7 @@ export function installRules(
         active.delete(def.name)
       }
 
-      const compiled = compileRule(def, resolve, spatialOption ? { spatial: spatialOption } : {})
+      const compiled = compileRule(def, resolve, compileOptions)
       if (compiled.rule === null) {
         errorsByName.set(def.name, compiled.errors)
         continue

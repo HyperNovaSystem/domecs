@@ -30,15 +30,21 @@ export declare const SPECIAL_FORMS: Readonly<Record<string, {
     readonly optional: number;
 }>>;
 /**
- * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick` and (§5.4)
- * `pointer` (`pointer.x`), plus `other` and `event` for later minors. A
+ * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick`, (§5.4)
+ * `pointer` (`pointer.x`), and (2.3, §6.1) `other` (an event rule's bound
+ * entity) and `event` (`event.f`, the triggering payload's field). A
  * component with one of these names cannot be referenced in an expression.
  * After an entity, `id` is reserved too (`e.id` is the entity id).
  */
 export declare const RESERVED_WORDS: ReadonlySet<string>;
-/** What a selector or `self` refers to (2.2). */
+/** What a selector, `self` or (2.3) `other` refers to (2.2). */
 export type EntityNode = {
     kind: 'self';
+    pos: number;
+}
+/** 2.3 (§6.1): the entity an event rule's `other` binding gives. */
+ | {
+    kind: 'other';
     pos: number;
 } | {
     kind: 'select';
@@ -179,6 +185,12 @@ export type AstNode = {
     kind: 'pointer';
     field: PointerField;
     pos: number;
+}
+/** `event.f`: the triggering event payload's field (event rules only). */
+ | {
+    kind: 'event';
+    field: string;
+    pos: number;
 };
 /**
  * Walk every read of the evaluated entity's own fields reachable from
@@ -197,14 +209,15 @@ export declare function walkFieldRefs(node: AstNode, visit: (component: string, 
  * Walk every component name reachable from `node`, in left-to-right source
  * order (2.2, §5.2):
  * - `'self'`: a read of the evaluated entity's field (`C.f`, `self.C.f`);
- * - `'member'`: a read of another entity's field (`first(S).C.f`, `e.C.f`)
- *   or an aggregate's per-member field (`sum(S, C.f)`);
+ * - `'member'`: a read of another entity's field (`first(S).C.f`, `e.C.f`,
+ *   2.3 `other.C.f`) or an aggregate's per-member field (`sum(S, C.f)`);
  * - `'set'` (`field` null): a set (`count(S)`, `first(S)`, …) or a `has`
  *   target component.
  *
  * `pos` is the node's position: the component token for `C.f`, the start of
  * the entity for `e.C.f`, and the form's name token for sets, aggregates and
  * `has`. Component renames and `compileRule` resolution use this walker.
+ * Payload reads (`event.f`, 2.3) name no component and are not visited.
  */
 export declare function walkComponentRefs(node: AstNode, visit: (component: string, field: string | null, pos: number, role: 'self' | 'member' | 'set') => void): void;
 /** Every direct child of `node` (expressions and entity nodes), for depth walks. */
@@ -255,7 +268,7 @@ export interface EvalEnv {
         uniform(): number;
     };
     /** The evaluated entity's id (`self`, `self.id`; excluded by selectors). */
-    self?: number;
+    self?: number | undefined;
     /** `C.f` on another entity, own properties only; `undefined` when absent. */
     readField?(entity: number, component: string, field: string): Value | undefined;
     /** The entities holding component `set`, ascending id, stable within a run. */
@@ -293,6 +306,16 @@ export interface EvalEnv {
             readonly wheel: number;
         };
     };
+    /**
+     * Event rules (2.3, §6.1): the triggering payload's field `f` for
+     * `event.f`; `undefined` when the payload has no such field (no value).
+     */
+    eventField?(field: string): Value | undefined;
+    /**
+     * Event rules (2.3, §6.1): the entity the `other` binding gave, or
+     * `undefined` when it gave none (no value). A dead entity is no value too.
+     */
+    other?: number | undefined;
 }
 /**
  * Thrown by `evaluate` when it cannot produce a value — for
@@ -414,9 +437,11 @@ import { type AstNode } from './ast.js';
  *               | entity '.' IDENT '.' IDENT                   (+) another entity's field
  *               | entity '.' 'id'                              (+) entity id
  *               | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) §5.4
+ *               | 'event' '.' IDENT                            (++) payload field (2.3, §6.1)
  *               | call
  *               | '(' expr ')'
  *   entity     := 'self' | 'first' '(' SET ')'                 (+)
+ *               | 'other'                                      (++) event rules (2.3, §6.1)
  *               | 'nearest' '(' SET ( ',' expr )? ')'          (+) optional max distance
  *               | 'entity' '(' expr ')'                        (+) by numeric id
  *   call       := FUNC '(' args? ')'                           // whitelisted call
@@ -437,7 +462,11 @@ import { type AstNode } from './ast.js';
  * enforced at parse time.
  *
  * Reserved words (2.2): `self`, `tick`, `other`, `event`, `pointer` cannot
- * name a component in an expression, and `id` cannot after an entity. Only
+ * name a component in an expression, and `id` cannot after an entity.
+ * `(++)` marks the 2.3 additions (§6.1): `event.f` reads the triggering
+ * event's payload and `other` is the entity an event rule binds; the parser
+ * accepts both anywhere, and `compileRule` / `compileWorldExpression`
+ * reject them outside an event rule (and `other` without a binding). Only
  * `first(`, `nearest(` and `entity(` start a selector: `first.x` is still
  * `Component.field`. An entity is not a value: use `.id` or
  * `.Component.field`. Input reads (2.2, §5.4): `key(n)`, `pressed(n)`,
@@ -470,7 +499,7 @@ export declare function parseExpression(source: string): {
 export type { AstNode } from './ast.js';
 
 // file: rules.d.ts
-import { type ComponentType, type World } from '@domecs/core';
+import { type ComponentType, type EventType, type World } from '@domecs/core';
 import { type AstNode, type EntityNode } from './ast.js';
 /**
  * O-67: field names a rule may never read or write. Reads are own-property
@@ -484,7 +513,36 @@ export interface RuleActionDef {
 }
 export interface RuleDef {
     name: string;
-    schedule: 'tick' | 'fixed';
+    /**
+     * `'tick'` / `'fixed'`: the rule polls every entity matching `query` on
+     * that schedule. `'event'` (2.3, §6.1): the rule runs when the event named
+     * by {@link on} is delivered — once per payload, in emission order — for
+     * the entity {@link self} names, else for every entity matching `query`
+     * (broadcast, ascending id), else once with no entity (world scope: empty
+     * `query`, no `self`).
+     */
+    schedule: 'tick' | 'fixed' | 'event';
+    /**
+     * Event rules (2.3): the name of the event that triggers the rule,
+     * resolved through {@link InstallRulesOptions.resolveEvent} (default
+     * `world.lookupEvent`). Required iff `schedule` is `'event'`.
+     */
+    on?: string;
+    /**
+     * Event rules (2.3): an expression giving self's entity id from the
+     * payload, e.g. `"event.target"`. When it names an entity that is not
+     * alive or does not match `query`/`without`, the payload is skipped
+     * silently; when it gives no value or no integer, that is a systemic
+     * `rule_eval_failed` fault (`event.target ?? -1` skips silently instead).
+     * It cannot read an evaluated entity (`C.f`, `self`, ...) or `other`.
+     */
+    self?: string;
+    /**
+     * Event rules (2.3): an expression giving the entity `other` refers to,
+     * e.g. `"event.b"`. When it gives no value, or the entity is dead,
+     * reads of `other` are no value. Same restrictions as {@link self}.
+     */
+    other?: string;
     /**
      * System priority (lower runs first; default 0). Rules of equal priority
      * run in the order of the `defs` array last passed to `update()` (O-69).
@@ -516,7 +574,7 @@ export interface RuleDef {
  * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
  * members, so keep a default branch when switching on it.
  */
-export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | {
+export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | 'on' | 'self' | 'other' | {
     readonly query: number;
 } | {
     readonly without: number;
@@ -571,8 +629,18 @@ export interface CompiledRule {
  *   operator result of that kind, where arithmetic, a comparison or a
  *   function needs a number — outside the right side of `&&`/`||` and
  *   ternary branches, which may not run. Field kinds are not inferred.
+ * - Event rules (2.3, §6.1): `on` must resolve through
+ *   `options.resolveEvent` (`field: 'on'`); `on`, `self` and `other` on a
+ *   polling rule are errors at that field. `event.f` outside an event rule,
+ *   or naming a field the event's schema does not declare, and `other`
+ *   without an `other` binding, are errors at their position. The `self` /
+ *   `other` bindings and every expression of a world-scope rule (no `self`,
+ *   empty `query`) cannot read an evaluated entity (`C.f`, `self`,
+ *   `has(C)`, `nearest`, `distanceTo`, a centre-less `countWithin`); a
+ *   world-scope rule cannot `set` (`{ action: i, part: 'set' }`) or use
+ *   `without`.
  * - Every error carries `field` (§4.6), the one part of the def it is about:
- *   `'schedule'`, `'priority'`, `'rng'`, `{ query: i }`, `'when'` (parse, resolve and
+ *   `'schedule'`, `'priority'`, `'rng'`, `'on'`, `'self'`, `'other'`, `{ query: i }`, `'when'` (parse, resolve and
  *   type errors), `{ action: i, part: 'set' }` (malformed target, unknown
  *   target component, forbidden target field) or `{ action: i, part: 'expr' }`
  *   (every error inside that expression). `position` is an offset within
@@ -603,6 +671,12 @@ export interface SpatialOption {
 export interface CompileRuleOptions {
     /** Position source; required if the rule uses `nearest`, `countWithin` or `distanceTo`. */
     readonly spatial?: SpatialOption;
+    /**
+     * Event types by name (2.3, §6.1), for an event rule's `on`.
+     * `installRules` defaults it to `world.lookupEvent`; `compileRule` has
+     * no default, so an event rule compiled without it reports `on`.
+     */
+    readonly resolveEvent?: (name: string) => EventType<unknown> | undefined;
 }
 /** Visit `root` and every node below it (expressions and entity nodes), parents first. */
 export declare function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void;
@@ -662,6 +736,13 @@ export interface InstallRulesOptions {
      * position fields are missing or not finite numbers has no position.
      */
     readonly spatial?: SpatialOption;
+    /**
+     * Event types by name, for event rules' `on` (2.3, §6.1). Default
+     * `world.lookupEvent`: the event must be known to the world (registered,
+     * emitted, subscribed to or a trigger) when `update()` compiles the rule,
+     * and its name must not be ambiguous.
+     */
+    readonly resolveEvent?: (name: string) => EventType<unknown> | undefined;
 }
 /**
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
@@ -729,7 +810,8 @@ export interface WorldExpression {
  * and `nearest` (both measure from the evaluated entity), `countWithin`
  * without a centre, `dt`, `random()` (measuring a world must not
  * advance its randomness), and the input reads `key`, `pressed`,
- * `released`, `mod` and `pointer.*` (a metric must not depend on input). `time` is `world.time.elapsed` and `tick` is
+ * `released`, `mod` and `pointer.*` (a metric must not depend on input), and
+ * (2.3) the event-rule forms `event.f` and `other`. `time` is `world.time.elapsed` and `tick` is
  * `world.time.tick`. Everything else — selectors `first(S)` and
  * `entity(n)` with `.C.f` / `.id` reads, `has(e, C)`, aggregates,
  * `countWithin(S, r, e)` (needs `options.spatial`), math and `??` —

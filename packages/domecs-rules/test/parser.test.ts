@@ -415,7 +415,9 @@ describe('E10.2 grammar: errors', () => {
   })
 
   it('reserved words: self, tick, other, event, pointer', () => {
-    for (const word of ['self', 'tick', 'other', 'event', 'pointer']) {
+    // 2.3 (§6.1): `event.f` is a payload read, so `event.hp` parses; the
+    // others still reject `word.hp`.
+    for (const word of ['self', 'tick', 'other', 'pointer']) {
       const e = err1(`1 + ${word}.hp`)
       expect(e.position, word).toBe(4)
       expect(e.message, word).toMatch(/reserved word/)
@@ -423,8 +425,11 @@ describe('E10.2 grammar: errors', () => {
     expect(err1('count(tick)')).toMatchObject({ position: 6, message: expect.stringMatching(/reserved word/) })
     expect(err1('has(self, event)')).toMatchObject({ position: 10, message: expect.stringMatching(/reserved word/) })
     expect(err1('sum(E, other.x)')).toMatchObject({ position: 7, message: expect.stringMatching(/reserved word/) })
+    expect(err1('sum(E, event.x)')).toMatchObject({ position: 7, message: expect.stringMatching(/reserved word/) })
     expect(err1('first(P).pointer.x')).toMatchObject({ position: 9, message: expect.stringMatching(/reserved word/) })
-    expect(err1('other')).toMatchObject({ position: 0, message: expect.stringMatching(/reserved word/) })
+    expect(err1('first(P).event.x')).toMatchObject({ position: 9, message: expect.stringMatching(/reserved word/) })
+    expect(err1('other')).toMatchObject({ position: 0, message: expect.stringMatching(/use \.id/) })
+    expect(err1('event')).toMatchObject({ position: 0, message: expect.stringMatching(/reserved word.*event\.field/) })
   })
 
   it('id is reserved after an entity', () => {
@@ -558,5 +563,42 @@ describe('E10.2 walkers', () => {
       'set:P@first',
       'set:Q@has',
     ])
+  })
+})
+
+describe('E14.1 grammar: event.f and other (§6.1)', () => {
+  it('event.f is a payload read', () => {
+    expect(ok('event.dx')).toEqual({ kind: 'event', field: 'dx', pos: 0 })
+    expect(ok('Pos.x + event.dx')).toMatchObject({ kind: 'binary', right: { kind: 'event', field: 'dx', pos: 8 } })
+    expect(ok('event.target ?? -1')).toMatchObject({ kind: 'nullish', left: { kind: 'event', field: 'target' } })
+  })
+
+  it('other is an entity: other.C.f, other.id, has(other, C), distanceTo(other), countWithin centre', () => {
+    expect(ok('other.Hp.hp')).toEqual({ kind: 'member', target: { kind: 'other', pos: 0 }, component: 'Hp', field: 'hp', pos: 0 })
+    expect(ok('other.id')).toEqual({ kind: 'entityId', target: { kind: 'other', pos: 0 }, pos: 0 })
+    expect(ok('has(other, Hp)')).toMatchObject({ kind: 'has', target: { kind: 'other', pos: 4 }, component: 'Hp' })
+    expect(ok('distanceTo(other)')).toMatchObject({ kind: 'distanceTo', target: { kind: 'other', pos: 11 } })
+    expect(ok('countWithin(E, 3, other)')).toMatchObject({ kind: 'countWithin', centre: { kind: 'other', pos: 18 } })
+  })
+
+  it('errors keep their positions', () => {
+    expect(err1('1 + event')).toMatchObject({ position: 4, message: expect.stringMatching(/event\.field/) })
+    expect(err1('event.')).toMatchObject({ position: 6 })
+    expect(err1('event.a.b')).toMatchObject({ position: 7 })
+    expect(err1('other.hp')).toMatchObject({ position: 0, message: expect.stringMatching(/other\.Component\.field/) })
+    expect(err1('other.Hp.id.x')).toMatchObject({ position: 11 })
+  })
+
+  it('walkers: event.f visits nothing; other.C.f is a member read', () => {
+    const src = 'event.dx + other.Hp.hp + Pos.x'
+    const all: Array<[string, string | null, number, string]> = []
+    walkComponentRefs(ok(src), (c, f, pos, role) => all.push([c, f, pos, role]))
+    expect(all).toEqual([
+      ['Hp', 'hp', 11, 'member'],
+      ['Pos', 'x', 25, 'self'],
+    ])
+    const own: Array<[string, string, number]> = []
+    walkFieldRefs(ok(src), (c, f, pos) => own.push([c, f, pos]))
+    expect(own).toEqual([['Pos', 'x', 25]])
   })
 })

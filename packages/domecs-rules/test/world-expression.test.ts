@@ -108,6 +108,10 @@ describe('E11.1 compile: forms with no entity are rejected with positions', () =
     ['random() < 0.5', 0, /random\(\)/],
     ['2 * random()', 4, /random\(\)/],
     ['entity(first(WxPlayer).id).WxHp.hp ?? WxHp.hp', 38, /no entity/i],
+    // 2.3 (§6.1): payload reads and `other` exist only in event rules.
+    ['1 + event.dx', 4, /event rule/],
+    ['other.WxHp.hp', 0, /other/],
+    ['has(other, WxHp)', 4, /other/],
   ]
   for (const [source, position, message] of cases) {
     it(`${source} → error at ${position}`, () => {

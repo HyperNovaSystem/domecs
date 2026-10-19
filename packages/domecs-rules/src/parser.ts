@@ -33,9 +33,11 @@ import { LexError, tokenize, type Token } from './lexer.js'
  *               | entity '.' IDENT '.' IDENT                   (+) another entity's field
  *               | entity '.' 'id'                              (+) entity id
  *               | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) §5.4
+ *               | 'event' '.' IDENT                            (++) payload field (2.3, §6.1)
  *               | call
  *               | '(' expr ')'
  *   entity     := 'self' | 'first' '(' SET ')'                 (+)
+ *               | 'other'                                      (++) event rules (2.3, §6.1)
  *               | 'nearest' '(' SET ( ',' expr )? ')'          (+) optional max distance
  *               | 'entity' '(' expr ')'                        (+) by numeric id
  *   call       := FUNC '(' args? ')'                           // whitelisted call
@@ -56,7 +58,11 @@ import { LexError, tokenize, type Token } from './lexer.js'
  * enforced at parse time.
  *
  * Reserved words (2.2): `self`, `tick`, `other`, `event`, `pointer` cannot
- * name a component in an expression, and `id` cannot after an entity. Only
+ * name a component in an expression, and `id` cannot after an entity.
+ * `(++)` marks the 2.3 additions (§6.1): `event.f` reads the triggering
+ * event's payload and `other` is the entity an event rule binds; the parser
+ * accepts both anywhere, and `compileRule` / `compileWorldExpression`
+ * reject them outside an event rule (and `other` without a binding). Only
  * `first(`, `nearest(` and `entity(` start a selector: `first.x` is still
  * `Component.field`. An entity is not a value: use `.id` or
  * `.Component.field`. Input reads (2.2, §5.4): `key(n)`, `pressed(n)`,
@@ -262,11 +268,12 @@ class Parser {
         return { kind: 'identifier', name: t.value, pos: t.pos }
       }
 
-      // Entity reads: self.C.f, self.id, first(S).C.f, nearest(S).id, entity(n).C.f
-      if (t.value === 'self' || (SELECTORS.has(t.value) && nextIs('('))) {
+      // Entity reads: self.C.f, self.id, first(S).C.f, nearest(S).id, entity(n).C.f, other.C.f
+      if (t.value === 'self' || t.value === 'other' || (SELECTORS.has(t.value) && nextIs('('))) {
         return this.parseEntityAccess(this.parseEntity())
       }
       if (t.value === 'pointer') return this.parsePointer()
+      if (t.value === 'event') return this.parseEventField()
       if (RESERVED_WORDS.has(t.value)) throw new ParseFailure(t.pos, reserved(t.value))
 
       // Component.field
@@ -316,6 +323,18 @@ class Parser {
     return { kind: 'pointer', field: field.value as PointerField, pos: t.pos }
   }
 
+  /** 'event' '.' IDENT (2.3, §6.1) */
+  private parseEventField(): AstNode {
+    const t = this.advance() // 'event'
+    const dot = this.peek()
+    if (!(dot.type === 'punct' && dot.value === '.')) {
+      throw new ParseFailure(t.pos, `${reserved('event')}; read a payload field with event.field`)
+    }
+    this.advance() // '.'
+    const field = this.expectIdentifier('a payload field name')
+    return { kind: 'event', field: field.value, pos: t.pos }
+  }
+
   private expectIdentifier(what: string): Token {
     const t = this.peek()
     if (t.type !== 'identifier') {
@@ -336,9 +355,9 @@ class Parser {
   private parseEntity(): EntityNode {
     const t = this.peek()
     const next = this.tokens[this.index + 1]
-    if (t.type === 'identifier' && t.value === 'self') {
+    if (t.type === 'identifier' && (t.value === 'self' || t.value === 'other')) {
       this.advance()
-      return { kind: 'self', pos: t.pos }
+      return { kind: t.value, pos: t.pos }
     }
     if (t.type === 'identifier' && SELECTORS.has(t.value) && next?.type === 'punct' && next.value === '(') {
       this.advance()
@@ -366,8 +385,8 @@ class Parser {
     throw new ParseFailure(
       t.pos,
       t.type === 'eof'
-        ? 'Unexpected end of input, expected an entity (self, first(S), nearest(S[, d]) or entity(n))'
-        : `Expected an entity (self, first(S), nearest(S[, d]) or entity(n)), got "${t.value}"`,
+        ? 'Unexpected end of input, expected an entity (self, other, first(S), nearest(S[, d]) or entity(n))'
+        : `Expected an entity (self, other, first(S), nearest(S[, d]) or entity(n)), got "${t.value}"`,
     )
   }
 
@@ -385,11 +404,12 @@ class Parser {
       if (dotNext) throw new ParseFailure(name.pos, '"id" is reserved after an entity (e.id is the entity id)')
       return { kind: 'entityId', target, pos: target.pos }
     }
-    if (target.kind === 'self' && !dotNext) {
+    if ((target.kind === 'self' || target.kind === 'other') && !dotNext) {
       // `self.hp` reads like a component named "self"; say why it is not one.
+      const word = target.kind
       throw new ParseFailure(
         target.pos,
-        `${reserved('self')}; write self.Component.field to read this entity (self.${name.value}.field)`,
+        `${reserved(word)}; write ${word}.Component.field to read ${word === 'self' ? 'this entity' : 'the bound entity'} (${word}.${name.value}.field)`,
       )
     }
     if (RESERVED_WORDS.has(name.value)) throw new ParseFailure(name.pos, reserved(name.value))
@@ -417,7 +437,7 @@ class Parser {
         const t = this.peek()
         const next = this.tokens[this.index + 1]
         let target: EntityNode
-        if (t.type === 'identifier' && t.value !== 'self' && next?.type === 'punct' && next.value === ')') {
+        if (t.type === 'identifier' && t.value !== 'self' && t.value !== 'other' && next?.type === 'punct' && next.value === ')') {
           target = { kind: 'self', pos }
         } else {
           target = this.parseEntity()

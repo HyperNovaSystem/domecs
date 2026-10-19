@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createWorld, defineComponent, type ComponentType, type World } from '@domecs/core'
+import { Faulted, createWorld, defineComponent, defineEvent, entry, type ComponentType, type World } from '@domecs/core'
 import { compileRule, installRules, type RuleDef, type RuleError } from '../src/rules.js'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
@@ -460,5 +460,314 @@ describe('RuleError.field — per-part attribution (§4.6)', () => {
       { action: 0, part: 'set' },
       { action: 0, part: 'expr' },
     ])
+  })
+})
+
+// Spec §6.1 (G8, O-84), plan E14.1: event-triggered rules.
+describe('E14.1 event rules', () => {
+  const EvPos = defineComponent<{ x: number; y: number }>('EvPos', { defaults: { x: 0, y: 0 } })
+  const EvTag = defineComponent<Record<string, never>>('EvTag', { defaults: {} })
+  const EvShield = defineComponent<Record<string, never>>('EvShield', { defaults: {} })
+  const Move = defineEvent<{ target?: number; dx?: number }>('EvMove', {
+    schema: { fields: { target: { kind: 'number' }, dx: { kind: 'number' } } },
+  })
+  const Push = defineEvent<{ dx: number }>('EvPush') // schema-less
+  const Hit = defineEvent<{ a: number; b: number }>('EvHit', {
+    schema: { fields: { a: { kind: 'number' }, b: { kind: 'number' } } },
+  })
+  const resolveEv = resolveFrom([EvPos, EvTag, EvShield, Health])
+
+  function evWorld(): World {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    expect(w.register(Move, Push, Hit).ok).toBe(true)
+    return w
+  }
+  const moveRule: RuleDef = {
+    name: 'move',
+    schedule: 'event',
+    on: 'EvMove',
+    self: 'event.target',
+    query: ['EvPos'],
+    actions: [{ set: 'EvPos.x', expr: 'EvPos.x + event.dx' }],
+  }
+  function install(w: World, defs: RuleDef[]): Map<string, RuleError[]> {
+    const handle = installRules(w, [], resolveEv)
+    return handle.update(defs)
+  }
+  const systemic = (w: World): Array<{ source: string; kind: string; message: string }> => {
+    const seen: Array<{ source: string; kind: string; message: string }> = []
+    w.signals.faultRaised.subscribe((f) =>
+      seen.push({ source: f.source, kind: f.entry.kind, message: String((f.entry.detail as { message?: unknown })?.message) }),
+    )
+    return seen
+  }
+
+  it('test 1: act(Move, {target, dx}) with self: event.target moves only that entity, no code systems', () => {
+    const w = evWorld()
+    expect(install(w, [moveRule])).toEqual(new Map())
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    const b = w.spawn([entry(EvPos, { x: 10, y: 0 })])
+    const r = w.action(Move, { target: b, dx: 3 })
+    expect(r.accepted).toBe(true)
+    expect(w.getComponent(a, EvPos)!.x).toBe(0)
+    expect(w.getComponent(b, EvPos)!.x).toBe(13)
+    // The trigger is listed as a command the world accepts (O-51), and the
+    // system maps back to its rule (§4.5).
+    const manifest = w.describe()
+    expect(manifest.events.map((e) => e.name)).toContain('EvMove')
+    expect(manifest.systems.find((s) => s.name === 'rule:move')).toMatchObject({ schedule: 'event' })
+  })
+
+  it('every payload of the tick runs, in emission order', () => {
+    const w = evWorld()
+    install(w, [{ ...moveRule, actions: [{ set: 'EvPos.x', expr: 'EvPos.x * 10 + event.dx' }] }])
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    w.emit(Move, { target: a, dx: 1 })
+    w.emit(Move, { target: a, dx: 2 })
+    w.stepOnce()
+    expect(w.getComponent(a, EvPos)!.x).toBe(12)
+    // No event, no run.
+    w.stepOnce()
+    expect(w.getComponent(a, EvPos)!.x).toBe(12)
+  })
+
+  it('a dead, unmatched or excluded self is a silent no-op', () => {
+    const w = evWorld()
+    const faults = systemic(w)
+    install(w, [{ ...moveRule, without: ['EvShield'] }])
+    const dead = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    w.despawn(dead)
+    const bare = w.spawn([entry(Health, { hp: 1 })])
+    const shielded = w.spawn([entry(EvPos, { x: 0, y: 0 }), entry(EvShield, {})])
+    for (const target of [dead, bare, shielded, 9999, -1]) {
+      expect(w.action(Move, { target, dx: 5 }).accepted).toBe(true)
+    }
+    expect(w.getComponent(shielded, EvPos)!.x).toBe(0)
+    expect(w.has(bare, Faulted)).toBe(false)
+    expect(w.has(shielded, Faulted)).toBe(false)
+    expect(faults).toEqual([])
+  })
+
+  it('a self binding that gives no id is a systemic fault (not a throw)', () => {
+    const w = evWorld()
+    const faults = systemic(w)
+    const handle = installRules(w, [moveRule], resolveEv)
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    w.action(Move, { dx: 1 }) // no target: no value
+    w.action(Move, { target: 1.5, dx: 1 }) // not an integer
+    expect(faults.map((f) => [f.source, f.kind])).toEqual([
+      ['rule:move', 'rule_eval_failed'],
+      ['rule:move', 'rule_eval_failed'],
+    ])
+    expect(faults[0]!.message).toMatch(/event\.target/)
+    expect(faults[1]!.message).toMatch(/integer/)
+    // `?? -1` turns a missing target into a silent skip.
+    expect(handle.update([{ ...moveRule, self: 'event.target ?? -1' }])).toEqual(new Map())
+    w.action(Move, { dx: 1 })
+    expect(faults).toHaveLength(2)
+    expect(w.getComponent(a, EvPos)!.x).toBe(0)
+  })
+
+  it('an action that fails faults the self entity, as in polling rules', () => {
+    const w = evWorld()
+    install(w, [{ ...moveRule, actions: [{ set: 'EvPos.x', expr: 'EvPos.x + Health.hp' }] }])
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    w.action(Move, { target: a, dx: 1 })
+    expect(w.getComponent(a, Faulted)!.faults[0]).toMatchObject({ kind: 'rule_eval_failed', source: 'rule:move' })
+  })
+
+  it('test 2: broadcast runs for each matching entity in ascending id, per payload', () => {
+    const w = evWorld()
+    install(w, [{
+      name: 'push',
+      schedule: 'event',
+      on: 'EvPush',
+      query: ['EvPos'],
+      without: ['EvShield'],
+      when: 'EvPos.y == 0',
+      actions: [{ set: 'EvPos.x', expr: 'EvPos.x * 10 + event.dx' }],
+    }])
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    const b = w.spawn([entry(EvPos, { x: 0, y: 1 })]) // when fails
+    const c = w.spawn([entry(EvPos, { x: 0, y: 0 }), entry(EvShield, {})]) // excluded
+    const d = w.spawn([entry(EvPos, { x: 1, y: 0 })])
+    w.emit(Push, { dx: 1 })
+    w.emit(Push, { dx: 2 })
+    w.stepOnce()
+    expect([a, b, c, d].map((id) => w.getComponent(id, EvPos)!.x)).toEqual([12, 0, 0, 112])
+  })
+
+  it('test 2: a world-scope rule (no self, empty query) runs once per payload; set is a compile error', () => {
+    const w = evWorld()
+    const ok = compileRule({ name: 'w', schedule: 'event', on: 'EvPush', query: [], when: 'event.dx > 0', actions: [] }, resolveEv, {
+      resolveEvent: (n) => w.lookupEvent(n),
+    })
+    expect(ok.errors).toEqual([])
+    const bad = compileRule(
+      { name: 'w', schedule: 'event', on: 'EvPush', query: [], actions: [{ set: 'EvPos.x', expr: '1' }] },
+      resolveEv,
+      { resolveEvent: (n) => w.lookupEvent(n) },
+    )
+    expect(bad.rule).toBeNull()
+    expect(bad.errors).toEqual([
+      { rule: 'w', position: -1, message: expect.stringMatching(/world-scope.*no entity to set/), field: { action: 0, part: 'set' } },
+    ])
+    // A world-scope rule's failure has no entity: a systemic fault.
+    const faults = systemic(w)
+    install(w, [{ name: 'w', schedule: 'event', on: 'EvPush', query: [], when: 'event.nope > 0', actions: [] }])
+    w.emit(Push, { dx: 1 })
+    w.emit(Push, { dx: 1 })
+    w.stepOnce()
+    expect(faults.map((f) => f.source)).toEqual(['rule:w', 'rule:w'])
+  })
+
+  it('other: reads the bound entity; a dead other is no value', () => {
+    const w = evWorld()
+    const copy: RuleDef = {
+      name: 'copy',
+      schedule: 'event',
+      on: 'EvHit',
+      self: 'event.a',
+      other: 'event.b',
+      query: ['EvPos'],
+      actions: [
+        { set: 'EvPos.x', expr: 'other.EvPos.x ?? -1' },
+        { set: 'EvPos.y', expr: '(has(other, EvTag) ?? false) ? 1 : 0' },
+      ],
+    }
+    install(w, [copy])
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    const b = w.spawn([entry(EvPos, { x: 7, y: 0 }), entry(EvTag, {})])
+    w.action(Hit, { a, b })
+    expect(w.getComponent(a, EvPos)).toEqual({ x: 7, y: 1 })
+    w.despawn(b)
+    w.action(Hit, { a, b })
+    expect(w.getComponent(a, EvPos)).toEqual({ x: -1, y: 0 })
+    // A missing `other` field is no value too.
+    w.emit(Hit, { a } as { a: number; b: number })
+    w.stepOnce()
+    expect(w.getComponent(a, EvPos)!.x).toBe(-1)
+  })
+
+  it('event rules may draw from their own stream', () => {
+    const w = evWorld()
+    install(w, [{ ...moveRule, rng: 'own', actions: [{ set: 'EvPos.x', expr: 'random()' }] }])
+    const a = w.spawn([entry(EvPos, { x: 0, y: 0 })])
+    w.action(Move, { target: a, dx: 0 })
+    const x = w.getComponent(a, EvPos)!.x
+    expect(x).toBeGreaterThanOrEqual(0)
+    expect(x).toBeLessThan(1)
+    expect(w.describe().systems.find((s) => s.name === 'rule:move')).toMatchObject({ rng: 'own' })
+  })
+
+  describe('compile checks with field attribution', () => {
+    const w = evWorld()
+    const opts = { resolveEvent: (n: string) => w.lookupEvent(n) }
+    // `undefined` drops a field of moveRule.
+    type Patch = { [K in keyof RuleDef]?: RuleDef[K] | undefined }
+    const errorsOf = (over: Patch): RuleError[] =>
+      compileRule({ ...moveRule, ...over } as RuleDef, resolveEv, opts).errors
+
+    it('on: required for event rules, must resolve, only for event rules', () => {
+      expect(errorsOf({ on: undefined })).toEqual([
+        { rule: 'move', position: -1, message: expect.stringMatching(/needs "on"/), field: 'on' },
+      ])
+      expect(errorsOf({ on: 'Nope' })).toEqual([
+        { rule: 'move', position: -1, message: expect.stringMatching(/Unknown event "Nope"/), field: 'on' },
+      ])
+      // Without a resolver nothing resolves.
+      expect(compileRule(moveRule, resolveEv).errors).toEqual([
+        { rule: 'move', position: -1, message: expect.stringMatching(/Unknown event "EvMove"/), field: 'on' },
+      ])
+      const tick: Patch = { schedule: 'tick', self: undefined, actions: [] }
+      expect(errorsOf({ ...tick })).toEqual([
+        { rule: 'move', position: -1, message: expect.stringMatching(/only for event rules/), field: 'on' },
+      ])
+      expect(errorsOf({ ...tick, on: undefined, self: 'event.target' }).map((e) => e.field)).toEqual(['self'])
+      expect(errorsOf({ ...tick, on: undefined, other: 'event.b' }).map((e) => e.field)).toEqual(['other'])
+      expect(errorsOf({ schedule: 'later' as RuleDef['schedule'] })[0]).toMatchObject({
+        field: 'schedule',
+        message: expect.stringMatching(/"event"/),
+      })
+    })
+
+    it('event.f outside event rules is an error at its position', () => {
+      const r = compileRule(
+        { name: 't', schedule: 'tick', query: ['EvPos'], when: 'EvPos.x < event.dx', actions: [{ set: 'EvPos.x', expr: '1 + event.dx' }] },
+        resolveEv,
+        opts,
+      )
+      expect(r.errors).toEqual([
+        { rule: 't', position: 10, message: expect.stringMatching(/only event rules/), field: 'when' },
+        { rule: 't', position: 4, message: expect.stringMatching(/only event rules/), field: { action: 0, part: 'expr' } },
+      ])
+    })
+
+    it('with a schema, event.f must be a declared field; schema-less events take any field', () => {
+      expect(errorsOf({ when: 'event.dy > 0' })).toEqual([
+        { rule: 'move', position: 0, message: expect.stringMatching(/EvMove.*"dy".*target, dx/), field: 'when' },
+      ])
+      expect(errorsOf({ when: 'event.__proto__ > 0' })[0]).toMatchObject({ position: 0, field: 'when' })
+      expect(errorsOf({ on: 'EvPush', self: undefined, when: 'event.anything > 0', actions: [] })).toEqual([])
+    })
+
+    it('other: only with an other binding, only in event rules', () => {
+      expect(errorsOf({ when: 'other.EvPos.x > 0' })).toEqual([
+        { rule: 'move', position: 0, message: expect.stringMatching(/"other" binding/), field: 'when' },
+      ])
+      const r = compileRule(
+        { name: 't', schedule: 'tick', query: ['EvPos'], actions: [{ set: 'EvPos.x', expr: 'distanceTo(other)' }] },
+        resolveEv,
+        { ...opts, spatial: { component: 'EvPos' } },
+      )
+      expect(r.errors).toEqual([
+        { rule: 't', position: 11, message: expect.stringMatching(/only event rules/), field: { action: 0, part: 'expr' } },
+      ])
+    })
+
+    it('self/other bindings: parse and resolve errors, no evaluated entity, no other', () => {
+      expect(errorsOf({ self: 'event.' })).toEqual([
+        { rule: 'move', position: 6, message: expect.any(String), field: 'self' },
+      ])
+      expect(errorsOf({ self: 'EvPos.x' })).toEqual([
+        { rule: 'move', position: 0, message: expect.stringMatching(/no evaluated entity/), field: 'self' },
+      ])
+      expect(errorsOf({ self: 'first(Nope).id' })).toEqual([
+        { rule: 'move', position: 0, message: expect.stringMatching(/Unknown component "Nope"/), field: 'self' },
+      ])
+      expect(errorsOf({ other: 'other.id' })).toEqual([
+        { rule: 'move', position: 0, message: expect.stringMatching(/other/), field: 'other' },
+      ])
+      expect(errorsOf({ other: 'nearest(EvPos).id' })[0]).toMatchObject({ position: 0, field: 'other' })
+      expect(errorsOf({ self: '"a" * 2' })[0]).toMatchObject({ position: 0, field: 'self' })
+      // Clean bindings may read the payload, other entities and aggregates.
+      expect(errorsOf({ self: 'entity(event.target).id', other: 'first(EvTag).id ?? -1' })).toEqual([])
+    })
+
+    it('world scope: reads of the evaluated entity are errors at their position', () => {
+      const r = compileRule(
+        { name: 'w', schedule: 'event', on: 'EvPush', query: [], when: 'EvPos.x > 0 || has(EvTag)', actions: [] },
+        resolveEv,
+        opts,
+      )
+      expect(r.errors).toEqual([
+        { rule: 'w', position: 0, message: expect.stringMatching(/no evaluated entity/), field: 'when' },
+        { rule: 'w', position: 15, message: expect.stringMatching(/no evaluated entity/), field: 'when' },
+      ])
+      expect(
+        compileRule({ name: 'w', schedule: 'event', on: 'EvPush', query: [], without: ['EvTag'], actions: [] }, resolveEv, opts).errors,
+      ).toEqual([{ rule: 'w', position: -1, message: expect.stringMatching(/world-scope/), field: { without: 0 } }])
+    })
+
+    it('installRules resolves `on` through world.lookupEvent by default, or options.resolveEvent', () => {
+      const w2 = createWorld({ headless: true })
+      const errors = installRules(w2, [moveRule], resolveEv).update([moveRule])
+      expect(errors.get('move')?.[0]).toMatchObject({ field: 'on' })
+      const w3 = createWorld({ headless: true })
+      expect(installRules(w3, [], resolveEv, { resolveEvent: (n) => (n === 'EvMove' ? Move : undefined) }).update([moveRule])).toEqual(new Map())
+      const a = w3.spawn([entry(EvPos, { x: 0, y: 0 })])
+      w3.action(Move, { target: a, dx: 2 })
+      expect(w3.getComponent(a, EvPos)!.x).toBe(2)
+    })
   })
 })

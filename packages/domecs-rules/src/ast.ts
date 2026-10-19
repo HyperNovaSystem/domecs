@@ -89,16 +89,19 @@ export const SPECIAL_FORMS: Readonly<
 })
 
 /**
- * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick` and (§5.4)
- * `pointer` (`pointer.x`), plus `other` and `event` for later minors. A
+ * Names the parser reserves (2.2, §5.2, ED-9): `self`, `tick`, (§5.4)
+ * `pointer` (`pointer.x`), and (2.3, §6.1) `other` (an event rule's bound
+ * entity) and `event` (`event.f`, the triggering payload's field). A
  * component with one of these names cannot be referenced in an expression.
  * After an entity, `id` is reserved too (`e.id` is the entity id).
  */
 export const RESERVED_WORDS: ReadonlySet<string> = new Set(['self', 'tick', 'other', 'event', 'pointer'])
 
-/** What a selector or `self` refers to (2.2). */
+/** What a selector, `self` or (2.3) `other` refers to (2.2). */
 export type EntityNode =
   | { kind: 'self'; pos: number }
+  /** 2.3 (§6.1): the entity an event rule's `other` binding gives. */
+  | { kind: 'other'; pos: number }
   | { kind: 'select'; op: 'first' | 'nearest'; set: string; maxDistance?: AstNode; pos: number }
   | { kind: 'entityById'; id: AstNode; pos: number }
 
@@ -151,6 +154,9 @@ export type AstNode =
   | { kind: 'input'; op: InputOp; arg: AstNode; pos: number }
   /** `pointer.x`, `pointer.y`, `pointer.buttons`, `pointer.wheel`. */
   | { kind: 'pointer'; field: PointerField; pos: number }
+  // 2.3 (§6.1): event rules.
+  /** `event.f`: the triggering event payload's field (event rules only). */
+  | { kind: 'event'; field: string; pos: number }
 
 /** The expression children of an entity node, in source order. */
 function entityChildren(target: EntityNode): AstNode[] {
@@ -184,14 +190,15 @@ export function walkFieldRefs(
  * Walk every component name reachable from `node`, in left-to-right source
  * order (2.2, §5.2):
  * - `'self'`: a read of the evaluated entity's field (`C.f`, `self.C.f`);
- * - `'member'`: a read of another entity's field (`first(S).C.f`, `e.C.f`)
- *   or an aggregate's per-member field (`sum(S, C.f)`);
+ * - `'member'`: a read of another entity's field (`first(S).C.f`, `e.C.f`,
+ *   2.3 `other.C.f`) or an aggregate's per-member field (`sum(S, C.f)`);
  * - `'set'` (`field` null): a set (`count(S)`, `first(S)`, …) or a `has`
  *   target component.
  *
  * `pos` is the node's position: the component token for `C.f`, the start of
  * the entity for `e.C.f`, and the form's name token for sets, aggregates and
  * `has`. Component renames and `compileRule` resolution use this walker.
+ * Payload reads (`event.f`, 2.3) name no component and are not visited.
  */
 export function walkComponentRefs(
   node: AstNode,
@@ -253,6 +260,7 @@ export function walkComponentRefs(
     case 'boolean':
     case 'identifier':
     case 'pointer':
+    case 'event':
       return
   }
 }

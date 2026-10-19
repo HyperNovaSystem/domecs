@@ -53,7 +53,8 @@ export interface WorldExpression {
  * and `nearest` (both measure from the evaluated entity), `countWithin`
  * without a centre, `dt`, `random()` (measuring a world must not
  * advance its randomness), and the input reads `key`, `pressed`,
- * `released`, `mod` and `pointer.*` (a metric must not depend on input). `time` is `world.time.elapsed` and `tick` is
+ * `released`, `mod` and `pointer.*` (a metric must not depend on input), and
+ * (2.3) the event-rule forms `event.f` and `other`. `time` is `world.time.elapsed` and `tick` is
  * `world.time.tick`. Everything else — selectors `first(S)` and
  * `entity(n)` with `.C.f` / `.id` reads, `has(e, C)`, aggregates,
  * `countWithin(S, r, e)` (needs `options.spatial`), math and `??` —
@@ -128,6 +129,12 @@ export function compileWorldExpression(
         return
       case 'pointer':
         fail(node.pos, `pointer.${node.field} reads input, but a world expression must not depend on input (a metric measures the world's state)`)
+        return
+      case 'event':
+        fail(node.pos, `"event.${node.field}" reads the triggering event's payload: only event rules (schedule "event") have one`)
+        return
+      case 'other':
+        fail(node.pos, `"other" is bound only in an event rule with an "other" binding; use first(S) or entity(n)`)
         return
       case 'distanceTo':
         fail(node.pos, `distanceTo(e) measures from the evaluated entity, but there is ${NO_ENTITY}; use distance(x1, y1, x2, y2) with first(S) reads`)

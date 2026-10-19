@@ -108,6 +108,8 @@ function infer(
     }
     case 'pointer':
       return 'number'
+    case 'event': // a payload field's kind is not known before it runs
+      return 'unknown'
   }
 
   function entity(target: EntityNode): void {
