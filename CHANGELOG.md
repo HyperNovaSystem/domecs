@@ -13,7 +13,7 @@ All notable changes to DOMECS are documented here. The format is based on
   peek(), stop() }` records an `ActLog` (`format: 'domecs-actlog'`,
   `version: 1`): the base (`startTick`, `fixedStep`, `startScale`, strict
   `baseHash`), one frame per full step `{ tick, dt, scale?, hookScale?,
-  acts?, input? }` (the caller's dt, `null` for `stepOnce`; the scale on
+  acts?, startActs?, endActs?, input? }` (the caller's dt, `null` for `stepOnce`; the scale on
   entry and a scale a `tickStart` hook set; input delta-encoded), external
   emits by name with `via: 'emit' | 'action'` (plugin-hook emits included,
   heartbeats too; emits from systems and `on` handlers are not recorded),

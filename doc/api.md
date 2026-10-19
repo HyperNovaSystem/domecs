@@ -1473,7 +1473,9 @@ interface ActLogFrame {          // one stepOnce() or step(dt > 0); heartbeats a
   readonly dt: number | null     // null = stepOnce()
   readonly scale?: number        // entry scale, when it changed since the previous frame ended
   readonly hookScale?: number    // scale a tickStart hook set during this step
-  readonly acts?: readonly ActRecord[]
+  readonly acts?: readonly ActRecord[]       // emitted before the step's event flush
+  readonly startActs?: readonly ActRecord[]  // emitted by signals.tickStart subscribers this step
+  readonly endActs?: readonly ActRecord[]    // emitted after the systems (render, onTickEnd, tickEnd)
   readonly input?: JsonInput     // when it changed (always on the first frame)
 }
 interface ActRecord {
@@ -1500,14 +1502,18 @@ type ReplayError =
 What is recorded:
 - **Acts:** every emit not made by a system or an `on` handler —
   `world.emit`, `turn`, `action` (`via: 'action'`), and emits from plugin
-  hooks and signal subscribers, heartbeats included — into the next frame,
-  in emit order. Emits from systems and handlers are reproduced by replay.
+  hooks and signal subscribers, heartbeats included — in emit order: into
+  the next frame's `acts`, or, when made during a step after its event
+  flush, into that frame's `startActs` (`signals.tickStart`) or `endActs`
+  (render, `onTickEnd`, `signals.tickEnd`), which replay emits at the same
+  points. Emits from systems and handlers are reproduced by replay. Acts
+  emitted after the last step are not in the log.
 - **Frames:** per full step, the caller's dt (so wall-clock `step(dt)`
   replays exactly), the scale on entry, a scale a `tickStart` hook set, and
   `world.input` after plugin `onTickStart`, delta-encoded.
 - **Gaps:** a spawn/despawn/add/remove/`markChanged`/`setResource`/
-  `markResourceChanged` outside a full tick, a payload that is not plain
-  data, and `restore()`. Replay past a gap is unverified: the next
+  `markResourceChanged` outside a full tick, a draw on `world.rand` between
+  steps, a payload that is not plain data, and `restore()`. Replay past a gap is unverified: the next
   checkpoint reports `diverged`. Route every runtime change through a
   command.
 
@@ -1517,8 +1523,8 @@ resolves the acts (an unknown or ambiguous name → `unknown_event`, an
 emit), sets scale and input, emits, and steps. A malformed log, or one
 recorded at another `fixedStep`, is `invalid_log`; nothing throws for a bad
 log. The replay world must have the same setup minus every stimulus source
-(no input plugin, no hook that emits or sets the scale at tick start: their
-effects are in the log) and no `once` system the source had already run.
+(no input plugin, no hook or subscriber that emits, none that sets the scale
+at tick start: their effects are in the log) and no `once` system the source had already run.
 
 ```ts doctest name=act-log-replay
 import { strict as assert } from 'node:assert'

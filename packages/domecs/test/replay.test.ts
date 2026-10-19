@@ -762,3 +762,113 @@ describe('replay (§7.1)', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Verify fixes (E19 adversarial review)
+// ---------------------------------------------------------------------------
+
+describe('replay of emits made during a tick after the event flush', () => {
+  it('onTickEnd / signals.tickEnd emits: checkpoints and the final hash match on a world without the emitter', () => {
+    for (const via of ['plugin', 'signal'] as const) {
+      const live = source()
+      if (via === 'plugin') {
+        live.use(definePlugin({ name: 'ender', install: () => ({ onTickEnd(world, info) { if (!info.heartbeat) world.emit(Echo, { from: 'end' }) } }) }))
+      } else {
+        live.signals.tickEnd.subscribe(() => live.emit(Echo, { from: 'end' }))
+      }
+      const base = live.snapshot({ pendingEvents: true })
+      const rec = createRecorder(live, { hashEvery: 1 })
+      for (let i = 0; i < 12; i++) live.step(1 / 60)
+      const log = rec.stop()
+      expect(replay(fresh(), log, { base }), via).toEqual({ ok: true, value: { ticks: 12, hash: strict(live) } })
+    }
+  })
+
+  it('signals.tickStart emits keep their order relative to system emits', () => {
+    const Ping = defineEvent<{ n: number }>('RpPing')
+    const Pong = defineEvent<{ n: number }>('RpPong')
+    const setup = (w: World): void => {
+      w.register(Ping, Pong)
+      w.system('pong', {}, (ctx) => ctx.events.emit(Pong, { n: ctx.time.tick }))
+      w.system('ping', {}, (ctx) => ctx.events.emit(Ping, { n: -ctx.time.tick }))
+    }
+    const live = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    setup(live)
+    live.signals.tickStart.subscribe((t) => live.emit(Ping, { n: t.tick }))
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    for (let i = 0; i < 6; i++) live.stepOnce()
+    const log = rec.stop()
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    setup(w)
+    expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 6, hash: strict(live) } })
+    expect(w.pendingEvents().map((e) => e.type.name)).toEqual(live.pendingEvents().map((e) => e.type.name))
+  })
+})
+
+describe('startActs / endActs capture', () => {
+  it('puts post-flush emits into the running frame by phase, heartbeat emits into the next frame', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    w.signals.tickStart.subscribe((t) => w.emit(Echo, { from: `start${t.tick}` }))
+    w.use(definePlugin({ name: 'ender', install: () => ({ onTickEnd(world, info) { world.emit(Echo, { from: info.heartbeat ? 'hb-end' : 'end' }) } }) }))
+    const rec = createRecorder(w)
+    w.stepOnce()
+    w.step(0)
+    w.stepOnce()
+    const log = rec.stop()
+    expect(log.frames).toEqual([
+      { tick: 0, dt: null, input: { keys: [] }, startActs: [{ event: 'RpEcho', payload: { from: 'start1' }, via: 'emit' }], endActs: [{ event: 'RpEcho', payload: { from: 'end' }, via: 'emit' }] },
+      {
+        tick: 1,
+        dt: null,
+        acts: [
+          { event: 'RpEcho', payload: { from: 'start1' }, via: 'emit' },
+          { event: 'RpEcho', payload: { from: 'hb-end' }, via: 'emit' },
+        ],
+        startActs: [{ event: 'RpEcho', payload: { from: 'start2' }, via: 'emit' }],
+        endActs: [{ event: 'RpEcho', payload: { from: 'end' }, via: 'emit' }],
+      },
+    ])
+  })
+
+  it('an unknown name in startActs or endActs is unknown_event before any emit; malformed fields are invalid_log', () => {
+    const w0 = fresh()
+    const base = w0.snapshot({ pendingEvents: true })
+    const rec = createRecorder(w0)
+    w0.emit(Echo, { from: 'before' })
+    w0.stepOnce()
+    const log = rec.stop()
+    for (const field of ['startActs', 'endActs'] as const) {
+      const bad = { ...log, frames: [{ ...log.frames[0]!, [field]: [{ event: 'RpNope', via: 'emit' }] }] }
+      const w = fresh()
+      expect(replay(w, bad, { base })).toEqual({ ok: false, error: { kind: 'unknown_event', event: 'RpNope', tick: 0 } })
+      expect(w.pendingEvents()).toEqual([])
+      const malformed = { ...log, frames: [{ ...log.frames[0]!, [field]: [{ event: 'RpEcho', via: 'x' }] }] }
+      expect(replay(fresh(), malformed as unknown as ActLog, { base })).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
+    }
+  })
+})
+
+describe('out-of-tick draws on world.rand', () => {
+  it('record an out_of_tick_mutation gap', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const rec = createRecorder(w)
+    w.stepOnce()
+    w.rand.uniform()
+    w.stepOnce()
+    w.stepOnce()
+    expect(rec.stop().gaps).toEqual([{ tick: 1, reason: 'out_of_tick_mutation' }])
+  })
+
+  it('draws inside systems record nothing, and a restore does not add a rand gap', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    w.system('draw', {}, (ctx) => void ctx.rand.uniform())
+    const base = w.snapshot({ pendingEvents: true })
+    const rec = createRecorder(w)
+    w.stepOnce()
+    w.stepOnce()
+    w.restore(base)
+    w.stepOnce()
+    expect(rec.stop().gaps).toEqual([{ tick: 2, reason: 'restore' }])
+  })
+})

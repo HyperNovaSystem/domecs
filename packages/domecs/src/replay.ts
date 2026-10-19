@@ -163,8 +163,25 @@ export interface ActLogFrame {
    * replay applies it at the same point.
    */
   readonly hookScale?: number
-  /** Events emitted from outside since the previous step, in emit order. */
+  /**
+   * Events emitted from outside since the previous step and before this
+   * step's event flush (out of tick, during heartbeats, from plugin
+   * `onTickStart`), in emit order. Replay emits them before the step.
+   */
   readonly acts?: readonly ActRecord[]
+  /**
+   * Events emitted from outside during this step after its event flush and
+   * before its systems (`signals.tickStart` subscribers), in emit order.
+   * Replay emits them at the same point, so they keep their place among the
+   * events the step's systems emit.
+   */
+  readonly startActs?: readonly ActRecord[]
+  /**
+   * Events emitted from outside during this step after its systems (render,
+   * plugin `onTickEnd`, `signals.tickEnd`), in emit order. Replay emits them
+   * at the same point, so the step ends with the same queue (and checkpoint).
+   */
+  readonly endActs?: readonly ActRecord[]
   /** `world.input` as systems saw it this step, when it differs from the previous frame's (always on the first frame). */
   readonly input?: JsonInput
 }
@@ -229,6 +246,8 @@ interface FrameDraft {
   scale?: number
   hookScale?: number
   acts?: ActRecord[]
+  startActs?: ActRecord[]
+  endActs?: ActRecord[]
   input?: JsonInput
 }
 
@@ -238,12 +257,16 @@ interface FrameDraft {
  *
  * - every emit **not made by a system or an `on` handler** (`world.emit`,
  *   `turn`, `action`, plugin hooks and signal subscribers, heartbeats
- *   included), with `via`, into the next frame's `acts`;
+ *   included), with `via`: into the next frame's `acts`, or, when made
+ *   during a full step after its event flush, into that frame's
+ *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
+ *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
  *   scale on entry, a scale a tick-start hook set, and `world.input` after
  *   plugin `onTickStart`, delta-encoded;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
- *   `markResourceChanged` outside a full tick (`out_of_tick_mutation`), a
+ *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
+ *   between steps (`out_of_tick_mutation`), a
  *   payload that is not plain data (`unserializable_payload`; the act is
  *   dropped), and `restore()` (`restore`).
  *
@@ -269,12 +292,17 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   let pending: ActRecord[] = []
   // Entered but before plugin onTickStart finished: acts still join it.
   let opening: FrameDraft | null = null
-  // The frame whose tick is running (for hookScale).
+  // The frame whose tick is running (for hookScale, startActs, endActs).
   let running: FrameDraft | null = null
+  // Whether the running frame's tick-start hooks are done (its systems ran).
+  let afterHooks = false
   let entryScale = startScale
   // The scale the previous frame ended with: a replay world has it too.
   let lastScale = startScale
   let lastInput: string | null = null
+  // world.rand's state when the previous frame ended: a draw between steps
+  // is a direct write a replay cannot reproduce.
+  let lastRand = String(world.rand.seed())
   let restoreMark = 0
   let restoreTick = 0
   let active = true
@@ -287,22 +315,34 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     gaps.push({ tick, reason })
   }
 
+  function checkRand(): void {
+    const now = String(world.rand.seed())
+    if (now !== lastRand) {
+      gap('out_of_tick_mutation')
+      lastRand = now
+    }
+  }
+
   const listener: ActTapListener = {
     emitted(type, payload, via) {
+      let into: ActRecord[] = pending
+      const f = running
+      if (f !== null) into = afterHooks ? (f.endActs ??= []) : (f.startActs ??= [])
       if (payload === undefined) {
-        pending.push({ event: type.name, via })
+        into.push({ event: type.name, via })
         return
       }
       let copy: JsonValue
       try {
         copy = plainDataCopy(payload, 'payload')
       } catch {
-        gap('unserializable_payload')
+        gap('unserializable_payload', f?.tick)
         return
       }
-      pending.push({ event: type.name, payload: copy, via })
+      into.push({ event: type.name, payload: copy, via })
     },
     frameEntered(tick, dt, scale) {
+      checkRand()
       opening = { tick, dt }
       entryScale = scale
       if (scale !== lastScale) opening.scale = scale
@@ -326,14 +366,18 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       }
       opening = null
       running = f
+      afterHooks = false
       frames.push(f)
     },
     hooksDone() {
       if (running !== null && world.time.scale !== entryScale) running.hookScale = world.time.scale
+      afterHooks = true
     },
     frameEnded() {
       running = null
+      afterHooks = false
       lastScale = world.time.scale
+      lastRand = String(world.rand.seed())
       const tick = world.time.tick
       if (hashEvery !== undefined && tick % hashEvery === 0) {
         try {
@@ -358,6 +402,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
         pending.splice(0, restoreMark)
         // At the tick the world left, where the log stops describing it.
         gap('restore', restoreTick)
+        lastRand = String(world.rand.seed())
       } else {
         // A failed restore drops what its hooks emitted.
         pending.length = restoreMark
@@ -367,6 +412,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   const detach = tap.attach(listener)
 
   function build(): ActLog {
+    if (active) checkRand()
     const log: {
       format: 'domecs-actlog'
       version: 1
@@ -493,12 +539,14 @@ function checkFrame(f: unknown): string | null {
   if (f.dt !== null && !(isFinite(f.dt) && f.dt > 0)) return 'dt is not null or a positive finite number'
   if (f.scale !== undefined && !isScale(f.scale)) return 'scale is not a non-negative finite number'
   if (f.hookScale !== undefined && !isScale(f.hookScale)) return 'hookScale is not a non-negative finite number'
-  if (f.acts !== undefined) {
-    if (!Array.isArray(f.acts)) return 'acts is not an array'
-    for (let i = 0; i < f.acts.length; i++) {
-      const a: unknown = f.acts[i]
-      if (!isRec(a) || typeof a.event !== 'string') return `acts[${i}].event is not a string`
-      if (a.via !== 'emit' && a.via !== 'action') return `acts[${i}].via is not 'emit' or 'action'`
+  for (const field of ['acts', 'startActs', 'endActs'] as const) {
+    const acts = f[field]
+    if (acts === undefined) continue
+    if (!Array.isArray(acts)) return `${field} is not an array`
+    for (let i = 0; i < acts.length; i++) {
+      const a: unknown = acts[i]
+      if (!isRec(a) || typeof a.event !== 'string') return `${field}[${i}].event is not a string`
+      if (a.via !== 'emit' && a.via !== 'action') return `${field}[${i}].via is not 'emit' or 'action'`
     }
   }
   if (f.input !== undefined) {
@@ -547,33 +595,62 @@ function checkLog(log: unknown): string | null {
  * Apply one log frame to `world` (§7.1 replay step 3): resolve every act
  * (`unknown_event` / `rejected_payload` before any emit), set the scale and
  * input, emit the acts in order, then `stepOnce()` or `step(dt)` — with the
- * frame's `hookScale` set from a one-step `signals.tickStart` subscription.
+ * frame's `hookScale` set and its `startActs` emitted from a one-step
+ * `signals.tickStart` subscription, and its `endActs` emitted from a
+ * one-step `signals.tickEnd` subscription.
  * Returns `null` when the frame was applied. The frame must be valid
  * (checked by {@link replay}); shared with `runBranch` (§7.2).
  */
-export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null {
-  const resolved: Array<{ type: EventType<unknown>; payload: unknown }> = []
-  for (const act of frame.acts ?? []) {
+type ResolvedAct = { readonly type: EventType<unknown>; readonly payload: unknown }
+
+function resolveActs(world: World, acts: readonly ActRecord[] | undefined, tick: number, out: ResolvedAct[]): ReplayError | null {
+  for (const act of acts ?? []) {
     const type = world.lookupEvent(act.event)
-    if (type === undefined) return { kind: 'unknown_event', event: act.event, tick: frame.tick }
+    if (type === undefined) return { kind: 'unknown_event', event: act.event, tick }
     const payload = act.payload === undefined ? undefined : cloneSerializable(act.payload)
     if (act.via === 'action') {
       const reason = validateEventPayload(type, payload)
-      if (reason !== null) return { kind: 'rejected_payload', event: act.event, tick: frame.tick, reason }
+      if (reason !== null) return { kind: 'rejected_payload', event: act.event, tick, reason }
     }
-    resolved.push({ type, payload })
+    out.push({ type, payload })
   }
+  return null
+}
+
+export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null {
+  const before: ResolvedAct[] = []
+  const atStart: ResolvedAct[] = []
+  const atEnd: ResolvedAct[] = []
+  const failed =
+    resolveActs(world, frame.acts, frame.tick, before) ??
+    resolveActs(world, frame.startActs, frame.tick, atStart) ??
+    resolveActs(world, frame.endActs, frame.tick, atEnd)
+  if (failed !== null) return failed
   if (frame.scale !== undefined) world.setScale(frame.scale)
   if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
-  for (const { type, payload } of resolved) world.emit(type, payload)
+  for (const { type, payload } of before) world.emit(type, payload)
   const hookScale = frame.hookScale
-  const unsubscribe =
-    hookScale === undefined ? undefined : world.signals.tickStart.subscribe(() => world.setScale(hookScale))
+  const unsubscribe: Array<() => void> = []
+  if (hookScale !== undefined || atStart.length > 0) {
+    unsubscribe.push(
+      world.signals.tickStart.subscribe(() => {
+        if (hookScale !== undefined) world.setScale(hookScale)
+        for (const { type, payload } of atStart) world.emit(type, payload)
+      }),
+    )
+  }
+  if (atEnd.length > 0) {
+    unsubscribe.push(
+      world.signals.tickEnd.subscribe(() => {
+        for (const { type, payload } of atEnd) world.emit(type, payload)
+      }),
+    )
+  }
   try {
     if (frame.dt === null) world.stepOnce()
     else world.step(frame.dt)
   } finally {
-    unsubscribe?.()
+    for (const u of unsubscribe) u()
   }
   return null
 }

@@ -162,10 +162,11 @@ if (!r.ok) console.log(r.error.kind)         // 'diverged' at the first bad chec
 
 Every runtime change goes through a command (`emit`/`action`/`turn`): a
 direct `getComponent` write + `markChanged`, `spawn` or `setResource` outside
-a tick is a **gap** (`log.gaps`) and replay past it diverges. `register`
+a tick, or a `world.rand` draw between steps, is a **gap** (`log.gaps`) and
+replay past it diverges. `register`
 every command event so `replay` resolves acts by name. Build the replay world
-without stimulus sources (no input plugin, no hook that emits or sets the
-scale at tick start — their effects are in the log) and with no `once`
+without stimulus sources (no input plugin, no hook or signal subscriber that
+emits, none that sets the scale at tick start — their effects are in the log) and with no `once`
 system the source already ran.
 
 ### Control while paused

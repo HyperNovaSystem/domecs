@@ -1298,8 +1298,25 @@ export interface ActLogFrame {
      * replay applies it at the same point.
      */
     readonly hookScale?: number;
-    /** Events emitted from outside since the previous step, in emit order. */
+    /**
+     * Events emitted from outside since the previous step and before this
+     * step's event flush (out of tick, during heartbeats, from plugin
+     * `onTickStart`), in emit order. Replay emits them before the step.
+     */
     readonly acts?: readonly ActRecord[];
+    /**
+     * Events emitted from outside during this step after its event flush and
+     * before its systems (`signals.tickStart` subscribers), in emit order.
+     * Replay emits them at the same point, so they keep their place among the
+     * events the step's systems emit.
+     */
+    readonly startActs?: readonly ActRecord[];
+    /**
+     * Events emitted from outside during this step after its systems (render,
+     * plugin `onTickEnd`, `signals.tickEnd`), in emit order. Replay emits them
+     * at the same point, so the step ends with the same queue (and checkpoint).
+     */
+    readonly endActs?: readonly ActRecord[];
     /** `world.input` as systems saw it this step, when it differs from the previous frame's (always on the first frame). */
     readonly input?: JsonInput;
 }
@@ -1355,12 +1372,16 @@ export declare function actLogHash(world: World): string;
  *
  * - every emit **not made by a system or an `on` handler** (`world.emit`,
  *   `turn`, `action`, plugin hooks and signal subscribers, heartbeats
- *   included), with `via`, into the next frame's `acts`;
+ *   included), with `via`: into the next frame's `acts`, or, when made
+ *   during a full step after its event flush, into that frame's
+ *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
+ *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
  *   scale on entry, a scale a tick-start hook set, and `world.input` after
  *   plugin `onTickStart`, delta-encoded;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
- *   `markResourceChanged` outside a full tick (`out_of_tick_mutation`), a
+ *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
+ *   between steps (`out_of_tick_mutation`), a
  *   payload that is not plain data (`unserializable_payload`; the act is
  *   dropped), and `restore()` (`restore`).
  *
@@ -1402,14 +1423,6 @@ export interface ReplayOptions {
     /** Called after each replayed frame with `world.time.tick`. */
     readonly onFrame?: (tick: number, world: World) => void;
 }
-/**
- * Apply one log frame to `world` (§7.1 replay step 3): resolve every act
- * (`unknown_event` / `rejected_payload` before any emit), set the scale and
- * input, emit the acts in order, then `stepOnce()` or `step(dt)` — with the
- * frame's `hookScale` set from a one-step `signals.tickStart` subscription.
- * Returns `null` when the frame was applied. The frame must be valid
- * (checked by {@link replay}); shared with `runBranch` (§7.2).
- */
 export declare function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null;
 /**
  * Replay `log` on `world` (§7.1): optionally `restore(options.base)`, then
