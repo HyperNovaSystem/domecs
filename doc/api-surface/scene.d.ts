@@ -240,6 +240,89 @@ export type { SpatialHashOptions, SpatialIndex } from './spatial-hash.js';
 export { BUILD_ID } from './build-id.js';
 export { Contact, ContactState, installContacts } from './contacts.js';
 export type { ContactPayload, ContactPhase, ContactStateValue, ContactsOptions } from './contacts.js';
+export { SceneMember, instantiateScene } from './scenes.js';
+export type { InstantiateSceneOptions, InstantiateSceneResult, SceneData, SceneEntityData, SceneProblem, } from './scenes.js';
+
+// file: scenes.d.ts
+import { type ComponentType, type Entity, type World } from '@domecs/core';
+/**
+ * Marks an entity spawned by {@link instantiateScene}: the scene's `name`
+ * and the entity's key within it (after duplicate suffixing). An ordinary,
+ * persistent component with a declared schema, so scene membership survives
+ * `snapshot`/`restore`, saves and replay, and keeps snapshot pruning from
+ * dropping an otherwise bare scene entity. Written by `instantiateScene`;
+ * treat it as read-only.
+ */
+export declare const SceneMember: ComponentType<{
+    scene: string;
+    key: string;
+}, 'SceneMember'>;
+/** One entity of a {@link SceneData}. */
+export interface SceneEntityData {
+    /** Unique within the scene; `parent` and `refFields` values name entities by it. */
+    readonly key: string;
+    /** Component name → fields; each value is the component's defaults plus these fields. */
+    readonly components: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+    /** The key of the parent entity within the same scene; absent or `null` for a root. */
+    readonly parent?: string | null;
+}
+/** A scene as plain data: a name and its entities in spawn order. */
+export interface SceneData {
+    readonly name: string;
+    readonly entities: readonly SceneEntityData[];
+}
+/**
+ * Something {@link instantiateScene} could not apply. `path` points into the
+ * data, e.g. `entities[3].components.Target.entity` or `entities[1].parent`.
+ */
+export interface SceneProblem {
+    readonly path: string;
+    readonly message: string;
+}
+/** Options for {@link instantiateScene}. */
+export interface InstantiateSceneOptions {
+    /** Component name → type (e.g. `world.lookupComponent`, or a catalog); `undefined` for an unknown name. */
+    readonly resolve: (name: string) => ComponentType<any> | undefined;
+    /** Fields holding scene keys that must become live entity ids, e.g. [['Target','entity']]. */
+    readonly refFields?: ReadonlyArray<readonly [component: string, field: string]>;
+}
+/** Result of {@link instantiateScene}. */
+export interface InstantiateSceneResult {
+    /** Final key → live id, in data order (a duplicate key appears suffixed, e.g. `'a#2'`). */
+    readonly ids: ReadonlyMap<string, Entity>;
+    /** Every problem, in the order found (spawn, then parents, then `refFields`). Empty on success. */
+    readonly problems: readonly SceneProblem[];
+}
+/**
+ * Spawn a scene into `world`. Never throws for bad scene data; every
+ * problem is returned with its path (a bad `data` shape or `options` is a
+ * programmer error: `TypeError`).
+ *
+ * 1. **Spawn** in array order, so equal data on equal worlds gives equal
+ *    ids. Each entity gets `SceneMember { scene: data.name, key }` and its
+ *    components, each the component's defaults plus the given fields (a
+ *    plain-data copy; built with the component's `create`). An unknown
+ *    component name, a component the resolver cannot give, fields that are
+ *    not an object or that `validate` rejects, a name another component type
+ *    holds in this world, and a second component of the same type are
+ *    problems: that component is skipped and the entity still spawns. A
+ *    duplicate key is a problem, and the entity spawns as `key#2` (`#3`, …);
+ *    a key that is not a string is a problem and the entity spawns as
+ *    `#<index>`.
+ * 2. **Parents** by key, in array order, through `setParent` (so a parent may
+ *    come later in the array). A key the scene does not have, a self-parent
+ *    and a link that would close a cycle are problems; the entity stays a
+ *    root.
+ * 3. **`refFields`**: in each listed component field holding a string, the
+ *    key becomes the live id (the field is marked changed). An unknown key
+ *    is a problem and the field is left unchanged. Values that are not
+ *    strings (`null`, numbers) are left as they are.
+ *
+ * Keys in the data name the first entity holding them; the suffixed keys
+ * exist only in `ids` and `SceneMember`. Instantiating a scene name twice
+ * gives two sets of members that {@link unloadScene} removes together.
+ */
+export declare function instantiateScene(world: World, data: SceneData, options: InstantiateSceneOptions): InstantiateSceneResult;
 
 // file: spatial-hash.d.ts
 import type { ComponentType, Entity, World } from '@domecs/core';
