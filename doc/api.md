@@ -825,8 +825,9 @@ interface WorldSnapshot {
   // a v2 snapshot → the world keeps its own root). (v3)
   readonly rngRoot?: RngState
   // Every own stream the world has created, by key (rng: 'own' systems;
-  // entries outlive their systems). Omitted while there is none. (v3)
-  readonly rngStreams?: Readonly<Record<string, RngState>>
+  // entries outlive their systems). Omitted while there is none; an explicit
+  // undefined counts as absent (the reseed recipe). (v3)
+  readonly rngStreams?: Readonly<Record<string, RngState>> | undefined
   readonly tick:     number
   // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
   // the fixed-step count, and fixedAccumulator from it, so fixed systems keep

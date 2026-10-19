@@ -1546,9 +1546,11 @@ export interface WorldSnapshot {
      * re-registered system resumes it). Omitted while the world has never
      * created an own stream. Restore replaces the world's map with it and
      * re-derives, from the restored root, the stream of every registered own
-     * system whose key is missing.
+     * system whose key is missing. An explicit `undefined` counts as absent,
+     * so the reseed recipe `{ ...snap, seed: s, rngRoot: s, rngStreams:
+     * undefined }` type-checks under `exactOptionalPropertyTypes`.
      */
-    readonly rngStreams?: Readonly<Record<string, RngState>>;
+    readonly rngStreams?: Readonly<Record<string, RngState>> | undefined;
     readonly tick: number;
     /**
      * Cumulative unquantized scaled time in seconds — the drift-free total
