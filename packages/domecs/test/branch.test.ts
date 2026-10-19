@@ -280,6 +280,14 @@ describe('runBranch (§7.2)', () => {
     const c = run(branch(snap, withExtra), opts)
     expect(extraDraws).toBeGreaterThan(0)
     expect(c.samples).toEqual(a.samples)
+    // Registered first, ahead of every other system, it still draws only from its own stream.
+    const extraFirst = (w: World): void => {
+      w.system('extra', { rng: 'own' }, (ctx) => {
+        extraDraws += ctx.rand.uniform()
+      })
+      setup(w)
+    }
+    expect(run(branch(snap, extraFirst), opts).samples).toEqual(a.samples)
   })
 
   it('runBranch(60) + runBranch(60) equals runBranch(120) (test 3)', () => {
