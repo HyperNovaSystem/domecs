@@ -103,6 +103,21 @@ interface Collider {
   readonly held: Uint8Array
 }
 
+/**
+ * Whether `value` looks like a `defineComponent` type. Core's own guard is
+ * internal; a component type is an object with a string `name` and a
+ * `create` function. Catches the likely mistake of passing a component's
+ * name (rules name components by string), which would otherwise install a
+ * plugin that never detects anything.
+ */
+const isComponentLike = (value: unknown): value is ComponentType<any> =>
+  value !== null &&
+  typeof value === 'object' &&
+  typeof (value as { name?: unknown }).name === 'string' &&
+  typeof (value as { create?: unknown }).create === 'function'
+
+const isFieldName = (value: unknown): value is string => typeof value === 'string' && value.length > 0
+
 const byPair = (s: readonly [Entity, Entity], t: readonly [Entity, Entity]): number => s[0] - t[0] || s[1] - t[1]
 
 /**
@@ -130,12 +145,18 @@ const byPair = (s: readonly [Entity, Entity], t: readonly [Entity, Entity]): num
  */
 export function installContacts(options: ContactsOptions): Plugin {
   const name = options.name ?? DEFAULT_NAME
+  if (!isFieldName(name)) {
+    throw new TypeError(`installContacts: name must be a non-empty string (got ${JSON.stringify(name)})`)
+  }
   const position = options.position
-  if (!position || typeof position !== 'object' || !position.component) {
-    throw new TypeError('installContacts: position.component must be a component type')
+  if (!position || typeof position !== 'object' || !isComponentLike(position.component)) {
+    throw new TypeError('installContacts: position.component must be a component type (from defineComponent), not a name')
   }
   const fx = position.x ?? 'x'
   const fy = position.y ?? 'y'
+  if (!isFieldName(fx) || !isFieldName(fy)) {
+    throw new TypeError('installContacts: position.x and position.y must be non-empty field names')
+  }
   const radius = options.radius
   let fixedRadius: number | undefined
   let radiusComponent: ComponentType<any> | undefined
@@ -145,19 +166,21 @@ export function installContacts(options: ContactsOptions): Plugin {
       throw new RangeError(`installContacts: radius must be a finite number >= 0 (got ${String(radius)})`)
     }
     fixedRadius = radius
-  } else if (radius && typeof radius === 'object' && radius.component && typeof radius.field === 'string') {
+  } else if (radius && typeof radius === 'object' && isComponentLike(radius.component) && isFieldName(radius.field)) {
     radiusComponent = radius.component
     radiusField = radius.field
   } else {
-    throw new TypeError('installContacts: radius must be a number or { component, field }')
+    throw new TypeError('installContacts: radius must be a number or { component, field } (a component type and a non-empty field name)')
   }
   const pairs = options.pairs
   if (
     !Array.isArray(pairs) ||
     pairs.length === 0 ||
-    pairs.some((p) => !Array.isArray(p) || p.length !== 2 || !p[0] || !p[1])
+    pairs.some((p) => !Array.isArray(p) || p.length !== 2 || !isComponentLike(p[0]) || !isComponentLike(p[1]))
   ) {
-    throw new TypeError('installContacts: pairs must be a non-empty array of [TagA, TagB] component pairs')
+    throw new TypeError(
+      'installContacts: pairs must be a non-empty array of [TagA, TagB] component-type pairs (from defineComponent), not names',
+    )
   }
   const schedule = options.schedule ?? 'fixed'
   if (schedule !== 'fixed' && schedule !== 'tick') {
@@ -171,6 +194,9 @@ export function installContacts(options: ContactsOptions): Plugin {
     options.cellSize ?? (fixedRadius !== undefined && fixedRadius > 0 ? 2 * fixedRadius : DEFAULT_CELL_SIZE)
   if (typeof cellSize !== 'number' || !(Number.isFinite(cellSize) && cellSize > 0)) {
     throw new RangeError(`installContacts: cellSize must be a finite number > 0 (got ${String(cellSize)})`)
+  }
+  if (options.stay !== undefined && typeof options.stay !== 'boolean') {
+    throw new TypeError(`installContacts: stay must be a boolean (got ${JSON.stringify(options.stay)})`)
   }
   const stay = options.stay === true
 

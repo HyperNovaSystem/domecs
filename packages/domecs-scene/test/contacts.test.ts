@@ -484,4 +484,24 @@ describe('installContacts (spec §6.2)', () => {
     expect(() => installContacts({ ...base, pairs: [] })).toThrow(/pairs/)
     expect(() => installContacts({ ...base, radius: { component: Body } as never })).toThrow(/radius/)
   })
+
+  it('rejects options that are not component types (e.g. names) instead of never detecting anything', () => {
+    const base: ContactsOptions = { position: { component: Pos }, radius: 1, pairs: [[Player, Enemy]] }
+    // Rules name components by string; passing a name here must fail loudly.
+    expect(() => installContacts({ ...base, pairs: [[Player, 'CtEnemy']] as never })).toThrow(TypeError)
+    expect(() => installContacts({ ...base, pairs: [['CtPlayer', Enemy]] as never })).toThrow(/pairs/)
+    expect(() => installContacts({ ...base, pairs: [[Player, {}]] as never })).toThrow(/pairs/)
+    expect(() => installContacts({ ...base, position: { component: 'CtPos' } as never })).toThrow(/position/)
+    expect(() => installContacts({ ...base, position: { component: Pos, x: 0 } as never })).toThrow(/position/)
+    expect(() => installContacts({ ...base, position: { component: Pos, y: '' } })).toThrow(/position/)
+    expect(() => installContacts({ ...base, radius: { component: 'CtBody', field: 'r' } as never })).toThrow(/radius/)
+    expect(() => installContacts({ ...base, radius: { component: Body, field: '' } })).toThrow(/radius/)
+    expect(() => installContacts({ ...base, name: '' })).toThrow(/name/)
+    expect(() => installContacts({ ...base, name: 7 as never })).toThrow(/name/)
+    expect(() => installContacts({ ...base, stay: 'yes' as never })).toThrow(/stay/)
+    // Valid custom fields still install.
+    const w = createWorld({ headless: true })
+    const P2 = defineComponent<{ px: number; py: number }>('CtPos2', { defaults: { px: 0, py: 0 } })
+    expect(w.use(installContacts({ ...base, position: { component: P2, x: 'px', y: 'py' } })).ok).toBe(true)
+  })
 })
