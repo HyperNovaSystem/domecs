@@ -245,6 +245,7 @@ describe('E10.2 grammar: new primaries', () => {
       component: 'Pos',
       field: 'x',
       pos: 0,
+      componentPos: 5,
     })
     expect(ok(' self.id')).toEqual({ kind: 'entityId', target: { kind: 'self', pos: 1 }, pos: 1 })
   })
@@ -252,18 +253,20 @@ describe('E10.2 grammar: new primaries', () => {
   it('first(S).C.f, nearest(S).C.f, nearest(S, d).id, entity(n).C.f', () => {
     expect(ok('first(Player).Pos.x')).toEqual({
       kind: 'member',
-      target: { kind: 'select', op: 'first', set: 'Player', pos: 0 },
+      target: { kind: 'select', op: 'first', set: 'Player', pos: 0, setPos: 6 },
       component: 'Pos',
       field: 'x',
       pos: 0,
+      componentPos: 14,
     })
     expect(ok('2 * nearest(Enemy).Health.hp')).toMatchObject({
       right: {
         kind: 'member',
-        target: { kind: 'select', op: 'nearest', set: 'Enemy', pos: 4 },
+        target: { kind: 'select', op: 'nearest', set: 'Enemy', pos: 4, setPos: 12 },
         component: 'Health',
         field: 'hp',
         pos: 4,
+        componentPos: 19,
       },
     })
     expect(ok('nearest(Enemy, Sight.range * 2).id')).toEqual({
@@ -280,6 +283,7 @@ describe('E10.2 grammar: new primaries', () => {
           pos: 27,
         },
         pos: 0,
+        setPos: 8,
       },
       pos: 0,
     })
@@ -289,23 +293,31 @@ describe('E10.2 grammar: new primaries', () => {
       component: 'Pos',
       field: 'y',
       pos: 0,
+      componentPos: 18,
     })
   })
 
   it('has(C) and has(e, C)', () => {
-    expect(ok('has(Shield)')).toEqual({ kind: 'has', target: { kind: 'self', pos: 0 }, component: 'Shield', pos: 0 })
-    expect(ok('has(first(Player), Shield)')).toEqual({
+    expect(ok('has(Shield)')).toEqual({
       kind: 'has',
-      target: { kind: 'select', op: 'first', set: 'Player', pos: 4 },
+      target: { kind: 'self', pos: 0 },
       component: 'Shield',
       pos: 0,
+      componentPos: 4,
+    })
+    expect(ok('has(first(Player), Shield)')).toEqual({
+      kind: 'has',
+      target: { kind: 'select', op: 'first', set: 'Player', pos: 4, setPos: 10 },
+      component: 'Shield',
+      pos: 0,
+      componentPos: 19,
     })
     expect(ok('has(self, Shield)')).toMatchObject({ kind: 'has', target: { kind: 'self', pos: 4 } })
   })
 
   it('count, exists, sum, avg, minOf, maxOf', () => {
-    expect(ok('count(Enemy)')).toEqual({ kind: 'aggregate', op: 'count', set: 'Enemy', pos: 0 })
-    expect(ok('exists(Enemy)')).toEqual({ kind: 'aggregate', op: 'exists', set: 'Enemy', pos: 0 })
+    expect(ok('count(Enemy)')).toEqual({ kind: 'aggregate', op: 'count', set: 'Enemy', pos: 0, setPos: 6 })
+    expect(ok('exists(Enemy)')).toEqual({ kind: 'aggregate', op: 'exists', set: 'Enemy', pos: 0, setPos: 7 })
     for (const op of ['sum', 'avg', 'minOf', 'maxOf'] as const) {
       expect(ok(`${op}(Enemy, Health.hp)`)).toEqual({
         kind: 'aggregate',
@@ -314,6 +326,8 @@ describe('E10.2 grammar: new primaries', () => {
         component: 'Health',
         field: 'hp',
         pos: 0,
+        setPos: op.length + 1,
+        componentPos: op.length + 8,
       })
     }
   })
@@ -324,20 +338,22 @@ describe('E10.2 grammar: new primaries', () => {
       set: 'Enemy',
       radius: { kind: 'number', value: 5, pos: 19 },
       pos: 0,
+      setPos: 12,
     })
     expect(ok('countWithin(Enemy, 5, first(Player))')).toEqual({
       kind: 'countWithin',
       set: 'Enemy',
       radius: { kind: 'number', value: 5, pos: 19 },
-      centre: { kind: 'select', op: 'first', set: 'Player', pos: 22 },
+      centre: { kind: 'select', op: 'first', set: 'Player', pos: 22, setPos: 28 },
       pos: 0,
+      setPos: 12,
     })
   })
 
   it('distanceTo(e)', () => {
     expect(ok('distanceTo(nearest(Enemy))')).toEqual({
       kind: 'distanceTo',
-      target: { kind: 'select', op: 'nearest', set: 'Enemy', pos: 11 },
+      target: { kind: 'select', op: 'nearest', set: 'Enemy', pos: 11, setPos: 19 },
       pos: 0,
     })
   })
@@ -380,7 +396,7 @@ describe('E10.2 grammar: names that are not selectors', () => {
   })
 
   it('a set named like a selector keyword is just a name', () => {
-    expect(ok('count(entity)')).toEqual({ kind: 'aggregate', op: 'count', set: 'entity', pos: 0 })
+    expect(ok('count(entity)')).toEqual({ kind: 'aggregate', op: 'count', set: 'entity', pos: 0, setPos: 6 })
     expect(ok('has(first)')).toMatchObject({ kind: 'has', component: 'first', target: { kind: 'self' } })
   })
 })
@@ -574,7 +590,14 @@ describe('E14.1 grammar: event.f and other (§6.1)', () => {
   })
 
   it('other is an entity: other.C.f, other.id, has(other, C), distanceTo(other), countWithin centre', () => {
-    expect(ok('other.Hp.hp')).toEqual({ kind: 'member', target: { kind: 'other', pos: 0 }, component: 'Hp', field: 'hp', pos: 0 })
+    expect(ok('other.Hp.hp')).toEqual({
+      kind: 'member',
+      target: { kind: 'other', pos: 0 },
+      component: 'Hp',
+      field: 'hp',
+      pos: 0,
+      componentPos: 6,
+    })
     expect(ok('other.id')).toEqual({ kind: 'entityId', target: { kind: 'other', pos: 0 }, pos: 0 })
     expect(ok('has(other, Hp)')).toMatchObject({ kind: 'has', target: { kind: 'other', pos: 4 }, component: 'Hp' })
     expect(ok('distanceTo(other)')).toMatchObject({ kind: 'distanceTo', target: { kind: 'other', pos: 11 } })
@@ -600,5 +623,130 @@ describe('E14.1 grammar: event.f and other (§6.1)', () => {
     const own: Array<[string, string, number]> = []
     walkFieldRefs(ok(src), (c, f, pos) => own.push([c, f, pos]))
     expect(own).toEqual([['Pos', 'x', 25]])
+  })
+})
+
+// Orchestrator decision (f), 2026-10-19: the walkers gain an additive name
+// position (the visit callback's last argument) for the component token on
+// every form, so a renaming tool (studio) splices exactly. `pos` is
+// unchanged (the node position).
+describe('walker name positions (decision f)', () => {
+  type Visit = string
+  const visits = (src: string): Visit[] => {
+    const out: Visit[] = []
+    walkComponentRefs(ok(src), (c, f, _pos, role, namePos) => out.push(`${role}:${c}${f ? '.' + f : ''}@${namePos}`))
+    return out
+  }
+  const spelledAtNamePos = (src: string): void => {
+    let n = 0
+    walkComponentRefs(ok(src), (c, _f, _pos, _role, namePos) => {
+      n++
+      expect(src.slice(namePos, namePos + c.length)).toBe(c)
+      expect(/[A-Za-z0-9_]/.test(src[namePos + c.length] ?? '')).toBe(false)
+      expect(/[A-Za-z0-9_]/.test(src[namePos - 1] ?? '')).toBe(false)
+    })
+    expect(n).toBeGreaterThan(0)
+  }
+
+  it('C.f: the component token (same as pos)', () => {
+    expect(visits('1 + Pos.x')).toEqual(['self:Pos.x@4'])
+  })
+
+  it('self.C.f and other.C.f: the token after the dot', () => {
+    expect(visits('self.Pos.x')).toEqual(['self:Pos.x@5'])
+    expect(visits('other.Hp.hp')).toEqual(['member:Hp.hp@6'])
+  })
+
+  it('first(S).C.f, nearest(S[, d]).C.f, entity(n).C.f: the set and the component tokens', () => {
+    expect(visits('first(P).Pos.x')).toEqual(['set:P@6', 'member:Pos.x@9'])
+    expect(visits('nearest(Coin).Pos.y')).toEqual(['set:Coin@8', 'member:Pos.y@14'])
+    expect(visits('nearest(Coin, Sight.d).Pos.y')).toEqual(['set:Coin@8', 'self:Sight.d@14', 'member:Pos.y@23'])
+    expect(visits('entity(Target.id).Hp.hp')).toEqual(['self:Target.id@7', 'member:Hp.hp@18'])
+  })
+
+  it('e.id and distanceTo(e): the selector set', () => {
+    expect(visits('first(P).id')).toEqual(['set:P@6'])
+    expect(visits('distanceTo(nearest(Foe))')).toEqual(['set:Foe@19'])
+  })
+
+  it('has(C), has(self, C), has(other, C), has(e, C): the target component', () => {
+    expect(visits('has(Shield)')).toEqual(['set:Shield@4'])
+    expect(visits('has(self, Shield)')).toEqual(['set:Shield@10'])
+    expect(visits('has(other, Shield)')).toEqual(['set:Shield@11'])
+    expect(visits('has(first(P), Shield)')).toEqual(['set:P@10', 'set:Shield@14'])
+  })
+
+  it('count(S), exists(S), countWithin(S, r[, e]): the set', () => {
+    expect(visits('count(Foe)')).toEqual(['set:Foe@6'])
+    expect(visits('exists(Foe)')).toEqual(['set:Foe@7'])
+    expect(visits('countWithin(Foe, Range.r)')).toEqual(['set:Foe@12', 'self:Range.r@17'])
+    expect(visits('countWithin(Foe, 3, first(P))')).toEqual(['set:Foe@12', 'set:P@26'])
+  })
+
+  it('sum|avg|minOf|maxOf(S, C.f): the set and the member component', () => {
+    expect(visits('sum(Foe, Hp.hp)')).toEqual(['set:Foe@4', 'member:Hp.hp@9'])
+    expect(visits('avg(Foe, Hp.hp)')).toEqual(['set:Foe@4', 'member:Hp.hp@9'])
+    expect(visits('minOf(Foe, Hp.hp)')).toEqual(['set:Foe@6', 'member:Hp.hp@11'])
+    expect(visits('maxOf(Foe, Hp.hp)')).toEqual(['set:Foe@6', 'member:Hp.hp@11'])
+  })
+
+  it('every visit of a mixed, oddly spaced expression names its token exactly', () => {
+    const src =
+      '  self . Pos . x + has( first(  P ) ,  Q ) + sum(  S ,  Hp . hp ) + other .  Hp . hp' +
+      ' + countWithin(  Foe , Range . r ,  nearest( Coin ,  Sight . d ) ) + entity( Target . id ) . Pos . y' +
+      ' + has(  Shield ) + count( Foe ) + distanceTo( first( P ) ) + Pos . x ?? maxOf( S , Pos . x )'
+    spelledAtNamePos(src)
+    expect(visits(src).length).toBe(18)
+  })
+
+  it('splicing a new name at every name position renames exactly', () => {
+    const src = 'self.Pos.x + first(Pos).Pos.y + has(first(Pos), Pos) + sum(Pos, Pos.x) + countWithin(Pos, 1) + Pos.y'
+    const at: number[] = []
+    walkComponentRefs(ok(src), (c, _f, _pos, _role, namePos) => {
+      if (c === 'Pos') at.push(namePos)
+    })
+    let out = src
+    for (const p of [...at].sort((a, b) => b - a)) out = out.slice(0, p) + 'Place' + out.slice(p + 'Pos'.length)
+    expect(out).toBe(
+      'self.Place.x + first(Place).Place.y + has(first(Place), Place) + sum(Place, Place.x) + countWithin(Place, 1) + Place.y',
+    )
+    const names: string[] = []
+    walkComponentRefs(ok(out), (c) => names.push(c))
+    expect(names.every((c) => c === 'Place')).toBe(true)
+    expect(names.length).toBe(at.length)
+  })
+
+  it('walkFieldRefs passes the name position too (self.C.f: after `self.`)', () => {
+    const src = 'self.Pos.x + Pos.y + first(P).Pos.x'
+    const own: Array<[string, string, number, number]> = []
+    walkFieldRefs(ok(src), (c, f, pos, namePos) => own.push([c, f, pos, namePos]))
+    expect(own).toEqual([
+      ['Pos', 'x', 0, 5],
+      ['Pos', 'y', 13, 13],
+    ])
+    expect(rules.walkFieldRefs).toBe(walkFieldRefs)
+    expect(rules.walkComponentRefs).toBe(walkComponentRefs)
+  })
+
+  it('the parser records the name positions on the AST nodes', () => {
+    expect(ok('self.Pos.x')).toMatchObject({ kind: 'member', pos: 0, componentPos: 5 })
+    expect(ok('first(P).id')).toMatchObject({ target: { kind: 'select', pos: 0, setPos: 6 } })
+    expect(ok('has(first(P), Q)')).toMatchObject({ kind: 'has', pos: 0, componentPos: 14 })
+    expect(ok('sum(S, Hp.hp)')).toMatchObject({ kind: 'aggregate', pos: 0, setPos: 4, componentPos: 7 })
+    expect(ok('countWithin(S, 1)')).toMatchObject({ kind: 'countWithin', pos: 0, setPos: 12 })
+  })
+
+  it('a hand-built node without name positions falls back to pos', () => {
+    const node: AstNode = {
+      kind: 'aggregate',
+      op: 'sum',
+      set: 'S',
+      component: 'Hp',
+      field: 'hp',
+      pos: 3,
+    }
+    const seen: number[] = []
+    walkComponentRefs(node, (_c, _f, _pos, _role, namePos) => seen.push(namePos))
+    expect(seen).toEqual([3, 3])
   })
 })

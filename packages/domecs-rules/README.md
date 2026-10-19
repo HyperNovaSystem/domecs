@@ -207,10 +207,11 @@ installRules(world, [chase], resolve, { spatial: { component: 'Pos' } })
   `__proto__`/`constructor`/`prototype` check. `walkComponentRefs(ast,
   visit)` visits them all (role `'self'`, `'member'` or `'set'`), for tools
   that rename components; `walkFieldRefs(ast, visit)` (also exported)
-  still visits only the evaluated entity's own fields. Both report node
-  positions: the component token only for `C.f`; `self` for `self.C.f`,
-  the entity's start for `e.C.f`, the form's name for sets, aggregates and
-  `has`, so a renaming tool finds the name token from there.
+  still visits only the evaluated entity's own fields. Both pass `pos`,
+  the node position (the component token only for `C.f`; `self` for
+  `self.C.f`, the entity's start for `e.C.f`, the form's name for sets,
+  aggregates and `has`), and, last (2.3), `namePos`: the visited name's own
+  token on every form, where a renaming tool splices the new name.
 
 **Cost model.** Member lists are computed once per rule run per set
 (ascending id). A set aggregate whose field's component the rule does not

@@ -344,11 +344,14 @@ class Parser {
     return this.advance()
   }
 
-  /** A component name used as a set or a component: not a reserved word. */
-  private parseComponentName(what: string): string {
+  /**
+   * A component name used as a set or a component: not a reserved word.
+   * Returns the token's position too (2.3, decision (f): walker name positions).
+   */
+  private parseComponentToken(what: string): { value: string; pos: number } {
     const t = this.expectIdentifier(what)
     if (RESERVED_WORDS.has(t.value)) throw new ParseFailure(t.pos, reserved(t.value))
-    return t.value
+    return { value: t.value, pos: t.pos }
   }
 
   /** entity := 'self' | first(SET) | nearest(SET[, expr]) | entity(expr) */
@@ -367,10 +370,10 @@ class Parser {
         this.expectPunct(')')
         return { kind: 'entityById', id, pos: t.pos }
       }
-      const set = this.parseComponentName('a component name')
+      const { value: set, pos: setPos } = this.parseComponentToken('a component name')
       if (t.value === 'first') {
         this.expectPunct(')')
-        return { kind: 'select', op: 'first', set, pos: t.pos }
+        return { kind: 'select', op: 'first', set, pos: t.pos, setPos }
       }
       let maxDistance: AstNode | undefined
       if (this.peek().type === 'punct' && this.peek().value === ',') {
@@ -379,8 +382,8 @@ class Parser {
       }
       this.expectPunct(')')
       return maxDistance
-        ? { kind: 'select', op: 'nearest', set, maxDistance, pos: t.pos }
-        : { kind: 'select', op: 'nearest', set, pos: t.pos }
+        ? { kind: 'select', op: 'nearest', set, maxDistance, pos: t.pos, setPos }
+        : { kind: 'select', op: 'nearest', set, pos: t.pos, setPos }
     }
     throw new ParseFailure(
       t.pos,
@@ -423,7 +426,7 @@ class Parser {
     }
     this.advance() // '.'
     const field = this.expectIdentifier('a field name')
-    return { kind: 'member', target, component: name.value, field: field.value, pos: target.pos }
+    return { kind: 'member', target, component: name.value, field: field.value, pos: target.pos, componentPos: name.pos }
   }
 
   private parseCall(): AstNode {
@@ -443,35 +446,44 @@ class Parser {
           target = this.parseEntity()
           this.expectPunct(',')
         }
-        const component = this.parseComponentName('a component name')
+        const { value: component, pos: componentPos } = this.parseComponentToken('a component name')
         this.expectPunct(')')
-        return { kind: 'has', target, component, pos }
+        return { kind: 'has', target, component, pos, componentPos }
       }
       case 'count':
       case 'exists': {
         this.expectPunct('(')
-        const set = this.parseComponentName('a component name')
+        const { value: set, pos: setPos } = this.parseComponentToken('a component name')
         this.expectPunct(')')
-        return { kind: 'aggregate', op: name, set, pos }
+        return { kind: 'aggregate', op: name, set, pos, setPos }
       }
       case 'sum':
       case 'avg':
       case 'minOf':
       case 'maxOf': {
         this.expectPunct('(')
-        const set = this.parseComponentName('a component name')
+        const { value: set, pos: setPos } = this.parseComponentToken('a component name')
         this.expectPunct(',')
-        const component = this.parseComponentName('"Component.field"')
+        const { value: component, pos: componentPos } = this.parseComponentToken('"Component.field"')
         const dot = this.peek()
         if (!(dot.type === 'punct' && dot.value === '.')) this.expectPunct('.')
         this.advance()
         const field = this.expectIdentifier('a field name')
         this.expectPunct(')')
-        return { kind: 'aggregate', op: name as AggregateOp, set, component, field: field.value, pos }
+        return {
+          kind: 'aggregate',
+          op: name as AggregateOp,
+          set,
+          component,
+          field: field.value,
+          pos,
+          setPos,
+          componentPos,
+        }
       }
       case 'countWithin': {
         this.expectPunct('(')
-        const set = this.parseComponentName('a component name')
+        const { value: set, pos: setPos } = this.parseComponentToken('a component name')
         this.expectPunct(',')
         const radius = this.parseTernary()
         let centre: EntityNode | undefined
@@ -480,7 +492,9 @@ class Parser {
           centre = this.parseEntity()
         }
         this.expectPunct(')')
-        return centre ? { kind: 'countWithin', set, radius, centre, pos } : { kind: 'countWithin', set, radius, pos }
+        return centre
+          ? { kind: 'countWithin', set, radius, centre, pos, setPos }
+          : { kind: 'countWithin', set, radius, pos, setPos }
       }
       case 'distanceTo': {
         this.expectPunct('(')

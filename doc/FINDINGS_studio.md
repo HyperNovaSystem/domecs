@@ -268,11 +268,15 @@ complete for self-only (2.1-style) expressions. **Positions are AST node
 positions, not name tokens** (E-fix2 verify): only `C.f` reports the
 component token; `self.C.f` reports `self`, `e.C.f` the start of the entity
 (`first(`, `entity(`, …), and sets, aggregates and `has` the form's name. A
-rename must not splice the new name at `pos` directly: it has to find the
-name token from `pos` (for `self.C.f` it follows `self.`; for `e.C.f` it
-follows the entity's closing `)` and `.`). The engine does not report name
-token positions; if studio wants them, that is an additive engine request
-(e.g. a name position on the visit callback) for the owner. Studio can drop its mirror once
+rename must not splice the new name at `pos` directly. **Update (E-fix3,
+orchestrator decision (f), 2026-10-19):** both walkers now pass a last
+argument, `namePos`, the visited name's own token on every form (`C.f`,
+`self.C.f`, `other.C.f`, `e.C.f`, selector and aggregate sets, both names of
+`sum|avg|minOf|maxOf(S, C.f)`, `has` targets); splice the new name at
+`namePos` (right to left). `pos` is unchanged. Tests: `parser.test.ts`
+"walker name positions (decision f)"; doctest `rules-cross-entity` renames by
+splicing. This ships in the 2.3.0 release-candidate tarballs packed at the
+E-fix3 HEAD; the earlier `2.3.0+g06745fe` tarballs predate it. Studio can drop its mirror once
 it pins an engine build that includes this commit; the 2.2.0 release-candidate
 tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
 and do not export it. The 2.3.0 release-candidate tarballs (E18,

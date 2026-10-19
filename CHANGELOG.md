@@ -98,6 +98,16 @@ Snapshots stay format v3. Release notes:
   the evaluated entity's own field reads with their positions; use
   `walkComponentRefs` to also visit member reads, sets and `has` targets
   (studio finding 2026-10-19; studio had mirrored the walk).
+- `@domecs/rules` walker name positions (orchestrator decision (f),
+  2026-10-19): the `walkComponentRefs` and `walkFieldRefs` visit callbacks
+  gain a last argument, `namePos`, the position of the visited name's own
+  token on every form (`C.f`, `self.C.f`, `other.C.f`, `e.C.f`, the set of
+  `first`/`nearest`/`count`/`exists`/`countWithin`, both names of
+  `sum|avg|minOf|maxOf(S, C.f)`, the `has` target), so a renaming tool
+  splices exactly. `pos` is unchanged (the node position). The parser
+  records the positions on the AST as optional `setPos` (`select`,
+  `aggregate`, `countWithin`) and `componentPos` (`member`, `has`,
+  `aggregate`); a hand-built node without them reports `pos` as `namePos`.
 
 ### Changed
 

@@ -5,7 +5,9 @@
  * Every node carries `pos`: the character offset (0-based, into the source
  * string that was parsed) of the token the node starts at. Used to report
  * accurate positions for component-resolution errors raised later by
- * `compileRule` against a successfully-parsed AST (see rules.ts).
+ * `compileRule` against a successfully-parsed AST (see rules.ts). Nodes that
+ * name a component after their start (2.3) also carry that name token's
+ * position (`setPos`, `componentPos`), which the walkers report as `namePos`.
  */
 
 export const FUNCTION_NAMES = [
@@ -102,7 +104,11 @@ export type EntityNode =
   | { kind: 'self'; pos: number }
   /** 2.3 (§6.1): the entity an event rule's `other` binding gives. */
   | { kind: 'other'; pos: number }
-  | { kind: 'select'; op: 'first' | 'nearest'; set: string; maxDistance?: AstNode; pos: number }
+  /**
+   * `setPos` (2.3, decision (f)): the position of the set's name token.
+   * The parser always sets it; a hand-built node without it reports `pos`.
+   */
+  | { kind: 'select'; op: 'first' | 'nearest'; set: string; maxDistance?: AstNode; pos: number; setPos?: number }
   | { kind: 'entityById'; id: AstNode; pos: number }
 
 export type AggregateOp = 'count' | 'exists' | 'sum' | 'avg' | 'minOf' | 'maxOf'
@@ -135,16 +141,32 @@ export type AstNode =
   | { kind: 'ternary'; cond: AstNode; then: AstNode; else: AstNode; pos: number }
   | { kind: 'call'; name: FunctionName; args: AstNode[]; pos: number }
   // 2.2 (§5.2): cross-entity reads, aggregates and `??`.
-  /** `e.Component.field`; `self.C.f` reads the evaluated entity like `C.f`. */
-  | { kind: 'member'; target: EntityNode; component: string; field: string; pos: number }
+  /**
+   * `e.Component.field`; `self.C.f` reads the evaluated entity like `C.f`.
+   * `componentPos` (2.3): the component token's position (`pos` is the
+   * entity's start).
+   */
+  | { kind: 'member'; target: EntityNode; component: string; field: string; pos: number; componentPos?: number }
   /** `e.id`: the entity id as a number. */
   | { kind: 'entityId'; target: EntityNode; pos: number }
-  /** `has(C)` / `has(e, C)` (the target defaults to self). */
-  | { kind: 'has'; target: EntityNode; component: string; pos: number }
-  /** `count(S)`, `exists(S)`, `sum|avg|minOf|maxOf(S, C.f)`. */
-  | { kind: 'aggregate'; op: AggregateOp; set: string; component?: string; field?: string; pos: number }
-  /** `countWithin(S, r[, e])` (the centre defaults to self). */
-  | { kind: 'countWithin'; set: string; radius: AstNode; centre?: EntityNode; pos: number }
+  /** `has(C)` / `has(e, C)` (the target defaults to self). `componentPos` (2.3): `C`'s token. */
+  | { kind: 'has'; target: EntityNode; component: string; pos: number; componentPos?: number }
+  /**
+   * `count(S)`, `exists(S)`, `sum|avg|minOf|maxOf(S, C.f)`. `setPos` and
+   * `componentPos` (2.3): the `S` and `C` tokens.
+   */
+  | {
+      kind: 'aggregate'
+      op: AggregateOp
+      set: string
+      component?: string
+      field?: string
+      pos: number
+      setPos?: number
+      componentPos?: number
+    }
+  /** `countWithin(S, r[, e])` (the centre defaults to self). `setPos` (2.3): `S`'s token. */
+  | { kind: 'countWithin'; set: string; radius: AstNode; centre?: EntityNode; pos: number; setPos?: number }
   /** `distanceTo(e)`. */
   | { kind: 'distanceTo'; target: EntityNode; pos: number }
   /** `a ?? b`: `b` when evaluating `a` yields no value. */
@@ -175,14 +197,15 @@ function entityChildren(target: EntityNode): AstNode[] {
  * rename of the evaluated entity's own reads); a rename that must also
  * cover member reads, sets and `has` targets uses `walkComponentRefs`.
  * `pos` is the node position: the component token for `C.f`, but the
- * `self` token for `self.C.f` (the component name follows `self.`).
+ * `self` token for `self.C.f`. `namePos` (2.3, additive) is always the
+ * component token, so a rename splices the new name at `namePos`.
  */
 export function walkFieldRefs(
   node: AstNode,
-  visit: (component: string, field: string, pos: number) => void,
+  visit: (component: string, field: string, pos: number, namePos: number) => void,
 ): void {
-  walkComponentRefs(node, (component, field, pos, role) => {
-    if (role === 'self' && field !== null) visit(component, field, pos)
+  walkComponentRefs(node, (component, field, pos, role, namePos) => {
+    if (role === 'self' && field !== null) visit(component, field, pos, namePos)
   })
 }
 
@@ -197,24 +220,40 @@ export function walkFieldRefs(
  *
  * `pos` is the node's position: the component token for `C.f`, the start of
  * the entity for `e.C.f`, and the form's name token for sets, aggregates and
- * `has`. Component renames and `compileRule` resolution use this walker.
+ * `has`. `namePos` (2.3, additive) is the position of the visited name's own
+ * token on every form (`self.C.f`, `e.C.f`, `first(S)`, `has(e, C)`,
+ * `sum(S, C.f)`, …), so a rename splices the new name at `namePos`; a
+ * hand-built node without the name positions reports `pos` there.
+ * Component renames and `compileRule` resolution use this walker.
  * Payload reads (`event.f`, 2.3) name no component and are not visited.
  */
 export function walkComponentRefs(
   node: AstNode,
-  visit: (component: string, field: string | null, pos: number, role: 'self' | 'member' | 'set') => void,
+  visit: (
+    component: string,
+    field: string | null,
+    pos: number,
+    role: 'self' | 'member' | 'set',
+    namePos: number,
+  ) => void,
 ): void {
   const entity = (target: EntityNode): void => {
-    if (target.kind === 'select') visit(target.set, null, target.pos, 'set')
+    if (target.kind === 'select') visit(target.set, null, target.pos, 'set', target.setPos ?? target.pos)
     for (const child of entityChildren(target)) walkComponentRefs(child, visit)
   }
   switch (node.kind) {
     case 'field':
-      visit(node.component, node.field, node.pos, 'self')
+      visit(node.component, node.field, node.pos, 'self', node.pos)
       return
     case 'member':
       entity(node.target)
-      visit(node.component, node.field, node.pos, node.target.kind === 'self' ? 'self' : 'member')
+      visit(
+        node.component,
+        node.field,
+        node.pos,
+        node.target.kind === 'self' ? 'self' : 'member',
+        node.componentPos ?? node.pos,
+      )
       return
     case 'entityId':
     case 'distanceTo':
@@ -222,16 +261,16 @@ export function walkComponentRefs(
       return
     case 'has':
       entity(node.target)
-      visit(node.component, null, node.pos, 'set')
+      visit(node.component, null, node.pos, 'set', node.componentPos ?? node.pos)
       return
     case 'aggregate':
-      visit(node.set, null, node.pos, 'set')
+      visit(node.set, null, node.pos, 'set', node.setPos ?? node.pos)
       if (node.component !== undefined && node.field !== undefined) {
-        visit(node.component, node.field, node.pos, 'member')
+        visit(node.component, node.field, node.pos, 'member', node.componentPos ?? node.pos)
       }
       return
     case 'countWithin':
-      visit(node.set, null, node.pos, 'set')
+      visit(node.set, null, node.pos, 'set', node.setPos ?? node.pos)
       walkComponentRefs(node.radius, visit)
       if (node.centre) entity(node.centre)
       return

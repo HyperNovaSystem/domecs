@@ -6,7 +6,9 @@
  * Every node carries `pos`: the character offset (0-based, into the source
  * string that was parsed) of the token the node starts at. Used to report
  * accurate positions for component-resolution errors raised later by
- * `compileRule` against a successfully-parsed AST (see rules.ts).
+ * `compileRule` against a successfully-parsed AST (see rules.ts). Nodes that
+ * name a component after their start (2.3) also carry that name token's
+ * position (`setPos`, `componentPos`), which the walkers report as `namePos`.
  */
 export declare const FUNCTION_NAMES: readonly ["min", "max", "clamp", "abs", "sin", "cos", "floor", "random", "sqrt", "pow", "atan2", "hypot", "sign", "round", "ceil", "lerp", "distance"];
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
@@ -46,12 +48,18 @@ export type EntityNode = {
  | {
     kind: 'other';
     pos: number;
-} | {
+}
+/**
+ * `setPos` (2.3, decision (f)): the position of the set's name token.
+ * The parser always sets it; a hand-built node without it reports `pos`.
+ */
+ | {
     kind: 'select';
     op: 'first' | 'nearest';
     set: string;
     maxDistance?: AstNode;
     pos: number;
+    setPos?: number;
 } | {
     kind: 'entityById';
     id: AstNode;
@@ -122,13 +130,18 @@ export type AstNode = {
     args: AstNode[];
     pos: number;
 }
-/** `e.Component.field`; `self.C.f` reads the evaluated entity like `C.f`. */
+/**
+ * `e.Component.field`; `self.C.f` reads the evaluated entity like `C.f`.
+ * `componentPos` (2.3): the component token's position (`pos` is the
+ * entity's start).
+ */
  | {
     kind: 'member';
     target: EntityNode;
     component: string;
     field: string;
     pos: number;
+    componentPos?: number;
 }
 /** `e.id`: the entity id as a number. */
  | {
@@ -136,14 +149,18 @@ export type AstNode = {
     target: EntityNode;
     pos: number;
 }
-/** `has(C)` / `has(e, C)` (the target defaults to self). */
+/** `has(C)` / `has(e, C)` (the target defaults to self). `componentPos` (2.3): `C`'s token. */
  | {
     kind: 'has';
     target: EntityNode;
     component: string;
     pos: number;
+    componentPos?: number;
 }
-/** `count(S)`, `exists(S)`, `sum|avg|minOf|maxOf(S, C.f)`. */
+/**
+ * `count(S)`, `exists(S)`, `sum|avg|minOf|maxOf(S, C.f)`. `setPos` and
+ * `componentPos` (2.3): the `S` and `C` tokens.
+ */
  | {
     kind: 'aggregate';
     op: AggregateOp;
@@ -151,14 +168,17 @@ export type AstNode = {
     component?: string;
     field?: string;
     pos: number;
+    setPos?: number;
+    componentPos?: number;
 }
-/** `countWithin(S, r[, e])` (the centre defaults to self). */
+/** `countWithin(S, r[, e])` (the centre defaults to self). `setPos` (2.3): `S`'s token. */
  | {
     kind: 'countWithin';
     set: string;
     radius: AstNode;
     centre?: EntityNode;
     pos: number;
+    setPos?: number;
 }
 /** `distanceTo(e)`. */
  | {
@@ -202,9 +222,10 @@ export type AstNode = {
  * rename of the evaluated entity's own reads); a rename that must also
  * cover member reads, sets and `has` targets uses `walkComponentRefs`.
  * `pos` is the node position: the component token for `C.f`, but the
- * `self` token for `self.C.f` (the component name follows `self.`).
+ * `self` token for `self.C.f`. `namePos` (2.3, additive) is always the
+ * component token, so a rename splices the new name at `namePos`.
  */
-export declare function walkFieldRefs(node: AstNode, visit: (component: string, field: string, pos: number) => void): void;
+export declare function walkFieldRefs(node: AstNode, visit: (component: string, field: string, pos: number, namePos: number) => void): void;
 /**
  * Walk every component name reachable from `node`, in left-to-right source
  * order (2.2, §5.2):
@@ -216,10 +237,14 @@ export declare function walkFieldRefs(node: AstNode, visit: (component: string, 
  *
  * `pos` is the node's position: the component token for `C.f`, the start of
  * the entity for `e.C.f`, and the form's name token for sets, aggregates and
- * `has`. Component renames and `compileRule` resolution use this walker.
+ * `has`. `namePos` (2.3, additive) is the position of the visited name's own
+ * token on every form (`self.C.f`, `e.C.f`, `first(S)`, `has(e, C)`,
+ * `sum(S, C.f)`, …), so a rename splices the new name at `namePos`; a
+ * hand-built node without the name positions reports `pos` there.
+ * Component renames and `compileRule` resolution use this walker.
  * Payload reads (`event.f`, 2.3) name no component and are not visited.
  */
-export declare function walkComponentRefs(node: AstNode, visit: (component: string, field: string | null, pos: number, role: 'self' | 'member' | 'set') => void): void;
+export declare function walkComponentRefs(node: AstNode, visit: (component: string, field: string | null, pos: number, role: 'self' | 'member' | 'set', namePos: number) => void): void;
 /** Every direct child of `node` (expressions and entity nodes), for depth walks. */
 export declare function childNodes(node: AstNode | EntityNode): Array<AstNode | EntityNode>;
 
