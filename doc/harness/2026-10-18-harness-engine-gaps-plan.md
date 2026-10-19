@@ -263,7 +263,7 @@ Studio H0 starts as soon as E1's tarball is packed.
 
 #### E8.3 Release notes and gates
 
-- **Files:** `doc/v2.1.0.md`, `CHANGELOG.md`.
+- **Files:** `doc/release-notes/v2.1.0.md`, `CHANGELOG.md`.
 - [ ] **Accept:** **E8 exit:** `pnpm bench` (no regression), `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` (plus `DOMECS_ALT_RUNTIME` with the studio's pinned Electron) all green; `pack-for-studio` tarball delivered; **publish only on owner approval**.
 - [ ] **Commit:** `docs(release): 2.1.0 release notes (E8.3)`
 
@@ -350,6 +350,7 @@ checkpoints. Core tests use a core system with `rng: 'own'` where the spec says 
 - **Files:** `packages/domecs/src/world.ts` (symbol-keyed tap, `internal()` pattern; emit sites, `runTick` entry, mutation sites, `restore`), `packages/domecs/src/replay.ts`; same test file.
 - [ ] **Red:** external emits recorded with `via: 'emit' | 'action'` into the next frame (spec test 4: emits from systems and `on` handlers are not recorded); plugin `onTickStart` emits recorded during a full tick and during a heartbeat (half of test 9); frames carry `{tick, dt, scale?, input?}` with `dt: null` for `stepOnce`, `scale` read on `runTick` entry (a `tickStart` hook setting `scale = 0` at tick 50 records the pre-hook scale; half of test 10) and input delta-encoded after `onTickStart`; a heartbeat between acts does not split them into an extra frame and `setInput` + heartbeat records nothing (test 6); out-of-tick spawn/despawn/add/remove/`markChanged`/`setResource` records `out_of_tick_mutation`, a non-JSON payload `unserializable_payload`, `restore()` `restore` (half of test 3); `hashEvery: k` appends strict-hash checkpoints at tick ends where `tick % k === 0`; `startScale`, `fixedStep`, `baseHash` (strict, `pendingEvents: true`) set at creation; `peek()` returns a copy, `stop()` detaches (`active === false`).
 - [ ] **Green:** the tap (not a public signal), `ActRecord`, `ActLogFrame`, `ActLog`, `Recorder`, `createRecorder`.
+- [ ] **Note:** the spec's gap union lists `'heartbeat_input'`, but §7.1 says `setInput` + heartbeat records nothing, so no rule produces it. Drop it from the union unless implementation finds a case that needs it, and record the choice in spec Appendix C (E19 notes).
 - [ ] **Commit:** `feat(core): act-log recorder on a world-internal tap (E19.2)`
 
 #### E19.3 `replay`
@@ -392,7 +393,7 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 
 ### E13 — 2.2 release candidate
 
-- [ ] **E13.1** `doc/v2.2.0.md` (reserved words; `FunctionName` type-level change; new act log, replay and branch APIs), golden updated (owner-reviewed), fork-equivalence extended with chase rules and a rules-level leg for E19/E20 (a live world recorded with `createRecorder` vs a fresh build replaying the log from its base, and a `createBranch` + `runBranch` arm, with own-stream rules: equal strict hashes over ≥ 120 ticks after edits), all §8 gates, `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.2.0 release notes (E13.1)`
+- [ ] **E13.1** `doc/release-notes/v2.2.0.md` (reserved words; `FunctionName` type-level change; new act log, replay and branch APIs), golden updated (owner-reviewed), fork-equivalence extended with chase rules and a rules-level leg for E19/E20 (a live world recorded with `createRecorder` vs a fresh build replaying the log from its base, and a `createBranch` + `runBranch` arm, with own-stream rules: equal strict hashes over ≥ 120 ticks after edits), all §8 gates, `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.2.0 release notes (E13.1)`
 - **E13 exit gate:** E9–E12, E19 and E20 merged with their ledger rows (O-8, O-82, O-83, O-86, O-80, O-81) closed; `replay.test.ts` and `branch.test.ts` green; AGENTS.md "Record and replay" and "Branch and compare" recipes doctested; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green.
 - [ ] **E13.2** (only if E1.8 slipped) field-level diff lands here.
 
@@ -472,7 +473,7 @@ Scheduled in revision 3 (was EC3).
 
 ### E18 — 2.3 release candidate
 
-- [ ] **E18.1** `doc/v2.3.0.md` (including the new scene APIs); golden adds an event chain snapshotted with events in flight; fork-equivalence extended with effects, contacts and a scene swap (instantiate/unload between snapshots); all §8 gates; `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.3.0 release notes (E18.1)`
+- [ ] **E18.1** `doc/release-notes/v2.3.0.md` (including the new scene APIs); golden adds an event chain snapshotted with events in flight; fork-equivalence extended with effects, contacts and a scene swap (instantiate/unload between snapshots); all §8 gates; `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.3.0 release notes (E18.1)`
 - **E18 exit gate:** E14–E17 and E21 merged with their ledger rows (O-84, O-85, O-88, O-36, O-89, O-13 partial) updated; `scenes.test.ts` green; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green.
 
 ---

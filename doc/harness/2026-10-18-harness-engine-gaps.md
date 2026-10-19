@@ -21,8 +21,9 @@ _Paths in this document are relative to the repository root unless they are Mark
 as an in-policy puller), `plan/FINDINGS.md` (the O-ledger), `doc/SPEC.md` (runtime semantics),
 `doc/api.md` + `doc/api-surface/` (the type contract), `AGENTS.md` (naming and hard rules).
 
-**Inputs** (read in full; the critic resolves contradictions and wins where it does), under
-`/tmp/claude-1000/-home-ubuntu-project-HyperNova-domecs/0c574035-c693-4aaf-8be8-d90b31e45f0d/scratchpad/harness/`:
+**Inputs** (read in full; the critic resolves contradictions and wins where it does), in the
+2026-10-18 survey working folder `harness/` (session scratch, not committed; the findings this
+spec relies on are restated in it with their evidence, Appendix B):
 `survey-critic.md` (authoritative), `survey-engine.md` (gap ids G1–G18), `survey-studio.md`,
 `survey-agent-sdks.md`, `survey-platform.md`. Probes cited: `critic/order2.mjs` (registration-order
 drift), `probe/rng.mjs` (shared-RNG coupling), `probe/bench.mjs` (cost), platform `det/sim.mjs`
@@ -2165,7 +2166,7 @@ new export in every package's api-surface file.
    numbers (no build metadata). If any byte changed after the last tarball, re-pack and re-verify
    studio first. Studio then switches back to `^2.N.0` registry ranges at its milestone.
 
-**Release notes.** Each `doc/v2.N.0.md` lists:
+**Release notes.** Each `doc/release-notes/v2.N.0.md` (next to `v2.0.0.md`) lists:
 
 - highlights;
 - **behaviour changes**:
@@ -2352,7 +2353,7 @@ studio spec's dispositions.)
 | **Snapshot format: always v3 in 2.1.** Per-system RNG streams ship in 2.1 and `SNAPSHOT_VERSION` is 3 for every snapshot, not only when streams are used; persist migrates 2 → 3; v2 snapshots still load | ED-2, §3.2, §4.4 ("Always v3 in 2.1", test 4), §8 release notes, §11 risk 2; plan E4 | Unblocks E4, which E5 and E7 recorded as on hold. E7's `pendingEvents` (shipped on the v2 envelope) becomes a v3 optional field unchanged. The manifest `rng` field that E5 deferred lands with E4 (plan E4.1) |
 | **Schedule G3, G4 and G14.** No longer conditional | §0, ED-13, §7 (table, schedule lines), §8 order, §10, Appendix A; plan E19–E21 and the E13/E18 gates | G4 → E19 and G3 → E20 in 2.2 before the RC (E13); G14 → E21 in 2.3 before the RC (E18). G11 (`redefineComponent`, EC4) stays conditional |
 | Studio defaults new projects to `settings.engine.rng = 'own'`, migrated v1 projects to `'shared'` | §4.4 "Studio" line (already stated) | Engine default stays `'shared'` (ED-4) |
-| Spec and plan are committed under `doc/harness/` | Header, plan header, `doc/harness/README.md` | `plan/*` is gitignored, so the files were moved rather than `git mv`ed; references in AGENTS.md, `doc/`, `plan/FINDINGS.md` and the three studio docs point at the new paths |
+| Spec and plan are committed under `doc/harness/` | Header, plan header, `doc/harness/README.md` | `plan/*` is gitignored, so the files were moved rather than `git mv`ed; `doc/README.md`, `plan/FINDINGS.md` and the three studio docs point at the new paths (AGENTS.md and `plan/PLAN.md` had no references) |
 
 Choices made in the revision-3 docs pass where the decisions were silent (owner may override):
 
@@ -2455,3 +2456,12 @@ E4 (snapshot v3) is still on hold; E7 shipped on the v2 envelope.
 | §4.7 twin-named pending event (verify pass, `fix(E7)`) | `snapshot({ pendingEvents: true })` throws `TypeError` naming the event when another known event type shares a pending event's name | Found in adversarial verify: the by-name record could never restore (restore refuses the ambiguous name, even into the same world) or restored silently as the twin type in a world knowing only the other. `register` already refuses twins; `emit`/`on` do not |
 | §4.7 own `"__proto__"` payload key (verify pass, `fix(E7)`) | The payload copy and `cloneSerializable` define `"__proto__"` as an own data key (`setOwn`) | Found in adversarial verify: `out[k] = v` set the copy's prototype, dropping the data from the snapshot, the restored queue and the hash. The shared `cloneSerializable` fix also covers component/resource values |
 | §4.7 idle driver (verify pass) | No change; test added: after restoring a queue the O-48 repaint frame does not tick, the queue keeps the idle loop awake for one delivering step | Coverage gap only |
+
+### Verification notes — revision-3 docs pass (2026-10-19, adversarial pass)
+
+| Finding | Fix | Reason |
+|---|---|---|
+| The Inputs paragraph named a session scratch path under `/tmp/…/scratchpad/harness/` in a committed document | Replaced with a description of the survey working folder (not committed) | A machine- and session-specific path is meaningless to readers of the repository |
+| §8 and plan E8.3/E13.1/E18.1 named release notes `doc/v2.N.0.md` | `doc/release-notes/v2.N.0.md` | The v1.0.0 and v2.0.0 notes live in `doc/release-notes/` |
+| §7.1 `ActLog.gaps` lists `'heartbeat_input'`, but the semantics say `setInput` + heartbeat records nothing | Plan E19.2 note: drop the reason unless implementation needs it, recording the choice here | An unreachable variant in a public union invites dead `case` branches |
+| Studio docs still say "milestones E1–E18" | Not changed (the docs pass was limited to path references in the studio repo) | Follow-up in the studio repo: E1–E21 |
