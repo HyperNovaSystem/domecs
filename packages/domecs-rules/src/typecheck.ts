@@ -1,4 +1,4 @@
-import type { AstNode } from './ast.js'
+import type { AstNode, EntityNode } from './ast.js'
 
 /** What an expression is known to produce before it runs. */
 export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown'
@@ -9,8 +9,14 @@ export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown'
  * string or boolean literal (or an operator producing one) where
  * arithmetic, a comparison or a function needs a number. Field values are
  * `'unknown'`: a component's defaults do not fix a field's kind. Errors in
- * code that may not run — the right side of `&&`/`||`, a ternary branch —
- * are not reported, so this only rejects what fails on every evaluation.
+ * code that may not run — the right side of `&&`/`||`/`??`, a ternary
+ * branch — are not reported, so this only rejects what fails on every
+ * evaluation.
+ *
+ * 2.2 (§5.2): `has` and `exists` are boolean; `count`, `countWithin`,
+ * `distanceTo`, `e.id`, `tick` and the aggregates are numbers; member reads
+ * are `'unknown'`. An entity is never a value: the parser already rejects
+ * one outside a member base, selector argument or `has` target ("use .id").
  */
 export function inferKind(node: AstNode, report: (pos: number, message: string) => void): StaticKind {
   return infer(node, report, true)
@@ -32,7 +38,7 @@ function infer(
     case 'string':
     case 'boolean':
       return node.kind
-    case 'identifier':
+    case 'identifier': // dt, time, tick
       return 'number'
     case 'field':
       return 'unknown'
@@ -67,7 +73,31 @@ function infer(
     case 'call':
       for (const arg of node.args) numeric(arg, `${node.name}()`)
       return 'number'
-    default:
+    case 'nullish': {
+      const a = infer(node.left, report, certain)
+      const b = infer(node.right, report, false)
+      return a === b ? a : 'unknown'
+    }
+    case 'member':
+      entity(node.target)
       return 'unknown'
+    case 'entityId':
+    case 'distanceTo':
+      entity(node.target)
+      return 'number'
+    case 'has':
+      entity(node.target)
+      return 'boolean'
+    case 'aggregate':
+      return node.op === 'exists' ? 'boolean' : 'number'
+    case 'countWithin':
+      numeric(node.radius, 'countWithin()')
+      if (node.centre) entity(node.centre)
+      return 'number'
+  }
+
+  function entity(target: EntityNode): void {
+    if (target.kind === 'select' && target.maxDistance) numeric(target.maxDistance, 'nearest()')
+    if (target.kind === 'entityById') numeric(target.id, 'entity()')
   }
 }

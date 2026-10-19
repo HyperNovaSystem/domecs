@@ -1,5 +1,17 @@
-import type { ComponentType, EntityView, SystemFault, SystemHandle, World } from '@domecs/core'
-import { walkFieldRefs, type AstNode } from './ast.js'
+import {
+  And,
+  Has,
+  Not,
+  createSpatialGrid,
+  type ComponentType,
+  type EntityView,
+  type QueryDef,
+  type SpatialGrid,
+  type SystemFault,
+  type SystemHandle,
+  type World,
+} from '@domecs/core'
+import { childNodes, walkComponentRefs, type AstNode, type EntityNode } from './ast.js'
 import { parseExpression } from './parser.js'
 import { compileExpression, RuleEvalError, type CompiledExpression, type EvalEnv } from './evaluator.js'
 import { inferKind } from './typecheck.js'
@@ -37,6 +49,12 @@ export interface RuleDef {
   rng?: 'shared' | 'own'
   enabled?: boolean
   query: string[]
+  /**
+   * Components that exclude an entity from the rule (2.2, §5.2): the rule
+   * runs on entities holding every `query` component and none of these
+   * (`And(...query.map(Has), ...without.map(c => Not(Has(c))))`).
+   */
+  without?: string[]
   when?: string
   actions: RuleActionDef[]
 }
@@ -52,6 +70,7 @@ export type RuleDefPath =
   | 'rng'
   | 'when'
   | { readonly query: number }
+  | { readonly without: number }
   | { readonly action: number; readonly part: 'set' | 'expr' }
 
 export interface RuleError {
@@ -95,6 +114,11 @@ interface CompiledAction {
 
 interface CompiledRuleInternal extends CompiledRule {
   queryTypes: ComponentType<any>[]
+  withoutTypes: ComponentType<any>[]
+  /** Sets read by `nearest`/`countWithin`: one grid each per run. */
+  spatialSets: string[]
+  /** The resolved `spatial` option, when any form needs positions. */
+  spatial: ResolvedSpatial | undefined
   whenAst: AstNode | undefined
   when: CompiledExpression | undefined
   actions: CompiledAction[]
@@ -136,6 +160,7 @@ interface CompiledRuleInternal extends CompiledRule {
 export function compileRule(
   def: RuleDef,
   resolve: (name: string) => ComponentType<any> | undefined,
+  options: CompileRuleOptions = {},
 ): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] } {
   const errors: RuleError[] = []
   const componentsByName = new Map<string, ComponentType<any>>()
@@ -183,6 +208,35 @@ export function compileRule(
     const t = resolveAndTrack(def.query[i]!, -1, 'referenced in query', { query: i })
     if (t) queryTypes.push(t)
   }
+  const withoutTypes: ComponentType<any>[] = []
+  for (let i = 0; i < (def.without ?? []).length; i++) {
+    const t = resolveAndTrack(def.without![i]!, -1, 'referenced in without', { without: i })
+    if (t) withoutTypes.push(t)
+  }
+
+  // §5.2: every component name in an expression — self and member reads,
+  // sets, `has` targets, aggregate fields — resolves, and member fields get
+  // the O-67 check too. Spatial forms need the `spatial` option.
+  const spatialSets = new Set<string>()
+  let spatial: ResolvedSpatial | undefined
+  function checkExpression(ast: AstNode, path: RuleDefPath, context: string): void {
+    walkComponentRefs(ast, (component, field, pos) => {
+      if (field !== null) checkField(field, pos, path)
+      resolveAndTrack(component, pos, context, path)
+    })
+    forEachNode(ast, (node) => {
+      const form = spatialForm(node)
+      if (form === null) return
+      if (node.kind === 'select' || node.kind === 'countWithin') spatialSets.add(node.set)
+      const option = options.spatial
+      if (!option) {
+        fail(path, node.pos, `"${form}" needs positions: pass the spatial option to installRules`)
+        return
+      }
+      const type = resolveAndTrack(option.component, node.pos, 'named by the spatial option', path)
+      if (type) spatial = { type, x: option.x ?? 'x', y: option.y ?? 'y', cellSize: option.cellSize ?? DEFAULT_CELL_SIZE }
+    })
+  }
 
   let whenAst: AstNode | undefined
   if (def.when !== undefined) {
@@ -191,10 +245,7 @@ export function compileRule(
       for (const e of parsed.errors) fail('when', e.position, e.message)
     } else {
       whenAst = parsed.ast
-      walkFieldRefs(whenAst, (component, field, pos) => {
-        checkField(field, pos, 'when')
-        resolveAndTrack(component, pos, 'referenced in "when"', 'when')
-      })
+      checkExpression(whenAst, 'when', 'referenced in "when"')
     }
   }
 
@@ -220,10 +271,7 @@ export function compileRule(
       for (const e of parsed.errors) fail(exprPath, e.position, e.message)
       continue
     }
-    walkFieldRefs(parsed.ast, (component, field, pos) => {
-      checkField(field, pos, exprPath)
-      resolveAndTrack(component, pos, `referenced in action "${action.set}" expr`, exprPath)
-    })
+    checkExpression(parsed.ast, exprPath, `referenced in action "${action.set}" expr`)
     if (targetType) {
       compiledIndex.push(i)
       compiledActions.push({
@@ -231,7 +279,7 @@ export function compileRule(
         componentName: compName,
         field: fieldName,
         ast: parsed.ast,
-        run: compileExpression(parsed.ast),
+        run: undefined as unknown as CompiledExpression, // compiled below, once memoization is known
       })
     }
   }
@@ -247,15 +295,76 @@ export function compileRule(
   }
   if (errors.length > 0) return { rule: null, errors }
 
+  // §5.2 memoization: a set aggregate is computed once per run when it
+  // cannot change during the run — `count`/`exists` always (membership is
+  // stable within a run), a field aggregate when the rule writes no field of
+  // that component. Otherwise it is recomputed per entity (Gauss–Seidel).
+  const written = new Set(compiledActions.map((a) => a.componentName))
+  const memo = {
+    memoize: (node: Extract<AstNode, { kind: 'aggregate' }>): boolean =>
+      node.component === undefined || !written.has(node.component),
+  }
+  for (const action of compiledActions) action.run = compileExpression(action.ast, memo)
+
   const rule: CompiledRuleInternal = {
     def,
     queryTypes,
+    withoutTypes,
+    spatialSets: [...spatialSets],
+    spatial,
     whenAst,
-    when: whenAst ? compileExpression(whenAst) : undefined,
+    when: whenAst ? compileExpression(whenAst, memo) : undefined,
     actions: compiledActions,
     componentsByName,
   }
   return { rule, errors: [] }
+}
+
+/** Default `spatial.cellSize`: a pure performance setting (results never depend on it). */
+const DEFAULT_CELL_SIZE = 32
+
+/** Where positions come from (§5.2), resolved against real component types. */
+interface ResolvedSpatial {
+  type: ComponentType<any>
+  x: string
+  y: string
+  cellSize: number
+}
+
+/** The position source for `nearest`, `countWithin` and `distanceTo`. */
+export interface SpatialOption {
+  /** Component holding each entity's position. */
+  readonly component: string
+  /** Field names (default `'x'` / `'y'`). */
+  readonly x?: string
+  readonly y?: string
+  /** Grid cell size (default 32): performance only, results never depend on it. */
+  readonly cellSize?: number
+}
+
+/** Options for {@link compileRule} (2.2). */
+export interface CompileRuleOptions {
+  /** Position source; required if the rule uses `nearest`, `countWithin` or `distanceTo`. */
+  readonly spatial?: SpatialOption
+}
+
+/** The name of the spatial form `node` is, or null. */
+function spatialForm(node: AstNode | EntityNode): string | null {
+  if (node.kind === 'select' && node.op === 'nearest') return 'nearest'
+  if (node.kind === 'countWithin') return 'countWithin'
+  if (node.kind === 'distanceTo') return 'distanceTo'
+  return null
+}
+
+/** Visit `root` and every node below it (expressions and entity nodes), parents first. */
+function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void {
+  const stack: Array<AstNode | EntityNode> = [root]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    visit(node)
+    const children = childNodes(node)
+    for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!)
+  }
 }
 
 /**
@@ -292,26 +401,36 @@ function registerRuleSystem(
   order: number,
   rng: 'shared' | 'own',
 ): SystemHandle {
-  const { def, queryTypes, when, actions, componentsByName } = rule
+  const { def, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
   // Keyed by the rule's own names, as reads through resolveField are.
   const actionKeys = actions.map((a) => `${a.componentName}.${a.field}`)
   // O-69 (R12): staging lookups are needed only when an action reads a
   // field an earlier action wrote, and commit dedupe only when two actions
   // write the same field. Both are known now, so the common case skips them.
+  // Any field read counts (§5.2): an aggregate or `entity(n)` may read the
+  // evaluated entity itself, which resolves through resolveField.
   const readsStaged = actions.some((a, i) => {
     let hit = false
-    walkFieldRefs(a.ast, (c, f) => {
-      if (actionKeys.indexOf(`${c}.${f}`) < i && actionKeys.indexOf(`${c}.${f}`) >= 0) hit = true
+    walkComponentRefs(a.ast, (c, f) => {
+      if (f === null) return
+      const k = actionKeys.indexOf(`${c}.${f}`)
+      if (k >= 0 && k < i) hit = true
     })
     return hit
   })
   const uniqueTargets = new Set(actionKeys).size === actionKeys.length
+  // §5.2 `without`: And(...Has, ...Not(Has)); the plain list otherwise (2.1 shape).
+  const query: QueryDef =
+    withoutTypes.length === 0 ? queryTypes : And(...queryTypes.map((t) => Has(t)), ...withoutTypes.map((t) => Not(Has(t))))
+  // One grid per spatial set, cleared and refilled at the start of each run.
+  const grids = new Map<string, SpatialGrid>()
+  if (spatial) for (const set of spatialSets) grids.set(set, createSpatialGrid(spatial.cellSize))
 
   return world.system(
     `rule:${def.name}`,
     {
       schedule: def.schedule,
-      query: queryTypes,
+      query,
       priority: def.priority ?? 0,
       order,
       // §4.4: an own stream is keyed by the cursor key `rule:<name>`, and
@@ -343,6 +462,30 @@ function registerRuleSystem(
       const values: Array<number | string | boolean> = []
       const committed = new Set<string>()
       let entity!: EntityView
+      // §5.2: member lists, once per run per set (ascending id; structure
+      // never changes during a run).
+      const memberCache = new Map<string, readonly number[]>()
+      const members = (set: string): readonly number[] => {
+        let list = memberCache.get(set)
+        if (list === undefined) {
+          const type = componentsByName.get(set)
+          list = type ? world.listEntities([type]) : []
+          memberCache.set(set, list)
+        }
+        return list
+      }
+      const position = (id: number): { x: number; y: number } | undefined => {
+        if (!spatial) return undefined
+        const value = world.getComponent(id, spatial.type) as Record<string, unknown> | undefined
+        if (value === undefined || !Object.hasOwn(value, spatial.x) || !Object.hasOwn(value, spatial.y)) return undefined
+        const x = value[spatial.x]
+        const y = value[spatial.y]
+        return typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y)
+          ? { x, y }
+          : undefined
+      }
+      const excluding = (exclude: number | undefined): ((id: number) => boolean) | undefined =>
+        exclude === undefined ? undefined : (id) => id !== exclude
       const env: EvalEnv = {
         dt,
         time,
@@ -357,6 +500,40 @@ function registerRuleSystem(
           // O-67: own properties only — never the prototype chain.
           return Object.hasOwn(value, field) ? (value[field] as number | string | boolean) : undefined
         },
+        tick: ctx.time.tick,
+        readField(id, component, field) {
+          const type = componentsByName.get(component)
+          const value = type ? (world.getComponent(id, type) as Record<string, unknown> | undefined) : undefined
+          if (value === undefined || !Object.hasOwn(value, field)) return undefined
+          return value[field] as number | string | boolean
+        },
+        members,
+        isAlive: (id) => world.isAlive(id),
+        has(id, component) {
+          const type = componentsByName.get(component)
+          return type !== undefined && world.isAlive(id) && world.has(id, type)
+        },
+        position,
+        nearest(set, x, y, maxDistance, exclude) {
+          const grid = grids.get(set)
+          if (!grid) return undefined
+          const accept = excluding(exclude)
+          return accept ? grid.nearest(x, y, { maxDistance, accept }) : grid.nearest(x, y, { maxDistance })
+        },
+        within(set, x, y, r, exclude) {
+          const grid = grids.get(set)
+          return grid ? grid.within(x, y, r, excluding(exclude)) : []
+        },
+      }
+      // §5.2 spatial selection: grids from positions at the start of the run.
+      if (grids.size > 0 && ctx.entities.length > 0) {
+        for (const [set, grid] of grids) {
+          grid.clear()
+          for (const id of members(set)) {
+            const p = position(id)
+            if (p) grid.set(id, p.x, p.y)
+          }
+        }
       }
       // The entity's component: from its query view when the query holds
       // it, else looked up.
@@ -371,6 +548,7 @@ function registerRuleSystem(
 
       for (const view of ctx.entities) {
         entity = view
+        env.self = view.id
         if (readsStaged) staged.clear()
         // One bad entity (e.g. a query match missing a field referenced by
         // `when`/an action) must never stop the rest of the query from
@@ -483,6 +661,14 @@ export interface InstallRulesOptions {
    * own stream, so editing one rule never reshuffles another's draws.
    */
   readonly rng?: 'shared' | 'own'
+  /**
+   * Position source for `nearest`, `countWithin` and `distanceTo` (2.2,
+   * §5.2); required if any rule uses them (otherwise that rule fails to
+   * compile). Selection uses a grid built from these positions at the start
+   * of each rule run; `distanceTo` reads live positions. An entity whose
+   * position fields are missing or not finite numbers has no position.
+   */
+  readonly spatial?: SpatialOption
 }
 
 /**
@@ -515,6 +701,25 @@ export function installRules(
   const rngMode = options.rng ?? 'shared'
   if (rngMode !== 'shared' && rngMode !== 'own') {
     throw new Error(`@domecs/rules: installRules rng must be 'shared' or 'own', got ${JSON.stringify(rngMode)}`)
+  }
+  const spatialOption = options.spatial
+  if (spatialOption !== undefined) {
+    const isName = (v: unknown): boolean => typeof v === 'string' && v.length > 0 && !FORBIDDEN_FIELDS.has(v)
+    if (
+      typeof spatialOption !== 'object' ||
+      spatialOption === null ||
+      !isName(spatialOption.component) ||
+      (spatialOption.x !== undefined && !isName(spatialOption.x)) ||
+      (spatialOption.y !== undefined && !isName(spatialOption.y))
+    ) {
+      throw new Error(
+        `@domecs/rules: installRules spatial must be { component, x?, y?, cellSize? } with non-empty names, got ${JSON.stringify(spatialOption)}`,
+      )
+    }
+    const cs = spatialOption.cellSize
+    if (cs !== undefined && (typeof cs !== 'number' || !Number.isFinite(cs) || cs <= 0)) {
+      throw new Error(`@domecs/rules: installRules spatial.cellSize must be a finite number > 0, got ${String(cs)}`)
+    }
   }
   const active = new Map<string, SystemHandle>()
 
@@ -551,7 +756,7 @@ export function installRules(
         active.delete(def.name)
       }
 
-      const compiled = compileRule(def, resolve)
+      const compiled = compileRule(def, resolve, spatialOption ? { spatial: spatialOption } : {})
       if (compiled.rule === null) {
         errorsByName.set(def.name, compiled.errors)
         continue

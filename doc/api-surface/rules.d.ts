@@ -196,12 +196,19 @@ export declare const BUILD_ID: string;
 
 // file: evaluator.d.ts
 import type { AstNode } from './ast.js';
+/** A value an expression produces. */
+type Value = number | string | boolean;
 /**
  * Everything `evaluate` needs, without touching a `World` — the AST /
  * parser / evaluator stay pure and world-agnostic (the only "@domecs/core"
- * import is the pure `dmath` namespace, so `sin()`/`cos()` are
- * bit-reproducible across engines; O-75). The world-facing wiring
- * (resolving `Component.field` against a real `World`) lives in rules.ts.
+ * import is the pure `dmath` namespace, so `sin()`/`cos()` and, from 2.2,
+ * `atan2()`/`hypot()`/`pow()` are bit-reproducible across engines; O-75).
+ * The world-facing wiring (resolving `Component.field` against a real
+ * `World`) lives in rules.ts.
+ *
+ * The 2.2 members (spec §5.2) are optional, so the evaluator stays usable
+ * without a world: a form whose hook is missing raises a
+ * {@link RuleEvalError} "not available in this environment".
  */
 export interface EvalEnv {
     /**
@@ -209,9 +216,10 @@ export interface EvalEnv {
      * component is not registered/known, when the entity currently being
      * evaluated does not have that component, or when the component instance
      * has no such field. `evaluate` treats any of those uniformly: it throws
-     * a {@link RuleEvalError} (see the class doc for how rules.ts handles it).
+     * a {@link RuleEvalError} (a "no value" one, which `??` catches; see the
+     * class doc for how rules.ts handles it).
      */
-    resolveField(component: string, field: string): number | string | boolean | undefined;
+    resolveField(component: string, field: string): Value | undefined;
     /** Current tick delta-time in seconds (schedule-dependent — see rules.ts). */
     dt: number;
     /** Current elapsed simulation time in seconds. */
@@ -220,6 +228,27 @@ export interface EvalEnv {
     rand: {
         uniform(): number;
     };
+    /** The evaluated entity's id (`self`, `self.id`; excluded by selectors). */
+    self?: number;
+    /** `C.f` on another entity, own properties only; `undefined` when absent. */
+    readField?(entity: number, component: string, field: string): Value | undefined;
+    /** The entities holding component `set`, ascending id, stable within a run. */
+    members?(set: string): readonly number[];
+    /** Whether `entity` is alive (`entity(n)`). */
+    isAlive?(entity: number): boolean;
+    /** Whether `entity` holds `component` (`has`). */
+    has?(entity: number, component: string): boolean;
+    /** The entity's position (live), or `undefined` when it has none. */
+    position?(entity: number): {
+        x: number;
+        y: number;
+    } | undefined;
+    /** Nearest member of `set` to (x, y) within `maxDistance` (ties → lowest id), excluding `exclude`. */
+    nearest?(set: string, x: number, y: number, maxDistance: number, exclude: number | undefined): number | undefined;
+    /** Members of `set` within `r` of (x, y), ascending id, excluding `exclude`. */
+    within?(set: string, x: number, y: number, r: number, exclude: number | undefined): readonly number[];
+    /** `world.time.tick` (`tick`). */
+    tick?: number;
 }
 /**
  * Thrown by `evaluate` when it cannot produce a value — for
@@ -242,25 +271,50 @@ export declare class RuleEvalError extends Error {
     constructor(message: string);
 }
 /**
+ * "No value" (2.2, §5.2): a missing self or member field, an empty
+ * selector result, a dead `entity(n)`, an empty `avg`/`minOf`/`maxOf`, an
+ * entity without a position. `a ?? b` evaluates `b` on this error only.
+ * Internal: `instanceof RuleEvalError` still holds, so uncaught it is the
+ * existing per-entity `rule_eval_failed` fault.
+ */
+export declare class RuleNoValueError extends RuleEvalError {
+    constructor(message: string);
+}
+/**
  * Evaluate a parsed expression against `env`. Pure with respect to the AST
  * (no mutation), but each call to `random()` advances `env.rand`'s
  * underlying state — see rules.ts for how that is wired to a per-tick
  * `Rng` for deterministic replay.
  *
- * Short-circuits `&&`, `||`, and `?:` — the untaken branch is never
+ * Short-circuits `&&`, `||`, `?:` and `??` — the untaken branch is never
  * evaluated, so it can reference fields the current entity lacks without
  * raising (matches ordinary expression-language expectations and avoids
  * spurious RuleEvalErrors from branches that were never meant to run).
  */
-export declare function evaluate(ast: AstNode, env: EvalEnv): number | string | boolean;
+export declare function evaluate(ast: AstNode, env: EvalEnv): Value;
 /** A compiled expression: {@link evaluate} for one AST, without the walk. */
-export type CompiledExpression = (env: EvalEnv) => number | string | boolean;
+export type CompiledExpression = (env: EvalEnv) => Value;
+/** Options for {@link compileExpression}. */
+export interface CompileOptions {
+    /**
+     * Aggregates for which this returns true are computed once per
+     * environment object (rules.ts builds one per rule run) and reused for
+     * every entity of that run. Only sound when the aggregate cannot change
+     * during the run: rules.ts marks a set aggregate whose field's component
+     * the rule does not write (§5.2 "Memoization"). Results are identical
+     * either way.
+     */
+    readonly memoize?: (node: Extract<AstNode, {
+        kind: 'aggregate';
+    }>) => boolean;
+}
 /**
  * O-69 (R12): turn `ast` into nested closures once, so a rule evaluated for
  * every entity every tick does not re-dispatch on node kinds. Same results,
  * errors and short-circuiting as {@link evaluate}; no code is generated.
  */
-export declare function compileExpression(ast: AstNode): CompiledExpression;
+export declare function compileExpression(ast: AstNode, options?: CompileOptions): CompiledExpression;
+export {};
 
 // file: index.d.ts
 export type { AggregateOp, AstNode, BinaryOp, EntityNode, FunctionName, LogicalOp, UnaryOp } from './ast.js';
@@ -270,7 +324,7 @@ export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
 export type { EvalEnv } from './evaluator.js';
 export { compileRule, installRules } from './rules.js';
-export type { CompiledRule, InstallRulesOptions, RuleActionDef, RuleDef, RuleDefPath, RuleError, RuleFault, RulesHandle } from './rules.js';
+export type { CompiledRule, CompileRuleOptions, InstallRulesOptions, RuleActionDef, RuleDef, RuleDefPath, RuleError, RuleFault, RulesHandle, SpatialOption, } from './rules.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
@@ -366,7 +420,7 @@ export declare function parseExpression(source: string): {
 export type { AstNode } from './ast.js';
 
 // file: rules.d.ts
-import type { ComponentType, World } from '@domecs/core';
+import { type ComponentType, type World } from '@domecs/core';
 export interface RuleActionDef {
     /** Dotted "Component.field" target, same JSON shape as Studio's SystemData.actions. */
     set: string;
@@ -393,6 +447,12 @@ export interface RuleDef {
     rng?: 'shared' | 'own';
     enabled?: boolean;
     query: string[];
+    /**
+     * Components that exclude an entity from the rule (2.2, §5.2): the rule
+     * runs on entities holding every `query` component and none of these
+     * (`And(...query.map(Has), ...without.map(c => Not(Has(c))))`).
+     */
+    without?: string[];
     when?: string;
     actions: RuleActionDef[];
 }
@@ -402,6 +462,8 @@ export interface RuleDef {
  */
 export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | {
     readonly query: number;
+} | {
+    readonly without: number;
 } | {
     readonly action: number;
     readonly part: 'set' | 'expr';
@@ -462,13 +524,28 @@ export interface CompiledRule {
  * - If there are ANY errors, returns `{ rule: null, errors }` — never a
  *   partially-compiled rule.
  */
-export declare function compileRule(def: RuleDef, resolve: (name: string) => ComponentType<any> | undefined): {
+export declare function compileRule(def: RuleDef, resolve: (name: string) => ComponentType<any> | undefined, options?: CompileRuleOptions): {
     rule: CompiledRule;
     errors: [];
 } | {
     rule: null;
     errors: RuleError[];
 };
+/** The position source for `nearest`, `countWithin` and `distanceTo`. */
+export interface SpatialOption {
+    /** Component holding each entity's position. */
+    readonly component: string;
+    /** Field names (default `'x'` / `'y'`). */
+    readonly x?: string;
+    readonly y?: string;
+    /** Grid cell size (default 32): performance only, results never depend on it. */
+    readonly cellSize?: number;
+}
+/** Options for {@link compileRule} (2.2). */
+export interface CompileRuleOptions {
+    /** Position source; required if the rule uses `nearest`, `countWithin` or `distanceTo`. */
+    readonly spatial?: SpatialOption;
+}
 export interface RulesHandle {
     /**
      * Replace the full active rule set: compiles every def, installs (as
@@ -517,6 +594,14 @@ export interface InstallRulesOptions {
      * own stream, so editing one rule never reshuffles another's draws.
      */
     readonly rng?: 'shared' | 'own';
+    /**
+     * Position source for `nearest`, `countWithin` and `distanceTo` (2.2,
+     * §5.2); required if any rule uses them (otherwise that rule fails to
+     * compile). Selection uses a grid built from these positions at the start
+     * of each rule run; `distanceTo` reads live positions. An entity whose
+     * position fields are missing or not finite numbers has no position.
+     */
+    readonly spatial?: SpatialOption;
 }
 /**
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.
@@ -537,7 +622,13 @@ export type StaticKind = 'number' | 'string' | 'boolean' | 'unknown';
  * string or boolean literal (or an operator producing one) where
  * arithmetic, a comparison or a function needs a number. Field values are
  * `'unknown'`: a component's defaults do not fix a field's kind. Errors in
- * code that may not run — the right side of `&&`/`||`, a ternary branch —
- * are not reported, so this only rejects what fails on every evaluation.
+ * code that may not run — the right side of `&&`/`||`/`??`, a ternary
+ * branch — are not reported, so this only rejects what fails on every
+ * evaluation.
+ *
+ * 2.2 (§5.2): `has` and `exists` are boolean; `count`, `countWithin`,
+ * `distanceTo`, `e.id`, `tick` and the aggregates are numbers; member reads
+ * are `'unknown'`. An entity is never a value: the parser already rejects
+ * one outside a member base, selector argument or `has` target ("use .id").
  */
 export declare function inferKind(node: AstNode, report: (pos: number, message: string) => void): StaticKind;
