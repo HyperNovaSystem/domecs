@@ -58,16 +58,17 @@ const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
 const id = world.spawn([entry(Health, { hp: 10 })])
 const agent = createAgentBridge(world)
 agent.captureBaseline()
-agent.reset()                        // episode-boundary hygiene: every
-                                     // episode starts from the identical
-                                     // restored state
+// Episode-boundary hygiene: every episode starts from the identical restored
+// state. scale and input are not in the snapshot; reset re-applies them.
+// `once` systems do not re-run — put per-episode setup in the baseline.
+agent.reset({ scale: 1, input: 'empty' })
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
 agent.step()                         // turn-based; use step(1/60) for fixed
 const snap = agent.snapshot()
-agent.reset()                        // back to baseline for next episode
+agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
 ```
 
 ---
@@ -171,6 +172,23 @@ their own rules. `self`, `tick`, `other`, `event`, `pointer` are reserved
 words. Contract: SPEC Appendix A; tutorial:
 the `@domecs/rules` README.
 
+### Commands as event rules
+Declare the command with a `schema` and `world.register` it, then handle it
+with an event rule instead of a host system:
+
+```ts
+const move: RuleDef = {
+  name: 'move', schedule: 'event', on: 'Move', self: 'event.target',
+  query: ['Pos'], actions: [{ set: 'Pos.x', expr: 'Pos.x + event.dx' }],
+}
+```
+
+`act('Move', { target, dx })` moves only that entity (dead or unmatched:
+no-op). No `self`: broadcast over `query`, or once with an empty `query`.
+`effects` (`emit`, `spawn` with `installRules(..., { prefabs })`, `despawn`,
+`add`, `remove`) apply at the end of the rule's run; an `emit` arrives next
+tick.
+
 ### Record and replay
 Record what enters the world from outside, then re-run it on a fresh world
 built by the same setup:
@@ -230,6 +248,10 @@ Neither `fixedStep` (only with a fixed backlog) nor scale is in the snapshot:
 pass the source's `time.fixedStep` and `time.scale` (for a paused source, its
 resume scale, then `pause()` the branch). A probe that
 changes the world throws at the first sample.
+
+### Render state
+`defineResource('Camera', { default, transient: true })` keeps a camera / HUD
+cache out of snapshots and hashes; `restore()` keeps its live value.
 
 ### Control while paused
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM
