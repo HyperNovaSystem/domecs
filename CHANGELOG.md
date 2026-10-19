@@ -6,7 +6,29 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.3.0] — release candidate (2026-10-19; not yet published)
+
+All seven `@domecs/*` packages move to 2.3.0 together. Additive minor:
+behaviour language II (event-triggered rules, rule effects, contacts),
+authoring ergonomics (`runSystems` / `render`, transient resources, bridge
+reset options) and scenes for the Studio harness. `^2.0.0` peer ranges still
+resolve; the packages' `@domecs/core` peer range packs as `^2.3.0`.
+Snapshots stay format v3. Release notes:
+[`doc/release-notes/v2.3.0.md`](doc/release-notes/v2.3.0.md).
+
 ### Added
+
+- Fork-equivalence suite for 2.3 (`packages/domecs-rules/test/fork-equivalence.test.ts`):
+  a post-edit live world with rule effects, contacts on composed positions
+  and host scene swaps is matched after every tick by a fresh build restored
+  from its snapshot and by forks taken with contacts and rule emits in
+  flight (half through `canonicalJson` text), with swaps between them.
+- Dual-runtime golden fixture `rules-event-chain`
+  (`scripts/determinism-golden.mjs`, `test/golden/determinism.json`): event
+  rules and effects forked at step 500 with events in flight, restored
+  through `canonicalJson` text; the script requires the fork and the live
+  world to reach the same strict hash. Only the key is added; every 2.1 and
+  2.2 value is unchanged.
 
 - `@domecs/core` transient resources (2.3, harness spec §6.4, O-36):
   `defineResource(name, { transient: true })` (new `ResourceOptions.transient`).
@@ -85,6 +107,11 @@ All notable changes to DOMECS are documented here. The format is based on
   so such a rule or expression is still rejected; only the message
   changes. `EvalEnv` gains optional `eventField` and `other` hooks, and
   `EvalEnv.self` accepts `undefined`.
+- `@domecs/core`: a successful `restore()` also empties the current
+  (already-delivered) event view, so `world.events` and the view
+  `runSystems` hands its systems are empty until the next flush; before,
+  they still held what the abandoned timeline delivered at its last tick
+  (E16 verify; SPEC §7.1 "Pending events").
 
 ### Fixed
 

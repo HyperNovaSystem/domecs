@@ -255,6 +255,27 @@ Further soak passes (15 runs each) gave p50 ratios of 0.99, 0.99 and 0.97
 two 2.1-vs-2.1 soak controls gave 1.00 and 0.92, so differences under about
 8% are noise here. Every pass after the fix has 2.2 at or below 2.1.
 
+## 2.3 release-candidate check (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+Same method, against the 2.2 RC (`4631095`, extracted with `git archive` and
+built the same way), interleaved runs, medians of the per-run p50/p95. The
+host was shared with other jobs (load average 3–4.4 on 2 vCPU).
+
+| Workload | Runs | 2.3 p50 / p95 | 2.2 p50 / p95 | ratio p50 / p95 |
+|----------|------|---------------|---------------|-----------------|
+| soak (`--ticks 500 --warmup 100`) | 15 | 1.081 / 2.297 ms | 1.147 / 3.056 ms | 0.94 / 0.75 |
+| telemetry (`--ticks 500 --warmup 100`) | 21 | 0.351 / 1.431 ms | 0.353 / 2.008 ms | 0.99 / 0.71 |
+| windowed (`--ticks 1000 --warmup 200`) | 15 | 0.0349 / 0.0724 ms | 0.0352 / 0.0741 ms | 0.99 / 0.98 |
+| snapshot (default) | 9 | 5.12 / 9.18 ms | 5.31 / 9.81 ms | 0.96 / 0.94 |
+
+p50 is flat or lower on every workload. p95 swings with the host load: a
+first 15-run telemetry pass gave a p95 ratio of 1.34, a 21-run pass 0.71, a
+2.2-vs-2.2 control 0.96 and a reversed-order pass (2.2 first) 0.97, so
+telemetry p95 differences are noise here. The E18.1 archetype fix sorts
+component names once per new archetype, not per entity or tick. The
+`contacts` workload (1000 entities × 2 pairs, `stay: true`) gave p50 0.45–0.47
+ms over three runs, within the 0.5 ms target.
+
 ## Status
 
 - [x] Headless suite + baselines

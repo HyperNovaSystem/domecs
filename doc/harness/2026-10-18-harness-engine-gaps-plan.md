@@ -476,8 +476,8 @@ Scheduled in revision 3 (was EC3).
 
 ### E18 — 2.3 release candidate
 
-- [ ] **E18.1** `doc/release-notes/v2.3.0.md` (including the new scene APIs); golden adds an event chain snapshotted with events in flight; fork-equivalence extended with effects, contacts and a scene swap (instantiate/unload between snapshots); all §8 gates; `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.3.0 release notes (E18.1)`
-- **E18 exit gate:** E14–E17 and E21 merged with their ledger rows (O-84, O-85, O-88, O-36, O-89, O-13 partial) updated; `scenes.test.ts` green; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green.
+- [x] **E18.1** `doc/release-notes/v2.3.0.md` (including the new scene APIs); golden adds an event chain snapshotted with events in flight; fork-equivalence extended with effects, contacts and a scene swap (instantiate/unload between snapshots); all §8 gates; `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.3.0 release notes (E18.1)`
+- **E18 exit gate:** E14–E17 and E21 merged with their ledger rows (O-84, O-85, O-88, O-36, O-89, O-13 partial) updated; `scenes.test.ts` green; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green. **Met 2026-10-19** (spec Appendix C, "Implementation notes — E18"); version bump `chore(release)`, golden `test(release)`, suite `test(rules)` and an archetype-order fix `fix(core)` (O-91, found by the suite) landed as separate E18.1 commits.
 
 ---
 

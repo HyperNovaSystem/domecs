@@ -275,4 +275,6 @@ token positions; if studio wants them, that is an additive engine request
 (e.g. a name position on the visit callback) for the owner. Studio can drop its mirror once
 it pins an engine build that includes this commit; the 2.2.0 release-candidate
 tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
-and do not export it.
+and do not export it. The 2.3.0 release-candidate tarballs (E18,
+`vendor/domecs/domecs-*-2.3.0+g<sha>.tgz` beside the 2.1.0 and 2.2.0 sets)
+export it.
