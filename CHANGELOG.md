@@ -8,6 +8,20 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `@domecs/core`: branches (G3, O-81, harness spec §7.2; SPEC §7.5).
+  `createBranch(setup, from, { fixedStep?, seed?, scale? })` builds a headless
+  world, runs `setup`, restores `from` and sets the scale, returning
+  `Result<{ world, setup }, BranchError>` (`restore_failed` with a serialized
+  cause, `once_systems` when the setup has enabled `once` systems and
+  `from.tick > 0`). `runBranch(world, { steps, dt?, log?, probes?,
+  sampleEvery?, keyframeEvery?, hashEvery?, until?, shouldStop? })` →
+  `Result<BranchRun, ReplayError>` (`ticks`, `stoppedBy`, `samples`,
+  `keyframes`, `hashes`, `faults`, strict `finalHash`): synchronous,
+  extendable, counts per call with the final step always sampled, act-log
+  frames applied at their ticks, a mutating probe flagged at the first sample.
+  Types `WorldSetup`, `BranchOptions`, `BranchError`, `RunBranchOptions`,
+  `BranchRun`. AGENTS.md "Branch and compare" recipe.
+
 - `@domecs/core`: act logs and replay (G4, O-80, harness spec §7.1; SPEC
   §7.5). `createRecorder(world, { hashEvery? })` → `Recorder { active,
   peek(), stop() }` records an `ActLog` (`format: 'domecs-actlog'`,

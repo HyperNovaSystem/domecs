@@ -89,6 +89,11 @@ for (const entity of world.query(Has(Position)).entities) {
   strict-hash checkpoints) and re-run it on a fresh world built by the same
   setup; `encodeInput` / `decodeInput` turn an `InputSnapshot` into JSON and
   back (2.2, SPEC §7.5).
+- `createBranch(setup, from, { fixedStep?, seed?, scale? })` / `runBranch(world,
+  { steps, dt?, log?, probes?, sampleEvery?, keyframeEvery?, hashEvery?, until?,
+  shouldStop? })` — a headless fork built by the same setup and restored from a
+  snapshot, stepped with probe samples, keyframes, strict hashes, fault capture
+  and cooperative cancellation, without touching the live world (2.2, SPEC §7.5).
 - `dmath.sin` / `dmath.cos` / `dmath.sqrt`, and from 2.2 `dmath.atan2` /
   `dmath.hypot` / `dmath.pow` — bit-reproducible math (musl libm ports, `pow`
   from fdlibm; `sqrt` is `Math.sqrt`). Deterministic systems use these

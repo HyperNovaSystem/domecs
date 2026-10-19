@@ -169,6 +169,35 @@ without stimulus sources (no input plugin, no hook or signal subscriber that
 emits, none that sets the scale at tick start — their effects are in the log) and with no `once`
 system the source already ran.
 
+### Branch and compare
+To ask "what happens if…" without touching the live world (or re-firing its
+views), branch it: a fresh headless world built by the same setup and restored
+from a snapshot. Do not restore and step the live world for this.
+
+```ts
+import { createBranch, runBranch } from '@domecs/core'
+
+const from = live.snapshot({ pendingEvents: true })
+const b = createBranch(setup, from, { scale: live.time.scale })  // setup: same systems, same order; spawns nothing
+if (!b.ok) throw new Error(b.error.kind)     // 'restore_failed' | 'once_systems'
+const run = runBranch(b.value.world, {
+  steps: 600,
+  probes: { pop: (w) => w.countEntities([Creature]) },   // read-only
+  sampleEvery: 60,                           // counted from this call; the last step is always sampled
+  log,                                       // optional ActLog: acts applied at their ticks
+  until: (w) => w.countEntities([Creature]) === 0,
+  shouldStop: () => cancelled,               // synchronous: run it in a worker
+})
+if (run.ok) console.log(run.value.stoppedBy, run.value.samples, run.value.finalHash)
+```
+
+Compare branches (or a branch with the live world) by `finalHash` / `hashes`
+(strict) and by probe samples. Call `runBranch` again to extend a branch.
+`once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
+gate boot work so it is not re-run, or leave it out of the branch setup.
+Scale is not in the snapshot: pass the source's `time.scale`. A probe that
+changes the world throws at the first sample.
+
 ### Control while paused
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM
 listener calling `world.resume()` / `setScale(1)`.

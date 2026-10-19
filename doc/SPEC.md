@@ -854,7 +854,7 @@ The codec system allows one component schema to evolve without forcing monolithi
 The inspector (§10) consumes a bounded ring buffer of **diff snapshots**: each entry records only the components that changed since the previous snapshot.
 Memory is `O(changes)` not `O(entities × snapshots)`.
 
-### 7.5 Act logs and replay (`@domecs/core`, 2.2)
+### 7.5 Act logs, replay and branches (`@domecs/core`, 2.2)
 
 An act log (`ActLog`, `format: 'domecs-actlog'`, `version: 1`) records what entered a world from outside so that another world, built by the same setup and restored from the same base, replays to equal strict hashes (harness spec §7.1; O-80). It is a separate artifact; the snapshot format is unchanged.
 
@@ -876,6 +876,12 @@ An act log (`ActLog`, `format: 'domecs-actlog'`, `version: 1`) records what ente
 
 **Preconditions** (§8): the replay world has the same setup (systems, plugins, order) as the recording world **minus every stimulus source** — no input plugin (it would overwrite `world.input` at `onTickStart`) and no plugin hook or signal subscriber that emits events, and none that sets `time.scale` at tick start (their effects are already in the log) — and no enabled `once` system the source had already run (`once` run state is not snapshotted). A stimulus source is left out whole, so it must do nothing else a replay needs: its `world.rand` draws and world writes during a full tick are not in the log. Under them the same base, setup and log give the same hashes, tick systems (`scaledDelta` comes from the recorded dt and scale) and own RNG streams included. Not recorded: `runSystems` calls, draws on an own stream outside a tick, changes to the setup, acts emitted after the last frame (the log has no frame for them, so a replay ends without them in its queue), and a step that throws out of `step` (a plugin hook that throws): the log does not describe it.
 
+**Branches** (harness spec §7.2; O-81). Systems are closures, so a world cannot be cloned; a branch is a fresh world built by the source's setup and restored from one of its snapshots. `createBranch(setup, from, { fixedStep?, seed?, scale? })` runs `createWorld({ headless: true, fixedStep: fixedStep ?? from.fixedStep ?? 1/60, seed })`, `setup(world)`, `world.restore(from)` and `setScale(scale ?? 1)`, and returns `Result<{ world, setup }, BranchError>` with `setup`'s return value. A throw from `setup` is a bug and propagates; a throw from `restore` is `restore_failed` (the cause serialized with `normalizeCause`); an enabled `once` system registered by `setup` when `from.tick > 0` is `once_systems` (it would run on the branch's first step while the source had already run it). `seed` matters only for a v2 `from`, which has no `rngRoot`.
+
+`runBranch(world, { steps, dt?, log?, probes?, sampleEvery?, keyframeEvery?, hashEvery?, until?, shouldStop? })` steps the world it is given, synchronously, and returns `Result<BranchRun, ReplayError>` with `{ ticks, stoppedBy: 'steps' | 'until' | 'cancelled', samples, keyframes, hashes, faults, finalHash }`. Called again, it extends the branch from where it stopped. Before each step it polls `shouldStop`; it applies the `log` frame whose `tick` is the current tick, when there is one, with the replay frame code (acts resolved and checked first; scale, input, dt), else `stepOnce()` (`dt: null`) or `step(dt ?? time.fixedStep)`; after it, `until` is checked. `sampleEvery` (default 1 with probes), `keyframeEvery` and `hashEvery` count the steps of this call, not absolute ticks; probes are also sampled after the final step whatever stopped the run (once at the current tick when no step was taken). Keyframes are `snapshot({ pendingEvents: true })`; every hash is strict; probe values are copied as plain data; `faults` are the `signals.faultRaised` faults of this call. A malformed log or one for another `fixedStep` is `invalid_log`, and an act that does not resolve or validate is `unknown_event` / `rejected_payload`, with the steps already taken left taken. Equal `(setup, from, options)` give equal `finalHash`, `hashes` and `samples`.
+
+**Restore-continuation preconditions** (§7.1 "What restore continues"): `setup` registers the same types, systems and plugins in the same order as the source world (stable rules make the order a function of the definitions); `from` is taken with `{ pendingEvents: true }` and without snapshot-rewriting plugins (redaction); `scale` is the source's `time.scale`; and every event type that can be pending is registered. Probes must be read-only: at the first sample of each call `runBranch` compares the strict hash before and after each probe and throws an `Error` naming one that changed it. A `log` given to a branch follows replay's preconditions (no stimulus sources in `setup`). Nothing else can verify these.
+
 ---
 
 ## 8. Determinism contract
@@ -895,7 +901,7 @@ This relies on:
 
 - **Equality is by hash (O-11).** "Same state" means equal `hashSnapshot` (§7.1 "Canonical form"): canonical JSON with sorted keys and a lossless `-0`, hashed with FNV-1a-64. Restore-equivalence checks (fork vs live, checkpoints, keyframes) use the strict form, `hashSnapshot(snap, { includeChanges: true })`. `JSON.stringify(snapshot())` is not an equality test: it depends on component insertion order and writes `-0` as `0`.
 
-Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `hashSnapshot(snapshot(), { includeChanges: true })`. `createRecorder` / `replay` (§7.5) record a live session and re-run it with checkpoint verification.
+Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `hashSnapshot(snapshot(), { includeChanges: true })`. `createRecorder` / `replay` (§7.5) record a live session and re-run it with checkpoint verification; `createBranch` / `runBranch` (§7.5) run a headless fork from a snapshot and compare its hashes and probe samples.
 
 ---
 

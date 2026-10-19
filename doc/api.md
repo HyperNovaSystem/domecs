@@ -1608,6 +1608,147 @@ if (!r2.ok) assert.deepEqual([r2.error.kind, (r2.error as { tick: number }).tick
 assert.equal(replay(build(), { ...log, version: 2 } as unknown as ActLog).ok, false) // invalid_log, no throw
 ```
 
+### Branches
+
+A branch is a fresh headless world, built by the source's setup and restored
+from one of its snapshots, that steps without touching the live world or its
+views (harness spec §7.2, SPEC §7.5). Systems are closures, so this is how a
+world is "cloned": run the same setup again.
+
+```ts
+type WorldSetup<T = void> = (world: World) => T   // registers types/systems/plugins; spawns nothing
+function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, options?: BranchOptions):
+  Result<{ readonly world: World; readonly setup: T }, BranchError>
+function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>
+
+interface BranchOptions {
+  readonly fixedStep?: number         // default from.fixedStep ?? 1/60
+  readonly seed?: number | RngState   // only matters for a v2 `from` (no rngRoot)
+  readonly scale?: number             // the source's time.scale (not snapshotted); default 1
+}
+type BranchError =
+  | { kind: 'restore_failed'; cause: SerializedError }   // restore threw (never thrown)
+  | { kind: 'once_systems'; names: readonly string[] }   // enabled `once` systems and from.tick > 0
+
+interface RunBranchOptions {
+  readonly steps: number
+  readonly dt?: number | null         // per step; null = stepOnce(); default time.fixedStep
+  readonly log?: ActLog               // frames applied at matching ticks (they override dt)
+  readonly probes?: Readonly<Record<string, (world: World) => JsonValue>>   // read-only
+  readonly sampleEvery?: number       // default 1 when probes are given
+  readonly keyframeEvery?: number     // snapshot({ pendingEvents: true }) every k steps
+  readonly hashEvery?: number         // strict hash every k steps
+  readonly until?: (world: World) => boolean   // checked after each step
+  readonly shouldStop?: () => boolean          // polled before each step
+}
+interface BranchRun {
+  readonly ticks: number              // steps taken by this call
+  readonly stoppedBy: 'steps' | 'until' | 'cancelled'
+  readonly samples: ReadonlyArray<{ tick: number; values: Readonly<Record<string, JsonValue>> }>
+  readonly keyframes: ReadonlyArray<{ tick: number; snapshot: WorldSnapshot }>
+  readonly hashes: ReadonlyArray<{ tick: number; hash: string }>
+  readonly faults: readonly SystemicFault[]    // signals.faultRaised during this call
+  readonly finalHash: string                   // strict
+}
+```
+
+`createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
+`setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. A throw from
+`setup` is a bug and propagates; a throw from `restore` is `restore_failed`.
+If `setup` registers an enabled `once` system and `from.tick > 0`, the branch
+would run it while the source already had, so it is `once_systems`. Take
+`from` with `snapshot({ pendingEvents: true })` and without snapshot-rewriting
+plugins, and register the same systems in the same order as the source:
+nothing can check that.
+
+`runBranch` steps the world it is given (call it again to extend a branch).
+Every count — `sampleEvery`, `keyframeEvery`, `hashEvery` — is of this call's
+steps, and probes are always sampled after the final step too, whatever
+stopped the run, so the horizon value is always there. A `log` frame whose
+`tick` is the current tick is applied with replay's frame code (its acts,
+input, scale and dt); other steps use `dt`. Log errors are `ReplayError`
+values. Probes must be read-only: at the first sample of each call a probe
+that changed the strict hash throws, naming it. The call is synchronous: run
+it in a worker and cancel with `shouldStop`.
+
+```ts doctest name=branch-and-compare
+import { strict as assert } from 'node:assert'
+import {
+  createBranch,
+  createWorld,
+  defineComponent,
+  defineEvent,
+  entry,
+  hashSnapshot,
+  runBranch,
+  type World,
+} from '@domecs/core'
+
+const Pop = defineComponent<{ n: number; rate: number }>('BcPop', { defaults: { n: 0, rate: 0 } })
+const Boost = defineEvent<{ by: number }>('BcBoost', { schema: { fields: { by: { kind: 'number' } } } })
+
+// The one setup the live world and every branch share. It spawns nothing.
+function setup(w: World): void {
+  w.register(Boost)
+  w.system('grow', { query: [Pop] }, (ctx) => {
+    for (const e of ctx.entities) {
+      e.BcPop!.n += e.BcPop!.rate * ctx.time.scaledDelta
+      ctx.world.markChanged(e.id, Pop)
+    }
+  })
+  w.system('boost', { schedule: 'event', triggers: [Boost] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Pop])) {
+      for (const b of ctx.events.of(Boost)) ctx.world.getComponent(id, Pop)!.rate += b.by
+      ctx.world.markChanged(id, Pop)
+    }
+  })
+}
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+const live = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+setup(live)
+const id = live.spawn([entry(Pop, { n: 10, rate: 6 })])
+for (let i = 0; i < 30; i++) live.step(1 / 60)
+const from = live.snapshot({ pendingEvents: true })
+
+// Branch A carries on as is; branch B gets a boost at tick 40 from a log.
+const probes = { n: (w: World) => w.getComponent(w.listEntities([Pop])[0]!, Pop)!.n }
+const a = createBranch(setup, from)
+const b = createBranch(setup, from)
+if (!a.ok || !b.ok) throw new Error('branch failed')
+const runA = runBranch(a.value.world, { steps: 60, probes, sampleEvery: 25 })
+const runB = runBranch(b.value.world, {
+  steps: 60,
+  probes,
+  sampleEvery: 25,
+  log: {
+    format: 'domecs-actlog', version: 1, startTick: 30, fixedStep: 1 / 60, startScale: 1, baseHash: '',
+    frames: [{ tick: 40, dt: 1 / 60, acts: [{ event: 'BcBoost', payload: { by: 60 }, via: 'action' }] }],
+  },
+})
+if (!runA.ok || !runB.ok) throw new Error('run failed')
+// Samples after steps 25 and 50 of the call, and always after the last one.
+assert.deepEqual(runA.value.samples.map((s) => s.tick), [55, 80, 90])
+assert.ok((runB.value.samples[2]!.values.n as number) > (runA.value.samples[2]!.values.n as number))
+
+// Branches never touched the live world, and branch A is exactly its future.
+assert.equal(live.time.tick, 30)
+for (let i = 0; i < 60; i++) live.step(1 / 60)
+assert.equal(runA.value.finalHash, strict(live))
+assert.equal(live.getComponent(id, Pop)!.n, runA.value.samples[2]!.values.n)
+
+// Stop on a condition; the stopping tick is sampled.
+const c = createBranch(setup, from)
+if (!c.ok) throw new Error('branch failed')
+const runC = runBranch(c.value.world, { steps: 1000, probes, sampleEvery: 1000, until: (w) => w.time.tick === 42 })
+assert.ok(runC.ok && runC.value.stoppedBy === 'until' && runC.value.ticks === 12)
+assert.ok(runC.ok && runC.value.samples.length === 1 && runC.value.samples[0]!.tick === 42)
+
+// A once system would re-run in the branch: refused, not thrown.
+const d = createBranch((w) => { setup(w); w.system('boot', { schedule: 'once' }, () => {}) }, from)
+assert.deepEqual(d, { ok: false, error: { kind: 'once_systems', names: ['boot'] } })
+```
+
 ---
 
 ## `@domecs/input`

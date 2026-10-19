@@ -374,22 +374,22 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 #### E20.1 `createBranch`
 
 - **Files:** create `packages/domecs/src/branch.ts`; `packages/domecs/src/index.ts`; test `packages/domecs/test/branch.test.ts`.
-- [ ] **Red:** spec test 7: a setup registering an enabled `once` system with `from.tick > 0` → `once_systems` naming it; test 8: a source at `scale = 2` matches `createBranch(…, { scale: 2 })` and not the default; test 6 (restore half): a snapshot that fails validation → `restore_failed` with a serialized cause and no throw; a throwing `setup` propagates; `setup`'s return value comes back as `setup`; `fixedStep`/`seed` defaults.
-- [ ] **Green:** `WorldSetup<T>`, `BranchOptions`, `BranchError`, `createBranch` (headless world → `setup` → `restore(from)` → `setScale`).
-- [ ] **Commit:** `feat(core): createBranch builds a headless world restored from a snapshot (E20.1)`
+- [x] **Red:** spec test 7: a setup registering an enabled `once` system with `from.tick > 0` → `once_systems` naming it; test 8: a source at `scale = 2` matches `createBranch(…, { scale: 2 })` and not the default; test 6 (restore half): a snapshot that fails validation → `restore_failed` with a serialized cause and no throw; a throwing `setup` propagates; `setup`'s return value comes back as `setup`; `fixedStep`/`seed` defaults.
+- [x] **Green:** `WorldSetup<T>`, `BranchOptions`, `BranchError`, `createBranch` (headless world → `setup` → `restore(from)` → `setScale`).
+- [x] **Commit:** `feat(core): createBranch builds a headless world restored from a snapshot (E20.1)`
 
 #### E20.2 `runBranch`
 
 - **Files:** `packages/domecs/src/branch.ts`; same test file.
-- [ ] **Red:** spec test 1: live steps 120 ticks, a branch from its tick-30 snapshot (`pendingEvents: true`) steps 90 → equal `finalHash`; test 2: two branches from one snapshot are identical, and a setup that differs by one own-stream system leaves the other systems' sampled values unchanged; test 3: `runBranch(60)` + `runBranch(60)` equals `runBranch(120)`; test 4: `until` and `shouldStop` give the right `stoppedBy` and tick with the final tick sampled each time, `sampleEvery: 7` from a base at tick 30 samples 37, 44, …, and the last; test 5: a log with acts at ticks equals a live world receiving the same acts (E19 frame code); test 6: faults collected from `signals.faultRaised` for the call only; `keyframeEvery`/`hashEvery` outputs (strict hashes); dev-mode probe check flags a mutating probe at the first sample.
-- [ ] **Green:** `RunBranchOptions`, `BranchRun`, `runBranch` (synchronous; log errors surface as `ReplayError`).
-- [ ] **Commit:** `feat(core): runBranch with probes, keyframes, hashes and cancellation (E20.2)`
+- [x] **Red:** spec test 1: live steps 120 ticks, a branch from its tick-30 snapshot (`pendingEvents: true`) steps 90 → equal `finalHash`; test 2: two branches from one snapshot are identical, and a setup that differs by one own-stream system leaves the other systems' sampled values unchanged; test 3: `runBranch(60)` + `runBranch(60)` equals `runBranch(120)`; test 4: `until` and `shouldStop` give the right `stoppedBy` and tick with the final tick sampled each time, `sampleEvery: 7` from a base at tick 30 samples 37, 44, …, and the last; test 5: a log with acts at ticks equals a live world receiving the same acts (E19 frame code); test 6: faults collected from `signals.faultRaised` for the call only; `keyframeEvery`/`hashEvery` outputs (strict hashes); dev-mode probe check flags a mutating probe at the first sample.
+- [x] **Green:** `RunBranchOptions`, `BranchRun`, `runBranch` (synchronous; log errors surface as `ReplayError`).
+- [x] **Commit:** `feat(core): runBranch with probes, keyframes, hashes and cancellation (E20.2)`
 
 #### E20.3 Docs
 
 - **Files:** SPEC §7.5 (with replay; restore-continuation preconditions); `doc/api.md` with a `ts doctest` branch-and-compare fence; AGENTS.md recipe "Branch and compare" (replaces the plantroom pattern for headless use); `skills/domecs/SKILL.md`; `pnpm -r build && pnpm api:surface` (`core.d.ts`); CHANGELOG; `plan/FINDINGS.md` O-81 row.
-- [ ] **Red:** `pnpm doctest:check` fails on the new fence until E20.2 exists.
-- [ ] **Commit:** `docs(core): branches in SPEC, api.md and AGENTS recipes (E20.3)`
+- [x] **Red:** `pnpm doctest:check` fails on the new fence until E20.2 exists.
+- [x] **Commit:** `docs(core): branches in SPEC, api.md and AGENTS recipes (E20.3)`
 
 ### E13 — 2.2 release candidate
 
