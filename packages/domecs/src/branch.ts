@@ -6,7 +6,7 @@ import type { SystemicFault } from './errors.js'
 import { actLogHash, applyActFrame, checkLog, type ActLog, type ActLogFrame, type ReplayError } from './replay.js'
 import { err, normalizeCause, ok, type JsonValue, type Result, type SerializedError } from './result.js'
 import type { RngState } from './rng.js'
-import type { WorldSnapshot } from './snapshot.js'
+import { setOwn, type WorldSnapshot } from './snapshot.js'
 import { createWorld, type World } from './world.js'
 import { plainDataCopy } from './world-state.js'
 
@@ -206,7 +206,8 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
     const values: Record<string, JsonValue> = {}
     let before = checked ? '' : actLogHash(world)
     for (const [name, probe] of probes) {
-      values[name] = plainDataCopy(probe(world), `probe "${name}"`) as JsonValue
+      // An own data property, so a probe named "__proto__" is a key, not the prototype.
+      setOwn(values, name, plainDataCopy(probe(world), `probe "${name}"`))
       if (!checked) {
         const after = actLogHash(world)
         if (after !== before) {

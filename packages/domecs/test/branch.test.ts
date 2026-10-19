@@ -472,6 +472,19 @@ describe('runBranch (§7.2)', () => {
     expect(first.fixed).toBeLessThan((out.samples[1]!.values.stats as { fixed: number }).fixed)
   })
 
+  it('every probe name is an own key of the sample, __proto__ included', () => {
+    const { snap } = liveAt30()
+    const named = Object.fromEntries([
+      ['__proto__', (w: World) => ({ hits: statsOf(w).hits })],
+      ['constructor', (w: World) => statsOf(w).hits],
+    ]) as Record<string, (w: World) => never>
+    const out = run(branch(snap), { steps: 1, probes: named })
+    const values = out.samples[0]!.values
+    expect(Object.keys(values)).toEqual(['__proto__', 'constructor'])
+    expect(Object.getPrototypeOf(values)).toBe(Object.prototype)
+    expect(Object.getOwnPropertyDescriptor(values, '__proto__')?.value).toEqual({ hits: 3 })
+  })
+
   it('a probe that mutates the world is flagged at the first sample', () => {
     const { snap } = liveAt30()
     const w = branch(snap)
