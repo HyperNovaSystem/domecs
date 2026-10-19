@@ -369,6 +369,8 @@ interface World {
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
   // less ceremony at the call-site (F-10).
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  // The entity's component types sorted by name (2.3); despawn marks,
+  // componentRemoved and snapshot component keys use the same order.
   archetype(entity: Entity): ComponentType<unknown>[]
   // Reflect a component's name/transient/defaults/field-schema (#14). Works on
   // any ComponentType without prior registration; enumerate via componentTypes().
@@ -1073,8 +1075,9 @@ assert.equal(a.w.describe().systems.find((s) => s.name === 'roll')!.rng, 'own')
 
 Equality between worlds is by **canonical hash** (O-11; SPEC §7.1
 "Canonical form", §8). `JSON.stringify(snapshot())` is not an equality test:
-component key order follows archetype insertion order, and it writes `-0` as
-`0`.
+field order inside a value is whatever order code inserted the keys in, and
+it writes `-0` as `0`. (Since 2.3 an entity's components are listed by name,
+whatever order they were added in.)
 
 ```ts
 /** Canonical JSON of plain data: sorted keys (UTF-16 code unit), JSON value
@@ -1140,13 +1143,17 @@ function build(): World {
   return w
 }
 
-// Same state, different component-add order: JSON.stringify differs, the hash does not.
+// Same state, different component-add order: the hash is equal, and since
+// 2.3 the components are listed by name in both.
 const a = build()
 a.addComponent(a.spawn([entry(Pos, { x: 0 })]), Vel, { vx: 1 })
 const b = build()
 b.addComponent(b.spawn([entry(Vel, { vx: 1 })]), Pos, { x: 0 })
-assert.notEqual(JSON.stringify(a.snapshot()), JSON.stringify(b.snapshot()))
+assert.deepEqual(Object.keys(b.snapshot().entities[0]!.components), ['DtPos', 'DtVel'])
 assert.equal(hashSnapshot(a.snapshot()), hashSnapshot(b.snapshot()))
+// JSON.stringify writes -0 as 0; canonicalJson keeps it.
+assert.equal(JSON.stringify({ vx: -0 }), '{"vx":0}')
+assert.equal(canonicalJson({ vx: -0 }), '{"vx":-0}')
 
 // Fork from a canonical keyframe; compare strict hashes while both run.
 const keyframe = canonicalJson(a.snapshot())

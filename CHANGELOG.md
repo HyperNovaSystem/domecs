@@ -86,6 +86,19 @@ All notable changes to DOMECS are documented here. The format is based on
   changes. `EvalEnv` gains optional `eventField` and `other` hooks, and
   `EvalEnv.self` accepts `undefined`.
 
+### Fixed
+
+- `@domecs/core`: an entity's component order no longer depends on history
+  (found by the 2.3 fork-equivalence suite, E18.1). Archetypes kept their
+  component names in the order the first entity happened to gain them, so a
+  world restored from `canonicalJson` text (sorted keys) and the live world
+  recorded a later despawn's removal marks in different orders, and their
+  strict hashes differed while an `OnRemoved` reader had not run. Archetypes
+  now keep the names sorted: despawn marks, `componentRemoved`,
+  `world.archetype()` and snapshot component keys follow name order. Hashes
+  and golden values are unchanged; `JSON.stringify(snapshot())` text can
+  change key order.
+
 ## [2.2.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.2.0 together. Additive minor:

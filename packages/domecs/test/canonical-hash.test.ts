@@ -180,9 +180,16 @@ describe('hashSnapshot / canonicalSnapshot', () => {
     const eb = b.spawn([entry(Vel, { vx: 3, vy: 4 })])
     b.addComponent(eb, Pos, { x: 1, y: 2 })
     expect(ea).toBe(eb)
+    // Field order inside a value is incidental (no defaults fix it here).
+    const Loose = defineComponent<{ p?: number; q?: number }>('ChLoose')
+    a.addComponent(ea, Loose, { p: 1, q: 2 })
+    b.addComponent(eb, Loose, { q: 2, p: 1 })
     const sa = a.snapshot()
     const sb = b.snapshot()
-    // O-11: JSON.stringify depends on incidental key order…
+    // E18.1: an entity lists its components by name, whatever the add order…
+    expect(Object.keys(sa.entities[0]!.components)).toEqual(['ChLoose', 'ChPos', 'ChVel'])
+    expect(Object.keys(sb.entities[0]!.components)).toEqual(['ChLoose', 'ChPos', 'ChVel'])
+    // …but O-11: JSON.stringify still depends on incidental key order…
     expect(JSON.stringify(sa)).not.toBe(JSON.stringify(sb))
     // …the canonical form does not.
     expect(canonicalSnapshot(sa)).toBe(canonicalSnapshot(sb))

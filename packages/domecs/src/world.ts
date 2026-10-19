@@ -310,6 +310,11 @@ export interface World {
    * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
    */
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  /**
+   * The component types `entity` holds, sorted by name (2.3; before, in the
+   * order its archetype was first built). Despawn marks, `componentRemoved`
+   * and snapshot component keys follow the same order.
+   */
   archetype(entity: Entity): ComponentType<unknown>[]
   /**
    * Reflect a component's name, transient flag, default value, and field
@@ -806,7 +811,11 @@ export function createWorld(options: WorldOptions = {}): World {
     const key = archetypeKeyFor(types)
     let bucket = archetypes.get(key)
     if (bucket) return bucket
-    bucket = { key, types, entities: new SortedIdSet() }
+    // E18.1: the bucket keeps its names sorted, never in the order the first
+    // entity happened to gain them. Despawn marks, componentRemoved,
+    // archetype() and snapshot keys follow this order, so a world restored
+    // from canonicalJson text (sorted keys) records what the live one does.
+    bucket = { key, types: new Set(Array.from(types).sort()), entities: new SortedIdSet() }
     archetypes.set(key, bucket)
     for (const q of queries) evaluateQueryAgainstArchetype(q, bucket)
     return bucket

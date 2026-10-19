@@ -2693,6 +2693,11 @@ export interface World {
         id: Entity;
         value: T;
     }>;
+    /**
+     * The component types `entity` holds, sorted by name (2.3; before, in the
+     * order its archetype was first built). Despawn marks, `componentRemoved`
+     * and snapshot component keys follow the same order.
+     */
     archetype(entity: Entity): ComponentType<unknown>[];
     /**
      * Reflect a component's name, transient flag, default value, and field

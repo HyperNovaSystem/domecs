@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { canonicalJson, hashSnapshot } from '../src/canonical.js'
 import { defineComponent } from '../src/component.js'
 import { mergeSortedRuns, SortedIdSet } from '../src/id-set.js'
 import { defineEvent } from '../src/events.js'
@@ -599,5 +600,58 @@ describe('mergeSortedRuns', () => {
     const copy = mergeSortedRuns([only])
     expect(copy).toEqual([1, 2])
     expect(copy).not.toBe(only)
+  })
+})
+
+// E18.1 (found by the 2.3 fork-equivalence suite): an entity's component
+// order was the order its archetype was first built in, which is history:
+// live, the order components were added; after a restore from canonicalJson
+// text (sorted keys), name order. A despawn records one removal mark per
+// component in that order, so a fork restored from text and the live world
+// carried the same marks in different orders and their strict hashes
+// differed. Archetypes now keep their component names sorted.
+describe('component order within an entity — by name, not history (E18.1)', () => {
+  const Zeta = defineComponent<{ z: number }>('RcZeta', { defaults: { z: 0 } })
+  const Alpha = defineComponent<{ a: number }>('RcAlpha', { defaults: { a: 0 } })
+  const Mid = defineComponent<{ m: number }>('RcMid', { defaults: { m: 0 } })
+
+  const build = (): World => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    // An OnRemoved reader keeps removal marks in the snapshot until it runs.
+    w.system('reader', { query: OnRemoved(Alpha) }, () => {})
+    return w
+  }
+  const strict = (w: World): string => hashSnapshot(w.snapshot(), { includeChanges: true })
+
+  it('a despawn after a restore from canonicalJson text records removals like the live world', () => {
+    const live = build()
+    const id = live.spawn([entry(Zeta, { z: 1 }), entry(Mid, { m: 2 }), entry(Alpha, { a: 3 })])
+    live.stepOnce()
+    const fork = build()
+    fork.restore(JSON.parse(canonicalJson(live.snapshot())) as WorldSnapshot)
+    expect(strict(fork)).toBe(strict(live))
+    live.despawn(id)
+    fork.despawn(id)
+    expect(live.snapshot().changes?.marks).toEqual([
+      ['removed', 'RcAlpha', id],
+      ['removed', 'RcMid', id],
+      ['removed', 'RcZeta', id],
+    ])
+    expect(strict(fork)).toBe(strict(live))
+  })
+
+  it('archetype(), componentRemoved and snapshot keys follow names, whatever the add order', () => {
+    const w = build()
+    const a = w.spawn([entry(Zeta, { z: 0 }), entry(Alpha, { a: 0 })])
+    const b = w.spawn([entry(Alpha, { a: 0 })])
+    w.addComponent(b, Mid, { m: 0 })
+    w.addComponent(b, Zeta, { z: 0 })
+    expect(w.archetype(a).map((t) => t.name)).toEqual(['RcAlpha', 'RcZeta'])
+    expect(w.archetype(b).map((t) => t.name)).toEqual(['RcAlpha', 'RcMid', 'RcZeta'])
+    expect(Object.keys(w.snapshot().entities.find((e) => e.id === a)!.components)).toEqual(['RcAlpha', 'RcZeta'])
+    const removed: string[] = []
+    w.signals.componentRemoved.subscribe(({ type }) => void removed.push(type.name))
+    w.despawn(b)
+    expect(removed).toEqual(['RcAlpha', 'RcMid', 'RcZeta'])
   })
 })
