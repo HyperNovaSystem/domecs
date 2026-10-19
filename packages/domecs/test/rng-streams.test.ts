@@ -98,6 +98,27 @@ describe('§4.4 per-system RNG streams', () => {
     expect(Object.keys(w.snapshot().rngStreams!)).toEqual(['s', 's#1'])
   })
 
+  it('7b: re-registering the first of two same-named systems resumes its key (lowest free), not a fresh one', () => {
+    const run = (reRegister: boolean): number[] => {
+      const w = createWorld({ headless: true, seed: 9 })
+      const a = w.spawn([entry(Draws, { log: [] })])
+      const b = w.spawn([entry(Draws, { log: [] })])
+      let h = drawer(w, 's', 'own', a)
+      drawer(w, 's', 'own', b)
+      for (let i = 0; i < 4; i++) {
+        if (reRegister) {
+          h.remove()
+          h = drawer(w, 's', 'own', a)
+        }
+        w.stepOnce()
+      }
+      expect(Object.keys(w.snapshot().rngStreams!).sort()).toEqual(['s', 's#1'])
+      return logOf(w, a)
+    }
+    expect(run(true)).toEqual(run(false))
+    expect(run(true)).toEqual(firstDraws(deriveStream(seedToState(9), 's'), 4))
+  })
+
   it('removal keeps the entry; re-registering under the key resumes it', () => {
     const w = createWorld({ headless: true, seed: [4, 3, 2, 1] })
     const a = w.spawn([entry(Draws, { log: [] })])

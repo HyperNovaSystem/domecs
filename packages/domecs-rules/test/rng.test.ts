@@ -52,6 +52,47 @@ describe('rules — rng option (§4.4)', () => {
     expect(bValues([ruleA, ruleB], { rng: 'own' }, true)).toEqual(bValues([ruleA, ruleB], { rng: 'own' }))
   })
 
+  it('2b: two handles with a same-named rule — update() on the first every tick keeps both streams, and a fork matches', () => {
+    // Both handles install rule "B": keys rule:B and rule:B#1. The first
+    // handle's update() removes and re-registers its rule while the second's
+    // is still live; it must resume rule:B, not move to a fresh key.
+    // (Re-registration moves the rule last in run order, so compare the
+    // streams themselves, not the field both rules write.)
+    const run = (update: boolean): World => {
+      const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+      w.spawn([entry(B, { v: 0 })])
+      const h1 = installRules(w, [ruleB], resolve, { rng: 'own' })
+      installRules(w, [ruleB], resolve, { rng: 'own' })
+      for (let i = 0; i < 10; i++) {
+        if (update) h1.update([ruleB])
+        w.stepOnce()
+      }
+      return w
+    }
+    const live = run(true)
+    const root = seedToState([1, 2, 3, 4])
+    const tenIn = (key: string): number[] => {
+      const r = createRng(deriveStream(root, key))
+      for (let i = 0; i < 10; i++) r.uniform()
+      return [...r.seed()]
+    }
+    expect(live.snapshot().rngStreams).toEqual({ 'rule:B': tenIn('rule:B'), 'rule:B#1': tenIn('rule:B#1') })
+    expect(live.snapshot().rngStreams).toEqual(run(false).snapshot().rngStreams)
+    // a fresh build (both handles installed once) restored from live continues identically
+    const fork = createWorld({ headless: true, seed: 9 })
+    fork.spawn([entry(B, { v: 0 })])
+    const f1 = installRules(fork, [ruleB], resolve, { rng: 'own' })
+    installRules(fork, [ruleB], resolve, { rng: 'own' })
+    f1.update([ruleB]) // same run order as live: the first handle's rule last
+    fork.restore(live.snapshot({ pendingEvents: true }))
+    const strict = (w: World): string => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+    for (let i = 0; i < 20; i++) {
+      live.stepOnce()
+      fork.stepOnce()
+      expect(strict(fork)).toBe(strict(live))
+    }
+  })
+
   it("RuleDef.rng overrides the install default; describe() reports each rule's mode", () => {
     const w = createWorld({ headless: true })
     installRules(w, [{ ...ruleA, rng: 'shared' }, ruleB], resolve, { rng: 'own' })

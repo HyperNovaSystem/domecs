@@ -964,20 +964,21 @@ export function createWorld(options: WorldOptions = {}): World {
 
   /**
    * §4.4: the own stream of a system registering now under `name`. Its key
-   * is the cursor key it registers under (`name`, or `name#k`), skipping any
-   * key a live own-stream system still holds, so no two live systems share
-   * a generator. An existing entry is resumed; otherwise the stream is
-   * derived from the root.
+   * is the lowest of `name`, `name#1`, `name#2`, … that no live own-stream
+   * system holds — the cursor key (`name`, or `name#k` on a clash) whenever
+   * no earlier same-named system was removed — so no two live systems share
+   * a generator, and removing and re-registering a system while a
+   * same-named one stays live (two rules handles sharing a rule name, each
+   * `update()`) resumes the key it left. An existing entry is resumed;
+   * otherwise the stream is derived from the root.
    */
   function claimStream(name: string): { key: string; rng: Rng } {
     const held = new Set<string>()
-    let k = 0
     for (const sys of scheduler.all()) {
       if (sys.rngKey !== undefined) held.add(sys.rngKey)
-      if (sys.name === name) k++
     }
-    let key = k === 0 ? name : `${name}#${k}`
-    while (held.has(key)) key = `${name}#${++k}`
+    let key = name
+    for (let k = 1; held.has(key); k++) key = `${name}#${k}`
     let rng = streams.get(key)
     if (rng === undefined) {
       rng = createRng(deriveStream(rngRoot, key))
