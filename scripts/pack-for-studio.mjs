@@ -19,6 +19,9 @@
  *    `{ version, buildId, gitSha, dirty, packedAt,
  *       packages: { "@domecs/core": { file, integrity, buildId }, … } }`
  *    with npm-style `sha512-<base64>` integrity.
+ * 5. Copies `scripts/determinism-golden.mjs` next to the tarballs (manifest
+ *    `golden: { file, integrity }`), so studio can run the engine's
+ *    dual-runtime golden with `--engine <its node_modules>` (spec §3.4).
  *
  * Never publishes. Publishing (`pnpm publish:npm`) needs owner approval and
  * ships plain versions.
@@ -43,6 +46,7 @@ export const PACKAGES = [
 ]
 
 const OWN_TARBALL = /^domecs-(core|dom|input|inspector|persist|rules|scene)-.+\.tgz$/
+const GOLDEN_SCRIPT = 'determinism-golden.mjs'
 const DEP_SECTIONS = ['dependencies', 'peerDependencies', 'optionalDependencies', 'devDependencies']
 
 function run(cmd, args, opts = {}) {
@@ -183,6 +187,11 @@ export function packForStudio({ out, build = true, log = (m) => console.error(m)
   for (const f of fs.readdirSync(out)) {
     if (OWN_TARBALL.test(f) && !written.has(f)) fs.rmSync(path.join(out, f))
   }
+  // §3.4: studio runs the engine's determinism golden from the vendored
+  // copy (`node determinism-golden.mjs --engine <node_modules>`).
+  const goldenTarget = path.join(out, GOLDEN_SCRIPT)
+  fs.copyFileSync(path.join(root, 'scripts', GOLDEN_SCRIPT), goldenTarget)
+  log(`[pack-for-studio]   → ${GOLDEN_SCRIPT}`)
   const manifest = {
     version,
     buildId,
@@ -190,6 +199,7 @@ export function packForStudio({ out, build = true, log = (m) => console.error(m)
     dirty,
     packedAt: new Date().toISOString(),
     packages,
+    golden: { file: GOLDEN_SCRIPT, integrity: integrityOf(goldenTarget) },
   }
   fs.writeFileSync(path.join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   log('[pack-for-studio] wrote manifest.json')

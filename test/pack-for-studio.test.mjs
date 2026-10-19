@@ -52,6 +52,15 @@ test('pack-for-studio packs seven stamped tarballs and a manifest, then restores
     assert.ok(!Number.isNaN(Date.parse(manifest.packedAt)), 'packedAt is an ISO timestamp')
     assert.deepEqual(Object.keys(manifest.packages).sort(), PACKAGES.map((p) => p.name).sort())
 
+    // §3.4: the determinism golden script travels with the tarballs, so studio
+    // can run the engine's own golden under its pinned Electron (G-engine).
+    const goldenSrc = fs.readFileSync(path.join(root, 'scripts/determinism-golden.mjs'))
+    assert.deepEqual(fs.readFileSync(path.join(out, 'determinism-golden.mjs')), goldenSrc)
+    assert.deepEqual(manifest.golden, {
+      file: 'determinism-golden.mjs',
+      integrity: `sha512-${createHash('sha512').update(goldenSrc).digest('base64')}`,
+    })
+
     const tarballs = fs.readdirSync(out).filter((f) => f.endsWith('.tgz')).sort()
     assert.equal(tarballs.length, 7, tarballs.join(', '))
     assert.ok(fs.existsSync(path.join(out, 'unrelated.txt')), 'only our own stale tarballs are removed')

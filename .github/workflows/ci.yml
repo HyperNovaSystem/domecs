@@ -66,6 +66,11 @@ jobs:
       - name: Release validation
         run: pnpm test:release
 
+      # Spec §3.4: fixed worlds hash the same as test/golden/determinism.json
+      # on every Node in the matrix (packages were built above).
+      - name: Determinism golden
+        run: node --test test/golden.test.mjs
+
       # Packs the packages and installs the tarballs into a fresh project —
       # the payload `pnpm publish` would ship (O-73). Once per run is enough.
       - name: Cold install from packed tarballs

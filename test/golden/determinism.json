@@ -1,0 +1,10 @@
+{
+  "note": "Pinned by scripts/determinism-golden.mjs (spec §3.4). Regenerate with --write only for a deliberate change.",
+  "fixtures": {
+    "trig": "6f561265a775465f",
+    "random": "ae1d5a006eac6305",
+    "own-streams": "0050966bbbaaf81d",
+    "bounce0": "eb5dcd602be2af2c"
+  },
+  "dmathFingerprint": "82b97b8cd0be9c5d"
+}

@@ -20,6 +20,7 @@
     "bench:write": "node --expose-gc bench/run.mjs --write",
     "test:legibility": "node --test test/agent-legibility.test.mjs",
     "test:plantroom": "node --test example/plantroom/test/episode.test.mjs",
+    "test:golden": "pnpm --filter @domecs/core build && node --test test/golden.test.mjs",
     "plantroom:dev": "pnpm --filter @domecs/example-plantroom dev",
     "plantroom:build": "pnpm --filter @domecs/example-plantroom build",
     "plantroom:build:pages": "pnpm --filter @domecs/example-plantroom build --base=/domecs/",

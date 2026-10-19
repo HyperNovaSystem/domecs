@@ -254,7 +254,7 @@ For every item, the "Docs" line lists the following, in the same PR:
 - **Semantics:** the SPEC section.
 - **Package README:** the matching section in `packages/<pkg>/README.md`.
 - **Agent docs:** an AGENTS.md / `skills/domecs/SKILL.md` line where agent-facing.
-- **Release notes:** a `CHANGELOG.md` entry, plus `doc/v2.N.0.md` at release.
+- **Release notes:** a `CHANGELOG.md` entry, plus `doc/release-notes/v2.N.0.md` at release.
 
 ### 3.4 Dual-runtime golden (new in 2.1)
 
@@ -273,9 +273,12 @@ and a Node test spawns it under each runtime and compares.
 - **Cross-runtime.** If `DOMECS_ALT_RUNTIME` is set, for example to
   `"env ELECTRON_RUN_AS_NODE=1 /path/electron"`, the test also spawns the script under that
   binary and requires identical output.
-- **Studio** runs this same script from the packed tarball under its pinned Electron, through the
-  same spawn-and-compare test it uses for its own fixtures (studio spec §10.1). That is the check
-  that "determinism holds in the app" (critic risk 2).
+- **Studio** runs this same script under its pinned Electron, through the same spawn-and-compare
+  test it uses for its own fixtures (studio spec §10.1). That is the check that "determinism holds
+  in the app" (critic risk 2). `pack-for-studio` copies the script next to the tarballs
+  (`vendor/domecs/determinism-golden.mjs`, manifest `golden: { file, integrity }`), and
+  `--engine <dir>` makes it load `@domecs/core` from `<dir>/@domecs/core/dist` (studio passes its
+  `node_modules`), so studio runs it against the packed build it installed.
 
 ---
 
@@ -2158,7 +2161,8 @@ new export in every package's api-surface file.
    package (which rewrites `workspace:^`). Tarball names include the sha
    (`domecs-core-2.1.0+g1a2b3c4.tgz`), so a changed engine is a changed dependency spec.
 3. It writes `vendor/domecs/manifest.json`:
-   `{ version, gitSha, dirty, packedAt, packages: { "@domecs/core": { file, integrity, buildId }, … } }`.
+   `{ version, gitSha, dirty, packedAt, packages: { "@domecs/core": { file, integrity, buildId }, … } }`,
+   plus `golden: { file, integrity }` for the copied §3.4 script (2.1 RC).
 4. Studio's `engine:refresh` rewrites its `@domecs/*` specs to
    `file:../../vendor/domecs/<file>` (paths relative to each workspace package) and runs
    `npm install`, so the lockfile always matches the tarballs and `npm ci` never fails with
@@ -2487,3 +2491,13 @@ Owner decision (revision 3): `SNAPSHOT_VERSION` is 3 for every 2.1 snapshot.
 | §8 and plan E8.3/E13.1/E18.1 named release notes `doc/v2.N.0.md` | `doc/release-notes/v2.N.0.md` | The v1.0.0 and v2.0.0 notes live in `doc/release-notes/` |
 | §7.1 `ActLog.gaps` lists `'heartbeat_input'`, but the semantics say `setInput` + heartbeat records nothing | Plan E19.2 note: drop the reason unless implementation needs it, recording the choice here | An unreachable variant in a public union invites dead `case` branches |
 | Studio docs still say "milestones E1–E18" | Not changed (the docs pass was limited to path references in the studio repo) | Follow-up in the studio repo: E1–E21 |
+
+### Implementation notes — E8 (2026-10-19)
+
+| Item | Choice | Reason |
+|---|---|---|
+| §3.4 script dependencies | `scripts/determinism-golden.mjs` imports only the built `@domecs/core` dist (no rules) | In the workspace, `@domecs/rules`' dist imports `@domecs/core`, which resolves to core's TypeScript `src` (publishConfig switches to `dist` only when packed), so Node cannot load it without a loader. Every runtime-sensitive piece (`dmath`, the RNG, canonical number formatting in the hash) is in core; rules route `sin`/`cos`/`random()` through it |
+| §3.4 fixture sensitivity | `trig` stores `dmath.sin`/`cos` of the six angles where V8 13.6 `Math.*` differ from musl, plus orbit maths with arguments up to ~2^40; `bounce0` keeps `-0` in the final state (a resting ball against the right wall, `vx = -abs(vx) * 0.5`) and accumulates a `1 / vx` sign test | Mutation checks: swapping any `dmath` call in `trig` or the fingerprint for `Math.*`, or the `-0` bounce for `0 - abs(vx)`, changes the corresponding hash on Node 24. A first draft accumulated `sum += sin(a)`, where the 1-ulp difference was rounded away and `Math.*` went unnoticed |
+| §3.4 studio access to the script | `pack-for-studio` copies the script next to the tarballs (manifest `golden`), and `--engine <node_modules>` loads core from there | The spec has studio run it "from the packed tarball", but no package ships `scripts/`; adding it to `@domecs/core`'s `files` would publish a test script to npm |
+| §3.4 `test:golden` | `pnpm --filter @domecs/core build && node --test test/golden.test.mjs`; the test also checks `--engine` against a symlinked `node_modules` and that two runs print the same line | The script reads `dist/`, so a stale build would test old code |
+| E8 exit, alt runtime | `DOMECS_ALT_RUNTIME="env ELECTRON_RUN_AS_NODE=1 <electron 44.9.0>"` (the studio spec's pin, installed in a scratch directory outside both repos): identical output on linux-arm64 (Node 24.19.0 / V8 13.6 vs Electron 44.9.0 / Node 24.22.0 / V8 15.2). On the same host a 2M-input `Math.sin`/`Math.cos` checksum **differs** between those two runtimes, so the golden's equality comes from `dmath`, not from luck | Recorded as evidence for critic risk 2 |

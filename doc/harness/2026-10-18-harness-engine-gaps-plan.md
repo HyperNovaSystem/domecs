@@ -252,8 +252,8 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E8.1 Dual-runtime golden
 
 - **Files:** create `scripts/determinism-golden.mjs`, `test/golden.test.mjs`, `test/golden/determinism.json`; root script `test:golden`.
-- [ ] **Red:** the test spawns the script under `process.execPath` and compares its `fixtures` and `dmathFingerprint` (not `buildId`) with the committed JSON; with `DOMECS_ALT_RUNTIME` it also spawns under that binary and requires identical output; fixtures: `sin`/`cos`, `random()`, own streams, a `-0` bounce; strict hashes.
-- [ ] **Commit:** `test(release): dual-runtime determinism golden (E8.1)`
+- [x] **Red:** the test spawns the script under `process.execPath` and compares its `fixtures` and `dmathFingerprint` (not `buildId`) with the committed JSON; with `DOMECS_ALT_RUNTIME` it also spawns under that binary and requires identical output; fixtures: `sin`/`cos`, `random()`, own streams, a `-0` bounce; strict hashes.
+- [x] **Commit:** `test(release): dual-runtime determinism golden (E8.1)`
 
 #### E8.2 Fork-equivalence suite
 
