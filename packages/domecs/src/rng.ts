@@ -122,3 +122,33 @@ export function rewindRng(rng: Rng, state: RngState): boolean {
   for (let i = 0; i < 4; i++) s[i] = next[i]!
   return true
 }
+
+/**
+ * The initial state of the stream `key` under the root seed `root` (§4.4):
+ * the world's per-system stream for a system with `rng: 'own'`, keyed by its
+ * cursor key. Independent of when the system registered and of every other
+ * system's draws.
+ *
+ * - `h` = FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`;
+ * - word `i` = the first `splitmix32` output seeded with
+ *   `root[i] XOR rotl(h, 8·i)` (the rotation keeps equal root words apart);
+ * - an all-zero result is fixed up as {@link seedToState} does;
+ * - 8 xoshiro128** outputs are discarded as warm-up.
+ *
+ * Pinned by a golden test and part of the snapshot contract: changing it
+ * requires a `SNAPSHOT_VERSION` bump.
+ */
+export function deriveStream(root: RngState, key: string): RngState {
+  const text = 'domecs:stream:' + key
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = u32(Math.imul(h ^ text.charCodeAt(i), 0x01000193))
+  const r = seedToState(root)
+  const s: [number, number, number, number] = [0, 0, 0, 0]
+  for (let i = 0; i < 4; i++) {
+    const mix = i === 0 ? h : rotl(h, 8 * i)
+    s[i] = splitmix32(u32(r[i]! ^ mix))()
+  }
+  if (s[0] === 0 && s[1] === 0 && s[2] === 0 && s[3] === 0) s[0] = 1
+  for (let i = 0; i < 8; i++) xoshiroStep(s)
+  return [s[0], s[1], s[2], s[3]] as RngState
+}

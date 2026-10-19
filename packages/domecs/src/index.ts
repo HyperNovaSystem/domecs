@@ -8,7 +8,7 @@ export type {
   AgentObservation,
 } from './agent.js'
 export { defineEvent } from './events.js'
-export { createRng, restoreRng, seedToState } from './rng.js'
+export { createRng, deriveStream, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'
 export {
   Has,

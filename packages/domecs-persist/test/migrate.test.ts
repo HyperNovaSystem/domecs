@@ -96,6 +96,19 @@ describe('@domecs/persist — migrate', () => {
     if (r.ok) expect(r.value.version).toBe(2)
   })
 
+  it('BUILTIN_MIGRATIONS carries a 2->3 step that only bumps the version (§4.4, ED-2)', () => {
+    const step = BUILTIN_MIGRATIONS.get(2)
+    expect(step).toBeDefined()
+    const v2 = snap(2, { nextId: 7, resources: { Score: 1 } })
+    const r = step!(v2)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toEqual({ ...v2, version: 3 })
+    // a v1 snapshot climbs both built-in steps
+    const chain = migrate(snap(1), 3, BUILTIN_MIGRATIONS)
+    expect(chain.ok).toBe(true)
+    if (chain.ok) expect(chain.value.version).toBe(3)
+  })
+
   it('errors out when the snapshot is newer than the supported target', () => {
     const r = migrate(snap(5), 3, new Map())
     expect(r.ok).toBe(false)

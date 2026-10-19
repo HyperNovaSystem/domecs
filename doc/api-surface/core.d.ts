@@ -747,7 +747,7 @@ export { createWorld } from './world.js';
 export { createAgentBridge } from './agent.js';
 export type { AgentBridge, AgentBridgeOptions, AgentObservation, } from './agent.js';
 export { defineEvent } from './events.js';
-export { createRng, restoreRng, seedToState } from './rng.js';
+export { createRng, deriveStream, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';
 export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResource, normalize as normalizeQuery, collectHasComponents, QueryNodeKind, } from './query.js';
 export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, RegisterError, } from './world.js';
@@ -876,6 +876,8 @@ export interface WorldManifest {
         readonly priority: number;
         /** Secondary sort key within a priority (default 0; SPEC §3). */
         readonly order: number;
+        /** Which generator its `ctx.rand` is: the shared stream or its own (§4.4). */
+        readonly rng: 'shared' | 'own';
         /**
          * Names of the components the system's `query` / `reactsTo` reference
          * (any leaf, `Not` branches included), sorted and de-duplicated.
@@ -1270,6 +1272,22 @@ export declare function restoreRng(state: RngState): Rng;
  * Returns false when `rng` was not made by {@link createRng}.
  */
 export declare function rewindRng(rng: Rng, state: RngState): boolean;
+/**
+ * The initial state of the stream `key` under the root seed `root` (§4.4):
+ * the world's per-system stream for a system with `rng: 'own'`, keyed by its
+ * cursor key. Independent of when the system registered and of every other
+ * system's draws.
+ *
+ * - `h` = FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`;
+ * - word `i` = the first `splitmix32` output seeded with
+ *   `root[i] XOR rotl(h, 8·i)` (the rotation keeps equal root words apart);
+ * - an all-zero result is fixed up as {@link seedToState} does;
+ * - 8 xoshiro128** outputs are discarded as warm-up.
+ *
+ * Pinned by a golden test and part of the snapshot contract: changing it
+ * requires a `SNAPSHOT_VERSION` bump.
+ */
+export declare function deriveStream(root: RngState, key: string): RngState;
 
 // file: scheduler.d.ts
 import type { EventType, EventView } from './events.js';
@@ -1304,6 +1322,18 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
      * makes `world.system()` throw `TypeError`.
      */
     meta?: JsonValue;
+    /**
+     * Which generator `ctx.rand` is (§4.4; SPEC §2.8).
+     * 'shared' (default): `ctx.rand` is `world.rand`, so every system's draws
+     * depend on every other system's.
+     * 'own': `ctx.rand` is this system's stream, keyed by its cursor key (its
+     * name, or `name#k` on a clash) and derived from the world's root seed —
+     * independent of registration time and of every other system's draws. The
+     * stream outlives the system (re-registering under the key resumes it) and
+     * travels in the snapshot (`rngStreams`). Calling `world.rand` directly
+     * still draws the shared stream. Any other value throws at `world.system()`.
+     */
+    rng?: 'shared' | 'own';
     /**
      * Erased Fields phantom — keeps a structural slot for the inferred field
      * shape so callers can ascribe it explicitly when needed. The runtime
@@ -1383,6 +1413,12 @@ export interface CompiledSystem {
     components: string[];
     /** Clone of `def.meta` taken at registration (manifest). */
     meta?: JsonValue;
+    /** `def.rng ?? 'shared'` (manifest). */
+    rng: 'shared' | 'own';
+    /** For `rng: 'own'`: the stream key, fixed at registration (§4.4). */
+    rngKey?: string;
+    /** For `rng: 'own'`: the stream `ctx.rand` is; the world's map holds it. */
+    ownRand?: Rng;
     enabled: boolean;
     state: unknown;
     query?: QueryResult;
@@ -1433,8 +1469,13 @@ export interface Scheduler {
  *   is the system's (O-42).
  * @param initialSeen the change-log stamp a newly registered system's
  *   window starts after.
+ * @param claimStream the own stream (§4.4) a system registering now under
+ *   `name` with `rng: 'own'` draws from, and its key.
  */
-export declare function createScheduler(makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult, fixedStep: number, initialSeen: (name: string) => number): Scheduler;
+export declare function createScheduler(makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult, fixedStep: number, initialSeen: (name: string) => number, claimStream: (name: string) => {
+    key: string;
+    rng: Rng;
+}): Scheduler;
 export {};
 
 // file: signals.d.ts
@@ -1453,8 +1494,9 @@ export declare function createSignal<T>(): EmittableSignal<T>;
 // file: snapshot.d.ts
 import type { ChangesSnapshot } from './change-log.js';
 import type { JsonValue } from './result.js';
+import type { RngState } from './rng.js';
 import type { Entity } from './types.js';
-export declare const SNAPSHOT_VERSION = 2;
+export declare const SNAPSHOT_VERSION = 3;
 /** Options for `world.snapshot()`. */
 export interface SnapshotOptions {
     /**
@@ -1487,7 +1529,26 @@ export interface SnapshotPendingEvent {
 }
 export interface WorldSnapshot {
     readonly version: number;
+    /** State of the shared stream (`world.rand`) at snapshot time. */
     readonly seed: readonly [number, number, number, number];
+    /**
+     * The world's root seed state — the `createWorld` seed — from which every
+     * `rng: 'own'` stream derives (§4.4, v3). It never advances. Written by
+     * every 2.1 snapshot. Restore adopts it, so systems registered after the
+     * restore derive the streams the source world would; absent (a v2
+     * snapshot), the restoring world keeps its own root.
+     */
+    readonly rngRoot?: RngState;
+    /**
+     * Current state of every own stream this world has created, by stream key
+     * (the owning system's cursor key: its name, or `name#k` on a clash), v3.
+     * Entries outlive their systems (a removed system's entry is kept, so a
+     * re-registered system resumes it). Omitted while the world has never
+     * created an own stream. Restore replaces the world's map with it and
+     * re-derives, from the restored root, the stream of every registered own
+     * system whose key is missing.
+     */
+    readonly rngStreams?: Readonly<Record<string, RngState>>;
     readonly tick: number;
     /**
      * Cumulative unquantized scaled time in seconds — the drift-free total
@@ -1732,7 +1793,7 @@ export declare function createResourceState(recordChange: (name: string) => void
 
 // file: world-state.d.ts
 import type { ChangeCursor, ChangeLog } from './change-log.js';
-import { type Rng } from './rng.js';
+import { type Rng, type RngState } from './rng.js';
 import type { EmittedEvent, EventType } from './events.js';
 import { type SnapshotPendingEvent, type WorldSnapshot } from './snapshot.js';
 import { type TimeState } from './time.js';
@@ -1814,6 +1875,12 @@ export interface WorldStateCtx {
     ensureArchetype(types: Set<string>): ArchetypeBucket;
     getRand(): Rng;
     setRand(r: Rng): void;
+    /** The root own streams derive from (§4.4). */
+    getRngRoot(): RngState;
+    /** Every own stream the world has created, by key (§4.4). */
+    getStreams(): ReadonlyMap<string, Rng>;
+    /** Adopt a validated snapshot's root and streams (§4.4). */
+    restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined): void;
     getNextId(): Entity;
     setNextId(id: Entity): void;
     setEmptyArch(arch: ArchetypeBucket): void;

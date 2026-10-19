@@ -232,9 +232,9 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w2.getComponent(e, Health)?.hp).toBe(5)
   })
 
-  it('loads a legacy v1 snapshot via the built-in 1->2 migration (review #16)', () => {
+  it('loads a legacy v1 snapshot via the built-in 1->2->3 migrations (review #16)', () => {
     // A v1 save predates resources. Loading it with the default target
-    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2 step,
+    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2 and 2->3 steps,
     // restoring entities with an empty resource set.
     const v1: WorldSnapshot = {
       version: 1,
@@ -254,7 +254,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     const v0: WorldSnapshot = { version: 0, seed: [1, 2, 3, 4], tick: 0, entities: [] }
     storage.write('ancient', JSON.stringify(v0))
     const w = createWorld()
-    const r = load(w, storage, 'ancient') // default target, only the built-in 1->2
+    const r = load(w, storage, 'ancient') // default target, only the built-ins 1->2, 2->3
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.kind).toBe('migration_failed')
   })

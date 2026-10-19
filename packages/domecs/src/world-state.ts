@@ -1,6 +1,6 @@
 import { internal } from './component.js'
 import type { ChangeCursor, ChangeLog } from './change-log.js'
-import { restoreRng, rewindRng, type Rng } from './rng.js'
+import { restoreRng, rewindRng, type Rng, type RngState } from './rng.js'
 import type { EmittedEvent, EventType } from './events.js'
 import type { JsonValue } from './result.js'
 import {
@@ -91,6 +91,12 @@ export interface WorldStateCtx {
   // Reassignable factory closure vars, threaded as accessors.
   getRand(): Rng
   setRand(r: Rng): void
+  /** The root own streams derive from (§4.4). */
+  getRngRoot(): RngState
+  /** Every own stream the world has created, by key (§4.4). */
+  getStreams(): ReadonlyMap<string, Rng>
+  /** Adopt a validated snapshot's root and streams (§4.4). */
+  restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined): void
   getNextId(): Entity
   setNextId(id: Entity): void
   setEmptyArch(arch: ArchetypeBucket): void
@@ -136,9 +142,18 @@ export function buildSnapshot(
     fixedStepsDue(ctx.clock.totalScaledSeconds, ctx.time.fixedStep) - ctx.clock.fixedStepsFired
   // O-42: marks a system has not seen yet, so restore can re-issue them.
   const changes = ctx.changes.encode(ctx.changeCursors())
+  // §4.4: every own stream's state, by key; omitted while there is none.
+  let rngStreams: Record<string, RngState> | undefined
+  for (const [key, rng] of ctx.getStreams()) {
+    rngStreams ??= {}
+    setOwn(rngStreams, key, rng.seed())
+  }
+  const root = ctx.getRngRoot()
   return {
     version: SNAPSHOT_VERSION,
     seed: ctx.getRand().seed(),
+    rngRoot: [root[0], root[1], root[2], root[3]],
+    ...(rngStreams !== undefined ? { rngStreams } : {}),
     tick: ctx.time.tick,
     scaledTime: ctx.clock.totalScaledSeconds,
     ...(fixedBacklog > 0 ? { fixedBacklog, fixedStep: ctx.time.fixedStep } : {}),
@@ -335,6 +350,8 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   // PRNG state + tick + clock. The generator is rewound in place so a
   // captured `world.rand` handle follows the restore (O-46).
   if (!rewindRng(ctx.getRand(), s.seed)) ctx.setRand(restoreRng(s.seed))
+  // §4.4: own streams — the snapshot's root and map, missing keys re-derived.
+  ctx.restoreStreams(s.rngRoot, s.rngStreams)
   ctx.time.tick = s.tick
   ctx.time.delta = 0
   ctx.time.scaledDelta = 0
@@ -452,6 +469,10 @@ function isNonNegativeInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
+function isRngState(v: unknown): boolean {
+  return Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && Number.isFinite(n))
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -481,6 +502,19 @@ function validateEnvelope(s: WorldSnapshot): void {
     !seed.every((n) => typeof n === 'number' && Number.isFinite(n))
   ) {
     throw invalid('seed', 'an array of 4 finite numbers', seed)
+  }
+  // §4.4 (v3): present-but-invalid — including null — is rejected.
+  if (s.rngRoot !== undefined && !isRngState(s.rngRoot)) {
+    throw invalid('rngRoot', 'an array of 4 finite numbers', s.rngRoot)
+  }
+  if (s.rngStreams !== undefined) {
+    const streams: unknown = s.rngStreams
+    if (!isRecord(streams)) throw invalid('rngStreams', 'an object', streams)
+    for (const key of Object.keys(streams)) {
+      if (!isRngState(streams[key])) {
+        throw invalid(`rngStreams[${JSON.stringify(key)}]`, 'an array of 4 finite numbers', streams[key])
+      }
+    }
   }
   if (!isNonNegativeInt(s.tick)) throw invalid('tick', 'an integer >= 0', s.tick)
   if (s.nextId !== undefined && !isNonNegativeInt(s.nextId)) {

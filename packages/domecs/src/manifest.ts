@@ -38,6 +38,8 @@ export interface WorldManifest {
     readonly priority: number
     /** Secondary sort key within a priority (default 0; SPEC §3). */
     readonly order: number
+    /** Which generator its `ctx.rand` is: the shared stream or its own (§4.4). */
+    readonly rng: 'shared' | 'own'
     /**
      * Names of the components the system's `query` / `reactsTo` reference
      * (any leaf, `Not` branches included), sorted and de-duplicated.

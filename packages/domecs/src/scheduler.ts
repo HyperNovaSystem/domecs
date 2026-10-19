@@ -35,6 +35,18 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
    */
   meta?: JsonValue
   /**
+   * Which generator `ctx.rand` is (§4.4; SPEC §2.8).
+   * 'shared' (default): `ctx.rand` is `world.rand`, so every system's draws
+   * depend on every other system's.
+   * 'own': `ctx.rand` is this system's stream, keyed by its cursor key (its
+   * name, or `name#k` on a clash) and derived from the world's root seed —
+   * independent of registration time and of every other system's draws. The
+   * stream outlives the system (re-registering under the key resumes it) and
+   * travels in the snapshot (`rngStreams`). Calling `world.rand` directly
+   * still draws the shared stream. Any other value throws at `world.system()`.
+   */
+  rng?: 'shared' | 'own'
+  /**
    * Erased Fields phantom — keeps a structural slot for the inferred field
    * shape so callers can ascribe it explicitly when needed. The runtime
    * never reads this; declaring it lets `system<T>(...)` propagate Fields
@@ -149,6 +161,12 @@ export interface CompiledSystem {
   components: string[]
   /** Clone of `def.meta` taken at registration (manifest). */
   meta?: JsonValue
+  /** `def.rng ?? 'shared'` (manifest). */
+  rng: 'shared' | 'own'
+  /** For `rng: 'own'`: the stream key, fixed at registration (§4.4). */
+  rngKey?: string
+  /** For `rng: 'own'`: the stream `ctx.rand` is; the world's map holds it. */
+  ownRand?: Rng
   enabled: boolean
   state: unknown
   query?: QueryResult
@@ -217,11 +235,14 @@ const REMOVED_KIND: ReadonlySet<QueryNode['kind']> = new Set(['removed'])
  *   is the system's (O-42).
  * @param initialSeen the change-log stamp a newly registered system's
  *   window starts after.
+ * @param claimStream the own stream (§4.4) a system registering now under
+ *   `name` with `rng: 'own'` draws from, and its key.
  */
 export function createScheduler(
   makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult,
   fixedStep: number,
   initialSeen: (name: string) => number,
+  claimStream: (name: string) => { key: string; rng: Rng },
 ): Scheduler {
   const systems: CompiledSystem[] = []
   // name -> live handle, so getHandle(name) hands back the SAME object whose
@@ -278,6 +299,13 @@ export function createScheduler(
         }
       }
 
+      const rngMode = def.rng ?? 'shared'
+      if (rngMode !== 'shared' && rngMode !== 'own') {
+        throw new Error(
+          `domecs: system "${name}" rng=${JSON.stringify(rngMode)} must be 'shared' or 'own' (SPEC §2.8 per-system streams).`,
+        )
+      }
+
       if (def.schedule === 'reactive') {
         // defensive — unrepresentable in TS, retained for untyped JS callers
         if (!def.reactsTo) {
@@ -324,6 +352,7 @@ export function createScheduler(
         order,
         components: referencedComponentNames(nodes),
         ...(def.meta !== undefined ? { meta: cloneSerializable(def.meta) } : {}),
+        rng: rngMode,
         enabled: true,
         state: def.state,
         fixedDivisor,
@@ -338,6 +367,13 @@ export function createScheduler(
       }
       if (def.query) compiled.query = makeQuery(def.query, compiled)
       if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo, compiled)
+      if (rngMode === 'own') {
+        // Claimed last, once nothing can throw, so a failed registration
+        // leaves no stream entry behind.
+        const { key, rng } = claimStream(name)
+        compiled.rngKey = key
+        compiled.ownRand = rng
+      }
 
       systems.push(compiled)
       addToMode(compiled)

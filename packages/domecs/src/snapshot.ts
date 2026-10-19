@@ -1,11 +1,14 @@
 import type { ChangesSnapshot } from './change-log.js'
 import type { JsonValue } from './result.js'
+import type { RngState } from './rng.js'
 import type { Entity } from './types.js'
 
-// v2 added the optional `resources` field. The persist layer's
-// built-in 1->2 migration upgrades older saves (a v1 snapshot simply has no
-// resources).
-export const SNAPSHOT_VERSION = 2
+// v2 added the optional `resources` field; v3 (2.1) the optional `rngRoot`,
+// `rngStreams` (§4.4) and `pendingEvents` (§4.7) fields. Every snapshot a 2.1
+// world writes is v3. The persist layer's built-in 1->2 and 2->3 migrations
+// upgrade older saves (each is a pure version bump: an older snapshot simply
+// lacks the newer optional fields). `restore()` accepts any version <= 3.
+export const SNAPSHOT_VERSION = 3
 
 /** Options for `world.snapshot()`. */
 export interface SnapshotOptions {
@@ -41,7 +44,26 @@ export interface SnapshotPendingEvent {
 
 export interface WorldSnapshot {
   readonly version: number
+  /** State of the shared stream (`world.rand`) at snapshot time. */
   readonly seed: readonly [number, number, number, number]
+  /**
+   * The world's root seed state — the `createWorld` seed — from which every
+   * `rng: 'own'` stream derives (§4.4, v3). It never advances. Written by
+   * every 2.1 snapshot. Restore adopts it, so systems registered after the
+   * restore derive the streams the source world would; absent (a v2
+   * snapshot), the restoring world keeps its own root.
+   */
+  readonly rngRoot?: RngState
+  /**
+   * Current state of every own stream this world has created, by stream key
+   * (the owning system's cursor key: its name, or `name#k` on a clash), v3.
+   * Entries outlive their systems (a removed system's entry is kept, so a
+   * re-registered system resumes it). Omitted while the world has never
+   * created an own stream. Restore replaces the world's map with it and
+   * re-derives, from the restored root, the stream of every registered own
+   * system whose key is missing.
+   */
+  readonly rngStreams?: Readonly<Record<string, RngState>>
   readonly tick: number
   /**
    * Cumulative unquantized scaled time in seconds — the drift-free total

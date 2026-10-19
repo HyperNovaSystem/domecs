@@ -21,9 +21,14 @@ export type MigrationMap = ReadonlyMap<number, Migration>
  * - `1 → 2`: resources were added to `WorldSnapshot` at v2. A v1
  *   snapshot simply lacks them, so the step is a pure version bump —
  *   `world.restore` treats the absent `resources` as an empty set.
+ * - `2 → 3` (2.1): v3 added the optional `rngRoot`, `rngStreams` and
+ *   `pendingEvents` fields. A v2 snapshot lacks them, so the step is a pure
+ *   version bump — restore keeps the world's own root, re-derives every own
+ *   stream and abandons the event queue, as for a v2 snapshot.
  */
 export const BUILTIN_MIGRATIONS: MigrationMap = new Map<number, Migration>([
   [1, (snap) => ok({ ...snap, version: 2 })],
+  [2, (snap) => ok({ ...snap, version: 3 })],
 ])
 
 /**

@@ -41,7 +41,7 @@ import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin, type TickInfo } from './plugin.js'
 import { err, normalizeCause, ok, toJsonValue, type Result } from './result.js'
-import { createRng, type Rng, type RngState } from './rng.js'
+import { createRng, deriveStream, rewindRng, seedToState, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
   SNAPSHOT_VERSION,
@@ -558,6 +558,12 @@ export function createWorld(options: WorldOptions = {}): World {
   const strictReturns = options.strictReturns === true
   const warnedSystems = new Set<number>()
   let rand = createRng(seed)
+  // §4.4: the root every own stream derives from — the createWorld seed,
+  // replaced by a restored snapshot's `rngRoot`; it never advances.
+  let rngRoot: RngState = seedToState(seed)
+  // Every own stream this world has created, by stream key. An entry
+  // outlives its system: a re-registration under the key resumes it.
+  let streams = new Map<string, Rng>()
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
   let preResumeScale = 1
@@ -720,6 +726,9 @@ export function createWorld(options: WorldOptions = {}): World {
     setRand: (r) => {
       rand = r
     },
+    getRngRoot: () => rngRoot,
+    getStreams: () => streams,
+    restoreStreams: (root, rec) => restoreStreams(root, rec),
     getNextId: () => nextId,
     setNextId: (id) => {
       nextId = id
@@ -953,6 +962,64 @@ export function createWorld(options: WorldOptions = {}): World {
     return out
   }
 
+  /**
+   * §4.4: the own stream of a system registering now under `name`. Its key
+   * is the cursor key it registers under (`name`, or `name#k`), skipping any
+   * key a live own-stream system still holds, so no two live systems share
+   * a generator. An existing entry is resumed; otherwise the stream is
+   * derived from the root.
+   */
+  function claimStream(name: string): { key: string; rng: Rng } {
+    const held = new Set<string>()
+    let k = 0
+    for (const sys of scheduler.all()) {
+      if (sys.rngKey !== undefined) held.add(sys.rngKey)
+      if (sys.name === name) k++
+    }
+    let key = k === 0 ? name : `${name}#${k}`
+    while (held.has(key)) key = `${name}#${++k}`
+    let rng = streams.get(key)
+    if (rng === undefined) {
+      rng = createRng(deriveStream(rngRoot, key))
+      streams.set(key, rng)
+    }
+    return { key, rng }
+  }
+
+  /**
+   * §4.4 restore: adopt the snapshot's root (absent: keep ours), replace the
+   * stream map with its streams (absent: empty), then re-derive from the
+   * root the stream of every registered own system whose key is missing.
+   * Live generators are rewound in place (O-46), so captured `ctx.rand`
+   * handles follow. Called after validation, so nothing here throws.
+   */
+  function restoreStreams(
+    root: RngState | undefined,
+    rec: Readonly<Record<string, RngState>> | undefined,
+  ): void {
+    if (root !== undefined) rngRoot = seedToState(root)
+    const prev = streams
+    const next = new Map<string, Rng>()
+    const held = new Map<string, Rng>()
+    for (const sys of scheduler.all()) {
+      if (sys.rngKey !== undefined && sys.ownRand !== undefined) held.set(sys.rngKey, sys.ownRand)
+    }
+    if (rec !== undefined) {
+      for (const key of Object.keys(rec)) {
+        const state = rec[key]!
+        const rng = held.get(key) ?? prev.get(key)
+        if (rng !== undefined && rewindRng(rng, state)) next.set(key, rng)
+        else next.set(key, createRng(state))
+      }
+    }
+    for (const [key, rng] of held) {
+      if (next.has(key)) continue
+      rewindRng(rng, deriveStream(rngRoot, key))
+      next.set(key, rng)
+    }
+    streams = next
+  }
+
   /** The key a system registered now under `name` gets (see cursorKeys). */
   function nextCursorKey(name: string): string {
     let k = 0
@@ -1139,7 +1206,7 @@ export function createWorld(options: WorldOptions = {}): World {
       input,
       events: view,
       world,
-      rand,
+      rand: s.ownRand ?? rand,
       state: s.state,
     }
     // `System` is declared as `() => void`; we shape-check for a returned
@@ -1878,6 +1945,7 @@ export function createWorld(options: WorldOptions = {}): World {
           enabled: s.enabled,
           priority: s.priority,
           order: s.order,
+          rng: s.rng,
           components: s.components.slice(),
           ...(s.meta !== undefined ? { meta: cloneSerializable(s.meta) } : {}),
         })),
@@ -2186,6 +2254,7 @@ export function createWorld(options: WorldOptions = {}): World {
     (def, owner) => createQuery(def, owner),
     fixedStep,
     (name) => pendingCursors.get(nextCursorKey(name)) ?? lastTickEndSeq,
+    (name) => claimStream(name),
   )
   plugins = createPluginRegistry(world)
 
