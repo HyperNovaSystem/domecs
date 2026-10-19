@@ -141,7 +141,8 @@ export function buildSnapshot(
   const fixedBacklog =
     fixedStepsDue(ctx.clock.totalScaledSeconds, ctx.time.fixedStep) - ctx.clock.fixedStepsFired
   // O-42: marks a system has not seen yet, so restore can re-issue them.
-  const changes = ctx.changes.encode(ctx.changeCursors())
+  // Transient resources' marks are left out with their values (O-36).
+  const changes = ctx.changes.encode(ctx.changeCursors(), ctx.resources.isTransient)
   // §4.4: every own stream's state, by key; omitted while there is none.
   let rngStreams: Record<string, RngState> | undefined
   for (const [key, rng] of ctx.getStreams()) {

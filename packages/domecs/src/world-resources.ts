@@ -83,17 +83,25 @@ export function createResourceState(recordChange: (name: string) => void) {
       name: type.name,
       hasValue: values.has(type.name),
       hasDefault: meta.__default !== undefined,
+      transient: meta.__transient,
     }
+  }
+
+  /** Whether `name` is a registered transient resource (O-36). */
+  function isTransient(name: string): boolean {
+    const type = registry.get(name)
+    return type !== undefined && internalResource(type).__transient
   }
 
   // #16: serialize materialized resources by name (deep-cloned like component
   // values). Returns undefined when there are none so a resource-free world's
   // snapshot omits the field entirely (byte-identical to the pre-v2 shape
-  // modulo `version`).
+  // modulo `version`). Transient resources are left out (O-36).
   function snapshotValues(): Record<string, unknown> | undefined {
-    if (values.size === 0) return undefined
-    const out: Record<string, unknown> = {}
+    let out: Record<string, unknown> | undefined
     for (const [name, value] of values) {
+      if (isTransient(name)) continue
+      out ??= {}
       out[name] = cloneSerializable(value)
     }
     return out
@@ -102,22 +110,30 @@ export function createResourceState(recordChange: (name: string) => void) {
   // Validate incoming resource values for every *registered* resource type —
   // called BEFORE any state is wiped so an invalid snapshot throws cleanly
   // and leaves the world untouched. Mirrors the set() contract; names with no
-  // registered type pass through (the name-keyed lazy contract).
+  // registered type pass through (the name-keyed lazy contract). A value for
+  // a registered transient resource is not applied, so it is not validated
+  // either (O-36).
   function validateSnapshot(snapResources: Record<string, unknown>): void {
     for (const [name, value] of Object.entries(snapResources)) {
       const type = registry.get(name)
-      if (type) validate(internalResource(type), value, name)
+      if (!type) continue
+      const meta = internalResource(type)
+      if (!meta.__transient) validate(meta, value, name)
     }
   }
 
   // #16: resource values are part of the snapshot; clear then rehydrate.
-  // `registry` (type identity) persists like typeRegistry.
+  // `registry` (type identity) persists like typeRegistry. A transient
+  // resource keeps its live value (O-36).
   function clearForRestore(): void {
-    values.clear()
+    for (const name of Array.from(values.keys())) {
+      if (!isTransient(name)) values.delete(name)
+    }
   }
 
   function restoreValues(snapResources: Record<string, unknown>): void {
     for (const [name, value] of Object.entries(snapResources)) {
+      if (isTransient(name)) continue
       values.set(name, cloneSerializable(value))
     }
   }
@@ -130,6 +146,7 @@ export function createResourceState(recordChange: (name: string) => void) {
     describe,
     register,
     lookup,
+    isTransient,
     snapshotValues,
     validateSnapshot,
     clearForRestore,

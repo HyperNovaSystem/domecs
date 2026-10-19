@@ -9,6 +9,8 @@ export interface InternalResourceType<T, Name extends string = string>
   /** Produces a fresh default value, or `undefined` when none was declared. */
   readonly __default: (() => T) | undefined
   readonly __validate: ((value: T) => true | string) | undefined
+  /** Left out of snapshots; restore keeps the live value (O-36). */
+  readonly __transient: boolean
 }
 
 export function defineResource<T, const Name extends string>(
@@ -37,6 +39,7 @@ export function defineResource<T>(
     __tag: tag,
     __default: defaultFactory,
     __validate: options.validate,
+    __transient: options.transient === true,
   }
   return shape as unknown as ResourceType<T, string>
 }

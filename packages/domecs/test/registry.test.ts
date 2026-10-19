@@ -50,7 +50,7 @@ describe('World.register — eager registration (O-30)', () => {
     const w = world()
     expect(w.register(Score).ok).toBe(true)
     expect(w.resourceTypes()).toEqual([Score])
-    expect(w.describeResource(Score)).toEqual({ name: 'Score', hasValue: false, hasDefault: true })
+    expect(w.describeResource(Score)).toEqual({ name: 'Score', hasValue: false, hasDefault: true, transient: false })
   })
 
   it('accepts a mix of kinds in one call and is idempotent', () => {

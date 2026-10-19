@@ -267,7 +267,10 @@ export function createChangeLog() {
    * stamp order so the result depends only on the marks' relative order.
    * Returns undefined when every cursor has seen every mark.
    */
-  function encode(cursors: readonly ChangeCursor[]): ChangesSnapshot | undefined {
+  function encode(
+    cursors: readonly ChangeCursor[],
+    skipResource?: (name: string) => boolean,
+  ): ChangesSnapshot | undefined {
     if (cursors.length === 0) return undefined
     // A mark is carried while some system that could report it has not
     // seen it: removal marks only for `OnRemoved` readers, so retention for
@@ -288,7 +291,8 @@ export function createChangeLog() {
       }
     }
     for (const [name, stamp] of resourceStamps) {
-      if (stamp > floor) carried.push([stamp, ['resource', name]])
+      // A transient resource (O-36) is not in the snapshot; neither are its marks.
+      if (stamp > floor && !skipResource?.(name)) carried.push([stamp, ['resource', name]])
     }
     if (carried.length === 0) return undefined
     carried.sort((a, b) => a[0] - b[0])

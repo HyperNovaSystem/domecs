@@ -91,6 +91,8 @@ export interface ResourceDescriptor {
   readonly name: string
   readonly hasValue: boolean
   readonly hasDefault: boolean
+  /** Declared with `defineResource(name, { transient: true })`: not snapshotted. */
+  readonly transient: boolean
 }
 
 /**
@@ -123,6 +125,15 @@ export interface ResourceOptions<T> {
   default?: T | (() => T)
   /** Reject invalid values on `setResource` / lazy default; return `true` or a message. */
   validate?: (value: T) => true | string
+  /**
+   * Render-only or derived state (a camera, a HUD cache) that is rebuilt
+   * rather than saved (O-36). `snapshot()` leaves the value — and its change
+   * marks — out, so it never changes `hashSnapshot`; `restore()` keeps the
+   * live value (a snapshot value for it is ignored), and a fresh world
+   * restored from a snapshot falls back to the default. Reads, writes,
+   * validation and `OnChangedResource` are unchanged. Default `false`.
+   */
+  transient?: boolean
 }
 
 /**

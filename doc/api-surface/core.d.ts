@@ -410,7 +410,7 @@ export declare function createChangeLog(): {
     watchMarks: (kind: "added" | "changed", name: string) => () => void;
     pruneRemoved: (horizon: number) => void;
     clear: () => void;
-    encode: (cursors: readonly ChangeCursor[]) => ChangesSnapshot | undefined;
+    encode: (cursors: readonly ChangeCursor[], skipResource?: (name: string) => boolean) => ChangesSnapshot | undefined;
     decode: (snap: ChangesSnapshot | undefined) => {
         base: number;
         count: number;
@@ -834,6 +834,14 @@ export interface EventBus {
      * next flush.
      */
     takePending(): PendingEvents;
+    /**
+     * Empty the current (already-flushed) view. Called by a successful
+     * `world.restore()`: the view holds what the abandoned timeline delivered
+     * and no snapshot carries it, so a restored world reads the same (empty)
+     * view as a fresh world restored from the same snapshot (§6.3, O-88:
+     * `world.events` and `runSystems`' `ctx.events` before the next flush).
+     */
+    clearCurrent(): void;
     /**
      * Make `taken` the pending queue again, dropping anything emitted since
      * {@link takePending}. `world.restore()` calls it when the restore throws,
@@ -1606,6 +1614,8 @@ export interface InternalResourceType<T, Name extends string = string> extends R
     /** Produces a fresh default value, or `undefined` when none was declared. */
     readonly __default: (() => T) | undefined;
     readonly __validate: ((value: T) => true | string) | undefined;
+    /** Left out of snapshots; restore keeps the live value (O-36). */
+    readonly __transient: boolean;
 }
 export declare function defineResource<T, const Name extends string>(name: Name, options?: ResourceOptions<T>): ResourceType<T, Name>;
 export declare function defineResource<T>(name: string, options?: ResourceOptions<T>): ResourceType<T, string>;
@@ -2240,6 +2250,8 @@ export interface ResourceDescriptor {
     readonly name: string;
     readonly hasValue: boolean;
     readonly hasDefault: boolean;
+    /** Declared with `defineResource(name, { transient: true })`: not snapshotted. */
+    readonly transient: boolean;
 }
 /**
  * A world-singleton value, addressed by identity rather than per-entity
@@ -2269,6 +2281,15 @@ export interface ResourceOptions<T> {
     default?: T | (() => T);
     /** Reject invalid values on `setResource` / lazy default; return `true` or a message. */
     validate?: (value: T) => true | string;
+    /**
+     * Render-only or derived state (a camera, a HUD cache) that is rebuilt
+     * rather than saved (O-36). `snapshot()` leaves the value — and its change
+     * marks — out, so it never changes `hashSnapshot`; `restore()` keeps the
+     * live value (a snapshot value for it is ignored), and a fresh world
+     * restored from a snapshot falls back to the default. Reads, writes,
+     * validation and `OnChangedResource` are unchanged. Default `false`.
+     */
+    transient?: boolean;
 }
 /**
  * Tagged spawn entry — a (type, value) pair whose value position is tied to
@@ -2304,6 +2325,7 @@ export declare function createResourceState(recordChange: (name: string) => void
     describe: <T>(type: ResourceType<T>) => ResourceDescriptor;
     register: (type: ResourceType<unknown>) => void;
     lookup: (name: string) => ResourceType<unknown> | undefined;
+    isTransient: (name: string) => boolean;
     snapshotValues: () => Record<string, unknown> | undefined;
     validateSnapshot: (snapResources: Record<string, unknown>) => void;
     clearForRestore: () => void;
