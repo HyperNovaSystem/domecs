@@ -276,20 +276,20 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E9.1 `createSpatialGrid` (core)
 
 - **Files:** create `packages/domecs/src/spatial-grid.ts`; test `packages/domecs/test/spatial-grid.test.ts`.
-- [ ] **Red:** `within`/`nearest`/`pairs` equal a brute-force oracle on 2000 seeded points (duplicates, borders, negatives) for each cell size in `[0.5, 1, 7, 32, 100, 1e6]`, and the outputs are identical across cell sizes; same output for any insertion order; ties → lowest id; NaN/∞ not indexed.
-- [ ] **Green:** exact cell coordinates; `nearest` stops on the conservative integer ring bound `(k − 1) × cellSize`.
-- [ ] **Commit:** `feat(core): createSpatialGrid with cell-size-independent results (E9.1)`
+- [x] **Red:** `within`/`nearest`/`pairs` equal a brute-force oracle on 2000 seeded points (duplicates, borders, negatives) for each cell size in `[0.5, 1, 7, 32, 100, 1e6]`, and the outputs are identical across cell sizes; same output for any insertion order; ties → lowest id; NaN/∞ not indexed.
+- [x] **Green:** exact cell coordinates; `nearest` stops on the conservative integer ring bound `(k − 1) × cellSize`.
+- [x] **Commit:** `feat(core): createSpatialGrid with cell-size-independent results (E9.1)`
 
 #### E9.2 `createSpatialHash` (scene)
 
 - **Files:** create `packages/domecs-scene/src/spatial-hash.ts`; test `packages/domecs-scene/test/spatial-hash.test.ts`.
-- [ ] **Red:** tag filters, `exclude`, refresh after moves and despawns, `pairs(r, a, b)` canonical order; building/querying leaves `hashSnapshot` unchanged.
-- [ ] **Commit:** `feat(scene): world-bound spatial index (E9.2)`
+- [x] **Red:** tag filters, `exclude`, refresh after moves and despawns, `pairs(r, a, b)` canonical order; building/querying leaves `hashSnapshot` unchanged.
+- [x] **Commit:** `feat(scene): world-bound spatial index (E9.2)`
 
 #### E9.3 Docs and bench
 
 - **Files:** SPEC §1, new §2.12; `doc/api.md`; scene README; `bench/` `spatial` workload (refresh ≤ 0.1 ms, nearest ≤ 2 µs at 1000 entities).
-- [ ] **Commit:** `docs(scene): spatial queries (E9.3)`
+- [x] **Commit:** `docs(scene): spatial queries (E9.3)`
 
 ### E10 — Cross-entity rules and `dmath` additions (§5.2, §4.2; O-82, O-75)
 

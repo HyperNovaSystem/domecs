@@ -2,7 +2,7 @@
 
 Parent-child entity hierarchy for DOMECS (M4): a `Parent` component plus
 tree-shaped queries, a despawn-orphan policy plugin, and parent-before-child
-transform composition.
+transform composition; and a world-bound spatial index (2.2).
 
 ## Install
 
@@ -83,10 +83,49 @@ despawnTree(world, root) // despawns root AND child
   roots and whenever the direct `Parent` target does not itself carry
   `Local`.
 
+## Spatial index
+
+`createSpatialHash(world, { component, x?, y?, cellSize })` indexes one
+position component (fields `x`/`y` by default) for neighbour queries
+(2.2; SPEC §2.12). It is built on the pure `createSpatialGrid` from
+`@domecs/core`.
+
+```ts
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { createSpatialHash } from '@domecs/scene'
+
+const Pos = defineComponent<{ x: number; y: number }>('Pos', { defaults: { x: 0, y: 0 } })
+const Prey = defineComponent<{ alert: boolean }>('Prey', { defaults: { alert: false } })
+
+const world = createWorld({ headless: true })
+const a = world.spawn([entry(Pos, { x: 0, y: 0 }), entry(Prey, { alert: false })])
+const b = world.spawn([entry(Pos, { x: 3, y: 4 })])
+
+const index = createSpatialHash(world, { component: Pos, cellSize: 8 })
+index.within(0, 0, 5) // [a, b] — distance 5 is inclusive, ascending id
+index.within(0, 0, 5, [Prey]) // [a] — must hold every listed component
+index.nearest(1, 1, { exclude: a }) // b
+index.pairs(5, Prey, Pos) // [[a, b]] — first holds Prey, second holds Pos
+```
+
+- `refresh()` rebuilds from the component's current values (O(n), ascending
+  id). Positions are as of the last refresh (the index refreshes once at
+  creation): call it once per step before querying. A field that is not a
+  finite number is not indexed.
+- Filters are read live with `world.has` at query time.
+- `nearest(x, y, { maxDistance?, filter?, exclude? })`: minimum distance,
+  ties → lowest id.
+- `pairs(r, a, b)`: the first element holds `a`, the second `b`; for
+  `a !== b` every such ordered pair, for `a === b` first < second; sorted.
+- Results never depend on `cellSize` (a performance setting; about one
+  entity per cell is a good start).
+- Never snapshotted: building or querying leaves `hashSnapshot` unchanged;
+  `refresh()` after `restore()`. `dispose()` drops it (later calls throw).
+
 ## Related packages
 
 - `@domecs/core` — provides `World`, `defineComponent`, `definePlugin`,
-  `world.snapshot()` / `world.restore()`.
+  `world.snapshot()` / `world.restore()`, and `createSpatialGrid`.
 
 ## License
 

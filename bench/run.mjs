@@ -21,7 +21,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -31,6 +31,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { register } from 'node:module'
 import { runKootaSoak, runKootaWindowed } from './baselines/koota.mjs'
 import { runSignalsSoak, runSignalsWindowed } from './baselines/signals.mjs'
 
@@ -112,6 +113,10 @@ if (workload === 'all' || workload === 'hash') {
 if (workload === 'all' || workload === 'dmath') {
   record(runDmath({ calls: 1_000_000, repeats: 15 }))
 }
+if (workload === 'all' || workload === 'spatial') {
+  // Fixed at 1000 entities: the spec §5.1 cost targets are stated there.
+  record(await runSpatial({ entityCount: 1_000, repeats: 200, queries: 100_000 }))
+}
 if (workload === 'all' || workload === 'windowed') {
   record(
     runWindowed({
@@ -174,6 +179,9 @@ for (const r of results) {
       (r.canonicalBytes != null ? ` canonicalBytes=${r.canonicalBytes}` : '') +
       (r.targetP50Ms != null ? ` target=${fmtMs(r.targetP50Ms)} withinTarget=${r.withinTarget}` : '') +
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
+      (r.nearestUsAvg != null
+        ? ` refreshP50=${fmtMs(r.refreshP50Ms)} (target ${fmtMs(r.refreshTargetMs)}) nearestAvg=${r.nearestUsAvg.toFixed(3)}us (target ${r.nearestTargetUs}us) withinTarget=${r.withinTarget}`
+        : '') +
       (r.targetRatio != null
         ? ` sinRatio=${r.sin.ratio.toFixed(2)} cosRatio=${r.cos.ratio.toFixed(2)} targetRatio=${r.targetRatio} withinTarget=${r.withinTarget}`
         : '') +
@@ -477,6 +485,117 @@ function runDmath({ calls, repeats }) {
     cos: rows.cos,
     targetRatio,
     withinTarget: rows.sin.ratio <= targetRatio && rows.cos.ratio <= targetRatio,
+  }
+}
+
+/**
+ * Load `@domecs/scene` from its built dist. Its dist imports the bare
+ * specifier `@domecs/core`, which in the workspace resolves to TypeScript
+ * source; a resolve hook points it at the same core dist this file uses.
+ */
+async function importSceneDist() {
+  const sceneEntry = join(root, 'packages/domecs-scene/dist/index.js')
+  if (!existsSync(sceneEntry)) {
+    console.error('[bench] packages/domecs-scene/dist not found. Build it first:  pnpm --filter @domecs/scene build')
+    process.exit(1)
+  }
+  const coreUrl = pathToFileURL(distEntry).href
+  const hook =
+    'export async function resolve(specifier, context, next) {' +
+    `  if (specifier === '@domecs/core') return { url: ${JSON.stringify(coreUrl)}, shortCircuit: true };` +
+    '  return next(specifier, context) }'
+  register('data:text/javascript,' + encodeURIComponent(hook))
+  return import(pathToFileURL(sceneEntry).href)
+}
+
+/**
+ * O-8 / spec §5.1: `@domecs/scene` `createSpatialHash` over 1000 entities
+ * spread uniformly over a 1000 × 1000 field, cell size 32 (about one entity
+ * per cell). Targets (informational, not a gate): `refresh()` ≤ 0.1 ms p50
+ * and `nearest` ≤ 2 µs on average. Each refresh sample first moves every
+ * entity a little (outside the timing) so some cross cells, as in a running
+ * sim. `nearest` is timed over `queries` uniform query points per sample.
+ * The row also checks that results agree with a second index at another
+ * cell size (`deterministic`).
+ */
+async function runSpatial({ entityCount, repeats, queries }) {
+  const { createSpatialHash } = await importSceneDist()
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const ids = []
+  for (let i = 0; i < entityCount; i++) {
+    ids.push(
+      world.spawn([entry(Position, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) })]),
+    )
+  }
+  const index = createSpatialHash(world, { component: Position, cellSize: 32 })
+  const move = (k) => {
+    for (let i = 0; i < ids.length; i++) {
+      const p = world.getComponent(ids[i], Position)
+      p.x += ((i * 7 + k) % 5) - 2
+      p.y += ((i * 3 + k) % 5) - 2
+    }
+  }
+  for (let k = 0; k < warmupTicks; k++) {
+    move(k)
+    index.refresh()
+  }
+  const refreshSamples = []
+  for (let k = 0; k < repeats; k++) {
+    move(k)
+    const t0 = performance.now()
+    index.refresh()
+    refreshSamples.push(performance.now() - t0)
+  }
+
+  const qx = new Float64Array(queries)
+  const qy = new Float64Array(queries)
+  let s = 0x2545f491
+  for (let i = 0; i < queries; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    qx[i] = (s / 0x100000000) * 1000
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    qy[i] = (s / 0x100000000) * 1000
+  }
+  let checksum = 0
+  for (let i = 0; i < queries; i++) checksum += index.nearest(qx[i], qy[i]) ?? 0
+  const nearestSamples = []
+  for (let r = 0; r < 5; r++) {
+    const t0 = performance.now()
+    for (let i = 0; i < queries; i++) checksum += index.nearest(qx[i], qy[i]) ?? 0
+    nearestSamples.push(performance.now() - t0)
+  }
+
+  // Cell size is a performance setting only: a second index must agree.
+  const other = createSpatialHash(world, { component: Position, cellSize: 7 })
+  let agree = true
+  for (let i = 0; i < 2_000 && agree; i++) {
+    if (index.nearest(qx[i], qy[i]) !== other.nearest(qx[i], qy[i])) agree = false
+    else if (i % 50 === 0 && JSON.stringify(index.within(qx[i], qy[i], 40)) !== JSON.stringify(other.within(qx[i], qy[i], 40)))
+      agree = false
+  }
+  if (JSON.stringify(index.pairs(10, Position, Position)) !== JSON.stringify(other.pairs(10, Position, Position))) agree = false
+
+  const refresh = percentiles(refreshSamples)
+  const nearestUsAvg = (percentiles(nearestSamples).p50 * 1000) / queries
+  const refreshTargetMs = 0.1
+  const nearestTargetUs = 2
+  return {
+    workload: 'spatial',
+    engine: 'domecs',
+    entities: entityCount,
+    repeats,
+    queries,
+    cellSize: 32,
+    p50Ms: refresh.p50,
+    p95Ms: refresh.p95,
+    refreshP50Ms: refresh.p50,
+    refreshP95Ms: refresh.p95,
+    refreshTargetMs,
+    nearestUsAvg,
+    nearestTargetUs,
+    withinTarget: refresh.p50 <= refreshTargetMs && nearestUsAvg <= nearestTargetUs,
+    deterministic: agree,
+    checksum,
   }
 }
 

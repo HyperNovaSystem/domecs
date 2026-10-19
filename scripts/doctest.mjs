@@ -25,6 +25,7 @@ export const DOMECS_PACKAGES = {
   inspector: 'packages/domecs-inspector',
   persist: 'packages/domecs-persist',
   rules: 'packages/domecs-rules',
+  scene: 'packages/domecs-scene',
 }
 
 /**

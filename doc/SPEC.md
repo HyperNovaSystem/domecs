@@ -28,7 +28,7 @@ Shipped (1.0.0; `scene` and `rules` since 2.0.0):
 @domecs/input          — input collector: keyboard, pointer, touch, gamepad
 @domecs/persist        — snapshot save/load over a Storage interface, migrations, schema I/O
 @domecs/inspector      — headless fault/timeline recorder (see §10)
-@domecs/scene          — Parent component, hierarchy queries, transform composition
+@domecs/scene          — Parent component, hierarchy queries, transform composition, world-bound spatial index (2.2)
 @domecs/rules          — data-defined expression language and rule interpreter
 ```
 
@@ -40,6 +40,8 @@ Planned (do not exist yet):
 ```
 
 Deterministic math is not a separate package: `@domecs/core` exports `dmath` (2.1; §8). The `@domecs/math` package earlier drafts planned will not ship.
+
+The spatial grid is split the same way (2.2; §2.12): the pure, world-free `createSpatialGrid` lives in `@domecs/core`, so `@domecs/rules` can build on it without depending on `@domecs/scene`; the world-bound `createSpatialHash` lives in `@domecs/scene`.
 
 ### Module dependency DAG
 
@@ -424,6 +426,29 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 **Change tracking (normative).** Resource changes are marks like component marks (§2.9): `setResource` and `markResourceChanged` record the change whenever they are called, and `OnChangedResource(R)` (§2.4) reports it within each reader's change window. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
 
 **Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
+
+### 2.12 Spatial queries
+
+2D neighbour queries over points (2.2; O-8). Two layers:
+
+- **`createSpatialGrid(cellSize)`** (`@domecs/core`) — a pure, world-free uniform grid keyed by entity id: `set(id, x, y)` inserts or moves, `delete`, `clear`, `position`, `size`; queries `within(x, y, r, accept?)`, `nearest(x, y, { maxDistance?, accept? }?)` and `pairs(r, accept?)`.
+- **`createSpatialHash(world, { component, x?, y?, cellSize })`** (`@domecs/scene`) — a `SpatialIndex` over one position component (fields `x`/`y` by default). `refresh()` rebuilds from the component's current values in ascending id order (`iterEntitiesWith`); the index also refreshes once at creation. Queries take tag filters (`within(x, y, r, filter?)`, `nearest(x, y, { maxDistance?, filter?, exclude? }?)`, `pairs(r, a, b)`); a filter is a list of component types the entity must all hold, read live with `world.has` at query time. `dispose()` drops the index; any later call throws.
+
+**Results (normative).**
+
+- Distance is compared squared, as `dx * dx + dy * dy` with `dx = px - x`, `dy = py - y`, against `r * r`. Every query returns exactly what a brute-force scan over the indexed points with that expression returns. A negative or NaN radius or `maxDistance` matches nothing.
+- Results **never depend on `cellSize`**, on insertion order, or on the order cells are visited. Cell size is a performance setting only.
+- `within` is sorted by ascending id. `nearest` returns the minimum distance, ties → lowest id. `pairs(r)` (grid) lists unordered pairs `a < b`, sorted by `(a, b)`. `pairs(r, a, b)` (index) lists ordered pairs whose first element holds `a` and second holds `b`: for `a ≠ b` every such pair (an entity holding both tags can appear on either side), for `a == b` first < second; sorted by `(first, second)`.
+- A position with a non-finite coordinate (NaN, ±∞), or for the index a field that is not a number, is not indexed (setting one removes the id).
+- `accept` callbacks should be pure: `within` and `pairs` call them in output order on the matches; `nearest` may call them in any order and any number of times.
+
+**Cells.** Cell coordinates are `Math.floor(v / cellSize)`, exact for every finite `v`. Cell keys pack the integer coordinates by an exact rule (small integer, then a 52-bit integer, then a string), so distinct cells never share a key. A point whose cell coordinate exceeds 2^50 in magnitude (or overflows) is kept on a side list that every query scans. `cellSize` must be finite and > 0 (`RangeError` otherwise).
+
+**`nearest` termination.** Rings of cells expand around the query cell. The search stops only when a conservative lower bound on the distance of every unvisited cell is strictly greater than the best distance found (or than `maxDistance`): for ring `k` the bound is `(k − 1) × cellSize`, reduced by a relative slack of 2^-40, compared as squared distance, so floating-point rounding can only make the search visit more cells, never fewer. When a ring would need more cell lookups than there are occupied cells, the search scans every point instead (same result by definition). `within` and `pairs` likewise fall back to a scan when the covering block of cells is larger than the occupied grid.
+
+**Derived state (normative).** Grids and indexes are never part of a snapshot (§7.1); building, refreshing or querying one leaves `hashSnapshot` unchanged. After `restore()` rebuild or `refresh()` them from the restored positions. Positions are as of the last `refresh()`; call it once per step before querying (for example at the start of the system that queries).
+
+**Cost** (`bench/` `spatial` workload, informational): `refresh()` targets ≤ 0.1 ms and `nearest` ≤ 2 µs average at 1000 uniformly spread entities. In 2.2 `refresh()` is a full O(n) pass; an incremental refresh from change windows is a follow-up. Out of scope: occupancy layers (`firstAt`/`allAt`/`isBlocked`, the rest of O-8), 3D, AABB/broadphase trees.
 
 ---
 

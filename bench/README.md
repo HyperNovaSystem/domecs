@@ -16,6 +16,7 @@ interpretation.
 | 4 | **Snapshot / restore** | `snapshot` | Snapshot size/time + determinism |
 | 4b | **Snapshot hash** | `hash` | `hashSnapshot` (canonical JSON + FNV-1a-64) over a 1000-entity snapshot |
 | 4c | **Deterministic math** | `dmath` | `dmath.sin`/`dmath.cos` vs `Math.sin`/`Math.cos`, 1M calls |
+| 4d | **Spatial index** | `spatial` | `@domecs/scene` `createSpatialHash` `refresh()` and `nearest` at 1000 entities |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
 | 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
 
@@ -82,6 +83,16 @@ pnpm bench:write
   counterpart, 15 samples per pass; the row reports ns/call and the
   `dmath ÷ Math` p50 ratio per function, `targetRatio` (3×, spec §4.2 test 5;
   informational, not a gate) and `withinTarget`.
+- **Spatial workload (O-8):** 1000 entities spread uniformly over a
+  1000 × 1000 field, `createSpatialHash` with cell size 32 (about one
+  entity per cell). Each of 200 refresh samples first moves every entity by
+  up to 2 units (untimed) so some cross cells; `nearest` is timed over 100k
+  seeded query points, 5 samples. The row reports `refreshP50Ms` against
+  `refreshTargetMs` (0.1 ms), `nearestUsAvg` against `nearestTargetUs`
+  (2 µs; spec §5.1, informational, not a gate), and `deterministic` (a
+  second index at cell size 7 returns the same `nearest`, `within` and
+  `pairs` results). The scene dist imports the bare `@domecs/core`, so the
+  workload registers a resolve hook pointing it at the core dist.
 - **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).
@@ -139,6 +150,21 @@ Recorded as informational (spec §4.1); revisit on the reference host.
 
 Both sides are called through the same function-value loop, so the absolute
 numbers include call overhead; the ratio is the figure of merit.
+
+## Spatial workload (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+`node --expose-gc bench/run.mjs --workload spatial`, three runs:
+
+| Measure | Result | Target |
+|---------|--------|--------|
+| `refresh()` p50 / p95, 1000 entities | 0.175–0.185 ms / 0.39–0.42 ms | ≤ 0.1 ms (missed) |
+| `nearest` average | 0.713–0.716 µs | ≤ 2 µs (met) |
+
+About 0.12 ms of the refresh is `world.iterEntitiesWith` itself (ascending
+id selection plus a store lookup per entity); the grid update is the rest.
+Recorded as informational (spec §5.1). Faster iteration in core, or an
+incremental refresh from change windows, is the follow-up if a consumer
+needs it.
 
 ## 2.1 release-candidate check (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
 

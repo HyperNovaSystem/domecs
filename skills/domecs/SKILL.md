@@ -97,6 +97,8 @@ bridge.reset()                         // episode boundary
   fork; `hashEntities` localizes a divergence; `canonicalJson` for keyframes
 - **Events in flight:** forks/keyframes use `snapshot({ pendingEvents: true })`
   and `register` every event type that can be pending in the restoring world
+- **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
+  step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
 - **Trig in systems:** `dmath.sin` / `dmath.cos` (`@domecs/core`), not
   `Math.sin` / `Math.cos`, so Node, Electron and browsers agree bit for bit
 

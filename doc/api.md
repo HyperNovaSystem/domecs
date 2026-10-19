@@ -1130,6 +1130,75 @@ assert.ok(Object.is(dmath.sin(-0), -0))
 assert.equal(dmath.sqrt(2), Math.sqrt(2))
 ```
 
+### Spatial grid
+
+`createSpatialGrid(cellSize)` is a pure, world-free uniform grid over 2D
+points keyed by entity id (2.2; O-8; SPEC §2.12). Results equal a
+brute-force scan and never depend on `cellSize`, insertion order or cell
+order: cell size is a performance setting only. The grid is derived state
+and never enters a snapshot. For an index bound to a world's position
+component, use `createSpatialHash` from `@domecs/scene`.
+
+```ts
+function createSpatialGrid(cellSize: number): SpatialGrid   // RangeError unless finite and > 0
+
+interface SpatialGrid {
+  readonly cellSize: number
+  readonly size: number
+  clear(): void
+  set(id: Entity, x: number, y: number): void   // insert or move; non-finite → not indexed (id removed)
+  delete(id: Entity): void
+  position(id: Entity): { readonly x: number; readonly y: number } | undefined
+  within(x: number, y: number, r: number, accept?: (id: Entity) => boolean): Entity[]   // distance² <= r², ascending id
+  nearest(x: number, y: number, options?: { maxDistance?: number; accept?: (id: Entity) => boolean }): Entity | undefined   // ties → lowest id
+  pairs(r: number, accept?: (a: Entity, b: Entity) => boolean): Array<[Entity, Entity]>   // a < b, sorted by (a, b)
+}
+```
+
+- Distance is `dx * dx + dy * dy` (`dx = px - x`) compared with `r * r`
+  (`maxDistance * maxDistance`), inclusive. A negative or NaN radius matches
+  nothing.
+- `accept` should be pure. `within` and `pairs` call it in output order on
+  the matches; `nearest` may call it in any order, any number of times.
+- `nearest` expands rings of cells and stops on a conservative bound, so
+  rounding can only make it visit more cells. A query far from every point
+  (or a radius much larger than the cell size) falls back to a scan.
+- Pick a cell size near the typical query radius; about one point per cell
+  is a good start.
+
+```ts doctest name=spatial-grid
+import { strict as assert } from 'node:assert'
+import { createSpatialGrid } from '@domecs/core'
+
+const points: Array<[number, number, number]> = [
+  [1, 0, 0],
+  [2, 3, 4],
+  [3, -3, 4],
+  [4, 1, 0],
+  [5, 100, 100],
+]
+const results = [0.5, 2, 64].map((cellSize) => {
+  const grid = createSpatialGrid(cellSize)
+  for (const [id, x, y] of points) grid.set(id, x, y)
+  grid.set(6, Number.NaN, 0) // not indexed
+  return JSON.stringify([
+    grid.size,
+    grid.within(0, 0, 5),                     // [1, 2, 3, 4]: distance 5 is inclusive
+    grid.within(0, 0, 5, (id) => id % 2 === 0), // [2, 4]
+    grid.nearest(0, 4),                       // 2 and 3 tie at distance 3 → lowest id
+    grid.nearest(0, 0, { accept: (id) => id !== 1 }),
+    grid.nearest(50, 50, { maxDistance: 10 }),
+    grid.pairs(5),
+  ])
+})
+// the cell size never changes a result
+assert.equal(new Set(results).size, 1)
+assert.equal(
+  results[0],
+  JSON.stringify([5, [1, 2, 3, 4], [2, 4], 2, 4, undefined, [[1, 2], [1, 3], [1, 4], [2, 4]]]),
+)
+```
+
 ### Build identity
 
 Every package exports `BUILD_ID: string` (ED-15). It is `'dev'` in source and
@@ -1769,6 +1838,96 @@ interface InspectorSnapshot {
   readonly entityScoped: InspectorEntry[]
   readonly timeline:     TimelineEvent[]
 }
+```
+
+---
+
+## `@domecs/scene`
+
+Hierarchy (`Parent`, `setParent`, `childrenOf`, `ancestorsOf`, `rootsOf`,
+`despawnTree`, `installHierarchy`) and `composeTransforms` are documented in
+the package README. This section covers the spatial index.
+
+### Spatial index
+
+`createSpatialHash(world, options)` indexes one position component over the
+core grid (2.2; O-8; SPEC §2.12).
+
+```ts
+function createSpatialHash(world: World, options: SpatialHashOptions): SpatialIndex   // RangeError on a bad cellSize
+
+interface SpatialHashOptions {
+  readonly component: ComponentType<any>
+  readonly x?: string          // default 'x'
+  readonly y?: string          // default 'y'
+  readonly cellSize: number    // performance only; never changes results
+}
+
+interface SpatialIndex {
+  refresh(): void   // rebuild from the component's current values (O(n), ascending id)
+  within(x: number, y: number, r: number, filter?: readonly ComponentType<any>[]): Entity[]
+  nearest(x: number, y: number, options?: { maxDistance?: number; filter?: readonly ComponentType<any>[]; exclude?: Entity }): Entity | undefined
+  pairs(r: number, a: ComponentType<any>, b: ComponentType<any>): Array<[Entity, Entity]>
+  dispose(): void   // later calls throw
+}
+```
+
+- Positions are those read at the last `refresh()`; the index refreshes
+  once when created. Call `refresh()` once per step before querying, for
+  example at the start of the system that queries. A field that is not a
+  finite number is not indexed.
+- `filter` lists components the entity must **all** hold. It is read live
+  (`world.has`) at query time, so tag changes need no refresh.
+- `pairs(r, a, b)`: the first element holds `a`, the second `b`. For
+  `a !== b` every such ordered pair is listed (an entity with both tags can
+  appear on either side); for `a === b`, first < second. Sorted by
+  `(first, second)`.
+- Never snapshotted; building or querying an index leaves `hashSnapshot`
+  unchanged. After `restore()`, call `refresh()`.
+
+```ts doctest name=spatial-index
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { createSpatialHash } from '@domecs/scene'
+
+const Pos = defineComponent<{ x: number; y: number }>('SiPos', { defaults: { x: 0, y: 0 } })
+const Prey = defineComponent<{ alert: boolean }>('SiPrey', { defaults: { alert: false } })
+const Hunter = defineComponent<{ hunger: number }>('SiHunter', { defaults: { hunger: 0 } })
+
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const rabbit = world.spawn([entry(Pos, { x: 0, y: 0 }), entry(Prey, { alert: false })])
+const fox = world.spawn([entry(Pos, { x: 3, y: 4 }), entry(Hunter, { hunger: 5 })])
+const deer = world.spawn([entry(Pos, { x: 40, y: 0 }), entry(Prey, { alert: false })])
+
+const before = hashSnapshot(world.snapshot(), { includeChanges: true })
+const index = createSpatialHash(world, { component: Pos, cellSize: 8 })
+
+world.system('spot', { schedule: 'tick', query: [Hunter, Pos] }, ({ entities }) => {
+  index.refresh() // positions as of this step
+  for (const h of entities) {
+    const at = world.getComponent(h.id, Pos)!
+    const prey = index.nearest(at.x, at.y, { filter: [Prey], maxDistance: 10 })
+    if (prey === undefined) continue
+    world.getComponent(prey, Prey)!.alert = true
+    world.markChanged(prey, Prey)
+  }
+})
+
+assert.deepEqual(index.within(0, 0, 5), [rabbit, fox])
+assert.deepEqual(index.within(0, 0, 100, [Prey]), [rabbit, deer])
+assert.equal(index.nearest(0, 0, { exclude: rabbit }), fox)
+assert.deepEqual(index.pairs(5, Hunter, Prey), [[fox, rabbit]])
+assert.equal(hashSnapshot(world.snapshot(), { includeChanges: true }), before) // derived state
+
+world.stepOnce()
+assert.equal(world.getComponent(rabbit, Prey)!.alert, true)
+assert.equal(world.getComponent(deer, Prey)!.alert, false)
+
+// moves show after refresh()
+world.getComponent(deer, Pos)!.x = 2
+world.markChanged(deer, Pos)
+index.refresh()
+assert.deepEqual(index.within(0, 0, 5, [Prey]), [rabbit, deer])
 ```
 
 ---

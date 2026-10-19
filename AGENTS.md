@@ -131,6 +131,14 @@ disposable live feed state stays in the world.
 Install redaction plugins **before** constructing history with
 `captureInitial`, or the baseline leaks unredacted state.
 
+### Neighbour queries
+Do not scan every entity per entity (O(n²)). Use `createSpatialHash(world,
+{ component: Pos, cellSize })` from `@domecs/scene`: call `index.refresh()`
+once per step (at the start of the system that queries), then
+`within` / `nearest` / `pairs` with tag filters. Results are id-sorted and
+independent of `cellSize`; the index is never snapshotted, so `refresh()`
+after `restore`. The pure grid is `createSpatialGrid` in `@domecs/core`.
+
 ### Control while paused
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM
 listener calling `world.resume()` / `setScale(1)`.

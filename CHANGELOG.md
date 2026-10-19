@@ -13,6 +13,20 @@ All notable changes to DOMECS are documented here. The format is based on
   for hosts that pre-validate a command without emitting or stepping (studio
   finding 2026-10-19; studio had kept a copy).
 
+- `@domecs/core`: `createSpatialGrid(cellSize)` — a pure, world-free
+  uniform grid over 2D points keyed by entity id (O-8, harness spec §5.1):
+  `set`/`delete`/`clear`/`position`/`size`, `within(x, y, r, accept?)`
+  (ascending id), `nearest(x, y, { maxDistance?, accept? })` (ties → lowest
+  id) and `pairs(r, accept?)` (`a < b`, sorted). Results equal a
+  brute-force scan and never depend on the cell size or insertion order;
+  non-finite positions are not indexed. SPEC §2.12.
+- `@domecs/scene`: `createSpatialHash(world, { component, x?, y?, cellSize })`
+  → `SpatialIndex` over one position component: `refresh()` (O(n),
+  ascending id; also once at creation), `within`/`nearest` with live tag
+  filters and `exclude`, `pairs(r, a, b)` (first element holds `a`), and
+  `dispose()`. Derived state: never snapshotted.
+- `bench`: `spatial` workload (refresh and `nearest` at 1000 entities).
+
 ### Fixed
 
 - `@domecs/core`: `validateEventPayload` (and so `world.action()` /
