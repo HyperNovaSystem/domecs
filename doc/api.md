@@ -1948,9 +1948,10 @@ assert.deepEqual(index.within(0, 0, 5, [Prey]), [rabbit, deer])
 
 ## `@domecs/rules`
 
-Data-defined rules (`RuleDef`: `query`, `when`, `actions`) compiled and
-installed as systems named `rule:<name>`. The full rule language is in the
-package README; this section covers installation and ordering.
+Data-defined rules (`RuleDef`: `query`, `without`, `when`, `actions`)
+compiled and installed as systems named `rule:<name>`. The language is
+specified in SPEC Appendix A (tutorial: the package README); this section
+covers installation, ordering and the 2.2 cross-entity forms.
 
 ```ts
 function installRules(
@@ -1974,10 +1975,28 @@ interface InstallRulesOptions {
   // stream, keyed rule:<name> (SPEC §2.8), so editing one rule never changes
   // another's draws, and update() re-registration resumes the stream.
   readonly rng?: 'shared' | 'own'
+  // Position source for nearest / countWithin / distanceTo (2.2); required
+  // if any rule uses them. Throws unless { component, x?, y?, cellSize? }
+  // with non-empty names and a finite cellSize > 0 (default 32).
+  readonly spatial?: SpatialOption
+}
+
+interface SpatialOption {
+  readonly component: string   // the position component
+  readonly x?: string          // default 'x'
+  readonly y?: string          // default 'y'
+  readonly cellSize?: number   // grid cell size: performance only, results never depend on it
 }
 
 // RuleDef gains (2.1): rng?: 'shared' | 'own' — overrides the install default
 // for that rule; any other value is a RuleError on field 'rng'.
+// RuleDef gains (2.2): without?: string[] — components that exclude an entity
+// (And(...Has(query), ...Not(Has(without)))); an unknown name is a RuleError
+// on field { without: i }.
+
+// compileRule gains an optional third argument (2.2):
+function compileRule(def: RuleDef, resolve: (name: string) => ComponentType<any> | undefined,
+  options?: { spatial?: SpatialOption }): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] }
 
 interface RulesHandle {
   update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
@@ -1996,6 +2015,7 @@ interface RuleError {
 type RuleDefPath =
   | 'name' | 'schedule' | 'priority' | 'rng' | 'when'
   | { readonly query: number }
+  | { readonly without: number }                      // 2.2
   | { readonly action: number; readonly part: 'set' | 'expr' }
 ```
 
@@ -2041,6 +2061,63 @@ assert.notEqual(build('registration', true), build('registration', false))
 assert.equal(build('stable', true), build('stable', false))
 // order is validated at registration.
 assert.throws(() => createWorld({ headless: true }).system('s', { order: NaN }, () => {}), /order/)
+```
+
+**Cross-entity forms (2.2; SPEC Appendix A).** Selectors `self`,
+`first(S)`, `nearest(S[, d])`, `entity(n)` read another entity's fields
+(`first(Player).Pos.x`, `nearest(Coin).id`); `has([e,] C)`, `count(S)`,
+`exists(S)`, `sum`/`avg`/`minOf`/`maxOf(S, C.f)`, `countWithin(S, r[, e])`
+and `distanceTo(e)` work over sets (a set `S` is the holders of component
+`S`). `a ?? b` takes `b` when `a` has no value (a missing field, an empty
+selector, a dead `entity(n)`, an empty `avg`); type errors still fault.
+New functions: `sqrt pow atan2 hypot sign round ceil lerp distance` (`pow`,
+`atan2`, `hypot` via `dmath`), and the identifier `tick`. Reads are live and
+entities run in ascending id, so an entity sees the writes lower ids made in
+the same run. `self`, `tick`, `other`, `event` and `pointer` are reserved
+words, and `walkComponentRefs(ast, visit)` visits every component name
+(reads, sets, `has` targets) for tools that rename components.
+
+```ts doctest name=rules-cross-entity
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { installRules, parseExpression, walkComponentRefs, type RuleDef } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('XrPos', { defaults: { x: 0, y: 0 } })
+const Player = defineComponent<Record<string, never>>('XrPlayer', { defaults: {} })
+const Enemy = defineComponent<{ near: number }>('XrEnemy', { defaults: { near: 0 } })
+const types = new Map([Pos, Player, Enemy].map((t) => [t.name, t]))
+
+const defs: RuleDef[] = [
+  {
+    // Enemies close 10% of the gap to the player each tick and count the
+    // other enemies within 5 units.
+    name: 'chase', schedule: 'tick', query: ['XrEnemy', 'XrPos'], without: ['XrPlayer'],
+    actions: [
+      { set: 'XrPos.x', expr: 'XrPos.x + (first(XrPlayer).XrPos.x - XrPos.x) * 0.1 ?? XrPos.x' },
+      { set: 'XrEnemy.near', expr: 'countWithin(XrEnemy, 5)' },
+    ],
+  },
+]
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const errors = installRules(w, [], (n) => types.get(n), { spatial: { component: 'XrPos' } }).update(defs)
+assert.equal(errors.size, 0)
+w.spawn([entry(Player, {}), entry(Pos, { x: 100, y: 0 })])
+const a = w.spawn([entry(Enemy, { near: 0 }), entry(Pos, { x: 0, y: 0 })])
+w.spawn([entry(Enemy, { near: 0 }), entry(Pos, { x: 3, y: 4 })])
+w.stepOnce()
+assert.equal(w.getComponent(a, Pos)!.x, 10)
+assert.equal(w.getComponent(a, Enemy)!.near, 1) // the other enemy, 5 away (inclusive)
+
+// Spatial forms need the spatial option: otherwise the rule does not compile.
+const bad = installRules(createWorld({ headless: true }), defs, (n) => types.get(n))
+assert.deepEqual(bad.update(defs).get('chase')![0]!.field, { action: 1, part: 'expr' })
+
+// Every component name, with its role:
+const parsed = parseExpression('first(XrPlayer).XrPos.x - XrPos.x')
+assert.ok('ast' in parsed)
+const seen: string[] = []
+walkComponentRefs(parsed.ast, (c, f, _pos, role) => seen.push(`${role}:${c}${f ? '.' + f : ''}`))
+assert.deepEqual(seen, ['set:XrPlayer', 'member:XrPos.x', 'self:XrPos.x'])
 ```
 
 ---

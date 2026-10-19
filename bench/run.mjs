@@ -21,7 +21,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|rules|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -117,6 +117,10 @@ if (workload === 'all' || workload === 'spatial') {
   // Fixed at 1000 entities: the spec §5.1 cost targets are stated there.
   record(await runSpatial({ entityCount: 1_000, repeats: 200, queries: 100_000 }))
 }
+if (workload === 'all' || workload === 'rules') {
+  // Fixed at 1000 entities: the spec §5.2 cost targets are stated there.
+  record(await runRules({ entityCount: 1_000, ticks: 300 }))
+}
 if (workload === 'all' || workload === 'windowed') {
   record(
     runWindowed({
@@ -181,6 +185,9 @@ for (const r of results) {
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
       (r.nearestUsAvg != null
         ? ` refreshP50=${fmtMs(r.refreshP50Ms)} (target ${fmtMs(r.refreshTargetMs)}) nearestAvg=${r.nearestUsAvg.toFixed(3)}us (target ${r.nearestTargetUs}us) withinTarget=${r.withinTarget}`
+        : '') +
+      (r.nearestRatio != null
+        ? ` nearestRatio=${r.nearestRatio.toFixed(2)} (target ${r.nearestTargetRatio}) sumMemoRatio=${r.sumMemoRatio.toFixed(2)} (target ${r.sumTargetRatio}) withinTarget=${r.withinTarget}`
         : '') +
       (r.targetRatio != null
         ? ` sinRatio=${r.sin.ratio.toFixed(2)} cosRatio=${r.cos.ratio.toFixed(2)} targetRatio=${r.targetRatio} withinTarget=${r.withinTarget}`
@@ -493,19 +500,108 @@ function runDmath({ calls, repeats }) {
  * specifier `@domecs/core`, which in the workspace resolves to TypeScript
  * source; a resolve hook points it at the same core dist this file uses.
  */
-async function importSceneDist() {
-  const sceneEntry = join(root, 'packages/domecs-scene/dist/index.js')
-  if (!existsSync(sceneEntry)) {
-    console.error('[bench] packages/domecs-scene/dist not found. Build it first:  pnpm --filter @domecs/scene build')
+// `var`: workloads run from top-level code above this line (no TDZ).
+var coreHookRegistered = false
+
+/** Import a sibling package's dist with its `@domecs/core` import mapped to the core dist. */
+async function importWithCore(pkgDir, name) {
+  const pkgEntry = join(root, `packages/${pkgDir}/dist/index.js`)
+  if (!existsSync(pkgEntry)) {
+    console.error(`[bench] packages/${pkgDir}/dist not found. Build it first:  pnpm --filter ${name} build`)
     process.exit(1)
   }
-  const coreUrl = pathToFileURL(distEntry).href
-  const hook =
-    'export async function resolve(specifier, context, next) {' +
-    `  if (specifier === '@domecs/core') return { url: ${JSON.stringify(coreUrl)}, shortCircuit: true };` +
-    '  return next(specifier, context) }'
-  register('data:text/javascript,' + encodeURIComponent(hook))
-  return import(pathToFileURL(sceneEntry).href)
+  if (!coreHookRegistered) {
+    const coreUrl = pathToFileURL(distEntry).href
+    const hook =
+      'export async function resolve(specifier, context, next) {' +
+      `  if (specifier === '@domecs/core') return { url: ${JSON.stringify(coreUrl)}, shortCircuit: true };` +
+      '  return next(specifier, context) }'
+    register('data:text/javascript,' + encodeURIComponent(hook))
+    coreHookRegistered = true
+  }
+  return import(pathToFileURL(pkgEntry).href)
+}
+
+function importSceneDist() {
+  return importWithCore('domecs-scene', '@domecs/scene')
+}
+
+/**
+ * Spec §5.2 cost targets (informational, not a gate), 1000 entities: a rule
+ * using `nearest(Player)` costs ≤ 3× a self-only rule, and a memoized
+ * `sum(Enemy, Health.hp)` ≤ 1.2×. Each variant runs alone in its own world
+ * (one tick rule over every entity); a sample is one `stepOnce()`. The
+ * nearest variant includes building the per-run grid.
+ */
+async function runRules({ entityCount, ticks }) {
+  const { installRules } = await importWithCore('domecs-rules', '@domecs/rules')
+  const RPos = defineComponent('BenchRulePos', { defaults: { x: 0, y: 0 } })
+  const ROut = defineComponent('BenchRuleOut', { defaults: { a: 0 } })
+  const RHp = defineComponent('BenchRuleHp', { defaults: { hp: 0 } })
+  const REnemy = defineComponent('BenchRuleEnemy', { defaults: {} })
+  const RPlayer = defineComponent('BenchRulePlayer', { defaults: {} })
+  const types = new Map([RPos, ROut, RHp, REnemy, RPlayer].map((t) => [t.name, t]))
+  // Every variant writes a changed value each tick, so all pay the same
+  // commit and markChanged cost; only the read differs.
+  const variants = {
+    self: 'BenchRuleOut.a + BenchRulePos.x * 0.5',
+    nearest: 'BenchRuleOut.a + (nearest(BenchRulePlayer).id ?? 0)',
+    sumMemo: 'BenchRuleOut.a + sum(BenchRuleEnemy, BenchRuleHp.hp)',
+  }
+  const timeVariant = (expr) => {
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    for (let i = 0; i < entityCount; i++) {
+      const bag = [
+        entry(RPos, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) }),
+        entry(ROut, { a: 0 }),
+        entry(RHp, { hp: i % 13 }),
+      ]
+      if (i % 4 === 0) bag.push(entry(REnemy, {}))
+      if (i === entityCount >> 1) bag.push(entry(RPlayer, {}))
+      world.spawn(bag)
+    }
+    installRules(
+      world,
+      [{ name: 'bench', schedule: 'tick', query: ['BenchRuleOut', 'BenchRulePos'], actions: [{ set: 'BenchRuleOut.a', expr }] }],
+      (n) => types.get(n),
+      { spatial: { component: 'BenchRulePos', cellSize: 32 } },
+    )
+    for (let k = 0; k < warmupTicks; k++) world.stepOnce()
+    const samples = []
+    for (let k = 0; k < ticks; k++) {
+      const t0 = performance.now()
+      world.stepOnce()
+      samples.push(performance.now() - t0)
+    }
+    return percentiles(samples)
+  }
+  // Interleave three rounds so host drift hits every variant alike.
+  const p50 = { self: [], nearest: [], sumMemo: [] }
+  for (let round = 0; round < 3; round++) {
+    for (const [name, expr] of Object.entries(variants)) p50[name].push(timeVariant(expr).p50)
+  }
+  const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+  const self = median(p50.self)
+  const nearest = median(p50.nearest)
+  const sumMemo = median(p50.sumMemo)
+  const nearestTargetRatio = 3
+  const sumTargetRatio = 1.2
+  return {
+    workload: 'rules',
+    engine: 'domecs',
+    entities: entityCount,
+    ticks,
+    p50Ms: self,
+    p95Ms: Math.max(self, nearest, sumMemo),
+    selfP50Ms: self,
+    nearestP50Ms: nearest,
+    sumMemoP50Ms: sumMemo,
+    nearestRatio: nearest / self,
+    sumMemoRatio: sumMemo / self,
+    nearestTargetRatio,
+    sumTargetRatio,
+    withinTarget: nearest / self <= nearestTargetRatio && sumMemo / self <= sumTargetRatio,
+  }
 }
 
 /**

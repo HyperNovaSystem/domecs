@@ -9,10 +9,11 @@
  *   env ELECTRON_RUN_AS_NODE=1 /path/to/electron scripts/determinism-golden.mjs
  *
  * A plain ESM script with no test framework and no dependency besides the
- * built `@domecs/core` dist. It builds fixed headless worlds, steps each
- * 1000 fixed steps, and prints
+ * built `@domecs/core` and `@domecs/rules` dists (rules' own `@domecs/core`
+ * import is pointed at the same core build by a module resolve hook). It
+ * builds fixed headless worlds, steps each 1000 fixed steps, and prints
  *
- *   { "buildId": …, "fixtures": { <name>: <strict hash> }, "dmathFingerprint": … }
+ *   { "buildId": …, "fixtures": { <name>: <strict hash> }, "dmathFingerprint": …, "dmath2Fingerprint": … }
  *
  * Strict hash = `hashSnapshot(world.snapshot(), { includeChanges: true })`.
  * Fixtures (2.1): `trig` (`dmath.sin` / `dmath.cos`, large arguments),
@@ -21,6 +22,10 @@
  * them) and `bounce0` (a bounce at velocity 0 that leaves `-0`, then a
  * sign-sensitive system). `dmathFingerprint` hashes the bit patterns of
  * `dmath.sin` / `dmath.cos` over a fixed input set.
+ * 2.2 (plan E10.4) adds two rule-driven fixtures — `rules-chase` (`first`,
+ * `atan2`, `hypot`, `countWithin` crowding) and `rules-keep-distance`
+ * (`nearest`, `distanceTo`, `pow`, `sum`, `??`) — and `dmath2Fingerprint`
+ * (`dmath.atan2` / `hypot` / `pow` bit patterns).
  *
  * The test (`test/golden.test.mjs`, `pnpm test:golden`) runs it under Node
  * and, when `DOMECS_ALT_RUNTIME` is set, under that command too, and requires
@@ -33,6 +38,7 @@
  * golden (`--write`) only for a deliberate change, and say so in CHANGELOG.
  */
 import fs from 'node:fs'
+import { register } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -69,8 +75,27 @@ if (!fs.existsSync(coreEntry)) {
   console.error(`missing ${coreEntry}; build it (pnpm --filter @domecs/core build) or pass --engine <node_modules dir>`)
   process.exit(2)
 }
-const core = await import(pathToFileURL(coreEntry).href)
+const rulesEntry = opts.engine
+  ? path.resolve(opts.engine, '@domecs/rules/dist/index.js')
+  : path.resolve(here, '../packages/domecs-rules/dist/index.js')
+if (!fs.existsSync(rulesEntry)) {
+  console.error(`missing ${rulesEntry}; build it (pnpm --filter @domecs/rules build) or pass --engine <node_modules dir>`)
+  process.exit(2)
+}
+const coreUrl = pathToFileURL(coreEntry).href
+// @domecs/rules imports '@domecs/core': resolve it to the same core build
+// (in the workspace it would otherwise reach core's TypeScript source).
+register(
+  'data:text/javascript,' +
+    encodeURIComponent(
+      'export async function resolve(specifier, context, next) {' +
+        `  if (specifier === '@domecs/core') return { url: ${JSON.stringify(coreUrl)}, shortCircuit: true };` +
+        '  return next(specifier, context) }',
+    ),
+)
+const core = await import(coreUrl)
 const { BUILD_ID, createWorld, defineComponent, dmath, entry, hashSnapshot, hashValue } = core
+const { installRules } = await import(pathToFileURL(rulesEntry).href)
 
 /** Inputs where V8 13.6 Math.sin (first three) / Math.cos differ from musl by 1 ulp. */
 const KNOWN_DIFFERING = [
@@ -216,6 +241,97 @@ function bounce0() {
   return run(world)
 }
 
+// ── rules-chase: first(), atan2, hypot, countWithin crowding (2.2) ──────
+
+function rulesWorld(types, defs) {
+  const world = createWorld({ headless: true, seed: SEED })
+  const byName = new Map(types.map((t) => [t.name, t]))
+  const errors = installRules(world, [], (n) => byName.get(n), {
+    order: 'stable',
+    rng: 'own',
+    spatial: { component: 'GoldPos', cellSize: 4 },
+  }).update(defs)
+  if (errors.size > 0) throw new Error(`golden rules failed to compile: ${JSON.stringify([...errors])}`)
+  return world
+}
+
+function rulesChase() {
+  const Pos = defineComponent('GoldPos', { defaults: { x: 0, y: 0 } })
+  const Steer = defineComponent('GoldSteer', { defaults: { a: 0, speed: 0, d: 0, crowd: 0 } })
+  const Player = defineComponent('GoldPlayer', { defaults: { t: 0 } })
+  const Chaser = defineComponent('GoldChaser', { defaults: {} })
+  const world = rulesWorld(
+    [Pos, Steer, Player, Chaser],
+    [
+      {
+        name: 'orbit', schedule: 'fixed', priority: -1, query: ['GoldPlayer', 'GoldPos'],
+        actions: [
+          { set: 'GoldPlayer.t', expr: 'GoldPlayer.t + 1' },
+          { set: 'GoldPos.x', expr: 'cos(GoldPlayer.t * 0.013) * 40 + sin(tick * 0.5) * 0.25' },
+          { set: 'GoldPos.y', expr: 'sin(GoldPlayer.t * 0.017) * 40' },
+        ],
+      },
+      {
+        name: 'crowd', schedule: 'fixed', query: ['GoldChaser', 'GoldSteer'],
+        actions: [
+          { set: 'GoldSteer.crowd', expr: 'countWithin(GoldChaser, 3)' },
+          { set: 'GoldSteer.speed', expr: '0.6 / (1 + GoldSteer.crowd) + random() * 0.05' },
+        ],
+      },
+      {
+        name: 'chase', schedule: 'fixed', query: ['GoldChaser', 'GoldSteer', 'GoldPos'],
+        actions: [
+          { set: 'GoldSteer.a', expr: 'atan2(first(GoldPlayer).GoldPos.y - GoldPos.y, first(GoldPlayer).GoldPos.x - GoldPos.x)' },
+          { set: 'GoldSteer.d', expr: 'hypot(first(GoldPlayer).GoldPos.x - GoldPos.x, first(GoldPlayer).GoldPos.y - GoldPos.y)' },
+          { set: 'GoldPos.x', expr: 'GoldPos.x + cos(GoldSteer.a) * min(GoldSteer.speed, GoldSteer.d)' },
+          { set: 'GoldPos.y', expr: 'GoldPos.y + sin(GoldSteer.a) * min(GoldSteer.speed, GoldSteer.d)' },
+        ],
+      },
+    ],
+  )
+  world.spawn([entry(Player, { t: 0 }), entry(Pos, { x: 40, y: 0 })])
+  for (let i = 0; i < 32; i++) {
+    const a = i * 0.7
+    world.spawn([entry(Chaser, {}), entry(Steer, {}), entry(Pos, { x: 60 * dmath.cos(a) + i, y: 60 * dmath.sin(a) - i })])
+  }
+  return run(world)
+}
+
+// ── rules-keep-distance: nearest(), distanceTo, pow, sum, ?? (2.2) ──────
+
+function rulesKeepDistance() {
+  const Pos = defineComponent('GoldPos', { defaults: { x: 0, y: 0 } })
+  const Bot = defineComponent('GoldBot', { defaults: { d: 0, e: 1, near: -1 } })
+  const Coin = defineComponent('GoldCoin', { defaults: { v: 0 } })
+  const world = rulesWorld(
+    [Pos, Bot, Coin],
+    [
+      {
+        name: 'drift', schedule: 'fixed', query: ['GoldCoin', 'GoldPos'],
+        actions: [
+          { set: 'GoldPos.x', expr: 'GoldPos.x + (random() - 0.5) * 0.2' },
+          { set: 'GoldCoin.v', expr: 'pow(GoldCoin.v + 1, 0.5)' },
+        ],
+      },
+      {
+        name: 'keep', schedule: 'fixed', query: ['GoldBot', 'GoldPos'],
+        actions: [
+          { set: 'GoldBot.near', expr: 'nearest(GoldCoin, 30).id ?? -1' },
+          { set: 'GoldBot.d', expr: 'distanceTo(nearest(GoldCoin, 30)) ?? 0' },
+          { set: 'GoldPos.x', expr: 'GoldPos.x + (nearest(GoldCoin, 30).GoldPos.x - GoldPos.x) * (GoldBot.d - 5) / max(GoldBot.d, 0.001) * 0.1 ?? GoldPos.x + 0.3' },
+          { set: 'GoldPos.y', expr: 'GoldPos.y + (nearest(GoldCoin, 30).GoldPos.y - GoldPos.y) * (GoldBot.d - 5) / max(GoldBot.d, 0.001) * 0.1 ?? GoldPos.y' },
+          { set: 'GoldBot.e', expr: 'pow(GoldBot.e, 0.999) + sum(GoldCoin, GoldCoin.v) * 0.000001 + (avg(GoldCoin, GoldCoin.v) ?? 0) * 0.0000001 + pow(1 - GoldBot.d * 0.000000001, 3000000000) * 0.001' },
+        ],
+      },
+    ],
+  )
+  for (let i = 0; i < 12; i++) world.spawn([entry(Coin, { v: i }), entry(Pos, { x: (i % 4) * 15, y: Math.floor(i / 4) * 15 })])
+  for (let i = 0; i < 24; i++) {
+    world.spawn([entry(Bot, {}), entry(Pos, { x: (i * 7) % 50 - 5, y: (i * 11) % 40 - 5 })])
+  }
+  return run(world)
+}
+
 // ── dmath fingerprint ───────────────────────────────────────────────────
 
 function dmathFingerprint() {
@@ -250,6 +366,42 @@ function dmathFingerprint() {
   return hashValue(out)
 }
 
+// ── dmath 2.2 fingerprint: atan2 / hypot / pow ──────────────────────────
+
+function dmath2Fingerprint() {
+  const dv = new DataView(new ArrayBuffer(8))
+  const fromWords = (hi, lo) => {
+    dv.setUint32(0, hi >>> 0)
+    dv.setUint32(4, lo >>> 0)
+    return dv.getFloat64(0)
+  }
+  const hex = (x) => {
+    if (Number.isNaN(x)) return 'nan'
+    dv.setFloat64(0, x)
+    return dv.getUint32(0).toString(16).padStart(8, '0') + dv.getUint32(4).toString(16).padStart(8, '0')
+  }
+  let s = 0x7f4a7c15
+  const next = () => {
+    s = (s + 0x6d2b79f5) | 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return (t ^ (t >>> 14)) >>> 0
+  }
+  const specials = [0, -0, 1, -1, 0.5, 2, -3, Infinity, -Infinity, NaN, 5e-324, 1e300]
+  const pairs = []
+  for (const a of specials) for (const b of specials) pairs.push([a, b])
+  // Random finite bit patterns (every exponent), everyday values, and pow
+  // bases near 1 with large exponents.
+  while (pairs.length < 3072) {
+    const k = pairs.length % 3
+    if (k === 0) pairs.push([fromWords(next() & 0xffefffff, next()), fromWords(next() & 0xffefffff, next())])
+    else if (k === 1) pairs.push([(next() / 2 ** 32 - 0.5) * 20, (next() / 2 ** 32 - 0.5) * 20])
+    else pairs.push([fromWords(next() & 1 ? 0x3fefffff : 0x3ff00000, next()), (next() / 2 ** 32 - 0.5) * 2 ** 34])
+  }
+  const out = pairs.map(([a, b]) => `${hex(a)}:${hex(b)}:${hex(dmath.atan2(a, b))}:${hex(dmath.hypot(a, b))}:${hex(dmath.pow(Math.abs(a), b))}:${hex(dmath.pow(a, b))}`)
+  return hashValue(out)
+}
+
 const result = {
   buildId: BUILD_ID,
   fixtures: {
@@ -257,8 +409,11 @@ const result = {
     random: random(),
     'own-streams': ownStreams(),
     bounce0: bounce0(),
+    'rules-chase': rulesChase(),
+    'rules-keep-distance': rulesKeepDistance(),
   },
   dmathFingerprint: dmathFingerprint(),
+  dmath2Fingerprint: dmath2Fingerprint(),
 }
 
 if (opts.write) {
@@ -267,6 +422,7 @@ if (opts.write) {
     note: 'Pinned by scripts/determinism-golden.mjs (spec §3.4). Regenerate with --write only for a deliberate change.',
     fixtures: result.fixtures,
     dmathFingerprint: result.dmathFingerprint,
+    dmath2Fingerprint: result.dmath2Fingerprint,
   }
   fs.writeFileSync(goldenFile, `${JSON.stringify(golden, null, 2)}\n`)
   console.error(`wrote ${path.relative(process.cwd(), goldenFile)}`)

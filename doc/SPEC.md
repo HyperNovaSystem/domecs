@@ -29,7 +29,7 @@ Shipped (1.0.0; `scene` and `rules` since 2.0.0):
 @domecs/persist        — snapshot save/load over a Storage interface, migrations, schema I/O
 @domecs/inspector      — headless fault/timeline recorder (see §10)
 @domecs/scene          — Parent component, hierarchy queries, transform composition, world-bound spatial index (2.2)
-@domecs/rules          — data-defined expression language and rule interpreter
+@domecs/rules          — data-defined expression language and rule interpreter (Appendix A)
 ```
 
 Planned (do not exist yet):
@@ -1063,3 +1063,107 @@ Headless mode (§3) makes system tests fast and framework-free.
 - `critique.md` — design flaws in the README proposal and the corrections applied here. (Removed after the v1.0 freeze; retrieve from git history.)
 - `exemplars.md` — six applications whose requirements shaped v0.1.
 - `api.md` — concrete type and function signatures (next document).
+- Appendix A below — the rules expression language (`@domecs/rules`).
+
+---
+
+## Appendix A. Rules expression language (`@domecs/rules`, normative from 2.2)
+
+A rule (`RuleDef`) runs as a system named `rule:<name>` over the entities
+holding every `query` component and (2.2) none of the `without` components.
+For each entity, in ascending id, it evaluates `when` and then every action
+expression, and commits the action writes atomically (§2.8 for streams,
+§3 for ordering). The package README is the tutorial; this appendix is the
+contract.
+
+**Grammar** (precedence lowest first; `(+)` = 2.2):
+
+```
+expr           := nullish ( '?' expr ':' expr )?                  right-assoc
+nullish        := logicOr ( '??' logicOr )*                       (+) left-assoc
+logicOr        := logicAnd ( '||' logicAnd )*
+logicAnd       := equality ( '&&' equality )*
+equality       := relational ( ('==' | '!=') relational )*
+relational     := additive ( ('<' | '<=' | '>' | '>=') additive )*
+additive       := multiplicative ( ('+' | '-') multiplicative )*
+multiplicative := unary ( ('*' | '/' | '%') unary )*
+unary          := ('!' | '-') unary | primary
+primary        := number | string | 'true' | 'false' | 'dt' | 'time'
+                | 'tick'                                          (+)
+                | IDENT '.' IDENT                                 self Component.field
+                | entity '.' IDENT '.' IDENT                      (+)
+                | entity '.' 'id'                                 (+)
+                | call | '(' expr ')'
+entity         := 'self' | 'first' '(' SET ')'                    (+)
+                | 'nearest' '(' SET ( ',' expr )? ')'             (+)
+                | 'entity' '(' expr ')'                           (+)
+call           := FUNC '(' ( expr ( ',' expr )* )? ')'
+                | 'has' '(' ( entity ',' )? SET ')'               (+)
+                | ('count' | 'exists') '(' SET ')'                (+)
+                | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
+                | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'   (+)
+                | 'distanceTo' '(' entity ')'                     (+)
+SET            := IDENT                                           (+) the holders of that component
+FUNC           := min/2 max/2 clamp/3 abs/1 sin/1 cos/1 floor/1 random/0
+                | sqrt/1 pow/2 atan2/2 hypot/2 sign/1 round/1 ceil/1 lerp/3 distance/4   (+)
+```
+
+Number literals are decimal without exponent; strings take `\n \t \r \\ \" \'`.
+Limits (O-66): 16384 characters, 128 levels of AST depth. Unknown functions
+and wrong arities are parse errors.
+
+**Reserved words (2.2).** `self`, `tick`, `other`, `event`, `pointer` cannot
+name a component in an expression ("reserved word" at the name); after an
+entity, `id` is reserved. Only `first(`, `nearest(`, `entity(` start a
+selector (`first.x` is `Component.field`). An entity is not a value: outside
+a member base, `has`/`countWithin`/`distanceTo` argument it is a parse error.
+
+**Values and kinds.** Values are numbers, strings and booleans. Arithmetic,
+comparison and function arguments require numbers (a `RuleEvalError`
+otherwise); `==`/`!=` compare with `===`; `!`, `&&`, `||`, `?:` use JS
+truthiness and short-circuit, as does `??`. Type errors certain before the
+rule runs are compile errors (`has`/`exists` are boolean; `count`,
+`countWithin`, `distanceTo`, `e.id`, `tick`, the aggregates and every
+function are numbers; field reads are unknown).
+
+**Semantics (2.2).**
+
+- `SET` is the entities holding the component, ascending id, computed once
+  per rule run (membership never changes within a run).
+- `first(S)`: lowest-id member other than the evaluated entity.
+  `nearest(S[, d])`: the member minimizing squared distance from the
+  evaluated entity's position, ties to the lowest id, excluding itself,
+  within `d` (inclusive) if given. `entity(n)`: the alive entity with id `n`
+  (`n` must be an integer, else a type error).
+- `e.C.f` reads `C.f` on `e` as an own property; `e.id` is the id;
+  `self.C.f` is `C.f` (it sees the entity's staged writes). `has([e,] C)` is
+  a boolean, `e` defaulting to the evaluated entity.
+- `count(S)`, `exists(S)` = `count > 0`; `sum/avg/minOf/maxOf(S, C.f)` read
+  `C.f` on each member including the evaluated entity, skip members without
+  it, and fault on a non-number. `sum` of none is 0; `avg`/`minOf`/`maxOf`
+  of none have no value. `countWithin(S, r[, e])` counts members within `r`
+  of `e` (default the evaluated entity), excluding `e`.
+- `distanceTo(e)` = `sqrt(dx² + dy²)` between the evaluated entity's and
+  `e`'s live positions; `distance(x1, y1, x2, y2)` likewise.
+- Positions come from `installRules(..., { spatial: { component, x?, y?,
+  cellSize? } })`; without it, `nearest`/`countWithin`/`distanceTo` are
+  compile errors. A missing or non-finite position is no value. Candidate
+  selection (`nearest`, `countWithin`) uses a `createSpatialGrid` (§2.12)
+  built from positions at the start of the rule run; results never depend
+  on `cellSize`.
+- **No value**: a missing self or member field, an empty selector, a dead
+  `entity(n)`, an empty `avg`/`minOf`/`maxOf`, a missing position. `a ?? b`
+  evaluates `b` only on no value; other errors propagate. An uncaught error
+  skips the entity for that run with a `rule_eval_failed` fault (nothing is
+  written).
+- **Read timing**: reads are live; entity *k* sees the committed writes of
+  lower ids from the same run (Gauss–Seidel). Rules write only the
+  evaluated entity.
+- **Math**: `sin`, `cos`, `atan2`, `hypot`, `pow` evaluate with `dmath`
+  (§8); every other function is exact IEEE-754 arithmetic (`lerp(a, b, t)`
+  = `a + (b - a) * t`). A non-finite intermediate is allowed; a non-finite
+  write is rejected.
+- **Determinism**: iteration is ascending id, distances are exact double
+  arithmetic with id tie-breaks, caches never outlive a run, nothing
+  derived is snapshotted, and `random()` draws the rule's stream (§2.8).
+

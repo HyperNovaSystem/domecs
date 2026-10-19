@@ -51,19 +51,21 @@ within that part's string, or −1:
 | Unknown `schedule` | `'schedule'` |
 | Non-finite `priority` | `'priority'` |
 | Unknown component in `query[i]` | `{ query: i }` |
-| `when` parse, resolve or type error | `'when'` |
+| Unknown component in `without[i]` (2.2) | `{ without: i }` |
+| `when` parse, resolve or type error (and, 2.2, a spatial form without the `spatial` option) | `'when'` |
 | Malformed `actions[i].set`, unknown target component, forbidden field | `{ action: i, part: 'set' }` |
 | Any error inside `actions[i].expr` | `{ action: i, part: 'expr' }` |
 | Repeated rule name (from `update()`) | `'name'` |
 
-The union widens in later minors (for example `'rng'` or `{ without: i }`),
-so keep a default branch when you switch on it:
+The union widens in minors (`'rng'` in 2.1, `{ without: i }` in 2.2), so
+keep a default branch when you switch on it:
 
 ```ts
 function widgetFor(e: RuleError): string {
   const f = e.field
   if (typeof f === 'string') return f
   if (f && 'query' in f) return `query[${f.query}]`
+  if (f && 'without' in f) return `without[${f.without}]`
   if (f && 'action' in f) return `actions[${f.action}].${f.part}`
   return 'rule' // a part this version does not know yet
 }
@@ -111,18 +113,129 @@ such as `composeTransforms({ priority: 100 })` at 100 (bands table in SPEC
 `order`, `components` and `meta: { rule: name }` (maps the system back to its
 rule). The default may flip to `'stable'` in 3.0.
 
+## Language
+
+The grammar, lowest precedence first (2.2 additions marked; SPEC Appendix A
+is the normative reference):
+
+```
+expr       := nullish ( '?' expr ':' expr )?
+nullish    := or ( '??' or )*                       2.2: b when a has no value
+or / and / equality / relational / additive / multiplicative / unary  (as before)
+primary    := number | string | true | false | dt | time | tick (2.2)
+            | Component.field                       the evaluated entity's field
+            | entity '.' Component '.' field        2.2: another entity's field
+            | entity '.' 'id'                       2.2: its id (a number)
+            | call | '(' expr ')'
+entity     := self | first(S) | nearest(S[, maxDistance]) | entity(n)      2.2
+call       := min max clamp abs sin cos floor random
+            | sqrt pow atan2 hypot sign round ceil lerp distance           2.2
+            | has([e,] C) | count(S) | exists(S) | countWithin(S, r[, e])  2.2
+            | sum|avg|minOf|maxOf(S, C.f) | distanceTo(e)                   2.2
+```
+
+`S` is a component name standing for its holders (a set); use a tag
+component for "enemies". Number literals are plain decimals (no exponent).
+
+**Reserved words (2.2).** `self`, `tick`, `other`, `event` and `pointer`
+cannot name a component in an expression (a "reserved word" parse error at
+the name), and `id` cannot after an entity. Only `first(`, `nearest(` and
+`entity(` start a selector, so `first.x` is still `Component.field`. An
+entity is not a value: `first(Player)` alone is a parse error ("use .id").
+
+## Cross-entity reads (2.2)
+
+```ts
+const chase: RuleDef = {
+  name: 'chase', schedule: 'fixed', query: ['Pos', 'Vel'], without: ['Player'],
+  actions: [
+    { set: 'Vel.x', expr: '(first(Player).Pos.x - Pos.x) * 0.1' },
+    { set: 'Vel.y', expr: '(nearest(Coin, 50).Pos.y - Pos.y) * 0.1 ?? 0' },
+  ],
+}
+installRules(world, [chase], resolve, { spatial: { component: 'Pos' } })
+```
+
+- **Selectors.** `first(S)` is the lowest-id member other than the evaluated
+  entity; `nearest(S[, d])` minimizes squared distance from its position
+  (ties → lowest id; itself excluded; within `d` if given); `entity(n)` is
+  the alive entity with integer id `n`. `self` is the evaluated entity.
+- **Reads.** `e.C.f` reads an own property (missing component or field: no
+  value); `e.id` is the id; `self.C.f` is `C.f`. `has([e,] C)` is a boolean.
+- **Aggregates** include the evaluated entity: `count(S)`, `exists(S)`,
+  `sum/avg/minOf/maxOf(S, C.f)` (members without the field are skipped; a
+  non-number value faults the entity; `sum` of nothing is 0, `avg`/`minOf`/
+  `maxOf` of nothing have no value). `countWithin(S, r[, e])` counts members
+  within `r` of `e` (default the evaluated entity), excluding `e`.
+- **Distance.** `distanceTo(e)` is `sqrt(dx² + dy²)` between the two
+  positions; `distance(x1, y1, x2, y2)` the same over four numbers.
+- **Positions** come from `InstallRulesOptions.spatial` (`{ component, x?,
+  y?, cellSize? }`, fields default `x`/`y`, cell size 32 — performance
+  only). `nearest`, `countWithin` and `distanceTo` without it are compile
+  errors on the part that uses them. Selection uses a grid built from the
+  positions at the start of each rule run; `distanceTo` reads live
+  positions. An entity whose position fields are missing or not finite
+  numbers has no position.
+- **No value and `??`.** A missing field, an empty selector, a dead
+  `entity(n)`, an empty `avg`/`minOf`/`maxOf` or a missing position is "no
+  value". `a ?? b` evaluates `b` on no value only; type errors propagate.
+  Uncaught, no value is the usual `rule_eval_failed` fault on the entity.
+- **Read timing.** Reads are live. Entities run in ascending id and each
+  commits before the next, so entity *k* sees the writes lower ids made in
+  the same run (Gauss–Seidel), as its own-field reads always did. Rules
+  never write other entities.
+- **`without`.** `RuleDef.without: ['Player']` excludes holders
+  (`And(...Has(query), ...Not(Has(without)))`); an unknown name is a
+  `RuleError` on `{ without: i }`.
+- Every component name in an expression (reads, sets, `has` targets,
+  aggregate fields) must resolve, and member fields get the
+  `__proto__`/`constructor`/`prototype` check. `walkComponentRefs(ast,
+  visit)` visits them all (role `'self'`, `'member'` or `'set'`), for tools
+  that rename components; `walkFieldRefs` still visits only the evaluated
+  entity's own fields.
+
+**Cost model.** Member lists are computed once per rule run per set
+(ascending id). A set aggregate whose field's component the rule does not
+write (and every `count`/`exists`) is computed once per run and reused for
+each entity; otherwise once per entity. Spatial sets build one grid per run
+(O(n)); each `nearest`/`countWithin` is then a grid query. At 1000 entities
+a `nearest(Player)` rule costs about 1.7× a self-only rule and a memoized
+`sum(Enemy, Hp.hp)` about the same as a self-only rule (`bench/run.mjs
+--workload rules`; targets 3× and 1.2×). Avoid unmemoized aggregates in
+large rules: they are O(members) per entity.
+
 ## Timing and functions
 
 `dt` for a `fixed` rule is the fixed step, but `time` is the frame's elapsed
-time, the same in every fixed sub-step of a frame.
+time, the same in every fixed sub-step of a frame. `tick` (2.2) is
+`world.time.tick`.
 
 Every function is bit-reproducible: a rule computes the same bits in Node,
 Electron and every browser. `sin`/`cos` evaluate with `dmath` from
 `@domecs/core` (a musl libm port, < 1 ulp; since 2.1 — 2.0 used
 `Math.sin`/`Math.cos`, which differ by up to 1 ulp between engines, so 2.1
-results can differ from 2.0 by that much once). `min`, `max`, `clamp`, `abs`
-and `floor` are exact, and `random()` draws from the world's seeded RNG
-(SPEC §8).
+results can differ from 2.0 by that much once), and from 2.2 so do `atan2`,
+`hypot` and `pow` (`pow`'s special values are ECMAScript `**`'s). `min`,
+`max`, `clamp`, `abs`, `floor`, `sqrt`, `sign`, `round`, `ceil`, `lerp(a, b,
+t)` (`a + (b - a) * t`) and `distance` are exact, and `random()` draws from
+the world's seeded RNG (SPEC §8). Arities are fixed: one argument for `sqrt
+sign round ceil`, two for `pow atan2 hypot`, three for `lerp`, four for
+`distance`.
+
+`FUNCTION_NAMES` is a const tuple, so each minor that adds a function widens
+`FunctionName` (2.2 added nine). Give exhaustive switches over it a default
+branch:
+
+```ts
+function label(name: FunctionName): string {
+  switch (name) {
+    case 'min': return 'smaller of'
+    case 'max': return 'larger of'
+    // …
+    default: return name // a function this version does not know yet
+  }
+}
+```
 
 ## Randomness
 

@@ -17,6 +17,7 @@ interpretation.
 | 4b | **Snapshot hash** | `hash` | `hashSnapshot` (canonical JSON + FNV-1a-64) over a 1000-entity snapshot |
 | 4c | **Deterministic math** | `dmath` | `dmath.sin`/`dmath.cos` vs `Math.sin`/`Math.cos`, 1M calls |
 | 4d | **Spatial index** | `spatial` | `@domecs/scene` `createSpatialHash` `refresh()` and `nearest` at 1000 entities |
+| 4e | **Cross-entity rules** | `rules` | `@domecs/rules` self-only vs `nearest(Player)` vs memoized `sum(Enemy, Hp.hp)` rule, 1000 entities |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
 | 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
 
@@ -93,6 +94,16 @@ pnpm bench:write
   second index at cell size 7 returns the same `nearest`, `within` and
   `pairs` results). The scene dist imports the bare `@domecs/core`, so the
   workload registers a resolve hook pointing it at the core dist.
+- **Rules workload (O-82):** three single-rule worlds of 1000 entities
+  (positions uniform over 1000 × 1000, every fourth an `Enemy`, one
+  `Player`), one tick rule over every entity writing a changed value each
+  tick: self-only (`Out.a + Pos.x * 0.5`), `Out.a + (nearest(Player).id ??
+  0)` (spatial option, cell size 32, including the per-run grid build) and
+  `Out.a + sum(Enemy, Hp.hp)` (memoized: the rule writes no `Hp`). Three
+  interleaved rounds of 300 timed `stepOnce()`s after the warmup; the row
+  reports `nearestRatio` against 3× and `sumMemoRatio` against 1.2× (spec
+  §5.2, informational, not a gate). Rules' dist imports the bare
+  `@domecs/core`, so it loads through the same resolve hook as scene.
 - **Telemetry workload:** 1,000 marks/tick over a 100-entity hot subset, so
   per-tick coalescing actually engages; `coalesceRatio` reports marks issued
   per change delivered (≈10 when coalescing works).
@@ -165,6 +176,19 @@ id selection plus a store lookup per entity); the grid update is the rest.
 Recorded as informational (spec §5.1). Faster iteration in core, or an
 incremental refresh from change windows, is the follow-up if a consumer
 needs it.
+
+## Rules workload (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+`node --expose-gc bench/run.mjs --workload rules`, three runs:
+
+| Measure | Result | Target |
+|---------|--------|--------|
+| self-only rule, p50 per `stepOnce()` | 0.553–0.573 ms | — |
+| `nearest(Player)` ÷ self-only | 1.73–1.80× | ≤ 3× (met) |
+| memoized `sum(Enemy, Hp.hp)` ÷ self-only | 0.92–0.96× | ≤ 1.2× (met) |
+
+The memoized sum is computed once per run, so its per-entity cost is a
+closure call; its expression is slightly cheaper than the self-only one.
 
 ## 2.1 release-candidate check (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
 

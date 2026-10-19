@@ -35,6 +35,52 @@ All notable changes to DOMECS are documented here. The format is based on
   known weak region (`|1 - x| <= 2^-20`, `|y| > 2^31`: relative error up to
   ~2^-43). Golden vectors in `test/golden/dmath2-vectors.json`.
 
+- `@domecs/rules`: cross-entity rules (G1, O-82, harness spec §5.2; SPEC
+  Appendix A). Selectors `self`, `first(S)`, `nearest(S[, d])`, `entity(n)`
+  with reads `e.Component.field` and `e.id`; `has([e,] C)`; aggregates
+  `count`, `exists`, `sum`, `avg`, `minOf`, `maxOf` (sets include the
+  evaluated entity); `countWithin(S, r[, e])`, `distanceTo(e)`; functions
+  `sqrt pow atan2 hypot sign round ceil lerp distance` (`pow`/`atan2`/
+  `hypot` via `dmath`); the identifier `tick`; `a ?? b` (b on "no value":
+  a missing field, an empty selector, a dead `entity(n)`, an empty
+  `avg`/`minOf`/`maxOf`). `RuleDef.without` (excluded components; errors on
+  `{ without: i }`), `InstallRulesOptions.spatial` (`{ component, x?, y?,
+  cellSize? }`, start-of-run grid from `createSpatialGrid`), `compileRule`'s
+  optional `{ spatial }` argument, `walkComponentRefs`, `SPECIAL_FORMS`,
+  types `EntityNode`, `AggregateOp`, `SpatialOption`, `CompileRuleOptions`.
+  Reads are live in ascending id (an entity sees lower ids' writes from the
+  same run); set aggregates that cannot change during a run are memoized.
+- `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
+  `rules-keep-distance` (built with `@domecs/rules`) and a
+  `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and
+  `dmathFingerprint` are unchanged. The script now also needs the built
+  `@domecs/rules` (`--engine` looks for `<dir>/@domecs/rules`), and
+  `pnpm test:golden` builds it.
+- `bench`: `rules` workload (self-only vs `nearest(Player)` vs memoized
+  `sum` rule at 1000 entities; spec §5.2 targets 3× and 1.2×: 1.7× and
+  0.95× measured).
+
+### Changed
+
+- `@domecs/rules` (behaviour change): `self`, `tick`, `other`, `event` and
+  `pointer` are reserved words — a component with one of these names can no
+  longer be referenced in an expression (a parse error, "reserved word"),
+  and `id` is reserved after an entity. `a??b` now lexes as `??` (it was a
+  syntax error). A missing self field still faults the entity as before
+  (it is now a "no value" error, still a `RuleEvalError`). Every component
+  name in an expression is resolved at compile time, including sets and
+  `has` targets.
+
+### Type-level changes
+
+- `@domecs/rules`: `FUNCTION_NAMES` gains nine names, so `FunctionName`
+  widens and `FUNCTION_ARITY` gains keys; `AstNode` gains `member`,
+  `entityId`, `has`, `aggregate`, `countWithin`, `distanceTo` and `nullish`
+  nodes and `identifier.name` gains `'tick'`; `RuleDefPath` gains
+  `{ without: number }`. Exhaustive switches over `FunctionName`,
+  `AstNode['kind']` or `RuleDefPath` need a case or a default branch (the
+  rules README recommends a default branch).
+
 ### Fixed
 
 - `@domecs/core`: `validateEventPayload` (and so `world.action()` /

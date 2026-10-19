@@ -296,25 +296,25 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E10.1 `dmath` `atan2`, `hypot`, `pow`
 
 - **Files:** `packages/domecs/src/dmath.ts` (musl `atan2` + `atan` kernel, `hypot`; fdlibm `e_pow.c`), vectors, tests.
-- [ ] **Red:** accuracy ≤ 1 ulp vs `Math.*` over 100k inputs each; specials; golden vectors.
-- [ ] **Commit:** `feat(core): dmath atan2/hypot/pow (E10.1)`
+- [x] **Red:** accuracy ≤ 1 ulp vs `Math.*` over 100k inputs each; specials; golden vectors.
+- [x] **Commit:** `feat(core): dmath atan2/hypot/pow (E10.1)`
 
 #### E10.2 Lexer, parser and AST
 
 - **Files:** `packages/domecs-rules/src/{lexer.ts,parser.ts,ast.ts}`, test `parser.test.ts`.
-- [ ] **Red:** every new form with positions; arity errors; reserved words (`self`, `tick`, `other`, `event`, `pointer`; `id` after an entity); `first.x` still `Component.field`; `??` precedence cases; O-66 limits hold; `walkComponentRefs` visits members, sets and `has` targets; `walkFieldRefs` unchanged.
-- [ ] **Commit:** `feat(rules): grammar for selectors, aggregates, math and ?? (E10.2)`
+- [x] **Red:** every new form with positions; arity errors; reserved words (`self`, `tick`, `other`, `event`, `pointer`; `id` after an entity); `first.x` still `Component.field`; `??` precedence cases; O-66 limits hold; `walkComponentRefs` visits members, sets and `has` targets; `walkFieldRefs` unchanged.
+- [x] **Commit:** `feat(rules): grammar for selectors, aggregates, math and ?? (E10.2)`
 
 #### E10.3 Evaluator environment and semantics
 
 - **Files:** `packages/domecs-rules/src/{evaluator.ts,typecheck.ts,rules.ts}`, tests `evaluator.test.ts`, new `cross-entity.test.ts`.
-- [ ] **Red:** chase oracle; `nearest` vs brute force over 500 entities with ties and `maxDistance`; aggregates (empty sets, skipped members, non-number fault, memoized == non-memoized); `??` catches no-value only; Gauss–Seidel read timing with live == fork; `without` and `{without: i}` errors; spatial forms without `spatial` → compile error with the right `field`; `atan2`/`pow`/`hypot` equal `dmath` bit for bit.
-- [ ] **Commit:** `feat(rules): cross-entity reads, selectors, aggregates and spatial forms (E10.3)`
+- [x] **Red:** chase oracle; `nearest` vs brute force over 500 entities with ties and `maxDistance`; aggregates (empty sets, skipped members, non-number fault, memoized == non-memoized); `??` catches no-value only; Gauss–Seidel read timing with live == fork; `without` and `{without: i}` errors; spatial forms without `spatial` → compile error with the right `field`; `atan2`/`pow`/`hypot` equal `dmath` bit for bit.
+- [x] **Commit:** `feat(rules): cross-entity reads, selectors, aggregates and spatial forms (E10.3)`
 
 #### E10.4 Docs, golden and type-level note
 
 - **Files:** rules README (grammar, cost model, default branch for `FunctionName`); SPEC rules appendix; `doc/api.md`; AGENTS.md "Behaviours as rules"; SKILL.md; CHANGELOG **type-level change** (`FunctionName` widens) and reserved-words behaviour change; `scripts/determinism-golden.mjs` adds chase, keep-distance, `atan2`/`hypot`/`pow`, `nearest`, `countWithin`; bench cost targets.
-- [ ] **Commit:** `docs(rules): rules language I reference and golden scenarios (E10.4)`
+- [x] **Commit:** `docs(rules): rules language I reference and golden scenarios (E10.4)`
 
 ### E11 — World expressions (§5.3; O-83)
 

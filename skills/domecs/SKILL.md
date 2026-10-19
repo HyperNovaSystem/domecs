@@ -99,8 +99,16 @@ bridge.reset()                         // episode boundary
   and `register` every event type that can be pending in the restoring world
 - **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
   step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
-- **Trig in systems:** `dmath.sin` / `dmath.cos` (`@domecs/core`), not
-  `Math.sin` / `Math.cos`, so Node, Electron and browsers agree bit for bit
+- **Trig in systems:** `dmath.sin` / `dmath.cos` / `dmath.atan2` /
+  `dmath.hypot` / `dmath.pow` (`@domecs/core`), not `Math.*`, so Node,
+  Electron and browsers agree bit for bit
+- **Behaviours as rules:** cross-entity rules read other entities with
+  `first(Player).Pos.x`, `nearest(Coin, 50).id`, `count(Enemy)`,
+  `sum(Enemy, Hp.hp)`, `countWithin(Enemy, 5)`, `distanceTo(e)`; wrap reads
+  that may be absent in `?? fallback`; exclude with `without: [...]`; pass
+  `installRules(..., { spatial: { component: 'Pos' } })` for `nearest` /
+  `countWithin` / `distanceTo`. Rules write only their own entity; `self`,
+  `tick`, `other`, `event`, `pointer` are reserved words
 
 ## Done when
 
