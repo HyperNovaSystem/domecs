@@ -113,8 +113,8 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   derived state (e.g. `composeTransforms`; `{ ran, skipped }`, only enabled `tick`/`fixed`)
   and `world.render()` repaints via `onRender` only — neither advances `time.tick` nor fires
   `tickStart`/`tickEnd` (unlike `step(0)`). Derived/transient state only: a recorder notes a gap
-- **Render state:** `defineResource('Camera', { default, transient: true })` keeps a camera /
-  HUD cache out of snapshots and hashes; `restore()` keeps its live value
+- **Render state:** `defineResource('Camera', { default: { x: 0, zoom: 1 }, transient: true })`
+  keeps a camera / HUD cache out of snapshots and hashes; `restore()` keeps its live value
 - **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
   step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
 - **Contacts (hits, pickups):** `world.use(installContacts({ position: { component: Pos },

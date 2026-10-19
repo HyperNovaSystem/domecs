@@ -250,8 +250,9 @@ resume scale, then `pause()` the branch). A probe that
 changes the world throws at the first sample.
 
 ### Render state
-`defineResource('Camera', { default, transient: true })` keeps a camera / HUD
-cache out of snapshots and hashes; `restore()` keeps its live value.
+`defineResource('Camera', { default: { x: 0, zoom: 1 }, transient: true })`
+keeps a camera / HUD cache out of snapshots and hashes; `restore()` keeps its
+live value.
 
 ### Control while paused
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM
