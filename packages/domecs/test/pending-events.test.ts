@@ -294,3 +294,25 @@ describe('pending events in snapshots (§4.7)', () => {
     ])
   })
 })
+
+describe('pending events in snapshots — verify pass (fix(E7))', () => {
+  it('refuses to record a pending event whose name two known types share', () => {
+    // The record is by name: a twin-named pending event can never restore
+    // (the name is ambiguous in this world) or restores as the wrong type in
+    // a world that knows only the twin. Refuse it loudly at snapshot time.
+    const w = fresh()
+    const PingTwin = defineEvent<{ n: number }>('PePing')
+    w.on(PingTwin, () => {})
+    w.emit(Ping, { n: 1 })
+    expect(() => w.snapshot()).not.toThrow()
+    expect(() => w.snapshot({ pendingEvents: true })).toThrow(TypeError)
+    expect(() => w.snapshot({ pendingEvents: true })).toThrow(/PePing.*share|share.*PePing/)
+    // The queue is untouched by the failed snapshot.
+    expect(w.pendingEvents()).toEqual([{ type: Ping, payload: { n: 1 } }])
+
+    // Without the twin pending or known, a twin-free world records fine.
+    const v = fresh()
+    v.emit(Ping, { n: 1 })
+    expect(v.snapshot({ pendingEvents: true }).pendingEvents).toEqual([{ event: 'PePing', payload: { n: 1 } }])
+  })
+})

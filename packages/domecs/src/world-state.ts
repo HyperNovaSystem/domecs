@@ -106,6 +106,7 @@ export function buildSnapshot(
   ctx: WorldStateCtx,
   pruneEmpty: boolean,
   pending?: readonly EmittedEvent[],
+  lookup?: (name: string) => EventType<unknown> | undefined,
 ): WorldSnapshot {
   const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
   const sortedAlive = Array.from(ctx.alive).sort((a, b) => a - b)
@@ -145,7 +146,7 @@ export function buildSnapshot(
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
     ...(changes !== undefined ? { changes } : {}),
     ...(pending !== undefined && pending.length > 0
-      ? { pendingEvents: encodePendingEvents(pending) }
+      ? { pendingEvents: encodePendingEvents(pending, lookup) }
       : {}),
   }
 }
@@ -163,9 +164,25 @@ export function buildSnapshot(
  * array, a non-finite number, BigInt, symbol, function, class instance
  * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
  * coerced payload would restore as a different value.
+ *
+ * `lookup` is the snapshotting world's name lookup (`bus.lookup`). The record
+ * is by name, so an event whose name does not resolve back to its own type —
+ * two distinct known types share it — throws `TypeError` too: restore would
+ * refuse it as ambiguous, or re-queue it as the twin in a world that knows
+ * only the other type.
  */
-export function encodePendingEvents(events: readonly EmittedEvent[]): SnapshotPendingEvent[] {
+export function encodePendingEvents(
+  events: readonly EmittedEvent[],
+  lookup?: (name: string) => EventType<unknown> | undefined,
+): SnapshotPendingEvent[] {
   return events.map((e, i) => {
+    if (lookup !== undefined && lookup(e.type.name) !== e.type) {
+      throw new TypeError(
+        `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) cannot be recorded ` +
+          `by name: distinct known event types share the name "${e.type.name}"; give each event type ` +
+          `a unique name`,
+      )
+    }
     if (e.payload === undefined) return { event: e.type.name }
     try {
       return { event: e.type.name, payload: plainCopy(e.payload, []) }

@@ -2137,6 +2137,7 @@ export function createWorld(options: WorldOptions = {}): World {
         stateCtx,
         options?.pruneEmptyEntities === true,
         options?.pendingEvents === true ? bus.pendingEvents() : undefined,
+        (name) => bus.lookup(name),
       )
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {

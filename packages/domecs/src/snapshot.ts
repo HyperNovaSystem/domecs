@@ -23,7 +23,8 @@ export interface SnapshotOptions {
    * the restoring world's queue, as in 2.0. Every fork, keyframe or
    * checkpoint whose future must match the live world's should pass `true`.
    * Throws `TypeError` naming the event when a pending payload is not plain
-   * data.
+   * data, or when another known event type shares a pending event's name
+   * (the record is by name, so it could not restore as the same type).
    */
   readonly pendingEvents?: boolean
 }

@@ -1471,7 +1471,8 @@ export interface SnapshotOptions {
      * the restoring world's queue, as in 2.0. Every fork, keyframe or
      * checkpoint whose future must match the live world's should pass `true`.
      * Throws `TypeError` naming the event when a pending payload is not plain
-     * data.
+     * data, or when another known event type shares a pending event's name
+     * (the record is by name, so it could not restore as the same type).
      */
     readonly pendingEvents?: boolean;
 }
@@ -1818,7 +1819,7 @@ export interface WorldStateCtx {
  * option does not change the hash of a world with an empty queue (restoring
  * an absent field and an empty one both leave the queue empty).
  */
-export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, pending?: readonly EmittedEvent[]): WorldSnapshot;
+export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, pending?: readonly EmittedEvent[], lookup?: (name: string) => EventType<unknown> | undefined): WorldSnapshot;
 /**
  * Plain-data copies of the undelivered events, in bus order. A payload
  * that is not plain data throws `TypeError` naming the event and the path.
@@ -1830,8 +1831,14 @@ export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, p
  * array, a non-finite number, BigInt, symbol, function, class instance
  * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
  * coerced payload would restore as a different value.
+ *
+ * `lookup` is the snapshotting world's name lookup (`bus.lookup`). The record
+ * is by name, so an event whose name does not resolve back to its own type —
+ * two distinct known types share it — throws `TypeError` too: restore would
+ * refuse it as ambiguous, or re-queue it as the twin in a world that knows
+ * only the other type.
  */
-export declare function encodePendingEvents(events: readonly EmittedEvent[]): SnapshotPendingEvent[];
+export declare function encodePendingEvents(events: readonly EmittedEvent[], lookup?: (name: string) => EventType<unknown> | undefined): SnapshotPendingEvent[];
 /**
  * Check a snapshot's `pendingEvents` field and resolve each name through
  * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a

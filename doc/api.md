@@ -362,7 +362,8 @@ interface World {
   // pruneTransientOnlyEntities() plugin applies this on the no-arg save() path.
   // options.pendingEvents (default false): record the undelivered events, so
   // a fork restored from it delivers them on its next tick (O-90). A pending
-  // payload that is not plain data throws TypeError naming the event.
+  // payload that is not plain data, or a pending event whose name another
+  // known event type shares, throws TypeError naming the event.
   snapshot(options?: SnapshotOptions): WorldSnapshot
   // The undelivered events in bus order (first emit of each type, then
   // payload order). A fresh array; reading consumes nothing.
@@ -734,7 +735,8 @@ Events in flight between two ticks travel with a snapshot only when it is
 taken with `{ pendingEvents: true }` (O-90). Restore resolves each name with
 `world.lookupEvent`, so the restoring world must know the type —
 `register` it in setup (or subscribe, or name it in `triggers`). Payloads
-must be plain data; anything else throws `TypeError` at `snapshot()`.
+must be plain data and each pending type's name unique among the known
+event types; anything else throws `TypeError` at `snapshot()`.
 `world.pendingEvents()` shows the queue without consuming it:
 
 ```ts doctest name=pending-events-fork
