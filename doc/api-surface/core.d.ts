@@ -770,6 +770,8 @@ export type { SnapshotOptions, SnapshotPendingEvent, WorldSnapshot } from './sna
 export { canonicalJson, canonicalSnapshot, hashSnapshot, hashEntities, hashValue, HASH_ALGORITHM, } from './canonical.js';
 export type { CanonicalOptions } from './canonical.js';
 export { dmath } from './dmath.js';
+export { createSpatialGrid } from './spatial-grid.js';
+export type { SpatialGrid } from './spatial-grid.js';
 export type { ChangesSnapshot } from './change-log.js';
 export type { Rng, RngState } from './rng.js';
 export type { TimeState } from './time.js';
@@ -1628,6 +1630,67 @@ export declare function cloneSerializable<T>(value: T): T;
  * drop the data from the copy and from its canonical hash.
  */
 export declare function setOwn(out: Record<string, unknown>, k: string, v: unknown): void;
+
+// file: spatial-grid.d.ts
+import type { Entity } from './types.js';
+/**
+ * A pure, world-free uniform grid over 2D points (O-8, spec §5.1, ED-7).
+ *
+ * Results of {@link SpatialGrid.within}, {@link SpatialGrid.nearest} and
+ * {@link SpatialGrid.pairs} are normative: they equal a brute-force scan
+ * over every indexed point and never depend on `cellSize`, on insertion
+ * order or on cell iteration order. Cell size is a pure performance
+ * setting. Distances are compared as `dx * dx + dy * dy` with
+ * `dx = px - x`, `dy = py - y`, the same expression a brute-force scan
+ * would use.
+ *
+ * The grid is derived state: it is never part of a snapshot. Rebuild it from
+ * snapshotted positions.
+ */
+export interface SpatialGrid {
+    readonly cellSize: number;
+    /** Number of indexed ids. */
+    readonly size: number;
+    clear(): void;
+    /** Insert or move. Non-finite coordinates are not indexed (the id is removed). */
+    set(id: Entity, x: number, y: number): void;
+    /** Remove `id`; unknown ids are a no-op. */
+    delete(id: Entity): void;
+    /** The indexed position of `id`, or `undefined` when it is not indexed. */
+    position(id: Entity): {
+        readonly x: number;
+        readonly y: number;
+    } | undefined;
+    /**
+     * Ids with distance² <= r², ascending id. A negative or NaN `r` matches
+     * nothing. `accept` is called in ascending id order on the ids within
+     * range; it should be pure.
+     */
+    within(x: number, y: number, r: number, accept?: (id: Entity) => boolean): Entity[];
+    /**
+     * The id with the minimum distance²; ties → lowest id. `maxDistance`
+     * (inclusive) bounds the search; a negative or NaN `maxDistance` matches
+     * nothing. `accept` may be called in any order and any number of times,
+     * so it should be pure.
+     */
+    nearest(x: number, y: number, options?: {
+        maxDistance?: number;
+        accept?: (id: Entity) => boolean;
+    }): Entity | undefined;
+    /**
+     * Unordered pairs with distance <= r (a < b), sorted by (a, b). A negative
+     * or NaN `r` matches nothing. `accept` is called in output order on the
+     * pairs within range; it should be pure.
+     */
+    pairs(r: number, accept?: (a: Entity, b: Entity) => boolean): Array<[Entity, Entity]>;
+}
+/**
+ * Create an empty {@link SpatialGrid}. `cellSize` must be a finite number
+ * greater than 0 (throws `RangeError` otherwise); it changes speed, never
+ * results. A cell a little larger than the typical query radius is a good
+ * start.
+ */
+export declare function createSpatialGrid(cellSize: number): SpatialGrid;
 
 // file: time.d.ts
 export interface TimeState {

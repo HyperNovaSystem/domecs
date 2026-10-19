@@ -65,6 +65,8 @@ export {
 } from './canonical.js'
 export type { CanonicalOptions } from './canonical.js'
 export { dmath } from './dmath.js'
+export { createSpatialGrid } from './spatial-grid.js'
+export type { SpatialGrid } from './spatial-grid.js'
 export type { ChangesSnapshot } from './change-log.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'
