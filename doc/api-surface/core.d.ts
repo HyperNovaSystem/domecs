@@ -57,6 +57,18 @@ export interface AgentBridge {
     /** Typed command boundary — delegates to {@link World.action}. */
     act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult;
     /**
+     * Name-based command boundary for JSON callers (MCP tools, HTTP, act
+     * logs): resolves `name` through {@link World.lookupEvent}, then behaves
+     * exactly like `act(type, …)`, schema validation included (O-39).
+     *
+     * An unknown name, or one shared by two distinct known event types, is
+     * rejected with `{ accepted: false, consumedTurn: false, reason, events: [] }`
+     * — no emit, no tick. An event becomes known when it is registered,
+     * emitted, subscribed to or named as a trigger; `world.register` it (and
+     * keep agent-facing command names unique) so it resolves before first use.
+     */
+    act(name: string, payload: unknown, opts?: ActionOptions): ActionResult;
+    /**
      * Advance simulation. Omit `dt` for turn-based {@link World.stepOnce};
      * pass a positive `dt` for {@link World.step} (required for `fixed`
      * systems).

@@ -5,6 +5,8 @@ import {
   defineComponent,
   defineEvent,
   entry,
+  hashSnapshot,
+  type World,
 } from '../src/index.js'
 
 const Counter = defineComponent<{ n: number }>('AgentCounter', {
@@ -128,5 +130,94 @@ describe('createAgentBridge (WS-3)', () => {
     bridge.step() // first tick of the next episode
     expect(echoes).toBe(0)
     expect(world.getComponent(id, Counter)?.n).toBe(0)
+  })
+})
+
+// §4.5 (G10; O-78): name-based act resolves through world.lookupEvent.
+describe('AgentBridge.act(name, …)', () => {
+  const Hp = defineComponent<{ hp: number }>('ActHp', { defaults: { hp: 10 } })
+  const Damage = defineEvent<{ amount: number }>('Damage', {
+    schema: { fields: { amount: { kind: 'number' } } },
+  })
+  const Hurt = defineEvent<{ left: number }>('Hurt')
+
+  function setup(): { world: World; id: number } {
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const id = world.spawn([entry(Hp, { hp: 10 })])
+    world.register(Damage, Hurt)
+    world.system('damage', { schedule: 'event', triggers: [Damage] }, ({ events, world: w }) => {
+      for (const d of events.of(Damage)) {
+        const c = w.getComponent(id, Hp)!
+        c.hp -= d.amount
+        w.markChanged(id, Hp)
+        events.emit(Hurt, { left: c.hp })
+      }
+    })
+    return { world, id }
+  }
+
+  it("act('Damage', …) behaves exactly like act(Damage, …)", () => {
+    const a = setup()
+    const b = setup()
+    const byType = createAgentBridge(a.world).act(Damage, { amount: 3 })
+    const byName = createAgentBridge(b.world).act('Damage', { amount: 3 })
+    expect(byName).toEqual(byType)
+    expect(byName.accepted).toBe(true)
+    expect(byName.events.map((e) => e.type)).toEqual([Hurt])
+    expect(b.world.getComponent(b.id, Hp)?.hp).toBe(7)
+    expect(hashSnapshot(b.world.snapshot(), { includeChanges: true })).toBe(
+      hashSnapshot(a.world.snapshot(), { includeChanges: true }),
+    )
+  })
+
+  it('applies schema rejection (O-39) through the name path', () => {
+    const a = setup()
+    const b = setup()
+    const byType = createAgentBridge(a.world).act(Damage, { amout: 3 } as never)
+    const byName = createAgentBridge(b.world).act('Damage', { amout: 3 })
+    expect(byName).toEqual(byType)
+    expect(byName.accepted).toBe(false)
+    expect(byName.reason).toMatch(/unknown field "amout"/)
+    expect(b.world.time.tick).toBe(0)
+  })
+
+  it('passes ActionOptions through', () => {
+    const { world } = setup()
+    const r = createAgentBridge(world).act('Damage', { amount: 1 }, { snapshot: true })
+    expect(r.snapshot).toBeDefined()
+  })
+
+  it('rejects an unknown name with no emit and no tick', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    const before = hashSnapshot(world.snapshot(), { includeChanges: true })
+    const r = bridge.act('Damag', { amount: 3 })
+    expect(r).toEqual({
+      accepted: false,
+      consumedTurn: false,
+      reason: expect.stringMatching(/unknown event "Damag"/),
+      events: [],
+    })
+    expect(world.time.tick).toBe(0)
+    expect(hashSnapshot(world.snapshot(), { includeChanges: true })).toBe(before)
+    bridge.step()
+    expect(world.getComponent(id, Hp)?.hp).toBe(10)
+  })
+
+  it('rejects an ambiguous name with no emit and no tick', () => {
+    const { world, id } = setup()
+    const Twin = defineEvent<{ amount: number }>('Damage')
+    world.on(Twin, () => {}) // a second known type named "Damage"
+    const bridge = createAgentBridge(world)
+    const r = bridge.act('Damage', { amount: 3 })
+    expect(r).toEqual({
+      accepted: false,
+      consumedTurn: false,
+      reason: expect.stringMatching(/ambiguous event name "Damage"/),
+      events: [],
+    })
+    expect(world.time.tick).toBe(0)
+    bridge.step()
+    expect(world.getComponent(id, Hp)?.hp).toBe(10)
   })
 })
