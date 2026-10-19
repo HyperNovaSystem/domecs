@@ -12,8 +12,10 @@ DOMECS (M6).
 - `evaluate` — a pure, world-agnostic evaluator (`AstNode` + `EvalEnv` →
   `number | string | boolean`).
 - `compileRule` / `installRules` — the world-facing layer that resolves a
-  `RuleDef` (JSON-shaped: `query`, `when`, `actions`) against real
-  `@domecs/core` component types and installs it as a `world.system(...)`.
+  `RuleDef` (JSON-shaped: `query`, `when`, `actions`; from 2.3 `on`, `self`,
+  `other` and `effects`) against real `@domecs/core` component types and
+  installs it as a `world.system(...)`. See "Event rules" and "Effects"
+  (2.3) for commands and structural changes.
 
 See inline doc comments in `src/evaluator.ts` and `src/rules.ts` for the
 documented behavior around missing fields (skip and fault the entity) and determinism
@@ -55,10 +57,15 @@ within that part's string, or −1:
 | `when` parse, resolve or type error (and, 2.2, a spatial form without the `spatial` option) | `'when'` |
 | Malformed `actions[i].set`, unknown target component, forbidden field | `{ action: i, part: 'set' }` |
 | Any error inside `actions[i].expr` | `{ action: i, part: 'expr' }` |
+| Event rules (2.3): `on` missing, unknown, or on a polling rule | `'on'` |
+| `self` / `other` binding errors, or either on a polling rule (2.3) | `'self'` / `'other'` |
+| Effect `i` (2.3): its shape, a key, or an expression in it | `{ effect: i, part }` (`part`: `'effect'`, `'emit'`, `'payload'`, `'payload.<field>'`, `'spawn'`, `'at'`, `'at.x'`, `'at.y'`, `'set'`, `'set.<key>'`, `'despawn'`, `'add'`, `'to'`, `'remove'`, `'from'`) |
+| `effects` is not an array (2.3) | `{ effect: -1, part: 'effects' }` |
 | Repeated rule name (from `update()`) | `'name'` |
 
-The union widens in minors (`'rng'` in 2.1, `{ without: i }` in 2.2), so
-keep a default branch when you switch on it:
+The union widens in minors (`'rng'` in 2.1, `{ without: i }` in 2.2, `'on'`,
+`'self'`, `'other'` and `{ effect: i, part }` in 2.3), so keep a default
+branch when you switch on it:
 
 ```ts
 function widgetFor(e: RuleError): string {
@@ -67,6 +74,7 @@ function widgetFor(e: RuleError): string {
   if (f && 'query' in f) return `query[${f.query}]`
   if (f && 'without' in f) return `without[${f.without}]`
   if (f && 'action' in f) return `actions[${f.action}].${f.part}`
+  if (f && 'effect' in f) return `effects[${f.effect}].${f.part}`
   return 'rule' // a part this version does not know yet
 }
 ```
@@ -127,8 +135,10 @@ primary    := number | string | true | false | dt | time | tick (2.2)
             | entity '.' Component '.' field        2.2: another entity's field
             | entity '.' 'id'                       2.2: its id (a number)
             | pointer.x | pointer.y | pointer.buttons | pointer.wheel   2.2: input
+            | event.field                           2.3: the payload's field (event rules)
             | call | '(' expr ')'
 entity     := self | first(S) | nearest(S[, maxDistance]) | entity(n)      2.2
+            | other                                 2.3: the bound entity (event rules)
 call       := min max clamp abs sin cos floor random
             | sqrt pow atan2 hypot sign round ceil lerp distance           2.2
             | has([e,] C) | count(S) | exists(S) | countWithin(S, r[, e])  2.2
@@ -141,7 +151,8 @@ component for "enemies". Number literals are plain decimals (no exponent).
 
 **Reserved words (2.2).** `self`, `tick`, `other`, `event` and `pointer`
 cannot name a component in an expression (a "reserved word" parse error at
-the name), and `id` cannot after an entity. Only `first(`, `nearest(` and
+the name), and `id` cannot after an entity. From 2.3 `event.f` and `other`
+parse (see "Event rules"); outside an event rule they are compile errors. Only `first(`, `nearest(` and
 `entity(` start a selector, so `first.x` is still `Component.field`. An
 entity is not a value: `first(Player)` alone is a parse error ("use .id").
 `key`, `pressed`, `released` and `mod` are not reserved: only a call
@@ -304,6 +315,101 @@ const steer: RuleDef = {
   input before every step after a restore (or `bridge.reset()`). A
   malformed snapshot (an array where a `Set` belongs, a missing part) is a
   `rule_eval_failed` fault on the entity, not a throw from the step.
+
+## Event rules (2.3)
+
+A rule with `schedule: 'event'` runs when the event named by `on` is
+delivered, so a data-only project can take commands (`world.action`,
+`bridge.act`) without code systems:
+
+```ts
+const Move = defineEvent<{ target: number; dx: number }>('Move', {
+  schema: { fields: { target: { kind: 'number' }, dx: { kind: 'number' } } }, // act() validates
+})
+world.register(Move) // `on` resolves through world.lookupEvent by default
+const move: RuleDef = {
+  name: 'move', schedule: 'event', on: 'Move', self: 'event.target', query: ['Pos'],
+  actions: [{ set: 'Pos.x', expr: 'Pos.x + event.dx' }],
+}
+installRules(world, [move], resolve)
+world.action(Move, { target: id, dx: 3 }) // moves only `id`
+```
+
+- **Trigger.** `on` names the event; `installRules` resolves it with
+  `options.resolveEvent`, default `world.lookupEvent` (so `register` the
+  event before `update()`; an unknown or ambiguous name is a `RuleError` on
+  `'on'`). The rule is a core event system with `triggers: [event]`, so
+  `describe().events` lists the command. It runs at step 5 of the tick in
+  which the event is delivered (the tick after an `emit`, the same tick for
+  `action`/`turn`), also while paused, once per payload in emission order.
+- **Who it runs for.** With `self` (an expression, usually `event.target`):
+  that entity, when it is alive and matches `query`/`without` — otherwise
+  nothing happens, deterministically. A `self` that gives no value (a
+  missing field) or no integer is a systemic `rule_eval_failed` fault
+  (`signals.faultRaised`, source `rule:<name>`); write `event.target ?? -1`
+  to skip silently. Without `self` and with a `query`: every matching
+  entity in ascending id (broadcast). Without either: once, with no entity
+  (world scope) — `set` actions and reads of the evaluated entity (`C.f`,
+  `self`, `has(C)`, `nearest`, `distanceTo`, `countWithin(S, r)`) are
+  compile errors there, and its faults are systemic.
+- **Payload.** `event.f` reads the payload's own field `f`: absent,
+  `undefined` or `null` is no value (`??` catches it), an object is a type
+  error. When the event declares a schema, an undeclared `f` is a compile
+  error at its position.
+- **`other`.** `other: 'event.b'` binds a second entity: `other.C.f`,
+  `other.id`, `has(other, C)`, `distanceTo(other)`, `countWithin(S, r,
+  other)`, and the effect targets `to`/`from`/`despawn: 'other'`. A binding
+  that gives no value, or a dead entity, makes `other` no value. Rules still
+  write only `self` through `actions`; affect `other` through effects or an
+  emitted event.
+- **Bindings** (`self`, `other`) run before self is bound: they may read the
+  payload, other entities (`first(S)`, `entity(n)`), aggregates, `tick`,
+  but not `C.f`, `self`, `other` or the forms that measure from self.
+- **Randomness.** Event rules may use `rng: 'own'`; draws happen when
+  expressions evaluate, never when effects apply.
+
+## Effects (2.3)
+
+`effects` adds deferred structural and command changes to any rule (tick,
+fixed or event):
+
+| Effect | Does |
+|---|---|
+| `{ emit: 'Name', payload?: { field: expr } }` | emit the event (payload `{}` if absent), validated with `validateEventPayload` when applied |
+| `{ spawn: 'prefab', at?: { x: expr, y: expr }, set?: { 'C.f': expr } }` | spawn `prefabs('prefab')`; `at` writes the `spatial` position fields, then `set` |
+| `{ despawn: 'self' \| 'other' }` | despawn (idempotent) |
+| `{ add: 'C', to?: 'self' \| 'other', set?: { f: expr } }` | add `C` from its defaults plus `set`; already there: apply only `set` |
+| `{ remove: 'C', from?: 'self' \| 'other' }` | remove `C` (absent: no-op) |
+
+- **When.** Effects are queued for an entity only when its `when` held and
+  every action succeeded (atomic, like the actions); their expressions are
+  evaluated then, with self the queuing entity, and see its staged writes.
+  A failing effect expression fails the entity: nothing is written or
+  queued, and it gets a `rule_eval_failed` fault.
+- **Apply.** At the end of the rule's run, in queue order (payload, entity
+  ascending, effect index), so iteration and membership stay stable within
+  the run: a despawned entity is still read as alive by later entities of
+  the same run, and later effects targeting it are skipped.
+- **`emit`** is delivered **next tick** (bus semantics), so a chained event
+  rule runs then. An invalid payload is a `rule_eval_failed` fault on the
+  queuing entity (systemic in world scope) and is not emitted. Forks taken
+  with `snapshot({ pendingEvents: true })` between the emit and its
+  delivery deliver it too.
+- **`spawn`** needs `installRules(..., { prefabs })`: a function from name to
+  a `ComponentBag`, called when the rule compiles (an unknown prefab is a
+  `RuleError` at `{ effect: i, part: 'spawn' }`) and once per spawn. Entry
+  values are plain-data cloned, so spawns never share nested data. A `set`
+  on a component the prefab lacks adds it with its defaults. `at` requires
+  the `spatial` option. Ids are assigned in apply order (deterministic).
+- **Writes** (`spawn`/`add` `set`) are checked like actions: the field must
+  exist (on the value or the component's defaults) and keep its kind, and
+  numbers must be finite. A rejected write — or a component `validate`
+  rejecting the result — skips that effect with a fault on the queuing
+  entity; the other effects still apply.
+- **Targets.** `self` (the default for `to`/`from`) is the queuing entity;
+  `other` needs an event rule with an `other` binding, and an effect on an
+  unbound or dead `other` is skipped. A world-scope rule has no `self` to
+  target (compile error).
 
 ## Timing and functions
 

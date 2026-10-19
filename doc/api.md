@@ -2266,10 +2266,11 @@ assert.deepEqual(index.within(0, 0, 5, [Prey]), [rabbit, deer])
 
 ## `@domecs/rules`
 
-Data-defined rules (`RuleDef`: `query`, `without`, `when`, `actions`)
-compiled and installed as systems named `rule:<name>`. The language is
-specified in SPEC Appendix A (tutorial: the package README); this section
-covers installation, ordering and the 2.2 cross-entity forms.
+Data-defined rules (`RuleDef`: `query`, `without`, `when`, `actions`, and
+from 2.3 `on`/`self`/`other` and `effects`) compiled and installed as
+systems named `rule:<name>`. The language is specified in SPEC Appendix A
+(tutorial: the package README); this section covers installation, ordering,
+the 2.2 cross-entity forms and the 2.3 event rules and effects.
 
 ```ts
 function installRules(
@@ -2297,6 +2298,13 @@ interface InstallRulesOptions {
   // if any rule uses them. Throws unless { component, x?, y?, cellSize? }
   // with non-empty names and a finite cellSize > 0 (default 32).
   readonly spatial?: SpatialOption
+  // Event types by name for event rules' `on` and `emit` effects (2.3).
+  // Default world.lookupEvent: register() the events before update().
+  readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
+  // Prefab bags by name for `spawn` effects (2.3): called when a rule
+  // compiles (unknown prefab: RuleError { effect: i, part: 'spawn' }) and
+  // once per spawn; entry values are plain-data cloned.
+  readonly prefabs?: (name: string) => ComponentBag | undefined
 }
 
 interface SpatialOption {
@@ -2312,9 +2320,21 @@ interface SpatialOption {
 // (And(...Has(query), ...Not(Has(without)))); an unknown name is a RuleError
 // on field { without: i }.
 
-// compileRule gains an optional third argument (2.2):
+// RuleDef gains (2.3): schedule 'event'; on?: string (the trigger's name);
+// self?: string / other?: string (expressions giving entity ids, e.g.
+// 'event.target'); effects?: RuleEffectDef[].
+type RuleEffectDef =
+  | { emit: string; payload?: Record<string, string> }                  // field -> expr
+  | { spawn: string; at?: { x: string; y: string }; set?: Record<string, string> }  // 'Component.field' -> expr
+  | { despawn: 'self' | 'other' }
+  | { add: string; to?: 'self' | 'other'; set?: Record<string, string> } // field -> expr
+  | { remove: string; from?: 'self' | 'other' }
+
+// compileRule gains an optional third argument (2.2; resolveEvent and
+// prefabs in 2.3 — compileRule has no default resolver):
 function compileRule(def: RuleDef, resolve: (name: string) => ComponentType<any> | undefined,
-  options?: { spatial?: SpatialOption }): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] }
+  options?: { spatial?: SpatialOption; resolveEvent?: (name: string) => EventType<unknown> | undefined;
+    prefabs?: (name: string) => ComponentBag | undefined }): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] }
 
 interface RulesHandle {
   update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
@@ -2332,9 +2352,11 @@ interface RuleError {
 // keep a default branch.
 type RuleDefPath =
   | 'name' | 'schedule' | 'priority' | 'rng' | 'when'
+  | 'on' | 'self' | 'other'                           // 2.3
   | { readonly query: number }
   | { readonly without: number }                      // 2.2
   | { readonly action: number; readonly part: 'set' | 'expr' }
+  | { readonly effect: number; readonly part: string } // 2.3: 'emit', 'payload.<f>', 'spawn', 'at', 'at.x', 'set.<key>', 'to', ...
 ```
 
 **Ordering.** Systems run by (priority, `order`, registration index) — SPEC
@@ -2556,6 +2578,91 @@ assert.deepEqual(w.getComponent(ship, Ship), { vx: 0, shots: 1 })
 const fixed = compileRule({ ...steer, schedule: 'fixed' }, resolve)
 assert.deepEqual(fixed.errors.map((e) => e.field), [{ action: 1, part: 'expr' }])
 assert.equal(compileWorldExpression('key("Space") ? 1 : 0', resolve).expression, null)
+```
+
+**Event rules and effects (2.3; §6.1).** `schedule: 'event'` with `on: '<event
+name>'` registers a core event system triggered by that event (so
+`describe()` lists it as a command). For each payload delivered this tick, in
+emission order: with `self: 'event.target'` the rule runs for that entity
+(dead, or not matching `query`/`without`: a silent no-op; no value or not an
+integer: a systemic `rule_eval_failed` fault, so write `event.target ?? -1`
+to skip silently); without `self` it runs for every `query` match in
+ascending id (broadcast), or once with no entity when `query` is empty
+(world scope, where `set` actions and evaluated-entity reads are compile
+errors). `event.f` reads the payload (a missing field is no value; with a
+schema, an undeclared field is a compile error); `other` is the entity the
+`other` binding gives (dead: no value). `effects` (`emit`, `spawn`,
+`despawn`, `add`, `remove`) are queued per entity only when `when` held and
+every action succeeded, evaluated then (they see the entity's staged
+writes), and applied at the end of the rule's run in queue order. An
+`emit` is validated with `validateEventPayload` when applied (invalid: a
+fault on the queuing entity) and delivered **next tick**; a despawn is
+deferred, so later entities in the run still read the entity; spawn ids
+follow apply order. Forks taken with `snapshot({ pendingEvents: true })`
+between an emit and its delivery deliver it too.
+
+```ts doctest name=rules-event-effects
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, type ComponentBag } from '@domecs/core'
+import { compileRule, installRules, type RuleDef } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('EfDocPos', { defaults: { x: 0, y: 0 } })
+const Hp = defineComponent<{ hp: number }>('EfDocHp', { defaults: { hp: 3 } })
+const Spark = defineComponent<{ from: number }>('EfDocSpark', { defaults: { from: -1 } })
+const types = new Map([Pos, Hp, Spark].map((t) => [t.name, t]))
+const resolve = (n: string) => types.get(n)
+
+// An agent-facing command declares a schema, so act()/action() validate it.
+const Hit = defineEvent<{ target: number; amount: number }>('EfDocHit', {
+  schema: { fields: { target: { kind: 'number' }, amount: { kind: 'number' } } },
+  description: 'Damage one entity',
+})
+const Died = defineEvent<{ who: number }>('EfDocDied', { schema: { fields: { who: { kind: 'number' } } } })
+
+const defs: RuleDef[] = [
+  { // The command hits only its target, and leaves a spark there.
+    name: 'hit', schedule: 'event', on: 'EfDocHit', self: 'event.target', query: ['EfDocHp'],
+    actions: [{ set: 'EfDocHp.hp', expr: 'EfDocHp.hp - event.amount' }],
+    effects: [{ spawn: 'spark', at: { x: 'EfDocPos.x', y: 'EfDocPos.y' }, set: { 'EfDocSpark.from': 'self.id' } }],
+  },
+  { // Polling: the dead announce it and go.
+    name: 'die', schedule: 'tick', query: ['EfDocHp'], when: 'EfDocHp.hp <= 0', actions: [],
+    effects: [{ emit: 'EfDocDied', payload: { who: 'self.id' } }, { despawn: 'self' }],
+  },
+  { // Broadcast: every spark of the dead entity goes too.
+    name: 'sweep', schedule: 'event', on: 'EfDocDied', query: ['EfDocSpark'],
+    when: 'EfDocSpark.from == event.who', actions: [], effects: [{ despawn: 'self' }],
+  },
+]
+const prefabs = (name: string): ComponentBag | undefined =>
+  name === 'spark' ? [entry(Spark, { from: -1 }), entry(Pos, { x: 0, y: 0 })] : undefined
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+assert.equal(w.register(Hit, Died).ok, true) // `on` / `emit` resolve through world.lookupEvent
+const rules = installRules(w, [], resolve, { prefabs, spatial: { component: 'EfDocPos' } })
+assert.equal(rules.update(defs).size, 0)
+const a = w.spawn([entry(Hp, { hp: 3 }), entry(Pos, { x: 5, y: 1 })])
+const b = w.spawn([entry(Hp, { hp: 3 }), entry(Pos, { x: 9, y: 9 })])
+
+assert.equal(w.action(Hit, { target: a, amount: 3 }).accepted, true)
+assert.equal(w.getComponent(a, Hp)!.hp, 0)
+assert.equal(w.getComponent(b, Hp)!.hp, 3) // only the target
+const [spark] = w.listEntities([Spark])
+assert.deepEqual(w.getComponent(spark!, Pos), { x: 5, y: 1 })
+assert.equal(w.getComponent(spark!, Spark)!.from, a)
+
+w.stepOnce() // `die` emits Died (delivered next tick) and despawns a
+assert.equal(w.isAlive(a), false)
+assert.deepEqual(w.pendingEvents().map((e) => e.payload), [{ who: a }])
+w.stepOnce() // `sweep` runs on the delivered Died
+assert.deepEqual(w.listEntities([Spark]), [])
+
+// A malformed command is rejected before it runs; rule errors name the part.
+assert.equal(w.action(Hit, { target: b, amont: 1 } as never).accepted, false)
+const bad = compileRule({ ...defs[0]!, effects: [{ spawn: 'rocket' }] }, resolve, {
+  prefabs, resolveEvent: (n) => w.lookupEvent(n),
+})
+assert.deepEqual(bad.errors.map((e) => e.field), [{ effect: 0, part: 'spawn' }])
 ```
 
 ---

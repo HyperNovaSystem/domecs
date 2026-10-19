@@ -1104,7 +1104,7 @@ expression, and commits the action writes atomically (§2.8 for streams,
 §3 for ordering). The package README is the tutorial; this appendix is the
 contract.
 
-**Grammar** (precedence lowest first; `(+)` = 2.2):
+**Grammar** (precedence lowest first; `(+)` = 2.2, `(++)` = 2.3):
 
 ```
 expr           := nullish ( '?' expr ':' expr )?                  right-assoc
@@ -1122,8 +1122,10 @@ primary        := number | string | 'true' | 'false' | 'dt' | 'time'
                 | entity '.' IDENT '.' IDENT                      (+)
                 | entity '.' 'id'                                 (+)
                 | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) input
+                | 'event' '.' IDENT                               (++) payload field; event rules only
                 | call | '(' expr ')'
 entity         := 'self' | 'first' '(' SET ')'                    (+)
+                | 'other'                                         (++) event rules with an `other` binding only
                 | 'nearest' '(' SET ( ',' expr )? ')'             (+)
                 | 'entity' '(' expr ')'                           (+)
 call           := FUNC '(' ( expr ( ',' expr )* )? ')'
@@ -1144,7 +1146,8 @@ and wrong arities are parse errors.
 
 **Reserved words (2.2).** `self`, `tick`, `other`, `event`, `pointer` cannot
 name a component in an expression ("reserved word" at the name); after an
-entity, `id` is reserved. Only `first(`, `nearest(`, `entity(` start a
+entity, `id` is reserved. From 2.3 `event.f` and `other` parse (event
+rules). Only `first(`, `nearest(`, `entity(` start a
 selector (`first.x` is `Component.field`), and only `key(`, `pressed(`,
 `released(`, `mod(` read input (`key.x` is `Component.field`). An entity is
 not a value: outside a member base, `has`/`countWithin`/`distanceTo`
@@ -1208,6 +1211,35 @@ a string; `pointer.*` are numbers; field reads are unknown).
   `released` and `pointer.wheel` in a `fixed` rule are compile errors (§6:
   edges and the wheel last one render tick). Input is not snapshotted: a
   host replays it by installing the same snapshots before the same steps.
+- **Event rules** (2.3, `schedule: 'event'`): `on` names the trigger
+  (resolved by `resolveEvent`, default `world.lookupEvent`); the rule is a
+  core event system with `triggers: [event]` and runs, per payload in
+  emission order, for the entity `self` evaluates to (dead or not matching
+  `query`/`without`: no-op; no value or not an integer: a systemic
+  `rule_eval_failed` fault), else for every `query` match in ascending id,
+  else once with no entity (world scope: empty `query`; `set` actions and
+  evaluated-entity reads are compile errors). `event.f` reads the payload's
+  own field (absent, `undefined`, `null` = no value; with a schema, an
+  undeclared field is a compile error). `other` is the entity the `other`
+  binding gives; unbound or dead = no value. The `self`/`other` bindings
+  cannot read the evaluated entity or `other`. `event.f` and `other`
+  outside an event rule (and in world expressions) are compile errors.
+- **Effects** (2.3, `effects`: `emit`, `spawn`, `despawn`, `add`,
+  `remove`): queued per entity only when `when` held and every action
+  succeeded, with their expressions evaluated then (self = the queuing
+  entity, seeing its staged writes; `random()` draws then), and applied at
+  the end of the rule's run in queue order (payload, entity ascending,
+  effect index). `emit` is validated with `validateEventPayload` when
+  applied (invalid: a `rule_eval_failed` fault on the queuing entity) and
+  delivered next tick. `spawn` calls `prefabs(name)` per spawn,
+  plain-data clones each entry, writes `at` (the `spatial` position fields)
+  then `set` (`Component.field`), and assigns ids in apply order. `despawn`
+  is idempotent and later effects targeting a dead entity are skipped.
+  `add` uses defaults plus `set`, or only `set` when the component exists;
+  `remove` of an absent component is a no-op. Effect writes are checked
+  like action writes; a rejected one skips that effect with a fault. No
+  snapshot format change: emits in flight travel with
+  `snapshot({ pendingEvents: true })` (§7), spawns advance the id cursor.
 - **World expressions** (`compileWorldExpression`, 2.2): the same grammar
   with no evaluated entity. Bare `C.f`, `self`, `has(C)`, `countWithin(S, r)`
   without a centre, `distanceTo`, `nearest`, `dt`, `random()` and every

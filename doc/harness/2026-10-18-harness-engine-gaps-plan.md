@@ -406,19 +406,19 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 #### E14.1 Event rules
 
 - **Files:** `packages/domecs-rules/src/rules.ts` (`schedule: 'event'`, `on`, `self`, `other`), parser (`event.f`, `other`), tests `rules.test.ts`.
-- [ ] **Red:** `act('Move', {target, dx})` with `self: 'event.target'` moves only that entity; broadcast and world-scope rules; a `set` in a world-scope rule → compile error; `on`/`event.f`/`other` compile checks with `field` attribution.
-- [ ] **Commit:** `feat(rules): event-triggered rules (E14.1)`
+- [x] **Red:** `act('Move', {target, dx})` with `self: 'event.target'` moves only that entity; broadcast and world-scope rules; a `set` in a world-scope rule → compile error; `on`/`event.f`/`other` compile checks with `field` attribution.
+- [x] **Commit:** `feat(rules): event-triggered rules (E14.1)`
 
 #### E14.2 Effects
 
 - **Files:** `packages/domecs-rules/src/effects.ts`, test `effects.test.ts`.
-- [ ] **Red:** `emit` arrives next tick and chains; schema-invalid emit faults; a fork snapshotted (`pendingEvents: true`) between emit and delivery delivers it (strict hashes equal); spawn ids deterministic, prefab bags not shared; deferred despawn; atomicity (failed action → no effects); live vs fork with spawns/despawns/emits in flight.
-- [ ] **Commit:** `feat(rules): deferred emit/spawn/despawn/add/remove effects (E14.2)`
+- [x] **Red:** `emit` arrives next tick and chains; schema-invalid emit faults; a fork snapshotted (`pendingEvents: true`) between emit and delivery delivers it (strict hashes equal); spawn ids deterministic, prefab bags not shared; deferred despawn; atomicity (failed action → no effects); live vs fork with spawns/despawns/emits in flight.
+- [x] **Commit:** `feat(rules): deferred emit/spawn/despawn/add/remove effects (E14.2)`
 
 #### E14.3 Docs
 
-- **Files:** rules README ("Event rules", "Effects"); `doc/api.md`; AGENTS.md "Commands as event rules"; SKILL.md.
-- [ ] **Commit:** `docs(rules): event rules and effects (E14.3)`
+- **Files:** rules README ("Event rules", "Effects"); `doc/api.md`; AGENTS.md "Commands as event rules"; SKILL.md. AGENTS.md left to the owner (proposed text in spec Appendix C, "Implementation notes — E14").
+- [x] **Commit:** `docs(rules): event rules and effects (E14.3)`
 
 ### E15 — Contacts (§6.2; O-85)
 

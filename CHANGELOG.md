@@ -8,11 +8,35 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Added
 
+- `@domecs/rules` event-triggered rules (2.3, harness spec §6.1, O-84):
+  `RuleDef.schedule: 'event'` with `on` (the trigger's name, resolved by the
+  new `InstallRulesOptions.resolveEvent`, default `world.lookupEvent`),
+  `self` and `other` bindings (expressions such as `event.target`); grammar
+  `event.f` (payload field) and the `other` entity. The rule runs per
+  delivered payload for the bound entity, broadcast over `query`, or once in
+  world scope. `RuleDefPath` gains `'on' | 'self' | 'other'`.
+- `@domecs/rules` rule effects (2.3, §6.1): `RuleDef.effects`
+  (`RuleEffectDef`: `emit`, `spawn`, `despawn`, `add`, `remove`), queued
+  only when the entity's actions succeeded and applied at the end of the
+  rule's run; `emit` validates with `validateEventPayload` and is delivered
+  next tick; `spawn` uses the new `InstallRulesOptions.prefabs` (also a
+  `compileRule` option, with `resolveEvent`). `RuleDefPath` gains
+  `{ effect: number; part: string }`. Docs: rules README "Event rules" /
+  "Effects", `doc/api.md` doctest `rules-event-effects`, SPEC Appendix A.
 - `@domecs/rules`: `walkFieldRefs(ast, visit)` is now exported from the
   package entry (it was only in `dist/ast.js`). Unchanged behaviour: it visits
   the evaluated entity's own field reads with their positions; use
   `walkComponentRefs` to also visit member reads, sets and `has` targets
   (studio finding 2026-10-19; studio had mirrored the walk).
+
+### Changed
+
+- `@domecs/rules`: `event.f` and `other` now parse (they were "reserved
+  word" parse errors). Outside an event rule, and in
+  `compileWorldExpression`, they are compile errors at the same position,
+  so such a rule or expression is still rejected; only the message
+  changes. `EvalEnv` gains optional `eventField` and `other` hooks, and
+  `EvalEnv.self` accepts `undefined`.
 
 ## [2.2.0] — release candidate (2026-10-19; not yet published)
 

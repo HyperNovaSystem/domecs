@@ -119,13 +119,20 @@ bridge.reset()                         // episode boundary
   `sum(Enemy, Hp.hp)`, `countWithin(Enemy, 5)`, `distanceTo(e)`; wrap reads
   that may be absent in `?? fallback`; exclude with `without: [...]`; pass
   `installRules(..., { spatial: { component: 'Pos' } })` for `nearest` /
-  `countWithin` / `distanceTo`. Rules write only their own entity; `self`,
-  `tick`, `other`, `event`, `pointer` are reserved words
+  `countWithin` / `distanceTo`. Rules write only their own entity (others through effects or
+  events); `self`, `tick`, `other`, `event`, `pointer` are reserved words
 - **Player control as rules:** `key("ArrowLeft")` (held), `pressed("Space")` /
   `released("Space")` (edges; `tick` rules only, compile error in `fixed`), `mod("shift")`,
   `pointer.x|y|buttons|wheel` read the tick's `world.input` (`KeyboardEvent.code` names); drive
   headless runs with `world.setInput(snapshot)` before each step and record those snapshots to
   replay. Not allowed in world expressions
+- **Commands as event rules:** `{ schedule: 'event', on: 'Move', self: 'event.target',
+  query: ['Pos'], actions: [{ set: 'Pos.x', expr: 'Pos.x + event.dx' }] }` runs per delivered
+  payload for that entity (dead/unmatched: no-op); without `self` it broadcasts over `query`, or
+  runs once with empty `query` (world scope, no `set`). `register` the event first (`on` resolves
+  through `world.lookupEvent`) and give it a `schema` so `act()` validates. `effects`: `emit`
+  (delivered next tick), `spawn` (needs `installRules(..., { prefabs })`), `despawn`, `add`,
+  `remove` — queued only if the actions succeeded, applied at the end of the rule's run
 - **Metrics as world expressions:** `compileWorldExpression('countWithin(Enemy, 40, first(Player))',
   resolve, { spatial: { component: 'Pos' } })` → `expression.evaluate(world)` (a `Result`;
   read-only, hash unchanged). No entity: use `first(S).C.f`, never bare `C.f`, `self`, `dt`,
