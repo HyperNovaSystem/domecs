@@ -142,7 +142,9 @@ export interface AgentBridge {
 export declare function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge;
 
 // file: branch.d.ts
-import { type Result, type SerializedError } from './result.js';
+import type { SystemicFault } from './errors.js';
+import { type ActLog, type ReplayError } from './replay.js';
+import { type JsonValue, type Result, type SerializedError } from './result.js';
 import type { RngState } from './rng.js';
 import type { WorldSnapshot } from './snapshot.js';
 import { type World } from './world.js';
@@ -190,6 +192,78 @@ export declare function createBranch<T = void>(setup: WorldSetup<T>, from: World
     readonly world: World;
     readonly setup: T;
 }, BranchError>;
+/** Options for {@link runBranch}. */
+export interface RunBranchOptions {
+    /** How many steps to take at most (a non-negative integer). */
+    readonly steps: number;
+    /** Per-step dt; `null` = `stepOnce()`. Default `world.time.fixedStep`. Frames from `log` override. */
+    readonly dt?: number | null;
+    /**
+     * Acts, input, scale and dt to apply at matching ticks: before a step, the
+     * log's frame whose `tick` is `world.time.tick` is applied with §7.1's
+     * frame code (the first such frame, when ticks repeat after a `restore`
+     * gap). Steps with no frame use `dt`. `baseHash` and checkpoints are not
+     * compared (that is `replay`'s job).
+     */
+    readonly log?: ActLog;
+    /** Read-only probes sampled into `samples` (values are copied as plain data). */
+    readonly probes?: Readonly<Record<string, (world: World) => JsonValue>>;
+    /** Sample after every `sampleEvery`-th step of this call (default 1 when probes are given). */
+    readonly sampleEvery?: number;
+    /** Take a `snapshot({ pendingEvents: true })` after every `keyframeEvery`-th step of this call; default none. */
+    readonly keyframeEvery?: number;
+    /** Take a strict hash after every `hashEvery`-th step of this call; default none. */
+    readonly hashEvery?: number;
+    /** Checked after each step; `true` stops the run (`stoppedBy: 'until'`). */
+    readonly until?: (world: World) => boolean;
+    /** Polled before each step for cooperative cancellation (`stoppedBy: 'cancelled'`). */
+    readonly shouldStop?: () => boolean;
+}
+/** What {@link runBranch} observed. */
+export interface BranchRun {
+    /** Steps taken by this call. */
+    readonly ticks: number;
+    readonly stoppedBy: 'steps' | 'until' | 'cancelled';
+    readonly samples: ReadonlyArray<{
+        readonly tick: number;
+        readonly values: Readonly<Record<string, JsonValue>>;
+    }>;
+    readonly keyframes: ReadonlyArray<{
+        readonly tick: number;
+        readonly snapshot: WorldSnapshot;
+    }>;
+    readonly hashes: ReadonlyArray<{
+        readonly tick: number;
+        readonly hash: string;
+    }>;
+    /** Systemic faults raised (`signals.faultRaised`) during this call. */
+    readonly faults: readonly SystemicFault[];
+    /** Strict hash (`includeChanges: true`, pending events included) when the call returned. */
+    readonly finalHash: string;
+}
+/**
+ * Step `world` — usually a {@link createBranch} world — and observe it (§7.2).
+ * Synchronous; a host runs it in a worker and cancels through `shouldStop`.
+ * Call it again to extend the branch from where it stopped.
+ *
+ * Each step applies the `log` frame for the current tick when there is one
+ * (§7.1 frame code), else `stepOnce()` / `step(dt)`. Probes are sampled after
+ * every `sampleEvery`-th step **counted from this call's start**, and always
+ * after the final step whatever stopped the run (with no step taken, the
+ * current state is sampled once); `keyframeEvery` and `hashEvery` count the
+ * same way. All hashes are strict. Equal `(setup, from, options)` give equal
+ * `finalHash`, `hashes` and `samples`.
+ *
+ * Probes must be read-only: at the first sample of each call, the world's
+ * strict hash is compared before and after every probe, and a probe that
+ * changed it throws an `Error` naming it. A probe value that is not plain
+ * data throws `TypeError`.
+ *
+ * A malformed log, a log for another `fixedStep`, or an act that does not
+ * resolve or validate is a {@link ReplayError} value (the steps already taken
+ * stay taken). Malformed options throw `TypeError` before any step.
+ */
+export declare function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>;
 
 // file: build-id.d.ts
 /**
@@ -900,8 +974,8 @@ export { encodeInput, decodeInput } from './replay.js';
 export type { JsonInput } from './replay.js';
 export { createRecorder, replay } from './replay.js';
 export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, ReplayError, ReplayOptions, } from './replay.js';
-export { createBranch } from './branch.js';
-export type { BranchError, BranchOptions, WorldSetup } from './branch.js';
+export { createBranch, runBranch } from './branch.js';
+export type { BranchError, BranchOptions, BranchRun, RunBranchOptions, WorldSetup } from './branch.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';
@@ -1484,6 +1558,11 @@ export interface ReplayOptions {
     /** Called after each replayed frame with `world.time.tick`. */
     readonly onFrame?: (tick: number, world: World) => void;
 }
+/**
+ * A reason the log is malformed, or `null`. Reads defensively; never throws.
+ * Internal (not exported from the package); shared with `runBranch` (§7.2).
+ */
+export declare function checkLog(log: unknown): string | null;
 export declare function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null;
 /**
  * Replay `log` on `world` (§7.1): optionally `restore(options.base)`, then

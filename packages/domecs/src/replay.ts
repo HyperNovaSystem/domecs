@@ -597,8 +597,11 @@ function checkFrame(f: unknown): string | null {
   return null
 }
 
-/** A reason the log is malformed, or `null`. Reads defensively; never throws. */
-function checkLog(log: unknown): string | null {
+/**
+ * A reason the log is malformed, or `null`. Reads defensively; never throws.
+ * Internal (not exported from the package); shared with `runBranch` (§7.2).
+ */
+export function checkLog(log: unknown): string | null {
   try {
     if (!isRec(log)) return 'the log is not an object'
     if (log.format !== 'domecs-actlog') return `format is ${JSON.stringify(log.format) ?? 'undefined'}, expected "domecs-actlog"`
