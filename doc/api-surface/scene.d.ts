@@ -148,4 +148,58 @@ export { Parent, setParent, childrenOf, ancestorsOf, rootsOf, despawnTree, } fro
 export { installHierarchy } from './despawn-orphan-plugin.js';
 export { composeTransforms } from './compose-transforms.js';
 export type { ComposeTransformsOptions } from './compose-transforms.js';
+export { createSpatialHash } from './spatial-hash.js';
+export type { SpatialHashOptions, SpatialIndex } from './spatial-hash.js';
 export { BUILD_ID } from './build-id.js';
+
+// file: spatial-hash.d.ts
+import type { ComponentType, Entity, World } from '@domecs/core';
+/** Options for {@link createSpatialHash}. */
+export interface SpatialHashOptions {
+    /** The component holding each entity's position. */
+    readonly component: ComponentType<any>;
+    /** Field holding the x coordinate (default `'x'`). */
+    readonly x?: string;
+    /** Field holding the y coordinate (default `'y'`). */
+    readonly y?: string;
+    /** Grid cell size: a pure performance setting, never changes results. */
+    readonly cellSize: number;
+}
+/**
+ * A world-bound spatial index over one position component (spec §5.1).
+ *
+ * Positions are those read at the last {@link SpatialIndex.refresh} (the
+ * index also refreshes once when it is created). Tag filters are evaluated
+ * live at query time with `world.has`: an entity must hold every listed
+ * component. Results are sorted by id and, like the core grid's, never
+ * depend on `cellSize`. The index is derived state and never enters a
+ * snapshot.
+ */
+export interface SpatialIndex {
+    /** Rebuild from the component's current values (O(n)). */
+    refresh(): void;
+    /** Ids within distance `r` of (x, y) holding every `filter` component, ascending id. */
+    within(x: number, y: number, r: number, filter?: readonly ComponentType<any>[]): Entity[];
+    /** The nearest id passing `filter` and other than `exclude`; ties → lowest id. */
+    nearest(x: number, y: number, options?: {
+        maxDistance?: number;
+        filter?: readonly ComponentType<any>[];
+        exclude?: Entity;
+    }): Entity | undefined;
+    /**
+     * Pairs within distance `r` whose first element holds `a` and second holds
+     * `b`. For `a !== b` every such ordered pair is listed (an entity holding
+     * both tags can appear on either side); for `a === b` the first id is
+     * the lower. Sorted by (first, second).
+     */
+    pairs(r: number, a: ComponentType<any>, b: ComponentType<any>): Array<[Entity, Entity]>;
+    /** Drop the index. Any later call throws. Idempotent. */
+    dispose(): void;
+}
+/**
+ * Create a {@link SpatialIndex} over `options.component` and index the
+ * world's current positions. A position whose field is not a finite number
+ * is not indexed. Throws `RangeError` for a `cellSize` that is not a finite
+ * number > 0.
+ */
+export declare function createSpatialHash(world: World, options: SpatialHashOptions): SpatialIndex;
