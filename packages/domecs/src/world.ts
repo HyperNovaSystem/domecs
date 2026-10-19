@@ -2328,6 +2328,9 @@ export function createWorld(options: WorldOptions = {}): World {
     get inTick() {
       return inTick
     },
+    get resumeScale() {
+      return preResumeScale
+    },
   }
   Object.defineProperty(world, ACT_TAP, { value: tap })
 

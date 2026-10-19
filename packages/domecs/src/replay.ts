@@ -199,6 +199,12 @@ export interface ActLog {
   readonly fixedStep: number
   /** `time.scale` when recording started. */
   readonly startScale: number
+  /**
+   * Present when recording started paused (`startScale` 0): the scale
+   * `world.resume()` returned to then. Replay restores it, so a system that
+   * resumes the world resumes it to the same scale.
+   */
+  readonly resumeScale?: number
   /** `hashSnapshot(world.snapshot({ pendingEvents: true }), { includeChanges: true })` when recording started. */
   readonly baseHash: string
   readonly frames: readonly ActLogFrame[]
@@ -286,6 +292,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   const startTick = world.time.tick
   const fixedStep = world.time.fixedStep
   const startScale = world.time.scale
+  const resumeScale = startScale === 0 ? tap.resumeScale : undefined
   const baseHash = actLogHash(world)
   const frames: FrameDraft[] = []
   const checkpoints: Array<{ tick: number; hash: string }> = []
@@ -442,6 +449,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       startTick: number
       fixedStep: number
       startScale: number
+      resumeScale?: number
       baseHash: string
       frames: ActLogFrame[]
       checkpoints?: Array<{ tick: number; hash: string }>
@@ -455,6 +463,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       baseHash,
       frames: cloneSerializable(frames) as ActLogFrame[],
     }
+    if (resumeScale !== undefined) log.resumeScale = resumeScale
     if (checkpoints.length > 0) log.checkpoints = checkpoints.map((c) => ({ tick: c.tick, hash: c.hash }))
     if (gaps.length > 0) log.gaps = gaps.map((g) => ({ tick: g.tick, reason: g.reason }))
     return log
@@ -588,6 +597,9 @@ function checkLog(log: unknown): string | null {
     if (!isTick(log.startTick)) return 'startTick is not a non-negative integer'
     if (!(isFinite(log.fixedStep) && log.fixedStep > 0)) return 'fixedStep is not a positive finite number'
     if (!isScale(log.startScale)) return 'startScale is not a non-negative finite number'
+    if (log.resumeScale !== undefined && !(isFinite(log.resumeScale) && log.resumeScale > 0)) {
+      return 'resumeScale is not a positive finite number'
+    }
     if (typeof log.baseHash !== 'string') return 'baseHash is not a string'
     if (!Array.isArray(log.frames)) return 'frames is not an array'
     for (let i = 0; i < log.frames.length; i++) {
@@ -709,6 +721,8 @@ export function replay(
     })
   }
   if (options.base !== undefined) world.restore(options.base)
+  // A paused start also carries the scale resume() returns to.
+  if (log.startScale === 0 && log.resumeScale !== undefined) world.setScale(log.resumeScale)
   world.setScale(log.startScale)
   const actual = actLogHash(world)
   if (actual !== log.baseHash) return err({ kind: 'base_mismatch', expected: log.baseHash, actual })

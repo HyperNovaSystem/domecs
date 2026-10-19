@@ -11,8 +11,8 @@ All notable changes to DOMECS are documented here. The format is based on
 - `@domecs/core`: act logs and replay (G4, O-80, harness spec §7.1; SPEC
   §7.5). `createRecorder(world, { hashEvery? })` → `Recorder { active,
   peek(), stop() }` records an `ActLog` (`format: 'domecs-actlog'`,
-  `version: 1`): the base (`startTick`, `fixedStep`, `startScale`, strict
-  `baseHash`), one frame per full step `{ tick, dt, scale?, hookScale?,
+  `version: 1`): the base (`startTick`, `fixedStep`, `startScale`, `resumeScale` for a
+  paused start, strict `baseHash`), one frame per full step `{ tick, dt, scale?, hookScale?,
   acts?, startActs?, endActs?, input? }` (the caller's dt, `null` for `stepOnce`; the scale on
   entry and a scale a `tickStart` hook set; input delta-encoded), external
   emits by name with `via: 'emit' | 'action'` (plugin-hook emits included,

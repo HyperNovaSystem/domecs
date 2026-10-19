@@ -39,6 +39,8 @@ export interface ActTap {
   attach(listener: ActTapListener): () => void
   /** Whether a full tick or a heartbeat is running. */
   readonly inTick: boolean
+  /** The scale `world.resume()` would return to (meaningful while paused). */
+  readonly resumeScale: number
 }
 
 export const ACT_TAP: unique symbol = Symbol('domecs.actTap')

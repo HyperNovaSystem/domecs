@@ -1442,7 +1442,8 @@ assert.deepEqual(r, { ok: false, error: { kind: 'name_conflict', registry: 'even
 A recorder writes down what entered a world from outside — commands, the dt
 and scale of every step, the input systems saw — so a fresh world built by the
 same setup and restored from the same base replays to the same strict hashes
-(harness spec §7.1, SPEC §7.5). The log is plain JSON.
+(harness spec §7.1, SPEC §7.5). The log is plain JSON; store it with
+`canonicalJson` so a `-0` in a payload keeps its sign.
 
 ```ts
 function createRecorder(world: World, options?: { readonly hashEvery?: number }): Recorder
@@ -1463,6 +1464,7 @@ interface ActLog {
   readonly startTick: number
   readonly fixedStep: number
   readonly startScale: number    // time.scale when recording started
+  readonly resumeScale?: number  // startScale 0 only: the scale resume() returned to
   readonly baseHash: string      // strict hash (pendingEvents included) at start
   readonly frames: readonly ActLogFrame[]
   readonly checkpoints?: ReadonlyArray<{ tick: number; hash: string }>   // hashEvery
@@ -1518,7 +1520,8 @@ What is recorded:
   checkpoint reports `diverged`. Route every runtime change through a
   command.
 
-Replay restores `base`, sets `startScale`, checks `baseHash`, then per frame
+Replay restores `base`, sets `startScale` (and, for a paused start, the
+scale `resume()` returns to), checks `baseHash`, then per frame
 resolves the acts (an unknown or ambiguous name → `unknown_event`, an
 `'action'` payload failing its schema → `rejected_payload`, both before any
 emit), sets scale and input, emits, and steps. A malformed log, or one

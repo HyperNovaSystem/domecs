@@ -34,6 +34,8 @@ export interface ActTap {
     attach(listener: ActTapListener): () => void;
     /** Whether a full tick or a heartbeat is running. */
     readonly inTick: boolean;
+    /** The scale `world.resume()` would return to (meaningful while paused). */
+    readonly resumeScale: number;
 }
 export declare const ACT_TAP: unique symbol;
 /** The tap of a world made by `createWorld`; `undefined` for anything else. */
@@ -1332,6 +1334,12 @@ export interface ActLog {
     readonly fixedStep: number;
     /** `time.scale` when recording started. */
     readonly startScale: number;
+    /**
+     * Present when recording started paused (`startScale` 0): the scale
+     * `world.resume()` returned to then. Replay restores it, so a system that
+     * resumes the world resumes it to the same scale.
+     */
+    readonly resumeScale?: number;
     /** `hashSnapshot(world.snapshot({ pendingEvents: true }), { includeChanges: true })` when recording started. */
     readonly baseHash: string;
     readonly frames: readonly ActLogFrame[];

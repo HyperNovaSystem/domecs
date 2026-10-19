@@ -888,3 +888,42 @@ describe('input set by a signals.tickStart subscriber', () => {
     expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 20, hash: strict(live) } })
   })
 })
+
+describe('recording that starts paused', () => {
+  it('replays a system resume() to the scale the recording world would resume to', () => {
+    const Resume = defineEvent<void>('RpResume')
+    const setup = (): World => {
+      const w = fresh()
+      w.register(Resume)
+      w.system('resumer', { schedule: 'event', triggers: [Resume] }, (ctx) => ctx.world.resume())
+      return w
+    }
+    const live = setup()
+    live.spawn([entry(Stats, { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 })])
+    live.setScale(3)
+    live.pause()
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    live.step(1 / 60)
+    live.emit(Resume, undefined)
+    for (let i = 0; i < 5; i++) live.step(1 / 60)
+    const log = rec.stop()
+    expect(live.time.scale).toBe(3)
+    expect(log.startScale).toBe(0)
+    expect(log.resumeScale).toBe(3)
+    const w = setup()
+    expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 6, hash: strict(live) } })
+    expect(w.time.scale).toBe(3)
+  })
+
+  it('omits resumeScale when recording starts unpaused, and rejects a bad one', () => {
+    const w = fresh()
+    const base = w.snapshot({ pendingEvents: true })
+    const log = createRecorder(w).stop()
+    expect('resumeScale' in log).toBe(false)
+    for (const resumeScale of [0, -1, Number.NaN, 'x']) {
+      const r = replay(fresh(), { ...log, startScale: 0, resumeScale } as unknown as ActLog, { base })
+      expect(r).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
+    }
+  })
+})
