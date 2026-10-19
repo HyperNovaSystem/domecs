@@ -38,16 +38,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
+function usage(message) {
+  console.error(message)
+  process.exit(2)
+}
+
 function parseArgs(argv) {
   const opts = { engine: null, write: false }
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--engine') opts.engine = argv[++i] ?? null
-    else if (argv[i] === '--write') opts.write = true
-    else {
-      console.error(`unknown argument: ${argv[i]}`)
-      process.exit(2)
-    }
+    if (argv[i] === '--engine') {
+      const dir = argv[++i]
+      // Never fall back to the workspace build: studio would then pin
+      // whatever sits next to the script instead of the build it installed.
+      if (dir === undefined || dir.startsWith('--')) usage('--engine needs a node_modules directory')
+      opts.engine = dir
+    } else if (argv[i] === '--write') opts.write = true
+    else usage(`unknown argument: ${argv[i]}`)
   }
+  // Re-blessing writes ../test/golden next to this script: only the
+  // workspace copy against its own build may do that, never a vendored copy.
+  if (opts.write && opts.engine !== null) usage('--write re-blesses the workspace golden; it cannot be combined with --engine')
   return opts
 }
 

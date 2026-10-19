@@ -74,6 +74,24 @@ test('--engine resolves @domecs/core from a node_modules directory (studio runs 
   }
 })
 
+test('--engine without a directory, or --write with --engine, is a usage error (exit 2), never a silent fallback', () => {
+  // A valid engine dir, so only the --write rule can reject the last case:
+  // re-blessing writes ../test/golden next to the script, which for the
+  // vendored copy is outside vendor/domecs.
+  const nm = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-golden-'))
+  try {
+    fs.mkdirSync(path.join(nm, '@domecs'))
+    fs.symlinkSync(path.join(root, 'packages/domecs'), path.join(nm, '@domecs/core'), 'dir')
+    for (const args of [['--engine'], ['--engine', '--write'], ['--write', '--engine', nm]]) {
+      const r = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8', timeout: 120_000 })
+      assert.equal(r.status, 2, `${args.join(' ')}: expected exit 2, got ${r.status}\n${r.stdout}${r.stderr}`)
+      assert.equal(r.stdout, '', `${args.join(' ')}: printed a result`)
+    }
+  } finally {
+    fs.rmSync(nm, { recursive: true, force: true })
+  }
+})
+
 const alt = process.env.DOMECS_ALT_RUNTIME?.trim()
 test(
   'DOMECS_ALT_RUNTIME prints identical output',
