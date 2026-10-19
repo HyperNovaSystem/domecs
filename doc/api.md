@@ -2178,7 +2178,7 @@ interface InspectorSnapshot {
 
 Hierarchy (`Parent`, `setParent`, `childrenOf`, `ancestorsOf`, `rootsOf`,
 `despawnTree`, `installHierarchy`) and `composeTransforms` are documented in
-the package README. This section covers the spatial index.
+the package README. This section covers the spatial index and contacts.
 
 ### Spatial index
 
@@ -2260,6 +2260,108 @@ world.getComponent(deer, Pos)!.x = 2
 world.markChanged(deer, Pos)
 index.refresh()
 assert.deepEqual(index.within(0, 0, 5, [Prey]), [rabbit, deer])
+```
+
+### Contacts
+
+`installContacts(options)` emits `Contact` events when tagged colliders
+start, keep or stop overlapping (2.3; O-85; SPEC §2.12), for rules and event
+systems.
+
+```ts
+function installContacts(options: ContactsOptions): Plugin   // RangeError / TypeError on bad options
+
+interface ContactsOptions {
+  readonly position: { readonly component: ComponentType<any>; readonly x?: string; readonly y?: string }
+  readonly radius: number | { readonly component: ComponentType<any>; readonly field: string }
+  readonly pairs: ReadonlyArray<readonly [ComponentType<any>, ComponentType<any>]>   // non-empty
+  readonly stay?: boolean               // emit 'stay' each run while overlapping; default false
+  readonly schedule?: 'fixed' | 'tick'  // default 'fixed'
+  readonly priority?: number            // default 150 (contacts band)
+  readonly cellSize?: number            // default 2 × a fixed radius, else 64; performance only
+  readonly name?: string                // default 'domecs-scene:contacts'
+}
+
+const Contact: EventType<ContactPayload>            // schema { a: number, b: number, phase: enum }
+interface ContactPayload { readonly a: Entity; readonly b: Entity; readonly phase: ContactPhase }
+type ContactPhase = 'begin' | 'stay' | 'end'
+const ContactState: ResourceType<ContactStateValue, 'ContactState'>
+interface ContactStateValue { pairs: Array<[Entity, Entity]> }   // last run's pairs, sorted by (a, b)
+```
+
+- **Overlap:** `dx * dx + dy * dy <= (ra + rb) * (ra + rb)` between
+  colliders: entities with the position component, a finite position, a
+  radius (finite, ≥ 0; with a field, read live) and a tag of `pairs`.
+- **Pairs:** `a` holds the pair's first tag, `b` its second; same-tag pairs
+  have `a < b`; an entity holding both tags can appear on either side; a pair
+  found through two tag pairs counts once.
+- **Order:** each run diffs the sorted pairs against `ContactState` and emits
+  `end`, then `begin`, then (with `stay`) `stay`, each sorted by `(a, b)`.
+  Delivery is next tick (bus semantics). A despawned entity ends its pairs
+  once.
+- **Snapshots:** `ContactState` is an ordinary resource, so restore continues
+  `begin`/`end` exactly (live == fork); take forks with
+  `snapshot({ pendingEvents: true })` to keep contacts in flight. Results
+  never depend on `cellSize`.
+- `installContacts` registers `Contact` and `ContactState` (rules resolve
+  `on: 'Contact'` through `world.lookupEvent`); one contacts plugin per world
+  (a second `use` throws).
+
+```ts doctest name=scene-contacts
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { Contact, ContactState, installContacts } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('CoPos', { defaults: { x: 0, y: 0 } })
+const Vel = defineComponent<{ vx: number }>('CoVel', { defaults: { vx: 0 } })
+const Player = defineComponent<{ hp: number }>('CoPlayer', { defaults: { hp: 10 } })
+const Spike = defineComponent<{ dmg: number }>('CoSpike', { defaults: { dmg: 3 } })
+const types = [Pos, Vel, Player, Spike]
+
+function build() {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  world.system('move', { schedule: 'fixed', query: [Pos, Vel] }, ({ entities }) => {
+    for (const { id } of entities) {
+      world.getComponent(id, Pos)!.x += world.getComponent(id, Vel)!.vx
+      world.markChanged(id, Pos)
+    }
+  })
+  world.use(installContacts({ position: { component: Pos }, radius: 1, pairs: [[Player, Spike]] }))
+  const log: string[] = []
+  world.system('log', { schedule: 'event', triggers: [Contact] }, ({ events }) => {
+    for (const c of events.of(Contact)) log.push(`${c.phase} ${c.a}-${c.b}`)
+  })
+  const errors = installRules(world, [], (name) => types.find((t) => t.name === name)).update([{
+    name: 'spikeHurts', schedule: 'event', on: 'Contact', self: 'event.a', other: 'event.b',
+    query: ['CoPlayer'], when: "event.phase == 'begin'",
+    actions: [{ set: 'CoPlayer.hp', expr: 'CoPlayer.hp - other.CoSpike.dmg' }],
+  }])
+  assert.equal(errors.size, 0)
+  return { world, log }
+}
+
+const live = build()
+const hero = live.world.spawn([entry(Pos, { x: 0, y: 0 }), entry(Vel, { vx: 1 }), entry(Player, { hp: 10 })])
+const spike = live.world.spawn([entry(Pos, { x: 5, y: 0 }), entry(Spike, { dmg: 3 })])
+const step = (w: typeof live.world) => w.step(w.time.fixedStep) // contacts run on the fixed schedule
+
+for (let i = 0; i < 3; i++) step(live.world) // hero reaches x = 3: touching (3 + 2 = 5)
+assert.deepEqual(live.world.getResource(ContactState)!.pairs, [[hero, spike]])
+assert.deepEqual(live.log, []) // emitted this step, delivered next tick
+
+// Fork with the begin still in flight: it continues exactly like the live world.
+const fork = build()
+fork.world.restore(live.world.snapshot({ pendingEvents: true }))
+for (let i = 0; i < 6; i++) {
+  step(live.world)
+  step(fork.world)
+}
+assert.deepEqual(live.log, [`begin ${hero}-${spike}`, `end ${hero}-${spike}`])
+assert.deepEqual(fork.log, live.log)
+assert.equal(live.world.getComponent(hero, Player)!.hp, 7)
+const strict = (w: typeof live.world) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork.world), strict(live.world))
 ```
 
 ---

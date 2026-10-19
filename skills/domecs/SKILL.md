@@ -111,6 +111,12 @@ bridge.reset()                         // episode boundary
   and `register` every event type that can be pending in the restoring world
 - **Neighbours:** `createSpatialHash` (`@domecs/scene`), `refresh()` once per
   step, then `within`/`nearest`/`pairs`; never snapshotted, refresh after restore
+- **Contacts (hits, pickups):** `world.use(installContacts({ position: { component: Pos },
+  radius: 8 | { component: Body, field: 'r' }, pairs: [[Player, Enemy]] }))` (`@domecs/scene`)
+  emits `Contact { a, b, phase: 'begin' | 'stay' | 'end' }` (a holds the first tag; `stay`
+  opt-in) on the `fixed` schedule; rules react next tick with `{ schedule: 'event', on:
+  'Contact', self: 'event.a', other: 'event.b', when: "event.phase == 'begin'" }`.
+  `ContactState` is snapshotted; forks take `snapshot({ pendingEvents: true })`
 - **Trig in systems:** `dmath.sin` / `dmath.cos` / `dmath.atan2` /
   `dmath.hypot` / `dmath.pow` (`@domecs/core`), not `Math.*`, so Node,
   Electron and browsers agree bit for bit

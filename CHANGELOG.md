@@ -23,6 +23,17 @@ All notable changes to DOMECS are documented here. The format is based on
   `compileRule` option, with `resolveEvent`). `RuleDefPath` gains
   `{ effect: number; part: string }`. Docs: rules README "Event rules" /
   "Effects", `doc/api.md` doctest `rules-event-effects`, SPEC Appendix A.
+- `@domecs/scene` contacts (2.3, harness spec §6.2, O-85):
+  `installContacts({ position, radius, pairs, stay?, schedule?, priority?,
+  cellSize?, name? })` is a plugin whose system (default `fixed`, priority
+  150) finds overlapping tagged colliders (`dist² <= (ra + rb)²`, fixed or
+  per-entity radius), diffs them against the snapshotted `ContactState`
+  resource and emits `Contact { a, b, phase }` (declared schema; `end`,
+  `begin`, opt-in `stay`, each sorted by `(a, b)`; delivered next tick) for
+  `on: 'Contact'` event rules. Types `ContactsOptions`, `ContactPayload`,
+  `ContactPhase`, `ContactStateValue`. Docs: scene README "Contacts",
+  `doc/api.md` doctest `scene-contacts`, SPEC §2.12. Bench workload
+  `contacts`.
 - `@domecs/rules`: `walkFieldRefs(ast, visit)` is now exported from the
   package entry (it was only in `dist/ast.js`). Unchanged behaviour: it visits
   the evaluated entity's own field reads with their positions; use

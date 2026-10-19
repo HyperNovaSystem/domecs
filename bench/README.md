@@ -17,6 +17,7 @@ interpretation.
 | 4b | **Snapshot hash** | `hash` | `hashSnapshot` (canonical JSON + FNV-1a-64) over a 1000-entity snapshot |
 | 4c | **Deterministic math** | `dmath` | `dmath.sin`/`dmath.cos` vs `Math.sin`/`Math.cos`, 1M calls |
 | 4d | **Spatial index** | `spatial` | `@domecs/scene` `createSpatialHash` `refresh()` and `nearest` at 1000 entities |
+| 4f | **Contacts** | `contacts` | `@domecs/scene` `installContacts`: one contacts run at 1000 entities × 2 tag pairs |
 | 4e | **Cross-entity rules** | `rules` | `@domecs/rules` self-only vs `nearest(Player)` vs memoized `sum(Enemy, Hp.hp)` rule, 1000 entities |
 | 5 | **Plain baseline** | `baseline` | Hand-rolled Float64Array loops |
 | 6 | **Cross-engine compare** | `compare` | DOMECS vs Koota vs signals |
@@ -94,6 +95,15 @@ pnpm bench:write
   second index at cell size 7 returns the same `nearest`, `within` and
   `pairs` results). The scene dist imports the bare `@domecs/core`, so the
   workload registers a resolve hook pointing it at the core dist.
+- **Contacts workload (O-85):** 1000 entities spread uniformly over a
+  1000 × 1000 field, radii 2–6 from a component, every tenth a `Player`, the
+  rest alternating `Enemy` / `Pickup`; `installContacts` with pairs
+  `[[Player, Enemy], [Player, Pickup]]`, `stay: true`, cell size 16. A fixed
+  system moves every entity by up to 2 units per step; a sample is the
+  contacts system alone, timed by fixed systems at priority 149 and 151, over
+  300 steps after the warmup. The row reports `p50Ms` against `targetP50Ms`
+  (0.5 ms; spec §6.2, informational, not a gate) and `contactEvents`
+  (deterministic: 3480 for this setup).
 - **Rules workload (O-82):** three single-rule worlds of 1000 entities
   (positions uniform over 1000 × 1000, every fourth an `Enemy`, one
   `Player`), one tick rule over every entity writing a changed value each
@@ -176,6 +186,22 @@ id selection plus a store lookup per entity); the grid update is the rest.
 Recorded as informational (spec §5.1). Faster iteration in core, or an
 incremental refresh from change windows, is the follow-up if a consumer
 needs it.
+
+## Contacts workload (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+`node --expose-gc bench/run.mjs --workload contacts`, four runs on a host
+shared with other jobs (load average 2–3):
+
+| Measure | Result | Target |
+|---------|--------|--------|
+| contacts run p50, 1000 entities × 2 pairs | 0.37–0.54 ms | ≤ 0.5 ms (met in 3 of 4) |
+| contacts run p95 | 2.6–4.1 ms | — |
+
+The same host measured the `spatial` workload's `refresh()` p95 at 1.2 ms
+(0.4 ms recorded above on a quiet host), so the p95 here is mostly host
+noise. Of a run, about 0.3 ms is gathering the colliders (the query's
+views, one `Map` lookup and one `grid.set` per entity) and about 0.13 ms the
+100 anchored `within` queries.
 
 ## Rules workload (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
 

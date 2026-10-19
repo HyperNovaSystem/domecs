@@ -2,7 +2,8 @@
 
 Parent-child entity hierarchy for DOMECS (M4): a `Parent` component plus
 tree-shaped queries, a despawn-orphan policy plugin, and parent-before-child
-transform composition; and a world-bound spatial index (2.2).
+transform composition; a world-bound spatial index (2.2); and contact events
+for rules (2.3).
 
 ## Install
 
@@ -122,10 +123,70 @@ index.pairs(5, Prey, Pos) // [[a, b]] — first holds Prey, second holds Pos
 - Never snapshotted: building or querying leaves `hashSnapshot` unchanged;
   `refresh()` after `restore()`. `dispose()` drops it (later calls throw).
 
+## Contacts
+
+`installContacts(options)` is a plugin that turns overlaps into `Contact`
+events (2.3; SPEC §2.12), so rules can react to hits, pickups and goals:
+
+```ts
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { installContacts } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('Pos', { defaults: { x: 0, y: 0 } })
+const Body = defineComponent<{ r: number }>('Body', { defaults: { r: 1 } })
+const Player = defineComponent<{ hp: number }>('Player', { defaults: { hp: 3 } })
+const Enemy = defineComponent<{ dmg: number }>('Enemy', { defaults: { dmg: 1 } })
+
+const world = createWorld({ headless: true })
+world.use(installContacts({
+  position: { component: Pos },               // fields x / y by default
+  radius: { component: Body, field: 'r' },    // or a fixed number
+  pairs: [[Player, Enemy]],                   // a holds Player, b holds Enemy
+}))
+installRules(world, [{
+  name: 'hit', schedule: 'event', on: 'Contact', self: 'event.a', other: 'event.b',
+  query: ['Player'], when: "event.phase == 'begin'",
+  actions: [{ set: 'Player.hp', expr: 'Player.hp - other.Enemy.dmg' }],
+}], (n) => [Pos, Body, Player, Enemy].find((t) => t.name === n))
+```
+
+- **Colliders.** Every entity holding the position component, a valid radius
+  (the fixed number, or the radius field: a finite number ≥ 0) and at least
+  one tag of `pairs`. A non-finite position, a missing radius component or a
+  bad radius means not a collider.
+- **Overlap.** `dx * dx + dy * dy <= (ra + rb) * (ra + rb)`: touching counts.
+  Positions and radii are read live on each run.
+- **Pairs.** `[a, b]`: `a` holds the pair's first tag, `b` its second; for a
+  same-tag pair (`[Enemy, Enemy]`) `a < b`. An entity holding both tags can
+  appear on either side; a pair found through two tag pairs counts once.
+- **Events.** `Contact { a, b, phase }` (`'begin' | 'stay' | 'end'`, a
+  declared schema) is emitted `end`, then `begin`, then `stay` (only with
+  `stay: true`, once per run while overlapping), each sorted by `(a, b)`. It
+  is delivered **next tick**: `on: 'Contact'` rules (and event systems)
+  see it the tick after the overlap was found. A despawned entity, or one
+  that lost its tag, radius or position, ends its pairs once on the next run.
+- **State.** `ContactState` (`{ pairs }`, sorted) holds the last run's pairs.
+  It is an ordinary resource, so snapshots carry it and a restored world
+  continues `begin`/`end` where the source left off; forks also need
+  `snapshot({ pendingEvents: true })` for contacts still in flight.
+- **Schedule.** `'fixed'` by default (so `stepOnce()` never runs it; use
+  `step(world.time.fixedStep)`), `priority` 150 (the contacts band, after
+  transform composition at 100), `name` `'domecs-scene:contacts'`.
+  `cellSize` (default 2 × a fixed radius, else 64) is a performance setting
+  only.
+- **One per world.** `installContacts` registers `Contact` and
+  `ContactState` by name (install fails if another type holds either); a
+  second contacts plugin on the same world throws. Invalid options throw at
+  the call (`RangeError` / `TypeError`). Disposing removes the system.
+- Out of scope: AABB and polygon shapes, physics response, continuous
+  collision.
+
 ## Related packages
 
 - `@domecs/core` — provides `World`, `defineComponent`, `definePlugin`,
   `world.snapshot()` / `world.restore()`, and `createSpatialGrid`.
+- `@domecs/rules` — event rules (`on: 'Contact'`) consume contacts.
 
 ## License
 

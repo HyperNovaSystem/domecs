@@ -425,8 +425,9 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 #### E15.1 `installContacts`
 
 - **Files:** create `packages/domecs-scene/src/contacts.ts`; test `packages/domecs-scene/test/contacts.test.ts`.
-- [ ] **Red:** begin/stay/end vs oracle; same-tag pairs; despawn ends contact; snapshot mid-contact with begin/end in flight (`pendingEvents: true`) restores to identical events and strict hashes; rules integration (contact damage via an event rule); default priority 150; bench ≤ 0.5 ms at 1000 entities × 2 pairs.
-- [ ] **Commit:** `feat(scene): contact events for rules (E15.1)`
+- [x] **Red:** begin/stay/end vs oracle; same-tag pairs; despawn ends contact; snapshot mid-contact with begin/end in flight (`pendingEvents: true`) restores to identical events and strict hashes; rules integration (contact damage via an event rule); default priority 150; bench ≤ 0.5 ms at 1000 entities × 2 pairs.
+- [x] **Commit:** `feat(scene): contact events for rules (E15.1)`
+- [x] **Docs:** scene README "Contacts", `doc/api.md` doctest `scene-contacts`, SPEC §2.12 (+ §3 bands row), `doc/api-surface/scene.d.ts`, SKILL.md, CHANGELOG, `bench/README.md`, `plan/FINDINGS.md` O-85 closed. **Commit:** `docs(scene): contacts in README, api.md and SPEC (E15.1)`. Choices in spec Appendix C ("Implementation notes — E15")
 
 ### E16 — `runSystems` and `render` (§6.3; O-88)
 

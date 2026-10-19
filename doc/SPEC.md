@@ -28,7 +28,7 @@ Shipped (1.0.0; `scene` and `rules` since 2.0.0):
 @domecs/input          — input collector: keyboard, pointer, touch, gamepad
 @domecs/persist        — snapshot save/load over a Storage interface, migrations, schema I/O
 @domecs/inspector      — headless fault/timeline recorder (see §10)
-@domecs/scene          — Parent component, hierarchy queries, transform composition, world-bound spatial index (2.2)
+@domecs/scene          — Parent component, hierarchy queries, transform composition, world-bound spatial index (2.2), contact events (2.3)
 @domecs/rules          — data-defined expression language and rule interpreter (Appendix A)
 ```
 
@@ -450,6 +450,14 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 
 **Cost** (`bench/` `spatial` workload, informational): `refresh()` targets ≤ 0.1 ms and `nearest` ≤ 2 µs average at 1000 uniformly spread entities. In 2.2 `refresh()` is a full O(n) pass; an incremental refresh from change windows is a follow-up. Out of scope: occupancy layers (`firstAt`/`allAt`/`isBlocked`, the rest of O-8), 3D, AABB/broadphase trees.
 
+**Contacts (2.3; O-85).** `installContacts(options)` (`@domecs/scene`) is a plugin whose system (default `fixed`, priority 150: the contacts band of §3) turns overlaps into `Contact` events for rules:
+
+- **Colliders** are the entities holding the position component (`position.component`, fields `x`/`y` by default) with a finite position, a radius (`radius`: a fixed finite number ≥ 0, or a component field read live that must be a finite number ≥ 0) and at least one tag of `pairs`. Two colliders overlap when `dx * dx + dy * dy <= (ra + rb) * (ra + rb)` (touching counts). Each run rebuilds a `createSpatialGrid` from the live positions; results never depend on `cellSize`.
+- **Pairs (normative).** For each tag pair `[A, B]`, a pair `[a, b]` has `a` holding `A` and `b` holding `B`; for `A == B`, `a < b`. An entity holding both tags can appear on either side; a pair found through two tag pairs counts once. The current set is sorted by `(a, b)` and diffed against the `ContactState` resource (`{ pairs }`, sorted), giving `begin` (new), `end` (gone) and, with `stay: true`, `stay` (kept).
+- **Emission (normative).** `Contact { a, b, phase }` (a declared schema; `phase` is `'begin' | 'stay' | 'end'`) is emitted with `ctx.events.emit` in phase order `end`, `begin`, `stay`, each sorted by `(a, b)`, so it is delivered next tick (§4.1): rules see it through `on: 'Contact', self: 'event.a', other: 'event.b'` (Appendix A). A despawned entity, or one that lost its tag, radius or finite position, produces its `end` once on the next run.
+- **State.** `ContactState` is an ordinary resource, so a snapshot carries it and a restored world continues `begin`/`end` exactly (live == fork); a fork also needs `snapshot({ pendingEvents: true })` (§7.1) for contacts emitted but not yet delivered. The grid is derived state.
+- `installContacts` registers `Contact` and `ContactState` by name (install fails when another type holds either name). One contacts plugin per world (capability `domecs-scene:contacts`). Invalid options throw at the call. Out of scope: AABB and polygon shapes, physics response, continuous collision. Cost (`bench/` `contacts` workload, informational): ≤ 0.5 ms per run at 1000 entities × 2 tag pairs.
+
 ---
 
 ## 3. Scheduling modes
@@ -471,7 +479,7 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 | commands, input | −100 | command handlers, std command systems |
 | rules | strictly between −100 and 100 (default 0) | `installRules` |
 | derived transforms | 100 | `composeTransforms({ priority: 100 })` |
-| contacts | 150 | contact detection (planned) |
+| contacts | 150 | `installContacts` (`@domecs/scene`, §2.12) |
 | derived, render-only | 200 | caches, view state |
 | level switching | 1000 | scene-goto systems |
 
