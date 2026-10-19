@@ -64,6 +64,7 @@ interface FieldSchema {
   readonly options?:  ReadonlyArray<string | number>  // enum widget
   readonly label?:    string
   readonly readonly?: boolean
+  readonly description?: string  // free text for humans/agents; persist round-trips it
 }
 interface ComponentSchema { readonly fields: Readonly<Record<string, FieldSchema>> }
 interface ComponentDescriptor {
@@ -324,14 +325,35 @@ interface World {
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
   resourceTypes(): ResourceType<unknown>[]
   describeResource<T>(type: ResourceType<T>): ResourceDescriptor
-  // An event's name and declared schema fields (fieldsSource 'schema' | 'none').
+  // An event's name, declared schema fields (fieldsSource 'schema' | 'none')
+  // and `description` when defineEvent was given one.
   describeEvent(type: EventType<unknown>): EventDescriptor
+  // Every known event type (registered, emitted, subscribed to, or named as a
+  // trigger), first-seen order. Fresh array each call.
+  eventTypes(): EventType<unknown>[]
   // The world manifest (agents: bridge.observe()). Schema: components,
-  // resources, events (EventDescriptors: every type emitted, subscribed to, or
-  // named as an event system's trigger — O-51), systems, plugins,
-  // capabilities, snapshotVersion. Live: entityCount, componentCounts,
-  // archetypes. Cheap enough to poll.
+  // resources, events (EventDescriptors: every type registered, emitted,
+  // subscribed to, or named as an event system's trigger — O-51), systems,
+  // plugins, capabilities, snapshotVersion. Live: entityCount,
+  // componentCounts, archetypes. Cheap enough to poll. See WorldManifest.
   describe(): WorldManifest
+
+  // registry and name lookup (O-30, O-78)
+  // Eagerly register types so componentTypes()/eventTypes()/resourceTypes(),
+  // describe() and lookup* list them before first use. Idempotent and
+  // all-or-nothing; a name already held by a *different* type of the same
+  // kind (or by another argument) → err name_conflict, nothing registered.
+  // Components, events and resources are separate namespaces. Touches nothing
+  // the snapshot carries (a resource default is not materialized). Throws
+  // TypeError only for a value that is not a defined type.
+  register(
+    ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+  ): Result<void, RegisterError>
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+  // undefined when unknown, or when two distinct known event types share the
+  // name (F-8 lets them coexist; the name is then ambiguous).
+  lookupEvent(name: string): EventType<unknown> | undefined
+  lookupResource(name: string): ResourceType<unknown> | undefined
 
   // snapshots
   // options.pruneEmptyEntities (default false): drop entities whose
@@ -370,6 +392,35 @@ interface World {
 }
 
 type Entity = number
+
+interface RegisterError {
+  readonly kind:     'name_conflict'
+  readonly registry: 'component' | 'event' | 'resource'
+  readonly name:     string
+}
+
+interface WorldManifest {
+  readonly components: ComponentDescriptor[]
+  readonly resources:  ResourceDescriptor[]
+  readonly events:     EventDescriptor[]
+  readonly systems: {
+    readonly name:       string
+    readonly schedule:   SystemSchedule
+    readonly enabled:    boolean
+    readonly priority:   number
+    readonly order:      number
+    // Sorted, de-duplicated component names every query / reactsTo leaf
+    // names (Not branches included; resource leaves excluded).
+    readonly components: string[]
+    readonly meta?:      JsonValue   // SystemDef.meta, cloned per call
+  }[]
+  readonly plugins:         PluginManifestEntry[]
+  readonly capabilities:    string[]
+  readonly snapshotVersion: number
+  readonly entityCount:     number
+  readonly componentCounts: Record<string, number>
+  readonly archetypes: { readonly components: string[]; readonly entityCount: number }[]
+}
 
 // Options for `World.startLoop`. The rAF driver is intentionally thin:
 // compute wall-clock dt, clamp it, pipe it to step(dt). Consumers that
@@ -443,6 +494,8 @@ interface SystemDef {
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
   state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)
+  meta?:     JsonValue                     // annotation for tools; cloned into describe().systems[i].meta
+                                           // (@domecs/rules sets { rule: name })
 }
 
 type System = (ctx: SystemContext) => void
@@ -588,13 +641,30 @@ interface QueryHooks<Fields = Record<string, unknown>> {
 ### Events
 
 ```ts
-function defineEvent<T>(name: string): EventType<T>
+function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
+
+interface EventDefOptions {
+  // Payload field schema (component FieldSchema vocabulary). World.action /
+  // bridge.act validate payloads against it (O-39).
+  readonly schema?:      ComponentSchema
+  // Free text: what the command does. Surfaced by describeEvent/describe().
+  readonly description?: string
+}
+
+interface EventDescriptor {
+  readonly name:         string
+  readonly fields:       Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'none'
+  readonly description?: string
+}
 
 // `EventType<T>` is identity-keyed: the bus dispatches on a per-instance
 // symbol stored on the type object, not on `name`. Two `defineEvent('Same')`
 // calls produce distinct types whose payload buckets, subscribers, and views
 // never collide. `name` is an opaque label for diagnostics — duplicates are
-// permitted. (F-8.)
+// permitted (F-8), but a name two known types share is ambiguous to
+// world.lookupEvent / bridge.act(name, …). Keep agent-facing command names
+// unique; world.register(Cmd) asserts it.
 interface EventType<T> {
   readonly name: string
 }
@@ -1038,6 +1108,9 @@ interface AgentBridge {
   captureBaseline(): void              // re-capture baseline from current state
   observe(): AgentObservation
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  // Name-based act for JSON callers (MCP, HTTP, act logs): resolves through
+  // world.lookupEvent, then exactly like act(type, …).
+  act(name: string, payload: unknown, opts?: ActionOptions): ActionResult
   step(dt?: number): void              // omit dt → stepOnce; positive dt → step(dt)
   snapshot(options?: SnapshotOptions): WorldSnapshot
 }
@@ -1055,6 +1128,53 @@ Notes:
   (unknown fields / wrong-typed fields / out-of-enum values →
   `{ accepted: false, reason }`, no tick consumed). Schema-less events are
   unvalidated — declare schemas on agent-facing commands (O-39).
+- `act(name, …)` resolves the name through `world.lookupEvent`. An unknown
+  name, or one two distinct known event types share, returns
+  `{ accepted: false, consumedTurn: false, reason, events: [] }` with no emit
+  and no tick. `world.register` the command events at setup so they resolve
+  before anything emits them.
+
+```ts doctest name=agent-act-by-name
+import { strict as assert } from 'node:assert'
+import { createAgentBridge, createWorld, defineComponent, defineEvent, entry } from '@domecs/core'
+
+const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
+const Damage = defineEvent<{ amount: number }>('Damage', {
+  description: 'Remove hit points from the player',
+  schema: { fields: { amount: { kind: 'number', description: 'HP to remove' } } },
+})
+
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const id = world.spawn([entry(Health, { hp: 10 })])
+world.system('damage', { schedule: 'event', triggers: [Damage], meta: { owner: 'combat' } }, (ctx) => {
+  for (const d of ctx.events.of(Damage)) {
+    ctx.world.getComponent(id, Health)!.hp -= d.amount
+    ctx.world.markChanged(id, Health)
+  }
+})
+assert.equal(world.register(Damage).ok, true)       // asserts the name is unique
+assert.equal(world.lookupEvent('Damage'), Damage)
+assert.deepEqual(world.eventTypes().map((t) => t.name), ['Damage'])
+assert.equal(world.describeEvent(Damage).description, 'Remove hit points from the player')
+const sys = world.describe().systems.find((s) => s.name === 'damage')!
+assert.deepEqual(sys.meta, { owner: 'combat' })
+assert.deepEqual(sys.components, [])
+
+const bridge = createAgentBridge(world)
+assert.equal(bridge.act('Damage', { amount: 3 }).accepted, true)
+assert.equal(world.getComponent(id, Health)!.hp, 7)
+// Schema rejection works the same through the name path (O-39).
+assert.equal(bridge.act('Damage', { amout: 3 }).accepted, false)
+// Unknown name: rejected, no tick.
+const tick = world.time.tick
+const miss = bridge.act('Damag', { amount: 3 })
+assert.equal(miss.accepted, false)
+assert.equal(miss.consumedTurn, false)
+assert.equal(world.time.tick, tick)
+// A second, distinct "Damage" type cannot register under the taken name.
+const r = world.register(defineEvent('Damage'))
+assert.deepEqual(r, { ok: false, error: { kind: 'name_conflict', registry: 'event', name: 'Damage' } })
+```
 
 ---
 

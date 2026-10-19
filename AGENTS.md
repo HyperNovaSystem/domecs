@@ -17,7 +17,7 @@ projections. Humans and agents operate the **same** live world through:
 | Verb | API | Use |
 |------|-----|-----|
 | **observe** | `world.describe()` / `bridge.observe()` | Schema + live counts (cheap) |
-| **act** | `world.action(type, payload)` / `bridge.act(...)` | Typed commands with structured result |
+| **act** | `world.action(type, payload)` / `bridge.act(type \| 'Name', payload)` | Typed commands with structured result; by name for JSON callers |
 | **step** | `world.stepOnce()` / `world.step(dt)` / `bridge.step(dt?)` | Advance simulation |
 | **snapshot** | `world.snapshot()` / `bridge.snapshot()` | Branch, replay, compare |
 | **reset** | `bridge.reset()` (restore baseline) | Episode boundaries |
@@ -173,5 +173,11 @@ event declares a `schema`** (then typo'd fields / wrong types return
 `accepted: false` with a reason — declare schemas on every agent-facing
 command; schema-less events stay unvalidated), and `bridge.step(0)` is a
 heartbeat (no systems run), unlike `bridge.step()`.
+
+Name-based act: `bridge.act('Damage', payload)` resolves through
+`world.lookupEvent`. Call `world.register(...commandEvents)` at setup so each
+name resolves before first use and stays unique — an unknown name, or one two
+`defineEvent('Damage')` types share, returns `accepted: false` with no tick
+(`register` returns `name_conflict` for the duplicate).
 
 Installable skill companion: [`skills/domecs/SKILL.md`](skills/domecs/SKILL.md).

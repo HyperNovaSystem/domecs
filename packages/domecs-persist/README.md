@@ -82,10 +82,16 @@ else if (!boot.value) { /* first run */ }
 - `firstDivergence(a, b)` — the first difference in canonical order (state
   fields, then the lowest entity id, then resources), or `null`.
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
+- `serializeComponentType(type, world.describeComponent(type))` /
+  `registerComponentTypes(data, reserved)` — persist user-authored component
+  types (`ComponentTypeData`) and rebuild them; every `FieldSchema` key
+  round-trips, `description` included. `registerComponentTypes` never throws:
+  defects come back as `SchemaProblem`s.
 - Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`,
   `MigrationFailedError`, `Storage`, `SnapshotHistory`,
   `SnapshotHistoryOptions`, `SnapshotDiff`, `SnapshotDiffOptions`,
-  `FieldChange`, `ResourceChange`, `Divergence`.
+  `FieldChange`, `ResourceChange`, `Divergence`, `ComponentTypeData`,
+  `ComponentFieldData`, `SchemaProblem`.
 
 ## Related packages
 

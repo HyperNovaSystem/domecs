@@ -80,8 +80,9 @@ unknown `order` throws, as does an `orderBase` that is not finite or exceeds
 share a key). Keep rule priorities in
 the open band (−100, 100): commands and input at −100, derived transforms
 such as `composeTransforms({ priority: 100 })` at 100 (bands table in SPEC
-§3). `world.describe().systems` reports each rule system's `priority` and
-`order`. The default may flip to `'stable'` in 3.0.
+§3). `world.describe().systems` reports each rule system's `priority`,
+`order`, `components` and `meta: { rule: name }` (maps the system back to its
+rule). The default may flip to `'stable'` in 3.0.
 
 ## Timing and functions
 

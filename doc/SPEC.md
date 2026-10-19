@@ -110,7 +110,9 @@ enum `options`, label, readonly). `world.describeComponent(type)` returns a
 (`fieldsSource: 'schema'`), otherwise inferred from `defaults` by runtime
 `typeof` (`'defaults'`), otherwise empty (`'none'`). This lets dev tools render
 edit widgets from the world alone, with no per-app schema registry. Reflection
-is descriptive only — it does not validate or constrain component values.
+is descriptive only — it does not validate or constrain component values. A
+`FieldSchema` MAY carry a free-text `description` (units, what 0 means) for
+humans and agents; `@domecs/persist` round-trips it.
 
 **Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
 
@@ -121,6 +123,35 @@ v0.1 treats I-1 as a caller contract, not as a proxy-enforced runtime feature. S
 A world owns: entities, component stores, archetype index, query cache, system scheduler, event buffer, time state, input state, plugins, and a PRNG.
 
 Worlds are independent.  Two worlds never share mutable state.
+
+**Registry and name lookup (§4.5 of the harness spec; O-30, O-78).** A world
+keeps three name-keyed registries — components, events, resources — each its
+own namespace. A type enters its registry implicitly on first use (a component
+store access, an emit / `on` / event-system trigger, a resource access) or
+eagerly through `world.register(...types)`, so reflection lists it before
+anything uses it. `register` is idempotent, all-or-nothing, and returns
+`err({ kind: 'name_conflict', registry, name })` (never throws) when a name is
+already held by a different type object of the same kind, or by another
+argument of the same call; it throws `TypeError` only for a value that is not a
+type. It touches nothing the snapshot carries (no resource default is
+materialized), and registries persist across `restore()`.
+
+`lookupComponent(name)` / `lookupResource(name)` return the registered type or
+`undefined`. `lookupEvent(name)` returns `undefined` both for an unknown name
+and for an ambiguous one (two distinct known event types share it, §2.6).
+`componentTypes()`, `eventTypes()` and `resourceTypes()` list each registry in
+first-seen order.
+
+**Manifest.** `world.describe()` is the single machine-readable description of
+the live world: `components`, `resources`, `events` (descriptors, including an
+event's `description`), `systems`, `plugins`, `capabilities`,
+`snapshotVersion`, and the live counts `entityCount`, `componentCounts`,
+`archetypes`. Each `systems` entry is `{ name, schedule, enabled, priority,
+order, components, meta? }`: `components` is the sorted, de-duplicated list of
+component names every leaf of the system's `query` / `reactsTo` names (`Not`
+branches included, resource leaves excluded), computed once at registration;
+`meta` is the system's `SystemDef.meta`, cloned at registration and again per
+call. `describe()` stays O(systems + types).
 
 ### 2.4 Query
 
@@ -234,8 +265,13 @@ world.system(name, {
   reactsTo?: QueryDef,       // reactive only
   enabled?:  () => boolean,
   state?:    unknown,        // system-local; preserved across hot-swap (§9.5)
+  meta?:     JsonValue,      // annotation for tools; cloned, surfaced in describe()
 }, fn)
 ```
+
+`meta` is a JSON-safe annotation the runtime never reads; `describe().systems`
+reports a clone of it. `@domecs/rules` sets `{ rule: name }` on each rule's
+system.
 
 `state` is the system's private slot, readable and writable as `ctx.state` inside `fn`. It is preserved across dev-mode hot-swap (§9.5). It is **not** part of the world snapshot — on `restore()`, systems re-register and `state` resets. Closures over module-scope values are not preserved across hot-swap; swap-durable state must live in `state`.
 
@@ -246,6 +282,16 @@ world.system(name, {
 Events are typed messages.  Emitted events are **buffered** and flushed at step 1 of the next tick.  Event systems see a read-only view of the buffered events that match their `triggers`.
 
 Events never carry live component references; they carry data or entity ids.
+
+**Event names.** Event identity is the type object (F-8): two
+`defineEvent('X')` calls make distinct types that coexist on the bus without
+colliding. The name is a label, and a name two known types share is
+*ambiguous*: `world.lookupEvent('X')` returns `undefined`, and
+`bridge.act('X', …)` is rejected without emitting or ticking. An agent-facing
+command name MUST be unique within a world; `world.register(Cmd)` asserts it
+(`name_conflict` otherwise) and makes the command known before first use. An
+event MAY carry a free-text `description` (`defineEvent(name, { description })`),
+surfaced by `describeEvent` and `describe().events`.
 
 An event emitted during an event system's execution is delivered at step 1 of *the next tick* (not the same tick, not the end of the current tick).  This is the rule; it is not a surprise.
 

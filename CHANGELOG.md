@@ -56,6 +56,24 @@ peer ranges still resolve.
   from the current defs restored from its snapshot. The default
   `'registration'` keeps the 2.0 order. SPEC §3 documents the ordering
   triple and the recommended priority bands.
+- `@domecs/core`: registry and name lookup (G10; O-30, O-78).
+  `world.register(...types)` eagerly registers component, event and resource
+  types so reflection lists them before first use; it is idempotent,
+  all-or-nothing, and returns `err({ kind: 'name_conflict', registry, name })`
+  (type `RegisterError`) instead of throwing. `lookupComponent`,
+  `lookupEvent` (`undefined` for an ambiguous name), `lookupResource`, and
+  `eventTypes()` (first-seen order). SPEC §2.3, §2.6.
+- `@domecs/core`: `AgentBridge.act(name, payload, opts?)` — name-based act
+  for JSON callers; an unknown or ambiguous name is rejected with no emit
+  and no tick.
+- `@domecs/core`: richer manifest. `describe().systems[i]` gains
+  `components` (sorted component names the query / reactsTo reference) and
+  `meta` (new `SystemDef.meta?: JsonValue`, cloned). `FieldSchema.description`,
+  `EventDefOptions.description` and `EventDescriptor.description` add free
+  text for humans and agents.
+- `@domecs/persist`: `ComponentFieldData.description` round-trips through
+  `serializeComponentType` / `registerComponentTypes`.
+- `@domecs/rules`: each rule's system carries `meta: { rule: name }`.
 
 #### Changed
 

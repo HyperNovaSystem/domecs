@@ -52,6 +52,7 @@ bridge.reset()                         // episode boundary
 |--------|----------------|
 | `observe()` | `world.describe()` + `time` |
 | `act(type, payload, opts?)` | `world.action(...)` |
+| `act(name, payload, opts?)` | `world.lookupEvent(name)` → `world.action(...)`; unknown/ambiguous name → `accepted: false`, no tick |
 | `step()` / `step(dt)` | `stepOnce()` / `step(dt)` |
 | `snapshot(opts?)` | `world.snapshot(...)` |
 | `reset()` | `world.restore(baseline)` |
@@ -59,7 +60,9 @@ bridge.reset()                         // episode boundary
 ## Authoring order
 
 1. `defineComponent` / `defineEvent` / `defineResource` with schemas when useful
-2. `createWorld({ headless: true, seed })` for tests and agents
+   (field and event `description`s help agents read `describe()`)
+2. `createWorld({ headless: true, seed })` for tests and agents; then
+   `world.register(...types)` so `describe()` / `lookup*` list them before first use
 3. `world.system(...)` — schedules: `tick` | `fixed` | `event` | `once` | reactive
 4. `spawn` + `entry(C, value)`; keep the **entity id**, not the bag
 5. Optional: `mountDOM` + `defineView` for browser projection
@@ -73,6 +76,10 @@ bridge.reset()                         // episode boundary
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
+- **unique command names** — `bridge.act('Name', …)` resolves through
+  `world.lookupEvent`; two `defineEvent('Name')` types make the name
+  ambiguous (rejected). `world.register(Cmd)` asserts uniqueness
+  (`name_conflict`)
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
 - **loadIfPresent** for first-run boot (`@domecs/persist`)
