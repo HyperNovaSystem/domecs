@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { And, createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { And, createWorld, defineComponent, defineEvent, entry, hashSnapshot } from '@domecs/core'
+import { installRules, type RuleDef } from '@domecs/rules'
 import type { ComponentType, Entity, World } from '@domecs/core'
 import { Parent, ancestorsOf, installHierarchy, setParent } from '../src/index.js'
 import {
@@ -402,5 +403,155 @@ describe('unloadScene and sceneEntities (E21.2)', () => {
     }
     expect(strict(r)).toBe(strict(w))
     expect(sceneEntities(r, 'level1')).toEqual(sceneEntities(w, 'level1'))
+  })
+})
+
+// Spec §7.3 test 7, plan E21.3: "goto level" is an ordinary command handled
+// by an event rule (§6.1) that records the requested scene; the host reads
+// it after the step and swaps scenes with unloadScene + instantiateScene.
+// No rule effect for scenes exists (out of scope in 2.3).
+
+const Level = defineComponent<{ current: string; requested: string }>('ScLevel', {
+  defaults: { current: '', requested: '' },
+})
+const Vel = defineComponent<{ vx: number }>('ScVel', { defaults: { vx: 0 } })
+const GotoScene = defineEvent<{ scene: string }>('ScGotoScene', {
+  schema: { fields: { scene: { kind: 'string', description: 'Name of the scene to load' } } },
+  description: 'Ask the host to swap the current scene for another',
+})
+const sceneTypes: ComponentType<any>[] = [Pos, Hp, Target, Vel, Level]
+const sceneResolve = (name: string): ComponentType<any> | undefined => sceneTypes.find((t) => t.name === name)
+const catalog: Record<string, SceneData> = {
+  meadow: {
+    name: 'meadow',
+    entities: [
+      { key: 'hero', components: { ScPos: { x: 0 }, ScVel: { vx: 1 }, ScHp: { hp: 9 } } },
+      { key: 'hat', components: { ScPos: {} }, parent: 'hero' },
+      { key: 'wolf', components: { ScPos: { x: 9 }, ScVel: { vx: -1 }, ScTarget: { entity: 'hero' } } },
+    ],
+  },
+  cave: {
+    name: 'cave',
+    entities: [
+      { key: 'bat', components: { ScPos: { y: 4 }, ScVel: { vx: 2 }, ScTarget: { entity: 'torch' } } },
+      { key: 'torch', components: { ScPos: { x: 1 } } },
+    ],
+  },
+}
+
+describe('goto level through an event rule (E21.3)', () => {
+  const gotoRule: RuleDef = {
+    name: 'gotoScene',
+    schedule: 'event',
+    on: 'ScGotoScene',
+    priority: 1000,
+    query: ['ScLevel'],
+    actions: [{ set: 'ScLevel.requested', expr: 'event.scene' }],
+  }
+
+  const build = (): World => {
+    const w = createWorld({ headless: true, seed: [3, 1, 4, 1] })
+    w.use(installHierarchy())
+    expect(w.register(GotoScene, ...sceneTypes).ok).toBe(true)
+    w.system('sc:move', { schedule: 'fixed', query: [Pos, Vel] }, (ctx) => {
+      for (const e of ctx.entities) {
+        ctx.world.getComponent(e.id, Pos)!.x += ctx.world.getComponent(e.id, Vel)!.vx
+        ctx.world.markChanged(e.id, Pos)
+      }
+    })
+    const errors = installRules(w, [], sceneResolve).update([gotoRule])
+    expect([...errors]).toEqual([])
+    return w
+  }
+
+  /** The host's part, after each step: swap scenes when the rule recorded a request. */
+  const host = (w: World): string[] => {
+    const [level] = [...w.iterEntitiesWith(Level)]
+    const state = level!.value
+    if (state.requested === state.current) return []
+    const data = catalog[state.requested]
+    if (!data) {
+      // Refuse: the request falls back to the current scene.
+      const refused = `unknown scene "${state.requested}"`
+      state.requested = state.current
+      w.markChanged(level!.id, Level)
+      return [refused]
+    }
+    if (state.current) unloadScene(w, state.current)
+    const { problems } = instantiateScene(w, data, { resolve: sceneResolve, refFields: [['ScTarget', 'entity']] })
+    state.current = state.requested
+    w.markChanged(level!.id, Level)
+    return problems.map((p) => p.message)
+  }
+
+  const start = (w: World): void => {
+    w.spawn([entry(Level, { current: '', requested: 'meadow' })])
+    expect(host(w)).toEqual([])
+  }
+
+  /** The acts of the run, by the tick before which they are emitted. */
+  const script: Record<number, string> = { 3: 'cave', 7: 'meadow', 8: 'cave', 12: 'nowhere', 15: 'meadow' }
+  const tick = (w: World, i: number): string[] => {
+    const scene = script[i]
+    if (scene) w.emit(GotoScene, { scene })
+    w.step(w.time.fixedStep)
+    return host(w)
+  }
+
+  it('test 7: the rule records the request, the host swaps, and forks restored mid-sequence stay equal', () => {
+    const live = build()
+    start(live)
+    expect(sceneEntities(live, 'meadow')).toHaveLength(3)
+
+    const forks: Array<{ at: number; world: World }> = []
+    let lossy: { at: number; world: World } | undefined
+    const seen: string[] = []
+    /** A follower created at tick `at` already holds (or, lossy, dropped) that tick's act. */
+    const follow = (f: { at: number; world: World }, i: number): void => {
+      if (f.at === i) {
+        f.world.step(f.world.time.fixedStep)
+        host(f.world)
+      } else tick(f.world, i)
+    }
+    for (let i = 0; i < 20; i++) {
+      if (script[i]) {
+        // Fork right after the act is emitted, before the step that delivers it.
+        live.emit(GotoScene, { scene: script[i]! })
+        expect(live.pendingEvents().some((e) => e.type === GotoScene)).toBe(true)
+        const fork = build()
+        fork.restore(live.snapshot({ pendingEvents: true }))
+        expect(strict(fork)).toBe(strict(live))
+        forks.push({ at: i, world: fork })
+        if (!lossy) {
+          lossy = { at: i, world: build() }
+          lossy.world.restore(live.snapshot()) // control: the in-flight command is dropped
+        }
+        live.step(live.time.fixedStep)
+        seen.push(...host(live))
+      } else seen.push(...tick(live, i))
+      for (const f of forks) follow(f, i)
+      if (lossy) follow(lossy, i)
+      for (const f of forks) expect(strict(f.world), `fork@${f.at} tick ${i}`).toBe(strict(live))
+      const level = [...live.iterEntitiesWith(Level)][0]!.value
+      if (i === 3) {
+        // Delivered and handled in the step after the act: the cave is in.
+        expect(level).toEqual({ current: 'cave', requested: 'cave' })
+        expect(sceneEntities(live, 'meadow')).toEqual([])
+        expect(sceneEntities(live, 'cave')).toHaveLength(2)
+      }
+    }
+    expect(forks).toHaveLength(5)
+    expect(seen).toEqual(['unknown scene "nowhere"'])
+    const level = [...live.iterEntitiesWith(Level)][0]!.value
+    expect(level).toEqual({ current: 'meadow', requested: 'meadow' })
+    expect(sceneEntities(live, 'cave')).toEqual([])
+    const ids = sceneEntities(live, 'meadow')
+    expect(ids).toHaveLength(3)
+    // The wolf's target was remapped to this instantiation's hero.
+    const wolf = ids.find((id) => live.getComponent(id, SceneMember)!.key === 'wolf')!
+    const hero = ids.find((id) => live.getComponent(id, SceneMember)!.key === 'hero')!
+    expect(live.getComponent(wolf, Target)).toEqual({ entity: hero })
+    // The lossy control never saw the first GotoScene, so it diverged.
+    expect(strict(lossy!.world)).not.toBe(strict(live))
   })
 })
