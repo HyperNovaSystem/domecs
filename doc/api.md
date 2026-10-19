@@ -1510,7 +1510,8 @@ What is recorded:
   emitted after the last step are not in the log.
 - **Frames:** per full step, the caller's dt (so wall-clock `step(dt)`
   replays exactly), the scale on entry, a scale a `tickStart` hook set, and
-  `world.input` after plugin `onTickStart`, delta-encoded.
+  `world.input` as the step's systems see it (after plugin `onTickStart` and
+  `signals.tickStart`), delta-encoded.
 - **Gaps:** a spawn/despawn/add/remove/`markChanged`/`setResource`/
   `markResourceChanged` outside a full tick, a draw on `world.rand` between
   steps, a payload that is not plain data, and `restore()`. Replay past a gap is unverified: the next

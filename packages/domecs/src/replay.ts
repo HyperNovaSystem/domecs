@@ -262,8 +262,9 @@ interface FrameDraft {
  *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
  *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
- *   scale on entry, a scale a tick-start hook set, and `world.input` after
- *   plugin `onTickStart`, delta-encoded;
+ *   scale on entry, a scale a tick-start hook set, and `world.input` as the
+ *   step's systems see it (after plugin `onTickStart` and the `tickStart`
+ *   signal), delta-encoded;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a
@@ -300,6 +301,10 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   // The scale the previous frame ended with: a replay world has it too.
   let lastScale = startScale
   let lastInput: string | null = null
+  // The running frame's input as first read (after plugin onTickStart), and
+  // the previous frame's key, to re-read it once the tickStart signal ran.
+  let inputSeen: unknown = null
+  let prevInput: string | null = null
   // world.rand's state when the previous frame ended: a draw between steps
   // is a direct write a replay cannot reproduce.
   let lastRand = String(world.rand.seed())
@@ -313,6 +318,20 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     const last = gaps[gaps.length - 1]
     if (last !== undefined && last.tick === tick && last.reason === reason) return
     gaps.push({ tick, reason })
+  }
+
+  // Write world.input into the frame when it differs from the previous frame's.
+  function readInput(f: FrameDraft): void {
+    try {
+      const enc = encodeInput(world.input)
+      const key = canonicalJson(enc)
+      if (key !== lastInput) {
+        f.input = enc
+        lastInput = key
+      }
+    } catch {
+      gap('unserializable_payload', f.tick)
+    }
   }
 
   function checkRand(): void {
@@ -354,27 +373,31 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
         f.acts = pending
         pending = []
       }
-      try {
-        const enc = encodeInput(world.input)
-        const key = canonicalJson(enc)
-        if (key !== lastInput) {
-          f.input = enc
-          lastInput = key
-        }
-      } catch {
-        gap('unserializable_payload')
-      }
+      prevInput = lastInput
+      inputSeen = world.input
+      readInput(f)
       opening = null
       running = f
       afterHooks = false
       frames.push(f)
     },
     hooksDone() {
-      if (running !== null && world.time.scale !== entryScale) running.hookScale = world.time.scale
+      const f = running
+      if (f !== null) {
+        if (world.time.scale !== entryScale) f.hookScale = world.time.scale
+        // A signals.tickStart subscriber replaced the input: systems see
+        // that one (replay sets it before the step).
+        if (world.input !== inputSeen) {
+          delete f.input
+          lastInput = prevInput
+          readInput(f)
+        }
+      }
       afterHooks = true
     },
     frameEnded() {
       running = null
+      inputSeen = null
       afterHooks = false
       lastScale = world.time.scale
       lastRand = String(world.rand.seed())

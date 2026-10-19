@@ -1377,8 +1377,9 @@ export declare function actLogHash(world: World): string;
  *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
  *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
- *   scale on entry, a scale a tick-start hook set, and `world.input` after
- *   plugin `onTickStart`, delta-encoded;
+ *   scale on entry, a scale a tick-start hook set, and `world.input` as the
+ *   step's systems see it (after plugin `onTickStart` and the `tickStart`
+ *   signal), delta-encoded;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a

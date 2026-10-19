@@ -872,3 +872,19 @@ describe('out-of-tick draws on world.rand', () => {
     expect(rec.stop().gaps).toEqual([{ tick: 2, reason: 'restore' }])
   })
 })
+
+describe('input set by a signals.tickStart subscriber', () => {
+  it('is recorded as the input systems saw, and replays without the subscriber', () => {
+    const live = source()
+    live.signals.tickStart.subscribe((t) => {
+      if (t.tick % 5 === 0) live.setInput(inputWith(t.tick % 10 === 0 ? ['KeyA'] : []))
+    })
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    for (let i = 0; i < 20; i++) live.step(1 / 60)
+    const log = rec.stop()
+    const tenth = log.frames.find((f) => f.tick + 1 === 10)!
+    expect(tenth.input).toEqual({ keys: ['KeyA'] })
+    expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 20, hash: strict(live) } })
+  })
+})
