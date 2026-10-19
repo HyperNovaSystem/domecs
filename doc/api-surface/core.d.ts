@@ -141,6 +141,56 @@ export interface AgentBridge {
  */
 export declare function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge;
 
+// file: branch.d.ts
+import { type Result, type SerializedError } from './result.js';
+import type { RngState } from './rng.js';
+import type { WorldSnapshot } from './snapshot.js';
+import { type World } from './world.js';
+/**
+ * Registers types, systems and plugins on a world in a fixed order; spawns
+ * nothing. May return setup output (handles, metadata) for the caller.
+ * A branch's setup must register the same systems, in the same order, as the
+ * world the snapshot came from (SPEC §7.1); nothing can verify this.
+ */
+export type WorldSetup<T = void> = (world: World) => T;
+/** Options for {@link createBranch}. */
+export interface BranchOptions {
+    /** Default `from.fixedStep ?? 1/60`. */
+    readonly fixedStep?: number;
+    /** The `createWorld` seed; only matters for a v2 `from` (no `rngRoot`). */
+    readonly seed?: number | RngState;
+    /** `time.scale` of the source; default 1. Scale is not snapshotted. */
+    readonly scale?: number;
+}
+/** Why {@link createBranch} could not build a branch. */
+export type BranchError = {
+    readonly kind: 'restore_failed';
+    readonly cause: SerializedError;
+} | {
+    readonly kind: 'once_systems';
+    readonly names: readonly string[];
+};
+/**
+ * Build a branch of a world (§7.2): `createWorld({ headless: true, fixedStep,
+ * seed })`, `setup(world)`, `world.restore(from)`, `setScale(options.scale ??
+ * 1)`.
+ *
+ * - A throw from `setup` is a bug and propagates.
+ * - A throw from `restore` (a snapshot that fails validation, an unknown
+ *   pending event) is `restore_failed` with the serialized cause.
+ * - An enabled `once` system registered by `setup` when `from.tick > 0` is
+ *   `once_systems`: the branch would run it on its first step while the
+ *   source, past tick 0, already had (`once` run state is not snapshotted).
+ *
+ * Take `from` with `snapshot({ pendingEvents: true })` and without
+ * snapshot-rewriting plugins (redaction), or the branch starts from a
+ * different state than the source had.
+ */
+export declare function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, options?: BranchOptions): Result<{
+    readonly world: World;
+    readonly setup: T;
+}, BranchError>;
+
 // file: build-id.d.ts
 /**
  * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
@@ -850,6 +900,8 @@ export { encodeInput, decodeInput } from './replay.js';
 export type { JsonInput } from './replay.js';
 export { createRecorder, replay } from './replay.js';
 export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, ReplayError, ReplayOptions, } from './replay.js';
+export { createBranch } from './branch.js';
+export type { BranchError, BranchOptions, WorldSetup } from './branch.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';

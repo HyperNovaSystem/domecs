@@ -155,3 +155,5 @@ export type {
   ReplayError,
   ReplayOptions,
 } from './replay.js'
+export { createBranch } from './branch.js'
+export type { BranchError, BranchOptions, WorldSetup } from './branch.js'
