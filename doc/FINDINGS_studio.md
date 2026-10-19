@@ -282,3 +282,26 @@ tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
 and do not export it. The 2.3.0 release-candidate tarballs (E18,
 `vendor/domecs/domecs-*-2.3.0+g<sha>.tgz` beside the 2.1.0 and 2.2.0 sets)
 export it.
+
+## 2026-10-19 — Rules AST nodes carry only a start position, and `childNodes` is not exported
+
+Forwarded from studio's H7.1 notes (`../studio/FINDINGS.md`, "H7.1 sentences
+and behaviour cards": "To forward to `../domecs/doc/FINDINGS_studio.md`").
+Studio's behaviour cards render each rule expression as a sentence and let a
+user edit one literal or open the Source view with one node's text selected,
+so they need each node's source extent. `parseExpression` gives every node a
+`pos` (its start; a binary node's `pos` is its operator) and nothing for the
+end. Studio therefore re-lexes the source with the rules lexer's lexemes and
+matches parentheses to compute spans (`literalSpan`, `nodeSpan` in
+`packages/core/src/sentences.ts`), which can drift from the parser as the
+grammar grows. `childNodes(node)` (`packages/domecs-rules/src/ast.ts`), which
+the engine's own walkers use to visit a node's children, is declared in the
+emitted `ast.d.ts` (and `doc/api-surface/rules.d.ts`) but not re-exported
+from the package entry, so studio's span code switches over node kinds itself.
+
+**Wanted (additive, not scheduled):** an `end` offset on every AST node (or a
+`span` helper that returns `[start, end)` for a node), and `childNodes` in the
+`@domecs/rules` exports. Either would remove studio's span code; neither
+changes evaluation or hashes. **Status:** open; no engine milestone takes it
+(E1–E21 are done). The walkers' `namePos` (decision (f), E-fix3) already
+covers the rename case, so this is only for sentence spans.

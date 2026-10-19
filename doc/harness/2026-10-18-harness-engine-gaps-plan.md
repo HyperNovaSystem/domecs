@@ -81,57 +81,57 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E1.1 Bump to 2.1.0 on the branch
 
 - **Files:** all seven `packages/*/package.json` (`version: 2.1.0`), `CHANGELOG.md` (Unreleased 2.1.0 heading).
-- [ ] **Red:** `test/release-validation.test.mjs` gains a check that every package shares one version and that `^2.0.0` satisfies it; run `pnpm test:release` → fails at 2.0.0 expectation update.
-- [ ] **Green:** bump; update the expectation.
-- [ ] **Commit:** `chore(release): bump packages to 2.1.0 on the harness branch (E1.1)`
+- [x] **Red:** `test/release-validation.test.mjs` gains a check that every package shares one version and that `^2.0.0` satisfies it; run `pnpm test:release` → fails at 2.0.0 expectation update.
+- [x] **Green:** bump; update the expectation.
+- [x] **Commit:** `chore(release): bump packages to 2.1.0 on the harness branch (E1.1)`
 
 #### E1.2 `canonicalJson`
 
 - **Files:** create `packages/domecs/src/canonical.ts`; test `packages/domecs/test/canonical-hash.test.ts`.
-- [ ] **Red:** sorted keys by UTF-16 code unit; `undefined`/function/symbol omitted in objects, `null` in arrays; `canonicalJson({a: -0}) === '{"a":-0}'`; `canonicalJson(JSON.parse(canonicalJson(x))) === canonicalJson(x)` for nested values with `-0`; `NaN`/`Infinity` throw `TypeError` whose message names the path (`"a.b[2]"`); BigInt and cycles throw `TypeError`.
-- [ ] **Green:** implement with `Number::toString` except the `-0` literal.
-- [ ] **Commit:** `feat(core): canonicalJson with lossless -0 and path-naming errors (E1.2)`
+- [x] **Red:** sorted keys by UTF-16 code unit; `undefined`/function/symbol omitted in objects, `null` in arrays; `canonicalJson({a: -0}) === '{"a":-0}'`; `canonicalJson(JSON.parse(canonicalJson(x))) === canonicalJson(x)` for nested values with `-0`; `NaN`/`Infinity` throw `TypeError` whose message names the path (`"a.b[2]"`); BigInt and cycles throw `TypeError`.
+- [x] **Green:** implement with `Number::toString` except the `-0` literal.
+- [x] **Commit:** `feat(core): canonicalJson with lossless -0 and path-naming errors (E1.2)`
 
 #### E1.3 `hashSnapshot`, `canonicalSnapshot`, `hashEntities`, `hashValue`
 
 - **Files:** `packages/domecs/src/canonical.ts`, `packages/domecs/src/index.ts`; same test file.
-- [ ] **Red:** the spec's tests 1–6: different component-add orders → equal hash (and different `JSON.stringify`); lossless round trip and the `-0`-sensitive fork (`1 / Body.vx` after a bounce) equal to live only through `canonicalJson`; live vs restored twin, 600 fixed steps, equal **strict** hashes every 60 ticks; heartbeat after render changes `changes` but not the default hash; golden constant for a fixture snapshot (pins FNV-1a-64); `hashEntities` localizes a one-field change. Scope: `version`, `meta`, `changes` excluded by default; `includeChanges`/`includeMeta` options.
-- [ ] **Green:** FNV-1a-64 with four 16-bit limbs and `Math.imul`; `HASH_ALGORITHM = 'fnv1a64'`.
-- [ ] **Commit:** `feat(core): hashSnapshot and canonicalSnapshot with strict includeChanges mode (E1.3)`
+- [x] **Red:** the spec's tests 1–6: different component-add orders → equal hash (and different `JSON.stringify`); lossless round trip and the `-0`-sensitive fork (`1 / Body.vx` after a bounce) equal to live only through `canonicalJson`; live vs restored twin, 600 fixed steps, equal **strict** hashes every 60 ticks; heartbeat after render changes `changes` but not the default hash; golden constant for a fixture snapshot (pins FNV-1a-64); `hashEntities` localizes a one-field change. Scope: `version`, `meta`, `changes` excluded by default; `includeChanges`/`includeMeta` options.
+- [x] **Green:** FNV-1a-64 with four 16-bit limbs and `Math.imul`; `HASH_ALGORITHM = 'fnv1a64'`.
+- [x] **Commit:** `feat(core): hashSnapshot and canonicalSnapshot with strict includeChanges mode (E1.3)`
 
 #### E1.4 Hash bench
 
 - **Files:** `bench/` workload `hash` (1000-entity snapshot), `bench/baselines` update.
-- [ ] **Red → Green:** `pnpm bench` reports hash time; target ≤ 2 ms recorded (informational).
-- [ ] **Commit:** `perf(bench): hashSnapshot workload (E1.4)`
+- [x] **Red → Green:** `pnpm bench` reports hash time; target ≤ 2 ms recorded (informational).
+- [x] **Commit:** `perf(bench): hashSnapshot workload (E1.4)`
 
 #### E1.5 `BUILD_ID` export in every package
 
 - **Files:** `packages/*/src/build-id.ts` (`export const BUILD_ID: string = 'dev'`), each `src/index.ts`; `test/api-surface.test.mjs` expectations.
-- [ ] **Red:** a core test imports `BUILD_ID` and expects a string; `pnpm api:check` fails until surfaces are regenerated.
-- [ ] **Green:** add exports; `pnpm -r build && pnpm api:surface`.
-- [ ] **Commit:** `feat(all): BUILD_ID export in every package (E1.5)`
+- [x] **Red:** a core test imports `BUILD_ID` and expects a string; `pnpm api:check` fails until surfaces are regenerated.
+- [x] **Green:** add exports; `pnpm -r build && pnpm api:surface`.
+- [x] **Commit:** `feat(all): BUILD_ID export in every package (E1.5)`
 
 #### E1.6 `scripts/pack-for-studio.mjs`
 
 - **Files:** create `scripts/pack-for-studio.mjs`; test `test/pack-for-studio.test.mjs` (node:test, packs into a temp dir).
-- [ ] **Red:** after running with `--out <tmp>`: seven tarballs named `domecs-<pkg>-2.1.0+g<sha>[-dirty].tgz`; each packed `package.json` has `version` with build metadata and `workspace:^` rewritten; `dist/build-id.js` inside each tarball exports the same id; `manifest.json` lists `{version, gitSha, dirty, packages: {name: {file, integrity, buildId}}}` with correct sha512 integrity.
-- [ ] **Green:** reuse `cold-install.mjs`'s build + `pnpm pack` step; stamp `dist/build-id.js` and the packed version, then restore the working tree.
-- [ ] **Accept:** studio's `npm run engine:refresh` (studio H0.2) installs the tarballs.
-- [ ] **Commit:** `build(release): pack-for-studio with build metadata, BUILD_ID stamping and manifest (E1.6)`
+- [x] **Red:** after running with `--out <tmp>`: seven tarballs named `domecs-<pkg>-2.1.0+g<sha>[-dirty].tgz`; each packed `package.json` has `version` with build metadata and `workspace:^` rewritten; `dist/build-id.js` inside each tarball exports the same id; `manifest.json` lists `{version, gitSha, dirty, packages: {name: {file, integrity, buildId}}}` with correct sha512 integrity.
+- [x] **Green:** reuse `cold-install.mjs`'s build + `pnpm pack` step; stamp `dist/build-id.js` and the packed version, then restore the working tree.
+- [x] **Accept:** studio's `npm run engine:refresh` (studio H0.2) installs the tarballs.
+- [x] **Commit:** `build(release): pack-for-studio with build metadata, BUILD_ID stamping and manifest (E1.6)`
 
 #### E1.7 Docs and the early tarball
 
 - **Files:** `doc/SPEC.md` §7.1 (canonical form, `-0`), §8 (equality by strict hash); `doc/api.md` ("Determinism tools"); `AGENTS.md` checklist (`hashSnapshot` replaces `JSON.stringify`); `skills/domecs/SKILL.md`; `CHANGELOG.md` (behaviour change: canonical JSON keeps `-0`); `plan/FINDINGS.md` O-11 row.
-- [ ] **Red:** `pnpm doctest:check` fails on the new fences until the code exists; `pnpm test:legibility` passes.
-- [ ] **Accept:** **E1 exit:** all PR gates green; `node scripts/pack-for-studio.mjs --out ../studio/vendor/domecs` run and the owner told the early tarball exists.
-- [ ] **Commit:** `docs(core): canonical hash in SPEC, api.md, AGENTS checklist (E1.7)`
+- [x] **Red:** `pnpm doctest:check` fails on the new fences until the code exists; `pnpm test:legibility` passes.
+- [x] **Accept:** **E1 exit:** all PR gates green; `node scripts/pack-for-studio.mjs --out ../studio/vendor/domecs` run and the owner told the early tarball exists.
+- [x] **Commit:** `docs(core): canonical hash in SPEC, api.md, AGENTS checklist (E1.7)`
 
 #### E1.8 (optional, may slip to E13) Field-level diff (G9; O-31)
 
 - **Files:** `packages/domecs-persist/src/history.ts`, test `packages/domecs-persist/test/diff-fields.test.ts`.
-- [ ] **Red:** spec test 7–8: scalar, nested, array-length, component added/removed, resource changes; `epsilon`; `limit` + `truncated`; key-order-only differences not reported; `firstDivergence` lowest-id first change, `null` when equal.
-- [ ] **Commit:** `feat(persist): field-level diffSnapshots and firstDivergence (E1.8)`
+- [x] **Red:** spec test 7–8: scalar, nested, array-length, component added/removed, resource changes; `epsilon`; `limit` + `truncated`; key-order-only differences not reported; `firstDivergence` lowest-id first change, `null` when equal.
+- [x] **Commit:** `feat(persist): field-level diffSnapshots and firstDivergence (E1.8)`
 
 ### E2 — `dmath` `sin`/`cos`/`sqrt` and the rules swap (§4.2; O-75)
 
