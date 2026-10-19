@@ -110,7 +110,20 @@ export function cloneSerializable<T>(value: T): T {
   if (Array.isArray(value)) return value.map((v) => cloneSerializable(v)) as unknown as T
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(value as object)) {
-    out[k] = cloneSerializable((value as Record<string, unknown>)[k])
+    setOwn(out, k, cloneSerializable((value as Record<string, unknown>)[k]))
   }
   return out as T
+}
+
+/**
+ * `out[k] = v` as an own data property. Plain assignment of `"__proto__"`
+ * (an own key `JSON.parse` creates) would set `out`'s prototype instead and
+ * drop the data from the copy and from its canonical hash.
+ */
+export function setOwn(out: Record<string, unknown>, k: string, v: unknown): void {
+  if (k === '__proto__') {
+    Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true })
+  } else {
+    out[k] = v
+  }
 }

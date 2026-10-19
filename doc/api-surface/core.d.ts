@@ -1551,6 +1551,12 @@ export interface WorldSnapshot {
     readonly meta?: Record<string, unknown>;
 }
 export declare function cloneSerializable<T>(value: T): T;
+/**
+ * `out[k] = v` as an own data property. Plain assignment of `"__proto__"`
+ * (an own key `JSON.parse` creates) would set `out`'s prototype instead and
+ * drop the data from the copy and from its canonical hash.
+ */
+export declare function setOwn(out: Record<string, unknown>, k: string, v: unknown): void;
 
 // file: time.d.ts
 export interface TimeState {

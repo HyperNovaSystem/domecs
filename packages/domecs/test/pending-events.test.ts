@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalJson,
   canonicalSnapshot,
   createWorld,
   defineComponent,
@@ -314,5 +315,36 @@ describe('pending events in snapshots — verify pass (fix(E7))', () => {
     const v = fresh()
     v.emit(Ping, { n: 1 })
     expect(v.snapshot({ pendingEvents: true }).pendingEvents).toEqual([{ event: 'PePing', payload: { n: 1 } }])
+  })
+
+  it('keeps an own "__proto__" payload key through snapshot and restore', () => {
+    // JSON.parse creates "__proto__" as an own data key; a copy by plain
+    // assignment would set the copy's prototype instead and drop the data.
+    const Raw = defineEvent<unknown>('PeRaw')
+    const w = fresh()
+    const payload = JSON.parse('{"__proto__":{"x":1},"y":2}') as unknown
+    w.emit(Raw, payload)
+    const snap = w.snapshot({ pendingEvents: true })
+    const recorded = snap.pendingEvents![0]!.payload as Record<string, unknown>
+    expect(Object.keys(recorded)).toEqual(['__proto__', 'y'])
+    expect(Object.getPrototypeOf(recorded)).toBe(Object.prototype)
+    expect(canonicalJson(recorded)).toBe(canonicalJson(payload))
+
+    const fork = fresh()
+    fork.register(Raw)
+    fork.restore(JSON.parse(canonicalJson(snap)) as WorldSnapshot)
+    const queued = fork.pendingEvents()[0]!.payload as Record<string, unknown>
+    expect(Object.keys(queued)).toEqual(['__proto__', 'y'])
+    expect(Object.getPrototypeOf(queued)).toBe(Object.prototype)
+    expect(strict(fork)).toBe(strict(w))
+  })
+
+  it('the shared snapshot copy keeps an own "__proto__" key in component values too', () => {
+    const Bag = defineComponent<Record<string, unknown>>('PeBag', { defaults: {} })
+    const w = fresh()
+    w.spawn([entry(Bag, JSON.parse('{"__proto__":{"x":1},"y":2}') as Record<string, unknown>)])
+    const comp = w.snapshot().entities[0]!.components.PeBag as Record<string, unknown>
+    expect(Object.keys(comp)).toEqual(['__proto__', 'y'])
+    expect(Object.getPrototypeOf(comp)).toBe(Object.prototype)
   })
 })

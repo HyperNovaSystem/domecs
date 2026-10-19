@@ -5,6 +5,7 @@ import type { EmittedEvent, EventType } from './events.js'
 import type { JsonValue } from './result.js'
 import {
   cloneSerializable,
+  setOwn,
   SNAPSHOT_VERSION,
   type SnapshotPendingEvent,
   type WorldSnapshot,
@@ -249,7 +250,7 @@ function plainCopy(v: unknown, ancestors: object[]): JsonValue {
       const child = (obj as Record<string, unknown>)[k]
       if (child === undefined) continue
       try {
-        out[k] = plainCopy(child, ancestors)
+        setOwn(out, k, plainCopy(child, ancestors))
       } catch (fault) {
         if (fault instanceof PlainFault) {
           fault.path.push(PATH_IDENT.test(k) ? `.${k}` : `[${JSON.stringify(k)}]`)
