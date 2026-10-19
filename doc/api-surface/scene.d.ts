@@ -46,6 +46,93 @@ export interface ComposeTransformsOptions {
  */
 export declare function composeTransforms<T>(Local: ComponentType<T>, World_: ComponentType<T>, compose: (parentWorld: T | null, local: T) => T, options?: ComposeTransformsOptions): Plugin;
 
+// file: contacts.d.ts
+import { type ComponentType, type Entity, type EventType, type Plugin, type ResourceType } from '@domecs/core';
+/** The phase of a {@link Contact}: it started, continues, or stopped this run. */
+export type ContactPhase = 'begin' | 'stay' | 'end';
+/** Payload of a {@link Contact} event. */
+export interface ContactPayload {
+    /** The entity carrying the pair's first tag (the lower id for a same-tag pair). */
+    readonly a: Entity;
+    /** The entity carrying the pair's second tag. */
+    readonly b: Entity;
+    readonly phase: ContactPhase;
+}
+/**
+ * Emitted by {@link installContacts} when two colliders start (`'begin'`),
+ * keep (`'stay'`, opt-in) or stop (`'end'`) overlapping. Declares a schema,
+ * so rules can read `event.a`, `event.b` and `event.phase`; `installContacts`
+ * registers it, so `on: 'Contact'` resolves through `world.lookupEvent`.
+ * Delivered the tick after the contacts system ran (bus semantics).
+ */
+export declare const Contact: EventType<ContactPayload>;
+/** Value of {@link ContactState}. */
+export interface ContactStateValue {
+    /** The overlapping pairs as of the last run, sorted by (a, b), without duplicates. */
+    pairs: Array<[Entity, Entity]>;
+}
+/**
+ * The overlapping pairs the contacts system saw on its last run, sorted by
+ * (a, b). An ordinary (snapshotted) resource, so a restored world continues
+ * `begin`/`end` exactly where the source left off. Written by the contacts
+ * system only; treat it as read-only.
+ */
+export declare const ContactState: ResourceType<ContactStateValue, 'ContactState'>;
+/** Options for {@link installContacts}. */
+export interface ContactsOptions {
+    /** The position component and its coordinate fields (default `'x'` / `'y'`). */
+    readonly position: {
+        readonly component: ComponentType<any>;
+        readonly x?: string;
+        readonly y?: string;
+    };
+    /**
+     * Radius per entity: a fixed number (finite, ≥ 0) or a component field,
+     * read live each run. With a field, an entity lacking the component, or
+     * whose value is not a finite number ≥ 0, is not a collider.
+     */
+    readonly radius: number | {
+        readonly component: ComponentType<any>;
+        readonly field: string;
+    };
+    /** Tag pairs to test (at least one), e.g. `[[Player, Enemy], [Player, Pickup]]`. */
+    readonly pairs: ReadonlyArray<readonly [ComponentType<any>, ComponentType<any>]>;
+    /** Emit `'stay'` each run while a pair overlaps (default false). */
+    readonly stay?: boolean;
+    /** Default `'fixed'` (runs per fixed step; `stepOnce` never runs it). */
+    readonly schedule?: 'fixed' | 'tick';
+    /** Default 150: the contacts band (SPEC §3), after transform composition at 100. */
+    readonly priority?: number;
+    /** Grid cell size, a performance setting only. Default 2 × a fixed radius (> 0), else 64. */
+    readonly cellSize?: number;
+    /** Plugin and system name. Default `'domecs-scene:contacts'`. */
+    readonly name?: string;
+}
+/**
+ * Plugin factory: overlap events for rules (spec §6.2). Each run of its
+ * system (`schedule`, default `'fixed'`, at `priority` 150) indexes every
+ * entity that holds the position component, at least one tag of `pairs` and
+ * a valid radius in a spatial grid, finds the pairs with
+ * `dx * dx + dy * dy <= (ra + rb) * (ra + rb)`, and diffs them against
+ * {@link ContactState}.
+ *
+ * A pair `[a, b]` means `a` holds the pair's first tag and `b` its second;
+ * for a same-tag pair `a < b`. An entity holding both tags of a pair can
+ * appear on either side (both directions are pairs); a pair found through
+ * two tag pairs counts once. Events are emitted as `end`, then `begin`, then
+ * (with `stay`) `stay`, each sorted by (a, b), and rules see them the next
+ * tick (`on: 'Contact', self: 'event.a', other: 'event.b'`). A despawned
+ * entity, or one that lost its tag, radius or a finite position, ends its
+ * pairs once on the next run. Results never depend on `cellSize`.
+ *
+ * Installs {@link Contact} and {@link ContactState} with `world.register`
+ * (install fails when another type holds either name). One contacts plugin
+ * per world: a second `use` throws (capability `domecs-scene:contacts`).
+ * Throws `RangeError`/`TypeError` here for invalid options. Disposing removes
+ * the system; `ContactState` keeps its last value.
+ */
+export declare function installContacts(options: ContactsOptions): Plugin;
+
 // file: despawn-orphan-plugin.d.ts
 import { type Plugin } from '@domecs/core';
 /**
@@ -151,6 +238,8 @@ export type { ComposeTransformsOptions } from './compose-transforms.js';
 export { createSpatialHash } from './spatial-hash.js';
 export type { SpatialHashOptions, SpatialIndex } from './spatial-hash.js';
 export { BUILD_ID } from './build-id.js';
+export { Contact, ContactState, installContacts } from './contacts.js';
+export type { ContactPayload, ContactPhase, ContactStateValue, ContactsOptions } from './contacts.js';
 
 // file: spatial-hash.d.ts
 import type { ComponentType, Entity, World } from '@domecs/core';

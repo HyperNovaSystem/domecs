@@ -21,7 +21,7 @@
  * Usage:
  *   pnpm build
  *   node bench/run.mjs
- *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|rules|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|contacts|rules|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -117,6 +117,10 @@ if (workload === 'all' || workload === 'spatial') {
   // Fixed at 1000 entities: the spec §5.1 cost targets are stated there.
   record(await runSpatial({ entityCount: 1_000, repeats: 200, queries: 100_000 }))
 }
+if (workload === 'all' || workload === 'contacts') {
+  // Fixed at 1000 entities × 2 tag pairs: the spec §6.2 cost target.
+  record(await runContacts({ entityCount: 1_000, ticks: 300 }))
+}
 if (workload === 'all' || workload === 'rules') {
   // Fixed at 1000 entities: the spec §5.2 cost targets are stated there.
   record(await runRules({ entityCount: 1_000, ticks: 300 }))
@@ -186,6 +190,7 @@ for (const r of results) {
       (r.nearestUsAvg != null
         ? ` refreshP50=${fmtMs(r.refreshP50Ms)} (target ${fmtMs(r.refreshTargetMs)}) nearestAvg=${r.nearestUsAvg.toFixed(3)}us (target ${r.nearestTargetUs}us) withinTarget=${r.withinTarget}`
         : '') +
+      (r.contactEvents != null ? ` contactEvents=${r.contactEvents}` : '') +
       (r.nearestRatio != null
         ? ` nearestRatio=${r.nearestRatio.toFixed(2)} (target ${r.nearestTargetRatio}) sumMemoRatio=${r.sumMemoRatio.toFixed(2)} (target ${r.sumTargetRatio}) withinTarget=${r.withinTarget}`
         : '') +
@@ -692,6 +697,84 @@ async function runSpatial({ entityCount, repeats, queries }) {
     withinTarget: refresh.p50 <= refreshTargetMs && nearestUsAvg <= nearestTargetUs,
     deterministic: agree,
     checksum,
+  }
+}
+
+/**
+ * Spec §6.2 cost target (informational, not a gate): one run of the contacts
+ * system at 1000 entities × 2 tag pairs ≤ 0.5 ms. Entities move each fixed
+ * step over a 1000 × 1000 field with radii from a component (2..6); a sample
+ * is the contacts system alone, timed by systems at priority 149 and 151.
+ */
+async function runContacts({ entityCount, ticks }) {
+  const { installContacts, Contact } = await importSceneDist()
+  const CPos = defineComponent('BenchContactPos', { defaults: { x: 0, y: 0 } })
+  const CBody = defineComponent('BenchContactBody', { defaults: { r: 1 } })
+  const CPlayer = defineComponent('BenchContactPlayer', { defaults: { p: 1 } })
+  const CEnemy = defineComponent('BenchContactEnemy', { defaults: { e: 1 } })
+  const CPickup = defineComponent('BenchContactPickup', { defaults: { k: 1 } })
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const ids = []
+  for (let i = 0; i < entityCount; i++) {
+    const tag = i % 10 === 0 ? CPlayer : i % 2 === 0 ? CEnemy : CPickup
+    ids.push(
+      world.spawn([
+        entry(CPos, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) }),
+        entry(CBody, { r: world.rand.uniformRange(2, 6) }),
+        entry(tag, {}),
+      ]),
+    )
+  }
+  world.system('bench:contacts:move', { schedule: 'fixed', priority: 0 }, () => {
+    const k = world.time.tick
+    for (let i = 0; i < ids.length; i++) {
+      const p = world.getComponent(ids[i], CPos)
+      p.x += ((i * 7 + k) % 5) - 2
+      p.y += ((i * 3 + k) % 5) - 2
+    }
+  })
+  let t0 = 0
+  const samples = []
+  world.system('bench:contacts:t0', { schedule: 'fixed', priority: 149 }, () => {
+    t0 = performance.now()
+  })
+  world.system('bench:contacts:t1', { schedule: 'fixed', priority: 151 }, () => {
+    samples.push(performance.now() - t0)
+  })
+  world.use(
+    installContacts({
+      position: { component: CPos },
+      radius: { component: CBody, field: 'r' },
+      pairs: [
+        [CPlayer, CEnemy],
+        [CPlayer, CPickup],
+      ],
+      stay: true,
+      cellSize: 16,
+    }),
+  )
+  let contactEvents = 0
+  world.system('bench:contacts:count', { schedule: 'event', triggers: [Contact] }, (ctx) => {
+    contactEvents += ctx.events.of(Contact).length
+  })
+  for (let k = 0; k < warmupTicks; k++) world.step(fixedStep)
+  samples.length = 0
+  contactEvents = 0
+  for (let k = 0; k < ticks; k++) world.step(fixedStep)
+  const { p50, p95 } = percentiles(samples)
+  const targetP50Ms = 0.5
+  return {
+    workload: 'contacts',
+    engine: 'domecs',
+    entities: entityCount,
+    ticks,
+    pairs: 2,
+    p50Ms: p50,
+    p95Ms: p95,
+    contactsP50Ms: p50,
+    contactEvents,
+    targetP50Ms,
+    withinTarget: p50 <= targetP50Ms,
   }
 }
 

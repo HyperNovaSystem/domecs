@@ -126,6 +126,9 @@ importers:
       '@domecs/core':
         specifier: workspace:*
         version: link:../domecs
+      '@domecs/rules':
+        specifier: workspace:*
+        version: link:../domecs-rules
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
