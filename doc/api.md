@@ -495,7 +495,9 @@ interface SystemDef {
   enabled?:  () => boolean
   state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)
   meta?:     JsonValue                     // annotation for tools; cloned into describe().systems[i].meta
-                                           // (@domecs/rules sets { rule: name })
+                                           // (@domecs/rules sets { rule: name }); non-JSON
+                                           // (function, undefined, NaN, class instance, cycle)
+                                           // → world.system() throws TypeError
 }
 
 type System = (ctx: SystemContext) => void

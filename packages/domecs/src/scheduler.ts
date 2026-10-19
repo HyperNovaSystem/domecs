@@ -29,7 +29,9 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
   /**
    * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
    * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
-   * Cloned at registration; the runtime never reads it.
+   * Cloned at registration; the runtime never reads it. A value JSON cannot
+   * carry (function, `undefined`, non-finite number, class instance, cycle)
+   * makes `world.system()` throw `TypeError`.
    */
   meta?: JsonValue
   /**
@@ -263,6 +265,19 @@ export function createScheduler(
         )
       }
 
+      if (def.meta !== undefined) {
+        // §4.5: meta is a JSON-safe annotation for the plain-data manifest.
+        // Refuse what JSON cannot carry before any state changes (like a
+        // non-finite order) rather than leak a function / NaN into
+        // describe() or overflow the stack cloning a cycle.
+        const problem = jsonProblem(def.meta, 'meta', [])
+        if (problem !== null) {
+          throw new TypeError(
+            `domecs: system "${name}" ${problem}; meta must be JSON-safe (null, boolean, finite number, string, array, plain object).`,
+          )
+        }
+      }
+
       if (def.schedule === 'reactive') {
         // defensive — unrepresentable in TS, retained for untyped JS callers
         if (!def.reactsTo) {
@@ -399,4 +414,52 @@ function referencedComponentNames(nodes: readonly QueryNode[]): string[] {
   }
   nodes.forEach(walk)
   return Array.from(out).sort()
+}
+
+/**
+ * `null` when `value` is a JSON value (null, boolean, finite number, string,
+ * dense array, plain or null-prototype object, acyclic), otherwise a short
+ * description of the first offending location (`path`). `ancestors` holds the
+ * containers on the current branch, so a shared but acyclic reference passes.
+ */
+function jsonProblem(value: unknown, path: string, ancestors: object[]): string | null {
+  if (value === null) return null
+  switch (typeof value) {
+    case 'boolean':
+    case 'string':
+      return null
+    case 'number':
+      return Number.isFinite(value) ? null : `${path} is ${String(value)}`
+    case 'object':
+      break
+    case 'undefined':
+      return `${path} is undefined`
+    default:
+      return `${path} is a ${typeof value}`
+  }
+  const obj = value as object
+  if (ancestors.includes(obj)) return `${path} is a cyclic reference`
+  ancestors.push(obj)
+  try {
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const at = `${path}[${i}]`
+        if (!(i in obj)) return `${at} is a hole`
+        const p = jsonProblem(obj[i], at, ancestors)
+        if (p !== null) return p
+      }
+      return null
+    }
+    const proto = Object.getPrototypeOf(obj)
+    if (proto !== Object.prototype && proto !== null) {
+      return `${path} is not a plain object`
+    }
+    for (const key of Object.keys(obj)) {
+      const p = jsonProblem((obj as Record<string, unknown>)[key], `${path}.${key}`, ancestors)
+      if (p !== null) return p
+    }
+    return null
+  } finally {
+    ancestors.pop()
+  }
 }

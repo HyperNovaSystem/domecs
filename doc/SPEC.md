@@ -271,7 +271,9 @@ world.system(name, {
 
 `meta` is a JSON-safe annotation the runtime never reads; `describe().systems`
 reports a clone of it. `@domecs/rules` sets `{ rule: name }` on each rule's
-system.
+system. A `meta` JSON cannot carry (a function, `undefined`, a non-finite
+number, a class instance, a cycle) makes `world.system()` throw `TypeError`
+before anything is registered.
 
 `state` is the system's private slot, readable and writable as `ctx.state` inside `fn`. It is preserved across dev-mode hot-swap (§9.5). It is **not** part of the world snapshot — on `restore()`, systems re-register and `state` resets. Closures over module-scope values are not preserved across hot-swap; swap-durable state must live in `state`.
 

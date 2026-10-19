@@ -1293,7 +1293,9 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
     /**
      * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
      * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
-     * Cloned at registration; the runtime never reads it.
+     * Cloned at registration; the runtime never reads it. A value JSON cannot
+     * carry (function, `undefined`, non-finite number, class instance, cycle)
+     * makes `world.system()` throw `TypeError`.
      */
     meta?: JsonValue;
     /**

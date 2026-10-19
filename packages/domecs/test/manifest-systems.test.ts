@@ -154,3 +154,45 @@ describe('field and event descriptions', () => {
     })
   })
 })
+
+// §4.5: `meta` is a JSON-safe annotation. A value JSON cannot carry is
+// refused at world.system() (like a non-finite `order`) instead of leaking a
+// live function / NaN into the plain-data manifest or overflowing the stack
+// on a cycle.
+describe('describe().systems — meta must be JSON-safe', () => {
+  const cyclic: Record<string, unknown> = {}
+  cyclic.self = cyclic
+  const bad: [string, unknown, RegExp][] = [
+    ['function', { fn: () => 1 }, /meta\.fn/],
+    ['undefined member', { u: undefined }, /meta\.u/],
+    ['NaN', { n: NaN }, /meta\.n/],
+    ['Infinity', [1, Infinity], /meta\[1\]/],
+    ['sparse array hole', [1, , 3], /meta\[1\]/],
+    ['bigint', { b: 1n }, /meta\.b/],
+    ['symbol', Symbol('s'), /meta\b/],
+    ['class instance', { d: new Date(0) }, /meta\.d/],
+    ['Map', new Map(), /meta\b/],
+    ['cycle', cyclic, /meta\.self/],
+  ]
+  for (const [label, meta, path] of bad) {
+    it(`throws TypeError for a ${label} and registers nothing`, () => {
+      const w = world()
+      expect(() => w.system('bad', { meta: meta as JsonValue }, () => {})).toThrow(TypeError)
+      expect(() => w.system('bad', { meta: meta as JsonValue }, () => {})).toThrow(path)
+      expect(w.describe().systems.some((s) => s.name === 'bad')).toBe(false)
+    })
+  }
+
+  it('accepts nested plain JSON, null-prototype objects and shared (acyclic) references', () => {
+    const w = world()
+    const shared = { k: 1 }
+    const bare = Object.assign(Object.create(null) as Record<string, JsonValue>, { z: true })
+    w.system('ok', { meta: { a: [1, 'x', null, false, { b: -0 }], s1: shared, s2: shared, bare } }, () => {})
+    expect(entryFor(w, 'ok').meta).toEqual({
+      a: [1, 'x', null, false, { b: -0 }],
+      s1: { k: 1 },
+      s2: { k: 1 },
+      bare: { z: true },
+    })
+  })
+})
