@@ -233,6 +233,190 @@ export declare function childNodes(node: AstNode | EntityNode): Array<AstNode | 
  */
 export declare const BUILD_ID: string;
 
+// file: effects.d.ts
+import { type ComponentBag, type ComponentType, type EventType, type World } from '@domecs/core';
+import type { AstNode } from './ast.js';
+import { type CompiledExpression, type EvalEnv } from './evaluator.js';
+/**
+ * A deferred structural or command effect of a rule (2.3, §6.1). Effects
+ * are queued for an entity only when its `when` held and all its actions
+ * succeeded (O-68 atomicity), with every expression evaluated at queue time
+ * (self is the queuing entity; it sees the entity's own staged writes, like
+ * a later action). They are applied at the end of the rule's run, in queue
+ * order (payload, then entity ascending, then effect index), so iteration
+ * and membership stay stable within the run.
+ *
+ * - `emit`: emit the event named `emit` with `payload` (field → expression;
+ *   absent: `{}`). The payload is validated with `validateEventPayload`
+ *   when applied; an invalid one is a `rule_eval_failed` fault on the
+ *   queuing entity and is not emitted. Delivered **next tick** (bus
+ *   semantics), so a chained event rule runs then.
+ * - `spawn`: spawn the prefab `spawn` (from the `prefabs` option, called
+ *   per spawn; each entry value is plain-data cloned). `at` writes the
+ *   `spatial` option's position fields (requires `spatial`); `set` writes
+ *   `"Component.field"` → expression, after `at`; a component the prefab
+ *   lacks is added with its defaults. Ids follow apply order.
+ * - `despawn`: despawn self or other. Idempotent; later effects that target
+ *   a despawned entity are skipped.
+ * - `add`: add the component to `to` (default self) from its defaults plus
+ *   `set` (field → expression; `"Component.field"` naming the same
+ *   component is accepted too). When the entity already has it, only `set`
+ *   is applied (marked changed when a value changed).
+ * - `remove`: remove the component from `from` (default self); absent is a
+ *   no-op.
+ *
+ * Targets: `'other'` is the event rule's `other` binding; when it gave no
+ * entity, or the entity is dead by the time the effect applies, the effect
+ * is skipped. A world-scope event rule (no `self`, empty `query`) has no
+ * self to target.
+ */
+export type RuleEffectDef = {
+    readonly emit: string;
+    readonly payload?: Readonly<Record<string, string>>;
+} | {
+    readonly spawn: string;
+    readonly at?: {
+        readonly x: string;
+        readonly y: string;
+    };
+    readonly set?: Readonly<Record<string, string>>;
+} | {
+    readonly despawn: 'self' | 'other';
+} | {
+    readonly add: string;
+    readonly to?: 'self' | 'other';
+    readonly set?: Readonly<Record<string, string>>;
+} | {
+    readonly remove: string;
+    readonly from?: 'self' | 'other';
+};
+/** Where an effect error points (a member of `RuleDefPath`). */
+export interface EffectPath {
+    readonly effect: number;
+    readonly part: string;
+}
+/** One expression of an effect: parsed at compile time, compiled once memoization is known. */
+export interface EffectSlot {
+    readonly ast: AstNode;
+    readonly path: EffectPath;
+    /** Must produce a number (`at.x`, `at.y`). */
+    readonly numeric: boolean;
+    run: CompiledExpression;
+}
+type Target = 'self' | 'other';
+/** A compiled effect. */
+export type EffectPlan = {
+    readonly kind: 'emit';
+    readonly name: string;
+    readonly type: EventType<unknown>;
+    readonly fields: ReadonlyArray<readonly [string, EffectSlot]>;
+} | {
+    readonly kind: 'spawn';
+    readonly prefab: string;
+    readonly at: {
+        readonly type: ComponentType<any>;
+        readonly x: string;
+        readonly y: string;
+        readonly ex: EffectSlot;
+        readonly ey: EffectSlot;
+    } | undefined;
+    readonly set: ReadonlyArray<{
+        readonly type: ComponentType<any>;
+        readonly field: string;
+        readonly slot: EffectSlot;
+    }>;
+} | {
+    readonly kind: 'despawn';
+    readonly target: Target;
+} | {
+    readonly kind: 'add';
+    readonly type: ComponentType<any>;
+    readonly target: Target;
+    readonly set: ReadonlyArray<readonly [string, EffectSlot]>;
+} | {
+    readonly kind: 'remove';
+    readonly type: ComponentType<any>;
+    readonly target: Target;
+};
+/** What compileRule lends {@link compileEffects}. */
+export interface EffectCompileContext {
+    fail(path: EffectPath, position: number, message: string): void;
+    /** Resolve a component name (errors at position -1). */
+    component(name: string, path: EffectPath, context: string): ComponentType<any> | undefined;
+    /** Report a forbidden field name; true when it is allowed. */
+    field(name: string, path: EffectPath): boolean;
+    /** Parse and check one expression; undefined after reporting its errors. */
+    expression(source: string, path: EffectPath, context: string): AstNode | undefined;
+    /** The spatial option's position component, or undefined after reporting why not. */
+    spatial(path: EffectPath): {
+        type: ComponentType<any>;
+        x: string;
+        y: string;
+    } | undefined;
+    readonly resolveEvent: ((name: string) => EventType<unknown> | undefined) | undefined;
+    readonly prefabs: ((name: string) => ComponentBag | undefined) | undefined;
+    /** World-scope event rule: no self. */
+    readonly worldScope: boolean;
+    /** The rule binds `other`. */
+    readonly hasOther: boolean;
+}
+/**
+ * Check and parse `def.effects` (2.3, §6.1). Every error goes through
+ * `ctx.fail` with `{ effect: i, part }`; `part` names the key (`'emit'`,
+ * `'payload'`, `'spawn'`, `'at'`, `'despawn'`, `'add'`, `'to'`, `'remove'`,
+ * `'from'`), the expression (`'payload.<field>'`, `'at.x'`, `'at.y'`,
+ * `'set.<key>'`), or `'effect'` for the effect's shape; a non-array
+ * `effects` is `{ effect: -1, part: 'effects' }`. Returns the plans and
+ * every expression slot (their `run` is filled in by the caller).
+ */
+export declare function compileEffects(effects: unknown, ctx: EffectCompileContext): {
+    plans: EffectPlan[];
+    slots: EffectSlot[];
+};
+/** An effect queued for apply at the end of the run. */
+export type QueuedEffect = {
+    readonly kind: 'emit';
+    readonly name: string;
+    readonly type: EventType<unknown>;
+    readonly payload: Record<string, unknown>;
+    readonly source: number | undefined;
+} | {
+    readonly kind: 'spawn';
+    readonly prefab: string;
+    readonly writes: ReadonlyArray<readonly [ComponentType<any>, string, unknown]>;
+    readonly source: number | undefined;
+} | {
+    readonly kind: 'despawn';
+    readonly target: number;
+    readonly source: number | undefined;
+} | {
+    readonly kind: 'add';
+    readonly type: ComponentType<any>;
+    readonly target: number;
+    readonly writes: ReadonlyArray<readonly [string, unknown]>;
+    readonly source: number | undefined;
+} | {
+    readonly kind: 'remove';
+    readonly type: ComponentType<any>;
+    readonly target: number;
+    readonly source: number | undefined;
+};
+/**
+ * Evaluate `plans` for the entity `env.self` (undefined in world scope)
+ * and append the results to `out`. Throws {@link RuleEvalError} like an
+ * action; the caller then discards everything this entity queued.
+ * Effects on an unbound `other` are not queued.
+ */
+export declare function queueEffects(plans: readonly EffectPlan[], env: EvalEnv, out: QueuedEffect[]): void;
+/**
+ * Apply `queue` in order (2.3, §6.1). A failure — an invalid emit payload,
+ * a write a component cannot take, a prefab gone missing, a component
+ * `validate` rejecting the result — skips that effect and is reported
+ * through `fault(source, message)`; the other effects still apply.
+ */
+export declare function applyEffects(world: World, queue: readonly QueuedEffect[], prefabs: ((name: string) => ComponentBag | undefined) | undefined, fault: (source: number | undefined, message: string) => void): void;
+export {};
+
 // file: evaluator.d.ts
 import { type AstNode, type ModifierName } from './ast.js';
 /** A value an expression produces. */
@@ -394,6 +578,7 @@ export { compileRule, installRules } from './rules.js';
 export type { CompiledRule, CompileRuleOptions, InstallRulesOptions, RuleActionDef, RuleDef, RuleDefPath, RuleError, RuleFault, RulesHandle, SpatialOption, } from './rules.js';
 export { compileWorldExpression } from './world-expression.js';
 export type { WorldExpression } from './world-expression.js';
+export type { RuleEffectDef } from './effects.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: lexer.d.ts
@@ -499,8 +684,9 @@ export declare function parseExpression(source: string): {
 export type { AstNode } from './ast.js';
 
 // file: rules.d.ts
-import { type ComponentType, type EventType, type World } from '@domecs/core';
+import { type ComponentBag, type ComponentType, type EventType, type World } from '@domecs/core';
 import { type AstNode, type EntityNode } from './ast.js';
+import { type RuleEffectDef } from './effects.js';
 /**
  * O-67: field names a rule may never read or write. Reads are own-property
  * only, and these names would reach the object's prototype machinery.
@@ -569,12 +755,26 @@ export interface RuleDef {
     without?: string[];
     when?: string;
     actions: RuleActionDef[];
+    /**
+     * Deferred structural and command effects (2.3, §6.1): `emit`, `spawn`,
+     * `despawn`, `add`, `remove`. Queued per entity only when `when` held and
+     * every action succeeded; applied at the end of the rule's run, in queue
+     * order. See {@link RuleEffectDef}.
+     */
+    effects?: RuleEffectDef[];
 }
 /**
  * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
  * members, so keep a default branch when switching on it.
  */
-export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | 'on' | 'self' | 'other' | {
+export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | 'on' | 'self' | 'other'
+/** An effect's part: its key (`'emit'`, `'spawn'`, `'to'`, ...), an
+ *  expression (`'payload.<field>'`, `'at.x'`, `'set.<key>'`), `'effect'`
+ *  (its shape), or `{ effect: -1, part: 'effects' }` (not an array). */
+ | {
+    readonly effect: number;
+    readonly part: string;
+} | {
     readonly query: number;
 } | {
     readonly without: number;
@@ -677,6 +877,12 @@ export interface CompileRuleOptions {
      * no default, so an event rule compiled without it reports `on`.
      */
     readonly resolveEvent?: (name: string) => EventType<unknown> | undefined;
+    /**
+     * Prefab bags by name for `spawn` effects (2.3, §6.1). Called once per
+     * spawn effect at compile time (an unknown prefab is a `RuleError` at
+     * `{ effect: i, part: 'spawn' }`) and once per spawn; return a fresh bag.
+     */
+    readonly prefabs?: (name: string) => ComponentBag | undefined;
 }
 /** Visit `root` and every node below it (expressions and entity nodes), parents first. */
 export declare function forEachNode(root: AstNode, visit: (node: AstNode | EntityNode) => void): void;
@@ -743,6 +949,12 @@ export interface InstallRulesOptions {
      * and its name must not be ambiguous.
      */
     readonly resolveEvent?: (name: string) => EventType<unknown> | undefined;
+    /**
+     * Prefab bags by name, for `spawn` effects (2.3, §6.1). Called when a
+     * rule compiles (an unknown prefab is a {@link RuleError}) and once per
+     * spawn; return a fresh bag (entry values are plain-data cloned anyway).
+     */
+    readonly prefabs?: (name: string) => ComponentBag | undefined;
 }
 /**
  * Constructs a {@link RulesHandle} and immediately calls `update(defs)` once.

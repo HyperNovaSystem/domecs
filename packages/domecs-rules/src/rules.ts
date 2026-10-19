@@ -4,6 +4,7 @@ import {
   Not,
   createSpatialGrid,
   validateEventPayload,
+  type ComponentBag,
   type ComponentType,
   type EntityView,
   type EventType,
@@ -19,6 +20,15 @@ import { childNodes, walkComponentRefs, type AstNode, type EntityNode } from './
 import { parseExpression } from './parser.js'
 import { compileExpression, RuleEvalError, RuleNoValueError, type CompiledExpression, type EvalEnv } from './evaluator.js'
 import { inferKind } from './typecheck.js'
+import {
+  applyEffects,
+  compileEffects,
+  queueEffects,
+  type EffectPlan,
+  type EffectSlot,
+  type QueuedEffect,
+  type RuleEffectDef,
+} from './effects.js'
 
 /**
  * O-67: field names a rule may never read or write. Reads are own-property
@@ -90,6 +100,13 @@ export interface RuleDef {
   without?: string[]
   when?: string
   actions: RuleActionDef[]
+  /**
+   * Deferred structural and command effects (2.3, §6.1): `emit`, `spawn`,
+   * `despawn`, `add`, `remove`. Queued per entity only when `when` held and
+   * every action succeeded; applied at the end of the rule's run, in queue
+   * order. See {@link RuleEffectDef}.
+   */
+  effects?: RuleEffectDef[]
 }
 
 /**
@@ -106,6 +123,10 @@ export type RuleDefPath =
   | 'on'
   | 'self'
   | 'other'
+  /** An effect's part: its key (`'emit'`, `'spawn'`, `'to'`, ...), an
+   *  expression (`'payload.<field>'`, `'at.x'`, `'set.<key>'`), `'effect'`
+   *  (its shape), or `{ effect: -1, part: 'effects' }` (not an array). */
+  | { readonly effect: number; readonly part: string }
   | { readonly query: number }
   | { readonly without: number }
   | { readonly action: number; readonly part: 'set' | 'expr' }
@@ -157,6 +178,9 @@ interface CompiledRuleInternal extends CompiledRule {
   otherBinding: CompiledExpression | undefined
   /** Event rule with no `self` and an empty `query`: runs once per payload with no entity. */
   worldScope: boolean
+  /** §6.1 effects, and every expression they evaluate. */
+  effects: EffectPlan[]
+  effectSlots: EffectSlot[]
   queryTypes: ComponentType<any>[]
   withoutTypes: ComponentType<any>[]
   /** Sets read by `nearest`/`countWithin`: one grid each per run. */
@@ -429,6 +453,39 @@ export function compileRule(
     }
   }
 
+  // §6.1 effects: parsed and checked here; compiled below with the actions.
+  const { plans: effectPlans, slots: effectSlots } = compileEffects(def.effects, {
+    fail,
+    component: (name, path, context) => resolveAndTrack(name, -1, context, path),
+    field: (name, path) => {
+      const before = errors.length
+      checkField(name, -1, path)
+      return errors.length === before
+    },
+    expression: (source, path, context) => {
+      const parsed = parseExpression(source)
+      if ('errors' in parsed) {
+        for (const e of parsed.errors) fail(path, e.position, e.message)
+        return undefined
+      }
+      checkExpression(parsed.ast, path, context, source, exprScope)
+      return parsed.ast
+    },
+    spatial: (path) => {
+      const option = options.spatial
+      if (!option) {
+        fail(path, -1, '"at" writes positions: pass the spatial option to installRules')
+        return undefined
+      }
+      const type = resolveAndTrack(option.component, -1, 'named by the spatial option', path)
+      return type ? { type, x: option.x ?? 'x', y: option.y ?? 'y' } : undefined
+    },
+    resolveEvent: options.resolveEvent,
+    prefabs: options.prefabs,
+    worldScope,
+    hasOther: isEvent && def.other !== undefined,
+  })
+
   if (errors.length > 0) return { rule: null, errors }
 
   // O-68 (R4): reject type errors certain before the rule runs (see
@@ -439,6 +496,12 @@ export function compileRule(
     if (!ast) continue
     const kind = inferKind(ast, (position, message) => fail(key, position, message))
     if (kind === 'string' || kind === 'boolean') fail(key, ast.pos, `"${key}" must give an entity id (a number), not a ${kind}`)
+  }
+  for (const slot of effectSlots) {
+    const kind = inferKind(slot.ast, (position, message) => fail(slot.path, position, message))
+    if (slot.numeric && (kind === 'string' || kind === 'boolean')) {
+      fail(slot.path, slot.ast.pos, `"${slot.path.part}" must give a number, not a ${kind}`)
+    }
   }
   for (let j = 0; j < compiledActions.length; j++) {
     const exprPath: RuleDefPath = { action: compiledIndex[j]!, part: 'expr' }
@@ -458,6 +521,7 @@ export function compileRule(
       node.component === undefined || !written.has(componentsByName.get(node.component)!),
   }
   for (const action of compiledActions) action.run = compileExpression(action.ast, memo)
+  for (const slot of effectSlots) slot.run = compileExpression(slot.ast, memo)
 
   const rule: CompiledRuleInternal = {
     def,
@@ -465,6 +529,8 @@ export function compileRule(
     selfBinding: bindingAsts.self ? compileExpression(bindingAsts.self, memo) : undefined,
     otherBinding: bindingAsts.other ? compileExpression(bindingAsts.other, memo) : undefined,
     worldScope,
+    effects: effectPlans,
+    effectSlots,
     queryTypes,
     withoutTypes,
     spatialSets: [...spatialSets],
@@ -509,6 +575,12 @@ export interface CompileRuleOptions {
    * no default, so an event rule compiled without it reports `on`.
    */
   readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
+  /**
+   * Prefab bags by name for `spawn` effects (2.3, §6.1). Called once per
+   * spawn effect at compile time (an unknown prefab is a `RuleError` at
+   * `{ effect: i, part: 'spawn' }`) and once per spawn; return a fresh bag.
+   */
+  readonly prefabs?: (name: string) => ComponentBag | undefined
 }
 
 /**
@@ -604,8 +676,9 @@ function registerRuleSystem(
   rule: CompiledRuleInternal,
   order: number,
   rng: 'shared' | 'own',
+  prefabs: ((name: string) => ComponentBag | undefined) | undefined,
 ): SystemHandle {
-  const { def, eventType, selfBinding, otherBinding, worldScope, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
+  const { def, eventType, selfBinding, otherBinding, worldScope, effects, effectSlots, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
   const isEvent = def.schedule === 'event'
   // Staging keys name the resolved component type, not the rule's spelling:
   // `resolve` may map two names to one component, and a read under either
@@ -627,7 +700,20 @@ function registerRuleSystem(
       if (k >= 0 && k < i) hit = true
     })
     return hit
-  })
+  }) || effectReadsWritten()
+  // §6.1: effect expressions run after every action, so they see the
+  // entity's staged writes like a later action would.
+  function effectReadsWritten(): boolean {
+    if (actions.length === 0) return false
+    for (const slot of effectSlots) {
+      let hit = false
+      walkComponentRefs(slot.ast, (c, f) => {
+        if (f !== null && actionKeys.includes(keyOf(c, f))) hit = true
+      })
+      if (hit) return true
+    }
+    return false
+  }
   const uniqueTargets = new Set(actionKeys).size === actionKeys.length
   // §5.2 `without`: And(...Has, ...Not(Has)); the plain list otherwise (2.1 shape).
   const query: QueryDef =
@@ -681,6 +767,10 @@ function registerRuleSystem(
       const targets: Array<Record<string, unknown>> = []
       const values: Array<number | string | boolean> = []
       const committed = new Set<string>()
+      // §6.1: effects queued this run (applied at its end), and the ones
+      // the current entity is queuing (dropped if it fails).
+      const queue: QueuedEffect[] = []
+      const pending: QueuedEffect[] = []
       // The evaluated entity; undefined in a world-scope event rule.
       let entity: EntityView | undefined
       // §6.1: the payload being handled (event rules).
@@ -820,6 +910,13 @@ function registerRuleSystem(
             values[i] = result
             if (readsStaged) staged.set(actionKeys[i]!, result)
           }
+          // §6.1: effects evaluate before any write commits, so a failing
+          // effect expression leaves the entity untouched too.
+          if (effects.length > 0) {
+            pending.length = 0
+            queueEffects(effects, env, pending)
+            for (const effect of pending) queue.push(effect)
+          }
           // Commit the final value of each field once; R9: an unchanged
           // value is not a change.
           if (uniqueTargets) {
@@ -901,6 +998,8 @@ function registerRuleSystem(
         }
         payload = undefined
       }
+      // §6.1: effects apply at the end of the run, in queue order.
+      if (queue.length > 0) applyEffects(world, queue, prefabs, fault)
       if (faults.length > 0) return { errors: faults }
     },
   )
@@ -973,6 +1072,12 @@ export interface InstallRulesOptions {
    * and its name must not be ambiguous.
    */
   readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
+  /**
+   * Prefab bags by name, for `spawn` effects (2.3, §6.1). Called when a
+   * rule compiles (an unknown prefab is a {@link RuleError}) and once per
+   * spawn; return a fresh bag (entry values are plain-data cloned anyway).
+   */
+  readonly prefabs?: (name: string) => ComponentBag | undefined
 }
 
 /**
@@ -1029,6 +1134,7 @@ export function installRules(
   const compileOptions: CompileRuleOptions = {
     ...(spatialOption ? { spatial: spatialOption } : {}),
     resolveEvent: options.resolveEvent ?? ((name) => world.lookupEvent(name)),
+    ...(options.prefabs ? { prefabs: options.prefabs } : {}),
   }
 
   function update(newDefs: RuleDef[]): Map<string, RuleError[]> {
@@ -1070,7 +1176,7 @@ export function installRules(
         continue
       }
 
-      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal, order, rngMode)
+      const handle = registerRuleSystem(world, compiled.rule as CompiledRuleInternal, order, rngMode, options.prefabs)
       active.set(def.name, handle)
     }
 
