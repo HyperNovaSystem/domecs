@@ -227,4 +227,17 @@ describe('firstDivergence', () => {
       change: { resource: 'R', path: 'n', before: 1, after: 2 },
     })
   })
+
+  it('reports snapshots differing only in pendingEvents (§4.7), like hashSnapshot', () => {
+    const a = snap([[1, { P: { x: 1 } }]])
+    const b = { ...a, pendingEvents: [{ event: 'Ping', payload: { n: 1 } }] }
+    expect(firstDivergence(a, b)).toEqual({ where: 'state', key: 'pendingEvents' })
+    expect(firstDivergence(b, { ...b, pendingEvents: [{ event: 'Ping', payload: { n: 2 } }] })).toEqual({
+      where: 'state',
+      key: 'pendingEvents',
+    })
+    expect(firstDivergence(b, { ...b, pendingEvents: [{ event: 'Ping', payload: { n: 1 } }] })).toBeNull()
+    // State fields come first: a tick difference is reported before the queue.
+    expect(firstDivergence(a, { ...b, tick: a.tick + 1 })).toEqual({ where: 'state', key: 'tick' })
+  })
 })

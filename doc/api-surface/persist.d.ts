@@ -127,7 +127,7 @@ export interface SnapshotDiff {
 /** The first difference {@link firstDivergence} finds. */
 export type Divergence = {
     readonly where: 'state';
-    readonly key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog';
+    readonly key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' | 'pendingEvents';
 } | {
     readonly where: 'entity';
     readonly entity: Entity;
@@ -153,7 +153,8 @@ export declare function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot, 
 /**
  * The first difference between two snapshots, in canonical order: the
  * top-level state fields (`seed`, `tick`, `scaledTime`, `nextId`,
- * `rngRoot`, `rngStreams`, then `fixedBacklog` with its `fixedStep`), then
+ * `rngRoot`, `rngStreams`, `fixedBacklog` with its `fixedStep`, then the
+ * in-flight `pendingEvents` as a whole, §4.7), then
  * the lowest entity id that differs (added, removed, or its first field
  * change by sorted component name and key; a component present on one side
  * only is a change at path `""`), then resources by sorted name. `version`,
