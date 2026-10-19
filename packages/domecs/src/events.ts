@@ -59,9 +59,15 @@ export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
 
 /**
  * O-39: shallow payload validation against an event's declared schema, used
- * by `world.action()` so the typed command boundary rejects malformed
- * commands instead of accepting them as no-ops. Only applies when the event
- * was defined with `{ schema }` — schema-less events stay unvalidated.
+ * by `world.action()` / `bridge.act()` so the typed command boundary rejects
+ * malformed commands instead of accepting them as no-ops. Only applies when
+ * the event was defined with `{ schema }` — schema-less events stay
+ * unvalidated (always `null`).
+ *
+ * Public so hosts (editors, agent harnesses) can pre-validate a payload with
+ * exactly the check `action()` applies, without emitting or stepping. For a
+ * rejected payload, `action()` reports
+ * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
  * - payload must be a plain object

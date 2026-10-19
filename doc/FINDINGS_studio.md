@@ -168,3 +168,31 @@ skipped") but doesn't say "signals" the way the internal `runTick` F-6
 comment does — worth naming `tickEnd`/`tickStart` explicitly there too, so a
 consumer discovers this specific hazard from the public signature alone
 rather than needing to read `runTick`'s implementation.
+
+## 2026-10-19 — `validateEventPayload` is not exported from `@domecs/core`
+
+`world.action()` / `bridge.act()` reject a malformed payload for an event
+declared with a `schema` (O-39) through `validateEventPayload`
+(`packages/domecs/src/events.ts`). The function was `export`ed from its
+module but not re-exported from the package entry point
+(`packages/domecs/src/index.ts`), so a consumer of the published package
+could not call it. Studio needs the same check to validate a command before
+sending it (editor forms, the AI harness's act tool) and kept its own copy of
+the validator, which can drift from the engine's rules (unknown fields,
+`kind` checks, enum `options`) without any test noticing.
+
+**Resolution (engine, 2026-10-19, `feat(core): export validateEventPayload
+(studio finding)`):** `@domecs/core` exports
+`validateEventPayload(type: EventType<unknown>, payload: unknown): string | null`
+under that name (the name the harness spec already uses in §5 for rule
+`emit` validation). `null` means valid (always `null` for a schema-less
+event); otherwise it returns the reason fragment that `action()` reports as
+`invalid payload for "<name>": <fragment>`. Documented in `doc/api.md`
+(Events, doctest `validate-event-payload`); API surface updated; test
+`packages/domecs/test/validate-event-payload.test.ts` pins the export and its
+agreement with `world.action()`. Studio can drop its copy once it pins an
+engine build that includes this commit.
+
+**Not changed here:** studio's docs still say engine "milestones E1–E18"
+(already noted in the harness spec's revision-3 verification notes). That
+text lives in the studio repo; the follow-up (E1–E21) belongs there.

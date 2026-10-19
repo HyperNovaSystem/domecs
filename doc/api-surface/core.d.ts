@@ -557,9 +557,15 @@ export declare function isEventType(value: unknown): value is EventType<unknown>
 export declare function internalEvent<T>(type: EventType<T>): InternalEventType<T>;
 /**
  * O-39: shallow payload validation against an event's declared schema, used
- * by `world.action()` so the typed command boundary rejects malformed
- * commands instead of accepting them as no-ops. Only applies when the event
- * was defined with `{ schema }` — schema-less events stay unvalidated.
+ * by `world.action()` / `bridge.act()` so the typed command boundary rejects
+ * malformed commands instead of accepting them as no-ops. Only applies when
+ * the event was defined with `{ schema }` — schema-less events stay
+ * unvalidated (always `null`).
+ *
+ * Public so hosts (editors, agent harnesses) can pre-validate a payload with
+ * exactly the check `action()` applies, without emitting or stepping. For a
+ * rejected payload, `action()` reports
+ * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
  * - payload must be a plain object
@@ -746,7 +752,7 @@ export { defineResource } from './resource.js';
 export { createWorld } from './world.js';
 export { createAgentBridge } from './agent.js';
 export type { AgentBridge, AgentBridgeOptions, AgentObservation, } from './agent.js';
-export { defineEvent } from './events.js';
+export { defineEvent, validateEventPayload } from './events.js';
 export { createRng, deriveStream, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';
 export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResource, normalize as normalizeQuery, collectHasComponents, QueryNodeKind, } from './query.js';

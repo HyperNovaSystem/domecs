@@ -663,6 +663,14 @@ interface QueryHooks<Fields = Record<string, unknown>> {
 ```ts
 function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
 
+// The O-39 payload check world.action / bridge.act apply, without emitting or
+// stepping: null when valid (always null for a schema-less event), else a
+// reason fragment. A rejected action reports
+// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a plain
+// object, undeclared keys are rejected, declared keys (all optional) must
+// match their kind / enum options; 'unknown' accepts anything.
+function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null
+
 interface EventDefOptions {
   // Payload field schema (component FieldSchema vocabulary). World.action /
   // bridge.act validate payloads against it (O-39).
@@ -693,6 +701,27 @@ interface EventView {
   of<T>(type: EventType<T>): readonly T[]
   emit<T>(type: EventType<T>, payload: T): void
 }
+```
+
+Pre-validate a command (a form, an editor, an agent harness) with the same
+check `action()` uses, so the two never drift:
+
+```ts doctest name=validate-event-payload
+import { strict as assert } from 'node:assert'
+import { createWorld, defineEvent, validateEventPayload } from '@domecs/core'
+
+const Move = defineEvent<{ dx: number; mode?: 'walk' | 'run' }>('Move', {
+  schema: { fields: { dx: { kind: 'number' }, mode: { kind: 'enum', options: ['walk', 'run'] } } },
+})
+
+assert.equal(validateEventPayload(Move, { dx: 2, mode: 'run' }), null)
+const why = validateEventPayload(Move, { dx: 2, dz: 1 })
+assert.match(why!, /unknown field "dz"/)
+
+const world = createWorld({ headless: true })
+const result = world.action(Move, { dx: 2, dz: 1 } as never)
+assert.equal(result.accepted, false)
+assert.equal(result.reason, `invalid payload for "Move": ${why}`)
 ```
 
 **Inter-entity references.** Components carrying foreign-entity ids

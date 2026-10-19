@@ -6,6 +6,13 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `@domecs/core`: `validateEventPayload(type, payload): string | null` is now
+  exported — the O-39 schema check `world.action()` / `bridge.act()` apply,
+  for hosts that pre-validate a command without emitting or stepping (studio
+  finding 2026-10-19; studio had kept a copy).
+
 ## [2.1.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the
