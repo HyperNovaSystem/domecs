@@ -3,7 +3,7 @@
 // restored from one of its snapshots, then stepped without touching the live
 // world (or its views).
 import type { SystemicFault } from './errors.js'
-import { actLogHash, applyActFrame, checkLog, type ActLog, type ActLogFrame, type ReplayError } from './replay.js'
+import { actLogHash, applyActFrame, checkLog, decodeInput, type ActLog, type ActLogFrame, type ReplayError } from './replay.js'
 import { err, normalizeCause, ok, type JsonValue, type Result, type SerializedError } from './result.js'
 import type { RngState } from './rng.js'
 import { setOwn, type WorldSnapshot } from './snapshot.js'
@@ -109,7 +109,11 @@ export interface RunBranchOptions {
    * log's frame whose `tick` is `world.time.tick` is applied with §7.1's
    * frame code (the first such frame, when ticks repeat after a `restore`
    * gap). Steps with no frame use `dt`. `baseHash` and checkpoints are not
-   * compared (that is `replay`'s job).
+   * compared (that is `replay`'s job). Before the first step, the input of
+   * the latest frame earlier than `world.time.tick` is set (input is
+   * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
+   * or keyframe starts with the source's input. The scale is not carried:
+   * pass the source's scale at that tick to {@link createBranch}.
    */
   readonly log?: ActLog
   /** Read-only probes sampled into `samples` (values are copied as plain data). */
@@ -194,6 +198,14 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
       })
     }
     for (const f of log.frames) if (!frames.has(f.tick)) frames.set(f.tick, f)
+    // Input is delta-encoded and not in a snapshot: a branch that starts
+    // after the log's first frame (from a keyframe or a mid-log snapshot)
+    // takes the input the latest earlier frame set, as the source had it.
+    let carried: ActLogFrame | undefined
+    for (const f of frames.values()) {
+      if (f.input !== undefined && f.tick < world.time.tick && (carried === undefined || f.tick > carried.tick)) carried = f
+    }
+    if (carried?.input !== undefined) world.setInput(decodeInput(carried.input))
   }
 
   const samples: Array<{ tick: number; values: Record<string, JsonValue> }> = []

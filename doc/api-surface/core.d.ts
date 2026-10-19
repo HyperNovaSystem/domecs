@@ -146,7 +146,7 @@ import type { SystemicFault } from './errors.js';
 import { type ActLog, type ReplayError } from './replay.js';
 import { type JsonValue, type Result, type SerializedError } from './result.js';
 import type { RngState } from './rng.js';
-import type { WorldSnapshot } from './snapshot.js';
+import { type WorldSnapshot } from './snapshot.js';
 import { type World } from './world.js';
 /**
  * Registers types, systems and plugins on a world in a fixed order; spawns
@@ -212,7 +212,11 @@ export interface RunBranchOptions {
      * log's frame whose `tick` is `world.time.tick` is applied with §7.1's
      * frame code (the first such frame, when ticks repeat after a `restore`
      * gap). Steps with no frame use `dt`. `baseHash` and checkpoints are not
-     * compared (that is `replay`'s job).
+     * compared (that is `replay`'s job). Before the first step, the input of
+     * the latest frame earlier than `world.time.tick` is set (input is
+     * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
+     * or keyframe starts with the source's input. The scale is not carried:
+     * pass the source's scale at that tick to {@link createBranch}.
      */
     readonly log?: ActLog;
     /** Read-only probes sampled into `samples` (values are copied as plain data). */

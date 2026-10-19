@@ -1670,7 +1670,9 @@ Every count — `sampleEvery`, `keyframeEvery`, `hashEvery` — is of this call'
 steps, and probes are always sampled after the final step too, whatever
 stopped the run, so the horizon value is always there. A `log` frame whose
 `tick` is the current tick is applied with replay's frame code (its acts,
-input, scale and dt); other steps use `dt`. Log errors are `ReplayError`
+input, scale and dt); other steps use `dt`. A branch that starts after the
+log's first frame (from a keyframe) first takes the input of the latest
+earlier frame; its scale is the one passed to `createBranch`. Log errors are `ReplayError`
 values. Probes must be read-only: at the first sample of each call a probe
 that changed the strict hash throws, naming it. The call is synchronous: run
 it in a worker and cancel with `shouldStop`.
