@@ -210,7 +210,7 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E5.2 Manifest additions and descriptions
 
 - **Files:** `packages/domecs/src/manifest.ts`, `packages/domecs/src/types.ts` (`FieldSchema.description`, `EventDefOptions.description`, `SystemDefBase.meta`), `packages/domecs-persist/src/schema.ts`, tests.
-- [x] **Red:** `describe().systems` carries `priority`, `order`, ~~`rng`~~ (deferred to E4; see spec E5 notes), sorted `components`, cloned `meta` (mutation does not leak); `FieldSchema.description` round-trips through `serializeComponentType`/`registerComponentTypes`.
+- [x] **Red:** `describe().systems` carries `priority`, `order`, `rng` (deferred from E5 and shipped in E4.1; asserted in `packages/domecs/test/rng-streams.test.ts`), sorted `components`, cloned `meta` (mutation does not leak); `FieldSchema.description` round-trips through `serializeComponentType`/`registerComponentTypes`.
 - [x] **Commit:** `feat(core,persist): richer manifest and field descriptions (E5.2)`
 
 #### E5.3 `bridge.act(name, …)`

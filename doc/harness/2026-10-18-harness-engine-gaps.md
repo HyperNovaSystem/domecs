@@ -1,8 +1,8 @@
 # Engine gaps for the Studio AI harness — design spec
 
 _Drafted 2026-10-18 on branch `feat/harness-engine-gaps` (base `b425242`, engine 2.0.0)._
-_Status: **in implementation** (revision 3). E1–E3 and E5–E7 have landed on the branch; E4 is
-unblocked by the revision-3 snapshot decision. When this spec and the code disagree, this spec
+_Status: **in implementation** (revision 3). E1–E7 have landed on the branch (E4 after the
+revision-3 snapshot decision; the E5 manifest `rng` field shipped with it). When this spec and the code disagree, this spec
 governs until it is amended in the same PR (studio ground rule: "spec authoritative")._
 _Revision 2 (2026-10-18): the determinism, product and feasibility reviews are applied. Items
 moved (G16 into 2.2; G3, G4, G14 to the conditional group §7), new items were added (G19–G21
@@ -2428,7 +2428,7 @@ E4 (per-system RNG streams, snapshot v3) is on hold pending an owner decision; E
 
 | Item | Choice | Reason |
 |---|---|---|
-| §4.5 manifest `rng: 'shared' \| 'own'` | **Not shipped**; deferred to E4 | The field reports E4's per-system stream mode, which does not exist yet. A field fixed at `'shared'` would freeze an API shape before the owner decides E4; adding it later is additive. Everything else in the systems entry (`priority`, `order`, `components`, `meta`) shipped |
+| §4.5 manifest `rng: 'shared' \| 'own'` | **Not shipped**; deferred to E4 (**shipped in E4.1**, see E4 notes) | The field reports E4's per-system stream mode, which does not exist yet. A field fixed at `'shared'` would freeze an API shape before the owner decides E4; adding it later is additive. Everything else in the systems entry (`priority`, `order`, `components`, `meta`) shipped |
 | §4.5 `components` source | All component leaves of `query` and `reactsTo` (`Has`, `Where`, `OnAdded`, `OnRemoved`, `OnChanged`), `Not` branches included, resource leaves skipped; sorted, de-duplicated; computed once at registration | The spec names `collectHasComponents`, but that helper skips `Not` branches and every non-`Has` leaf, so a `reactsTo: OnChanged(Vel)` system would list nothing. "Names referenced by query/reactsTo" is the stated contract; a private walker in `scheduler.ts` implements it |
 | §4.5 `register` signature | Resources are taken as `ResourceType<never>` | `ResourceType<T>`'s brand is contravariant in `T`, so `ResourceType<number>` is not assignable to the spec's `ResourceType<unknown>`; `never` accepts every `T` without `any` |
 | §4.5 `register` atomicity | All-or-nothing: every argument is checked (against the registries and against the other arguments) before any is registered; the first conflict is returned | The spec is silent; a partial registration on error would leave the caller unsure what is known |
