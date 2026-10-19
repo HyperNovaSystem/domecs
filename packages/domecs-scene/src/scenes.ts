@@ -4,7 +4,7 @@ import {
   type Entity,
   type World,
 } from '@domecs/core'
-import { setParent } from './hierarchy.js'
+import { Parent, despawnTree, setParent } from './hierarchy.js'
 
 /**
  * Marks an entity spawned by {@link instantiateScene}: the scene's `name`
@@ -223,7 +223,61 @@ export function instantiateScene(
   return { ids, problems }
 }
 
+/**
+ * Despawn every entity of scene `name`: `despawnTree` over its member roots
+ * (members whose parent is not a member of the scene), in ascending id
+ * order, so descendants that are not members (a bullet parented under a
+ * scene entity) go too and a member's ancestors outside the scene stay.
+ * Members still alive afterwards (a corrupted `Parent` cycle) are
+ * tree-despawned in ascending id order. Returns the number of entities
+ * removed. Unknown or empty scene: 0.
+ */
+export function unloadScene(world: World, name: string): number {
+  const members = sceneEntities(world, name)
+  if (members.length === 0) return 0
+  const isMember = new Set(members)
+  const children = childIndex(world)
+  const roots = members.filter((m) => {
+    const p = world.getComponent(m, Parent)?.entity ?? null
+    return p === null || !isMember.has(p)
+  })
+  // Everything the trees hold, to count what this call removed.
+  const reach = new Set<Entity>()
+  const stack = [...members]
+  while (stack.length > 0) {
+    const e = stack.pop()!
+    if (reach.has(e)) continue
+    reach.add(e)
+    for (const c of children.get(e) ?? []) stack.push(c)
+  }
+  for (const r of roots) if (world.isAlive(r)) despawnTree(world, r)
+  for (const m of members) if (world.isAlive(m)) despawnTree(world, m)
+  let removed = 0
+  for (const e of reach) if (!world.isAlive(e)) removed++
+  return removed
+}
+
+/** The live members of scene `name` (entities whose `SceneMember.scene` is `name`), in ascending id order. */
+export function sceneEntities(world: World, name: string): Entity[] {
+  const out: Entity[] = []
+  for (const { id, value } of world.iterEntitiesWith(SceneMember)) {
+    if (value.scene === name) out.push(id)
+  }
+  return out.sort((a, b) => a - b)
+}
+
 // --- internals -------------------------------------------------------------
+
+function childIndex(world: World): Map<Entity, Entity[]> {
+  const children = new Map<Entity, Entity[]>()
+  for (const { id, value } of world.iterEntitiesWith(Parent)) {
+    if (value.entity === null) continue
+    const list = children.get(value.entity)
+    if (list) list.push(id)
+    else children.set(value.entity, [id])
+  }
+  return children
+}
 
 function buildComponent(
   world: World,

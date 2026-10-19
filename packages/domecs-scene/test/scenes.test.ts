@@ -5,6 +5,8 @@ import { Parent, ancestorsOf, installHierarchy, setParent } from '../src/index.j
 import {
   SceneMember,
   instantiateScene,
+  sceneEntities,
+  unloadScene,
   type InstantiateSceneOptions,
   type SceneData,
 } from '../src/index.js'
@@ -307,5 +309,98 @@ describe('instantiateScene (E21.1)', () => {
     const { ids } = instantiateScene(w, level, opts)
     expect(setParent(w, ids.get('root')!, holder)).toEqual({ ok: true })
     expect(ancestorsOf(w, ids.get('sword')!)).toEqual([ids.get('hero'), ids.get('root'), holder])
+  })
+})
+
+const strict = (w: World): string => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+const levelB: SceneData = {
+  name: 'level2',
+  entities: [
+    { key: 'gate', components: { ScPos: { x: 50 } } },
+    { key: 'guard', components: { ScHp: { hp: 3 }, ScTarget: { entity: 'gate' } }, parent: 'gate' },
+  ],
+}
+
+describe('unloadScene and sceneEntities (E21.2)', () => {
+  it('test 5: unloadScene despawns exactly the scene\'s trees and returns the count', () => {
+    const w = fresh()
+    w.use(installHierarchy())
+    const outsider = w.spawn([entry(Pos, { x: -1, y: -1 })])
+    const a = instantiateScene(w, level, opts)
+    const between = w.spawn([entry(Hp, { hp: 1, max: 1 })])
+    const b = instantiateScene(w, levelB, { resolve, refFields: [['ScTarget', 'entity']] })
+    // A non-member parented under a member goes with its tree; a member's
+    // ancestor outside the scene stays.
+    const bullet = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    expect(setParent(w, bullet, a.ids.get('sword')!)).toEqual({ ok: true })
+    const holder = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    expect(setParent(w, a.ids.get('orc')!, holder)).toEqual({ ok: true })
+
+    expect(sceneEntities(w, 'level1')).toEqual([...a.ids.values()])
+    expect(sceneEntities(w, 'level2')).toEqual([...b.ids.values()])
+    expect(sceneEntities(w, 'nope')).toEqual([])
+
+    expect(unloadScene(w, 'level1')).toBe(5) // 4 members + the bullet
+    for (const id of [...a.ids.values(), bullet]) expect(w.isAlive(id)).toBe(false)
+    for (const id of [outsider, between, holder, ...b.ids.values()]) expect(w.isAlive(id)).toBe(true)
+    expect(sceneEntities(w, 'level1')).toEqual([])
+    expect(w.getComponent(b.ids.get('guard')!, Parent)).toEqual({ entity: b.ids.get('gate') })
+    expect(unloadScene(w, 'level1')).toBe(0)
+    expect(unloadScene(w, 'level2')).toBe(2)
+    expect(w.listEntities(And()).sort((x, y) => x - y)).toEqual([outsider, between, holder])
+  })
+
+  it('test 5: sceneEntities lists members in ascending id, whatever their parenting', () => {
+    const w = fresh()
+    const { ids } = instantiateScene(
+      w,
+      { name: 's', entities: [{ key: 'leaf', components: {}, parent: 'top' }, { key: 'top', components: {} }] },
+      opts,
+    )
+    expect(sceneEntities(w, 's')).toEqual([ids.get('leaf'), ids.get('top')])
+    expect(unloadScene(w, 's')).toBe(2)
+  })
+
+  it('a scene instantiated twice is unloaded as one; members whose Parent graph is cyclic still go', () => {
+    const w = fresh()
+    instantiateScene(w, level, opts)
+    instantiateScene(w, level, opts)
+    expect(sceneEntities(w, 'level1')).toHaveLength(8)
+    // Corrupt two members into a Parent cycle (no member root left for them).
+    const { ids } = instantiateScene(w, { name: 'loop', entities: [{ key: 'p', components: {} }, { key: 'q', components: {} }] }, opts)
+    const p = ids.get('p')!
+    const q = ids.get('q')!
+    w.addComponent(p, Parent, { entity: q })
+    w.addComponent(q, Parent, { entity: p })
+    expect(unloadScene(w, 'level1')).toBe(8)
+    expect(unloadScene(w, 'loop')).toBe(2)
+    expect(w.listEntities(And())).toEqual([])
+  })
+
+  it('test 6: instantiate, snapshot, restore into a fresh world: equal strict hash, and the scene still unloads', () => {
+    const w = fresh()
+    w.use(installHierarchy())
+    w.spawn([entry(Pos, { x: 1, y: 1 })])
+    instantiateScene(w, level, { resolve, refFields: [['ScTarget', 'entity']] })
+    instantiateScene(w, levelB, { resolve, refFields: [['ScTarget', 'entity']] })
+    w.stepOnce()
+    const snap = w.snapshot({ pendingEvents: true })
+
+    const r = fresh()
+    r.use(installHierarchy())
+    r.restore(snap)
+    expect(strict(r)).toBe(strict(w))
+    expect(sceneEntities(r, 'level1')).toEqual(sceneEntities(w, 'level1'))
+    expect(sceneEntities(r, 'level2')).toEqual(sceneEntities(w, 'level2'))
+
+    // Both worlds keep going identically: unload, re-instantiate, step.
+    for (const world of [w, r]) {
+      expect(unloadScene(world, 'level1')).toBe(4)
+      instantiateScene(world, level, { resolve, refFields: [['ScTarget', 'entity']] })
+      world.stepOnce()
+    }
+    expect(strict(r)).toBe(strict(w))
+    expect(sceneEntities(r, 'level1')).toEqual(sceneEntities(w, 'level1'))
   })
 })

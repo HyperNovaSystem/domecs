@@ -14,7 +14,7 @@ export type { SpatialHashOptions, SpatialIndex } from './spatial-hash.js'
 export { BUILD_ID } from './build-id.js'
 export { Contact, ContactState, installContacts } from './contacts.js'
 export type { ContactPayload, ContactPhase, ContactStateValue, ContactsOptions } from './contacts.js'
-export { SceneMember, instantiateScene } from './scenes.js'
+export { SceneMember, instantiateScene, sceneEntities, unloadScene } from './scenes.js'
 export type {
   InstantiateSceneOptions,
   InstantiateSceneResult,

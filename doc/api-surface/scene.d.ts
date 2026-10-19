@@ -240,7 +240,7 @@ export type { SpatialHashOptions, SpatialIndex } from './spatial-hash.js';
 export { BUILD_ID } from './build-id.js';
 export { Contact, ContactState, installContacts } from './contacts.js';
 export type { ContactPayload, ContactPhase, ContactStateValue, ContactsOptions } from './contacts.js';
-export { SceneMember, instantiateScene } from './scenes.js';
+export { SceneMember, instantiateScene, sceneEntities, unloadScene } from './scenes.js';
 export type { InstantiateSceneOptions, InstantiateSceneResult, SceneData, SceneEntityData, SceneProblem, } from './scenes.js';
 
 // file: scenes.d.ts
@@ -323,6 +323,18 @@ export interface InstantiateSceneResult {
  * gives two sets of members that {@link unloadScene} removes together.
  */
 export declare function instantiateScene(world: World, data: SceneData, options: InstantiateSceneOptions): InstantiateSceneResult;
+/**
+ * Despawn every entity of scene `name`: `despawnTree` over its member roots
+ * (members whose parent is not a member of the scene), in ascending id
+ * order, so descendants that are not members (a bullet parented under a
+ * scene entity) go too and a member's ancestors outside the scene stay.
+ * Members still alive afterwards (a corrupted `Parent` cycle) are
+ * tree-despawned in ascending id order. Returns the number of entities
+ * removed. Unknown or empty scene: 0.
+ */
+export declare function unloadScene(world: World, name: string): number;
+/** The live members of scene `name` (entities whose `SceneMember.scene` is `name`), in ascending id order. */
+export declare function sceneEntities(world: World, name: string): Entity[];
 
 // file: spatial-hash.d.ts
 import type { ComponentType, Entity, World } from '@domecs/core';
