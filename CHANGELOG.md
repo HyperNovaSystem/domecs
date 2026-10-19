@@ -6,7 +6,22 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.2.0] — release candidate (2026-10-19; not yet published)
+
+All seven `@domecs/*` packages move to 2.2.0 together. Additive minor:
+behaviour language I (cross-entity rules, spatial index, world expressions,
+input in rules) plus act-log recording, replay and branches for the Studio
+harness. `^2.0.0` peer ranges still resolve; the packages' `@domecs/core`
+peer range packs as `^2.2.0`. Snapshots stay format v3. Release notes:
+[`doc/release-notes/v2.2.0.md`](doc/release-notes/v2.2.0.md).
+
 ### Added
+
+- Fork-equivalence suite for 2.2 (`packages/domecs-rules/test/fork-equivalence.test.ts`):
+  a post-edit live world running chase rules (spatial, input, own streams,
+  `emit` and `action` acts) matched tick for tick over 150 steps by a fresh
+  build restored from its snapshot, by a fresh build replaying its act log,
+  and by `createBranch` + `runBranch` over the log.
 
 - `@domecs/core`: branches (G3, O-81, harness spec §7.2; SPEC §7.5).
   `createBranch(setup, from, { fixedStep?, seed?, scale? })` builds a headless

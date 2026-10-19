@@ -393,9 +393,9 @@ sampling counted from the call start plus the final tick, `WorldSetup<T>`.
 
 ### E13 — 2.2 release candidate
 
-- [ ] **E13.1** `doc/release-notes/v2.2.0.md` (reserved words; `FunctionName` type-level change; new act log, replay and branch APIs), golden updated (owner-reviewed), fork-equivalence extended with chase rules and a rules-level leg for E19/E20 (a live world recorded with `createRecorder` vs a fresh build replaying the log from its base, and a `createBranch` + `runBranch` arm, with own-stream rules: equal strict hashes over ≥ 120 ticks after edits), all §8 gates, `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.2.0 release notes (E13.1)`
-- **E13 exit gate:** E9–E12, E19 and E20 merged with their ledger rows (O-8, O-82, O-83, O-86, O-80, O-81) closed; `replay.test.ts` and `branch.test.ts` green; AGENTS.md "Record and replay" and "Branch and compare" recipes doctested; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green.
-- [ ] **E13.2** (only if E1.8 slipped) field-level diff lands here.
+- [x] **E13.1** `doc/release-notes/v2.2.0.md` (reserved words; `FunctionName` type-level change; new act log, replay and branch APIs), golden updated (owner-reviewed), fork-equivalence extended with chase rules and a rules-level leg for E19/E20 (a live world recorded with `createRecorder` vs a fresh build replaying the log from its base, and a `createBranch` + `runBranch` arm, with own-stream rules: equal strict hashes over ≥ 120 ticks after edits), all §8 gates, `pack-for-studio`. **Publish only on owner approval.** **Commit:** `docs(release): 2.2.0 release notes (E13.1)`
+- **E13 exit gate:** E9–E12, E19 and E20 merged with their ledger rows (O-8, O-82, O-83, O-86, O-80, O-81) closed; `replay.test.ts` and `branch.test.ts` green; AGENTS.md "Record and replay" and "Branch and compare" recipes doctested; `pnpm bench`, `pnpm test:plantroom`, `pnpm test:legibility`, `pnpm cold-install`, `pnpm test:golden` green. **Met 2026-10-19** (spec Appendix C, "Implementation notes — E13"); version bump `chore(release)`, suite `test(rules)` and a bench fix `perf(core)` landed as separate E13.1 commits.
+- [x] **E13.2** (only if E1.8 slipped) field-level diff lands here. **Not needed:** E1.8 shipped in 2.1 (`67a1abc`).
 
 ---
 

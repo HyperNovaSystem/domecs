@@ -191,7 +191,9 @@ event); otherwise it returns the reason fragment that `action()` reports as
 (Events, doctest `validate-event-payload`); API surface updated; test
 `packages/domecs/test/validate-event-payload.test.ts` pins the export and its
 agreement with `world.action()`. Studio can drop its copy once it pins an
-engine build that includes this commit.
+engine build that includes this commit. The 2.2.0 release-candidate tarballs (E13,
+`vendor/domecs/domecs-*-2.2.0+g<sha>.tgz` beside the 2.1.0 set) include it;
+the 2.1.0+g5cb0290 tarballs studio pins today do not.
 
 **Verify pass (engine, 2026-10-19, `fix(E-fix): validateEventPayload checks
 own keys only`):** the unknown-field check used `key in fields`, so a key

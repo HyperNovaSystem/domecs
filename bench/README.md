@@ -208,6 +208,27 @@ every difference is within noise. Default-length runs (100 ticks) are
 noisier: one 7-run pass showed windowed p95 at 1.9× (0.28 vs 0.15 ms), which
 did not reproduce with longer runs.
 
+## 2.2 release-candidate check (Node v24.19, arm64 2-vCPU VM, gc on, 2026-10-19)
+
+Same method as the 2.1 check, against the 2.1 RC (`5cb0290`, extracted with
+`git archive` and built the same way), medians of the per-run p50/p95. The
+first pass showed soak p50 at 1.11× (9 runs) and 1.08× (15 runs) of 2.1:
+`markChanged` called the act-log tap's `tapMutated()` on every mark, even
+with no recorder. With the mutation paths testing a plain flag first
+(E13.1 `perf(core)`):
+
+| Workload | Runs | 2.2 p50 / p95 | 2.1 p50 / p95 | ratio p50 / p95 |
+|----------|------|---------------|---------------|-----------------|
+| soak (`--ticks 500 --warmup 100`) | 9 | 1.013 / 1.237 ms | 1.111 / 1.294 ms | 0.91 / 0.96 |
+| telemetry (`--ticks 500 --warmup 100`) | 9 | 0.345 / 0.441 ms | 0.345 / 0.524 ms | 1.00 / 0.84 |
+| windowed (`--ticks 1000 --warmup 200`) | 15 | 0.0342 / 0.0648 ms | 0.0354 / 0.0619 ms | 0.97 / 1.05 |
+| snapshot (default) | 7 | 4.54 / 6.02 ms | 4.72 / 6.87 ms | 0.96 / 0.88 |
+
+Further soak passes (15 runs each) gave p50 ratios of 0.99, 0.99 and 0.97
+(the last with 2.1 run first). The host was shared with other test runs, and
+two 2.1-vs-2.1 soak controls gave 1.00 and 0.92, so differences under about
+8% are noise here. Every pass after the fix has 2.2 at or below 2.1.
+
 ## Status
 
 - [x] Headless suite + baselines
