@@ -999,7 +999,15 @@ function registerRuleSystem(
         payload = undefined
       }
       // §6.1: effects apply at the end of the run, in queue order.
-      if (queue.length > 0) applyEffects(world, queue, prefabs, fault)
+      // A queuing entity that an earlier effect of this run despawned (e.g.
+      // `despawn: self` then `emit`) cannot hold a fault — core drops entity
+      // faults on dead entities — so its apply-time failures are systemic.
+      if (queue.length > 0) {
+        applyEffects(world, queue, prefabs, (source, message) => {
+          if (source !== undefined && !world.isAlive(source)) fault(undefined, `entity ${source} (despawned): ${message}`)
+          else fault(source, message)
+        })
+      }
       if (faults.length > 0) return { errors: faults }
     },
   )

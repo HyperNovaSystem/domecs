@@ -392,7 +392,9 @@ function position(slot: EffectSlot, env: EvalEnv, part: string): number {
  * Apply `queue` in order (2.3, §6.1). A failure — an invalid emit payload,
  * a write a component cannot take, a prefab gone missing, a component
  * `validate` rejecting the result — skips that effect and is reported
- * through `fault(source, message)`; the other effects still apply.
+ * through `fault(source, message)`; the other effects still apply. The
+ * source may be dead by then (an earlier `despawn` in the queue); the
+ * caller reports that case as a systemic fault.
  */
 export function applyEffects(
   world: World,

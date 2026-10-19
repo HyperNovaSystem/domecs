@@ -2596,7 +2596,8 @@ schema, an undeclared field is a compile error); `other` is the entity the
 every action succeeded, evaluated then (they see the entity's staged
 writes), and applied at the end of the rule's run in queue order. An
 `emit` is validated with `validateEventPayload` when applied (invalid: a
-fault on the queuing entity) and delivered **next tick**; a despawn is
+fault on the queuing entity, or a systemic one if that entity was despawned
+earlier in the apply) and delivered **next tick**; a despawn is
 deferred, so later entities in the run still read the entity; spawn ids
 follow apply order. Forks taken with `snapshot({ pendingEvents: true })`
 between an emit and its delivery deliver it too.

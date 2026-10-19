@@ -134,6 +134,31 @@ describe('E14.2 emit', () => {
     expect(faults).toEqual([expect.stringMatching(/^rule:bad-world: .*FxSeen.*field "v" must be a number/)])
   })
 
+  it('an apply-time failure after the queuing entity despawned itself is a systemic fault, never dropped', () => {
+    // `despawn: self` then an emit is the common "die and announce" shape;
+    // core drops entity faults on a dead entity, so the fault must not be
+    // attached to the (now dead) queuing entity.
+    const w = world()
+    const faults = systemic(w)
+    install(w, [
+      {
+        name: 'die',
+        schedule: 'tick',
+        query: ['FxHp'],
+        actions: [],
+        effects: [{ despawn: 'self' }, { emit: 'FxDied', payload: { who: '"nobody"' } }, { spawn: 'bullet', set: { 'FxBullet.vx': '"fast"' } }],
+      },
+    ])
+    const a = w.spawn([entry(Hp, { hp: 1 })])
+    w.stepOnce()
+    expect(w.isAlive(a)).toBe(false)
+    expect(w.pendingEvents()).toEqual([])
+    expect(faults).toEqual([
+      expect.stringMatching(new RegExp(`^rule:die: entity ${a} \\(despawned\\): emit "FxDied".*field "who" must be a number`)),
+      expect.stringMatching(new RegExp(`^rule:die: entity ${a} \\(despawned\\): spawn "bullet".*FxBullet\\.vx`)),
+    ])
+  })
+
   it('emit payload fields are built in def order from values at queue time; no payload is {}', () => {
     const w = world()
     install(w, [

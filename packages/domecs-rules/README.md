@@ -405,7 +405,10 @@ fixed or event):
   exist (on the value or the component's defaults) and keep its kind, and
   numbers must be finite. A rejected write — or a component `validate`
   rejecting the result — skips that effect with a fault on the queuing
-  entity; the other effects still apply.
+  entity; the other effects still apply. When the queuing entity is already
+  gone by then (say `despawn: 'self'` before an `emit`), the fault is
+  systemic instead (`signals.faultRaised`, message `entity <id>
+  (despawned): …`), never dropped.
 - **Targets.** `self` (the default for `to`/`from`) is the queuing entity;
   `other` needs an event rule with an `other` binding, and an effect on an
   unbound or dead `other` is skipped. A world-scope rule has no `self` to
