@@ -258,8 +258,8 @@ Studio H0 starts as soon as E1's tarball is packed.
 #### E8.2 Fork-equivalence suite
 
 - **Files:** create `packages/domecs-rules/test/fork-equivalence.test.ts`.
-- [ ] **Red → Green:** live vs fresh build + restore (`pendingEvents: true`) with tick and fixed rules, compose at 100, own streams, spawns, `-0` values: equal strict hashes over ≥ 120 ticks after edits.
-- [ ] **Commit:** `test(rules): fork-equivalence suite for 2.1 (E8.2)`
+- [x] **Red → Green:** live vs fresh build + restore (`pendingEvents: true`) with tick and fixed rules, compose at 100, own streams, spawns, `-0` values: equal strict hashes over ≥ 120 ticks after edits.
+- [x] **Commit:** `test(rules): fork-equivalence suite for 2.1 (E8.2)`
 
 #### E8.3 Release notes and gates
 
