@@ -946,3 +946,22 @@ describe('checkpoint and gap validation', () => {
     expect(r).toMatchObject({ ok: false, error: { kind: 'invalid_log' } })
   })
 })
+
+describe('act payload validation', () => {
+  it('a payload that is not plain data (cycle, NaN, class instance) is invalid_log, never a throw', () => {
+    const { base, log } = record(10)
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    for (const payload of [cyclic, { n: Number.NaN }, { d: new Date(0) }, [Number.POSITIVE_INFINITY]]) {
+      for (const field of ['acts', 'startActs', 'endActs'] as const) {
+        const { checkpoints: _c, ...rest } = log
+        const bad = { ...rest, frames: [{ tick: log.startTick, dt: null, [field]: [{ event: 'RpEcho', payload, via: 'emit' }] }] }
+        const w = fresh()
+        let r
+        expect(() => (r = replay(w, bad as unknown as ActLog, { base }))).not.toThrow()
+        expect(r).toMatchObject({ ok: false, error: { kind: 'invalid_log', reason: expect.stringMatching(/payload/) } })
+        expect(w.time.tick).toBe(0)
+      }
+    }
+  })
+})

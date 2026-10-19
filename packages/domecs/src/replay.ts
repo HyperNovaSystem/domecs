@@ -581,6 +581,13 @@ function checkFrame(f: unknown): string | null {
       const a: unknown = acts[i]
       if (!isRec(a) || typeof a.event !== 'string') return `${field}[${i}].event is not a string`
       if (a.via !== 'emit' && a.via !== 'action') return `${field}[${i}].via is not 'emit' or 'action'`
+      if (a.payload !== undefined) {
+        try {
+          plainDataCopy(a.payload, `${field}[${i}].payload`)
+        } catch (cause) {
+          return cause instanceof TypeError ? cause.message : `${field}[${i}].payload is not plain data`
+        }
+      }
     }
   }
   if (f.input !== undefined) {
