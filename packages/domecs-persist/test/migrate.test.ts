@@ -120,6 +120,20 @@ describe('@domecs/persist — migrate', () => {
   })
 })
 
+describe('migrate: a version that is not a non-negative integer (security review 2026-10-19)', () => {
+  // Stored bytes are untrusted: NaN slipped through as ok, and "1" produced the step "1 → 11".
+  for (const bad of [Number.NaN, '1', 1.5, -1, null, Infinity] as unknown[]) {
+    it(`refuses ${String(bad)} (${typeof bad}) as migration_failed`, () => {
+      const r = migrate({ ...snap(1), version: bad as number }, 3, BUILTIN_MIGRATIONS)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error.kind).toBe('migration_failed')
+        expect(r.error.reason).toMatch(/version must be a non-negative integer/)
+      }
+    })
+  }
+})
+
 describe('withBuiltinMigrations (O-73)', () => {
   it('returns the built-ins for no user steps, and lets user steps win on a key', async () => {
     const { withBuiltinMigrations } = await import('../src/migrate.js')

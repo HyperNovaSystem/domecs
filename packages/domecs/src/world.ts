@@ -1758,6 +1758,11 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
     spawn(components?: ComponentBag): Entity {
+      // A restored cursor can sit at the top of the safe range: past it,
+      // ids collide (2^53 + 1 === 2^53), so refuse rather than reuse one.
+      if (!Number.isSafeInteger(nextId)) {
+        throw new RangeError('domecs: spawn: entity ids are exhausted (the next id would exceed Number.MAX_SAFE_INTEGER)')
+      }
       const id = nextId++
       alive.add(id)
       // new entity enters empty archetype

@@ -64,6 +64,25 @@ describe('O-41: restore validates the whole snapshot before wiping the world', (
   })
 })
 
+describe('security review 2026-10-19: entity ids stay safe integers', () => {
+  it('a restored id cursor at MAX_SAFE_INTEGER hands out that id once, then refuses instead of reusing ids', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const snap = { ...w.snapshot(), nextId: Number.MAX_SAFE_INTEGER, entities: [] }
+    w.restore(snap as WorldSnapshot)
+    expect(w.spawn([entry(Hp, { hp: 1 })])).toBe(Number.MAX_SAFE_INTEGER)
+    // 2^53 and 2^53 + 1 are the same double: two "new" entities would share an id
+    expect(() => w.spawn([entry(Hp, { hp: 2 })])).toThrow(/entity ids are exhausted/)
+    expect(w.listEntities([Hp])).toHaveLength(1)
+  })
+
+  it('a snapshot whose highest entity id is MAX_SAFE_INTEGER restores, and the next spawn refuses', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const snap = { ...w.snapshot(), nextId: undefined, entities: [{ id: Number.MAX_SAFE_INTEGER, components: { KhHp: { hp: 3 } } }] }
+    w.restore(snap as unknown as WorldSnapshot)
+    expect(() => w.spawn([entry(Hp, { hp: 2 })])).toThrow(/entity ids are exhausted/)
+  })
+})
+
 describe('O-43: the schedule is stable while a phase iterates it', () => {
   it('a system that removes itself does not skip the next one', () => {
     const w = createWorld({ headless: true })

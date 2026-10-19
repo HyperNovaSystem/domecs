@@ -305,3 +305,43 @@ from the package entry, so studio's span code switches over node kinds itself.
 changes evaluation or hashes. **Status:** open; no engine milestone takes it
 (E1–E21 are done). The walkers' `namePos` (decision (f), E-fix3) already
 covers the rename case, so this is only for sentence spans.
+
+## 2026-10-19 — Security review: untrusted-input APIs (fixed: id exhaustion, migrate versions; open: payload numbers)
+
+Studio's security review probed the engine APIs that take untrusted input:
+project folders opened from elsewhere hold keyframes and runs that are
+restored, and agents and external MCP tokens send act payloads and rule
+sources.
+
+- **Held up:** the rules compiler is an interpreter (no `eval`/`Function`);
+  field, query and event names `__proto__`/`constructor`/`prototype` are
+  refused (`FORBIDDEN_FIELDS`), reads are own-property only, emit payloads
+  with those keys are refused; expressions are capped (`MAX_EXPRESSION_DEPTH`
+  128, `MAX_EXPRESSION_LENGTH` 16384), so 5000 nested parentheses or 100k
+  unary minus signs are parse errors, not stack overflows.
+  `validateEventPayload` checks own keys only (a JSON `__proto__` key is an
+  unknown field). `world.restore` validates the envelope before wiping;
+  `__proto__` component, resource, stream and mark names pollute nothing;
+  200k entities restore in about a second.
+- **Fixed — entity ids past `Number.MAX_SAFE_INTEGER` (low).** A snapshot
+  with `nextId: 2^53 - 1` (or an entity at that id) restored, and the next
+  spawns handed out `2^53` twice (`2^53 + 1 === 2^53`): two live entities
+  with one id. `spawn` now throws a `RangeError` ("entity ids are exhausted")
+  instead. Test: `kernel-hardening.test.ts` "entity ids stay safe integers".
+- **Fixed — `migrate()` and non-integer versions (low).** `migrate` compared
+  `snap.version` without checking it: `NaN` returned `ok` unchanged, `"1"`
+  reported the step `1 → 11`, `1.5` looked for a `1.5 → 2.5` step. A version
+  that is not a non-negative safe integer is now `migration_failed` ("snapshot
+  version must be a non-negative integer"), with `from: -1` when it is not a
+  finite number. (`load` already required a number; `NaN`, `1.5` and `-1`
+  passed it.) Test: `domecs-persist/test/migrate.test.ts`. The JSDoc and the
+  API surface are unchanged.
+- **Open — `validateEventPayload` number and object kinds (info).** A
+  `number` field accepts `NaN` and `±Infinity`, and an `object` field accepts
+  an array. JSON cannot carry the non-finite numbers, so nothing reaching
+  studio over HTTP or MCP can send them, and rule effects already refuse
+  non-finite writes; in-process callers can. Not changed: tightening it would
+  refuse payloads that pass today.
+
+These two fixes are in the engine source on `feat/harness-engine-gaps`; the
+vendored 2.3.0 tarballs in `../studio/vendor/domecs/` predate them.

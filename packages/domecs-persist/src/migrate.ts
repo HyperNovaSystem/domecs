@@ -62,6 +62,20 @@ export function migrate(
   targetVersion: number,
   migrations: MigrationMap,
 ): Result<WorldSnapshot, MigrationFailedError> {
+  // Stored bytes are untrusted: a non-integer version (NaN, "1", null) must
+  // not compare its way through the loop below (security review 2026-10-19).
+  // It is refused up front; `from` is the version when finite, else -1.
+  const v: unknown = snap.version
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
+    return err({
+      kind: 'migration_failed',
+      from: typeof v === 'number' && Number.isFinite(v) ? v : -1,
+      to: targetVersion,
+      reason: `snapshot version must be a non-negative integer, got ${typeof v === 'string' ? JSON.stringify(v) : String(v)}`,
+      recoverable: false,
+      retryable: false,
+    })
+  }
   if (snap.version > targetVersion) {
     return err({
       kind: 'migration_failed',
