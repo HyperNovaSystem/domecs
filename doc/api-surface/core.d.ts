@@ -62,6 +62,24 @@ export interface AgentBridgeOptions {
     baseline?: WorldSnapshot;
 }
 /**
+ * Options for {@link AgentBridge.reset}: the host controls a snapshot does
+ * not carry, applied after the baseline is restored (O-89).
+ */
+export interface AgentResetOptions {
+    /**
+     * `world.setScale(scale)` after the restore: `0` pauses, a positive scale
+     * resumes at it. Omitted: the world keeps its current scale. Must be a
+     * finite number ≥ 0 (checked before anything is restored).
+     */
+    scale?: number;
+    /**
+     * `'empty'` replaces `world.input` with an empty input (no keys held, no
+     * key edges, pointer at the origin, no gamepads); `'keep'` (the default)
+     * leaves it as the last episode left it.
+     */
+    input?: 'keep' | 'empty';
+}
+/**
  * Compact observation for agent control loops.
  * `manifest` is the shipped {@link World.describe} surface — nothing new.
  */
@@ -84,15 +102,21 @@ export interface AgentBridge {
      *
      * Not restored (the snapshot does not carry them): `time.scale` and
      * input state. An episode that ends paused/rescaled or with stale
-     * `setInput` data carries that into the next episode — restore them
-     * explicitly at episode boundaries if your episodes touch either.
+     * `setInput` data carries that into the next episode unless `options`
+     * resets them: `reset({ scale: 1, input: 'empty' })` restores the
+     * baseline, then sets the scale and empties the input (O-89). An invalid
+     * option throws before anything is restored.
+     *
+     * `once` systems do not re-run: they ran on the world's first tick and
+     * the snapshot does not record that, so a restore leaves them as run
+     * (SPEC §7.1). Put per-episode setup in the baseline instead.
      *
      * Entity-id assignment is stable across `reset()`: the snapshot carries
      * the id cursor (O-38), so ids assigned after a restore match ids the
      * live world would have assigned. Pending events are discarded by
      * `restore()`, so an abandoned episode's events never fire into the next.
      */
-    reset(): void;
+    reset(options?: AgentResetOptions): void;
     /** Replace the baseline with a snapshot of the current world state. */
     captureBaseline(): void;
     /** Observe tick/scale/entity counts plus {@link World.describe}. */
@@ -132,7 +156,7 @@ export interface AgentBridge {
  * hygiene — every episode then starts from the identical restored state):
  * ```ts
  * const bridge = createAgentBridge(world)
- * bridge.reset()
+ * bridge.reset({ scale: 1, input: 'empty' })
  * const obs = bridge.observe()
  * const result = bridge.act(Cmd, { ... })
  * bridge.step() // or bridge.step(1/60) for fixed schedules
@@ -959,7 +983,7 @@ export { defineComponent } from './component.js';
 export { defineResource } from './resource.js';
 export { createWorld } from './world.js';
 export { createAgentBridge } from './agent.js';
-export type { AgentBridge, AgentBridgeOptions, AgentObservation, } from './agent.js';
+export type { AgentBridge, AgentBridgeOptions, AgentObservation, AgentResetOptions, } from './agent.js';
 export { defineEvent, validateEventPayload } from './events.js';
 export { createRng, deriveStream, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';

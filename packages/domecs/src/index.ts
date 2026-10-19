@@ -6,6 +6,7 @@ export type {
   AgentBridge,
   AgentBridgeOptions,
   AgentObservation,
+  AgentResetOptions,
 } from './agent.js'
 export { defineEvent, validateEventPayload } from './events.js'
 export { createRng, deriveStream, restoreRng, seedToState } from './rng.js'

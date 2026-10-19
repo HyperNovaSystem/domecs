@@ -221,3 +221,107 @@ describe('AgentBridge.act(name, …)', () => {
     expect(world.getComponent(id, Hp)?.hp).toBe(10)
   })
 })
+
+// E17.2 (harness spec §6.4; O-89): reset({ scale, input }) — episode-boundary
+// hygiene for the host controls the snapshot does not carry.
+describe('AgentBridge.reset(options) (E17.2, O-89)', () => {
+  const Pos = defineComponent<{ x: number }>('ResetPos', { defaults: { x: 0 } })
+
+  function setup(): { world: World; id: number; boots: { n: number } } {
+    const world = createWorld({ headless: true, seed: [5, 6, 7, 8] })
+    const boots = { n: 0 }
+    world.system('boot', { schedule: 'once' }, () => {
+      boots.n++
+    })
+    // Moves right while ArrowRight is held; the step size follows time.scale.
+    world.system('walk', { schedule: 'tick' }, ({ world: w, time }) => {
+      if (!w.input.keys.has('ArrowRight')) return
+      for (const e of w.listEntities([Pos] as const)) {
+        w.getComponent(e, Pos)!.x += time.scale
+        w.markChanged(e, Pos)
+      }
+    })
+    const id = world.spawn([entry(Pos, { x: 0 })])
+    return { world, id, boots }
+  }
+
+  function holdRight(world: World): void {
+    const input = world.input
+    world.setInput({ ...input, keys: new Set(['ArrowRight']) })
+  }
+
+  it('reset({ scale, input: "empty" }) starts every episode from the same host state', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+
+    const episode = (): string => {
+      bridge.reset({ scale: 1, input: 'empty' })
+      expect(world.time.scale).toBe(1)
+      expect(world.input.keys.size).toBe(0)
+      bridge.step() // nothing held: no movement
+      expect(world.getComponent(id, Pos)?.x).toBe(0)
+      holdRight(world)
+      bridge.step()
+      return hashSnapshot(bridge.snapshot(), { includeChanges: true })
+    }
+
+    const first = episode()
+    // The first episode ends rescaled with ArrowRight still held …
+    world.setScale(3)
+    // … the second must not inherit either.
+    const second = episode()
+    expect(second).toBe(first)
+    expect(world.getComponent(id, Pos)?.x).toBe(1)
+
+    // An episode that ends paused resumes at the requested scale.
+    world.pause()
+    expect(episode()).toBe(first)
+  })
+
+  it('reset() with no options keeps scale and input (the 2.0 behaviour)', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    world.setScale(2)
+    holdRight(world)
+    bridge.reset()
+    expect(world.time.scale).toBe(2)
+    expect(world.input.keys.has('ArrowRight')).toBe(true)
+    bridge.reset({ input: 'keep' })
+    expect(world.input.keys.has('ArrowRight')).toBe(true)
+  })
+
+  it('reset({ scale: 0 }) pauses; a later scale resumes', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.reset({ scale: 0 })
+    expect(world.time.scale).toBe(0)
+    bridge.reset({ scale: 0.5 })
+    expect(world.time.scale).toBe(0.5)
+  })
+
+  it('rejects a bad scale or input option before restoring anything', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+    world.getComponent(id, Pos)!.x = 42
+    world.markChanged(id, Pos)
+    expect(() => bridge.reset({ scale: -1 })).toThrow(/scale/)
+    expect(() => bridge.reset({ scale: Number.NaN })).toThrow(/scale/)
+    expect(() => bridge.reset({ input: 'clear' as never })).toThrow(TypeError)
+    expect(world.getComponent(id, Pos)?.x).toBe(42)
+  })
+
+  it('once systems do not re-run after reset()', () => {
+    const { world, boots } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.step()
+    expect(boots.n).toBe(1)
+    bridge.captureBaseline()
+    bridge.reset({ scale: 1, input: 'empty' })
+    bridge.step()
+    bridge.reset()
+    bridge.step()
+    expect(boots.n).toBe(1)
+  })
+})
