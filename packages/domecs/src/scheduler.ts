@@ -1,7 +1,9 @@
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
 import { normalize, treeHas, type EntityView, type QueryDef, type QueryNode, type QueryResult } from './query.js'
+import type { JsonValue } from './result.js'
 import type { Rng } from './rng.js'
+import { cloneSerializable } from './snapshot.js'
 import type { TimeState } from './time.js'
 // Type-only import breaks the scheduler<->world value cycle (TYPE_EVAL §3.1).
 import type { World } from './world.js'
@@ -24,6 +26,12 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
   order?: number
   enabled?: () => boolean
   state?: State
+  /**
+   * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
+   * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
+   * Cloned at registration; the runtime never reads it.
+   */
+  meta?: JsonValue
   /**
    * Erased Fields phantom — keeps a structural slot for the inferred field
    * shape so callers can ascribe it explicitly when needed. The runtime
@@ -135,6 +143,10 @@ export interface CompiledSystem {
   priority: number
   /** Secondary sort key within a priority (default 0). */
   order: number
+  /** Sorted names of the components its query / reactsTo reference (manifest). */
+  components: string[]
+  /** Clone of `def.meta` taken at registration (manifest). */
+  meta?: JsonValue
   enabled: boolean
   state: unknown
   query?: QueryResult
@@ -295,6 +307,8 @@ export function createScheduler(
         schedule,
         priority,
         order,
+        components: referencedComponentNames(nodes),
+        ...(def.meta !== undefined ? { meta: cloneSerializable(def.meta) } : {}),
         enabled: true,
         state: def.state,
         fixedDivisor,
@@ -368,4 +382,21 @@ export function createScheduler(
       }
     },
   }
+}
+
+/**
+ * Sorted, de-duplicated names of every component a query tree references —
+ * `Has`, `Where`, `OnAdded`, `OnRemoved`, `OnChanged` leaves, `Not` branches
+ * included (a `Not(Dead)` system still depends on `Dead`). Resource leaves
+ * are not components and are skipped. For `describe().systems` (§4.5).
+ */
+function referencedComponentNames(nodes: readonly QueryNode[]): string[] {
+  const out = new Set<string>()
+  const walk = (n: QueryNode): void => {
+    if (n.kind === 'and' || n.kind === 'or') n.children.forEach(walk)
+    else if (n.kind === 'not') walk(n.child)
+    else if (n.kind !== 'changedResource') out.add(n.type.name)
+  }
+  nodes.forEach(walk)
+  return Array.from(out).sort()
 }

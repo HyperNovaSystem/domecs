@@ -1828,10 +1828,17 @@ export function createWorld(options: WorldOptions = {}): World {
 
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
+      const description =
+        meta.__description !== undefined ? { description: meta.__description } : {}
       if (meta.__schema) {
-        return { name: type.name, fields: cloneFields(meta.__schema.fields), fieldsSource: 'schema' }
+        return {
+          name: type.name,
+          fields: cloneFields(meta.__schema.fields),
+          fieldsSource: 'schema',
+          ...description,
+        }
       }
-      return { name: type.name, fields: {}, fieldsSource: 'none' }
+      return { name: type.name, fields: {}, fieldsSource: 'none', ...description }
     },
 
     describeResource<T>(type: ResourceType<T>): ResourceDescriptor {
@@ -1851,6 +1858,8 @@ export function createWorld(options: WorldOptions = {}): World {
           enabled: s.enabled,
           priority: s.priority,
           order: s.order,
+          components: s.components.slice(),
+          ...(s.meta !== undefined ? { meta: cloneSerializable(s.meta) } : {}),
         })),
       )
 

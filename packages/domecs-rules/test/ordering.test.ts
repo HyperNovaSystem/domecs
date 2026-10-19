@@ -256,3 +256,16 @@ describe('rules — stable ordering option (E3.2)', () => {
     })
   })
 })
+
+// §4.5 (O-78): rules tag their systems so describe() can map them back.
+describe('rules — system meta (§4.5)', () => {
+  it("installRules sets meta { rule: name } on each rule's system", () => {
+    const w = createWorld({ headless: true })
+    installRules(w, [append('a', 'A'), append('b', 'B')], resolve)
+    const rules = w.describe().systems.filter((s) => s.name.startsWith('rule:'))
+    expect(rules.map((s) => [s.name, s.meta, s.components])).toEqual([
+      ['rule:a', { rule: 'a' }, ['OrLog']],
+      ['rule:b', { rule: 'b' }, ['OrLog']],
+    ])
+  })
+})

@@ -527,10 +527,17 @@ export interface EventDefOptions {
      * same way it renders a component.
      */
     readonly schema?: ComponentSchema;
+    /**
+     * Free-text meaning of the event (what the command does, when it is
+     * emitted) for humans and agents. Surfaced by `describeEvent` and
+     * `describe().events`; reflection only.
+     */
+    readonly description?: string;
 }
 /** Internal view of an {@link EventType} carrying its optional payload schema. */
 export interface InternalEventType<T> extends EventType<T> {
     readonly __schema?: ComponentSchema;
+    readonly __description?: string;
 }
 export declare function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>;
 /** Whether `value` is an {@link EventType} (carries the `eventTag` brand). */
@@ -561,6 +568,8 @@ export interface EventDescriptor {
     readonly name: string;
     readonly fields: Readonly<Record<string, FieldSchema>>;
     readonly fieldsSource: 'schema' | 'none';
+    /** The `description` given to `defineEvent`; absent when none was. */
+    readonly description?: string;
 }
 export interface EventView {
     of<T>(type: EventType<T>): readonly T[];
@@ -813,6 +822,7 @@ export declare function emptyInput(): InputSnapshot;
 
 // file: manifest.d.ts
 import type { EventDescriptor } from './events.js';
+import type { JsonValue } from './result.js';
 import type { SystemSchedule } from './scheduler.js';
 import type { ComponentDescriptor, ResourceDescriptor } from './types.js';
 /**
@@ -848,6 +858,14 @@ export interface WorldManifest {
         readonly priority: number;
         /** Secondary sort key within a priority (default 0; SPEC §3). */
         readonly order: number;
+        /**
+         * Names of the components the system's `query` / `reactsTo` reference
+         * (any leaf, `Not` branches included), sorted and de-duplicated.
+         * Computed once at registration.
+         */
+        readonly components: string[];
+        /** The system's `meta` annotation, cloned per call; absent when none was given. */
+        readonly meta?: JsonValue;
     }[];
     readonly plugins: PluginManifestEntry[];
     readonly capabilities: string[];
@@ -1239,6 +1257,7 @@ export declare function rewindRng(rng: Rng, state: RngState): boolean;
 import type { EventType, EventView } from './events.js';
 import type { InputSnapshot } from './input.js';
 import { type EntityView, type QueryDef, type QueryResult } from './query.js';
+import type { JsonValue } from './result.js';
 import type { Rng } from './rng.js';
 import type { TimeState } from './time.js';
 import type { World } from './world.js';
@@ -1259,6 +1278,12 @@ interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
     order?: number;
     enabled?: () => boolean;
     state?: State;
+    /**
+     * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
+     * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
+     * Cloned at registration; the runtime never reads it.
+     */
+    meta?: JsonValue;
     /**
      * Erased Fields phantom — keeps a structural slot for the inferred field
      * shape so callers can ascribe it explicitly when needed. The runtime
@@ -1334,6 +1359,10 @@ export interface CompiledSystem {
     priority: number;
     /** Secondary sort key within a priority (default 0). */
     order: number;
+    /** Sorted names of the components its query / reactsTo reference (manifest). */
+    components: string[];
+    /** Clone of `def.meta` taken at registration (manifest). */
+    meta?: JsonValue;
     enabled: boolean;
     state: unknown;
     query?: QueryResult;
@@ -1529,7 +1558,7 @@ export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'u
 /**
  * Per-field reflection metadata. `kind` is required; the rest are optional
  * widget hints (numeric range/step, enum `options`, display `label`,
- * `readonly`). Field names are plain strings, not keyed to `T` — this is a
+ * `readonly`) and a free-text `description`. Field names are plain strings, not keyed to `T` — this is a
  * runtime descriptor consumed by tooling, not a type-level constraint.
  */
 export interface FieldSchema {
@@ -1540,6 +1569,11 @@ export interface FieldSchema {
     readonly options?: ReadonlyArray<string | number>;
     readonly label?: string;
     readonly readonly?: boolean;
+    /**
+     * Free-text meaning of the field for humans and agents (units, range
+     * semantics, what 0 means). Reflection only; never validated against.
+     */
+    readonly description?: string;
 }
 /** A component's field schema: a map of field name → {@link FieldSchema}. */
 export interface ComponentSchema {

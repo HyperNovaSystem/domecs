@@ -42,7 +42,7 @@ export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'u
 /**
  * Per-field reflection metadata. `kind` is required; the rest are optional
  * widget hints (numeric range/step, enum `options`, display `label`,
- * `readonly`). Field names are plain strings, not keyed to `T` — this is a
+ * `readonly`) and a free-text `description`. Field names are plain strings, not keyed to `T` — this is a
  * runtime descriptor consumed by tooling, not a type-level constraint.
  */
 export interface FieldSchema {
@@ -53,6 +53,11 @@ export interface FieldSchema {
   readonly options?: ReadonlyArray<string | number>
   readonly label?: string
   readonly readonly?: boolean
+  /**
+   * Free-text meaning of the field for humans and agents (units, range
+   * semantics, what 0 means). Reflection only; never validated against.
+   */
+  readonly description?: string
 }
 
 /** A component's field schema: a map of field name → {@link FieldSchema}. */

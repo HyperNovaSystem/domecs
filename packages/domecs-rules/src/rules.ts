@@ -268,6 +268,8 @@ function registerRuleSystem(world: World, rule: CompiledRuleInternal, order: num
       priority: def.priority ?? 0,
       order,
       enabled: () => def.enabled !== false,
+      // §4.5: lets describe().systems map the system back to its rule.
+      meta: { rule: def.name },
     },
     (ctx) => {
       // Fixed-rate rules fire once per fixed-step tick, independent of the

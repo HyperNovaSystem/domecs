@@ -21,11 +21,18 @@ export interface EventDefOptions {
    * same way it renders a component.
    */
   readonly schema?: ComponentSchema
+  /**
+   * Free-text meaning of the event (what the command does, when it is
+   * emitted) for humans and agents. Surfaced by `describeEvent` and
+   * `describe().events`; reflection only.
+   */
+  readonly description?: string
 }
 
 /** Internal view of an {@link EventType} carrying its optional payload schema. */
 export interface InternalEventType<T> extends EventType<T> {
   readonly __schema?: ComponentSchema
+  readonly __description?: string
 }
 
 export function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T> {
@@ -33,6 +40,7 @@ export function defineEvent<T>(name: string, options?: EventDefOptions): EventTy
     name,
     [eventTag]: Symbol(name),
     ...(options?.schema ? { __schema: options.schema } : {}),
+    ...(options?.description !== undefined ? { __description: options.description } : {}),
   } as InternalEventType<T>
 }
 
@@ -110,6 +118,8 @@ export interface EventDescriptor {
   readonly name: string
   readonly fields: Readonly<Record<string, FieldSchema>>
   readonly fieldsSource: 'schema' | 'none'
+  /** The `description` given to `defineEvent`; absent when none was. */
+  readonly description?: string
 }
 
 export interface EventView {

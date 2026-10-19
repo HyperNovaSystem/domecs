@@ -325,6 +325,8 @@ export interface ComponentFieldData {
     options?: (string | number)[];
     label?: string;
     readonly?: boolean;
+    /** Free-text meaning of the field (`FieldSchema.description`); round-trips, never dropped. */
+    description?: string;
 }
 /** The persisted, document-embeddable form of a `ComponentType` + its `ComponentDescriptor`. */
 export interface ComponentTypeData {
@@ -362,7 +364,8 @@ export declare function serializeComponentType(type: ComponentType<unknown>, des
  *   that entry or field (O-63).
  * - A field named `__proto__`, or repeating an earlier field's name, is
  *   skipped; a `default` that does not fit the field's kind (or enum
- *   `options`) is dropped, keeping the field.
+ *   `options`), or a `description` that is not a string, is dropped,
+ *   keeping the field.
  */
 export declare function registerComponentTypes(data: ComponentTypeData[], reserved: ReadonlySet<string>): {
     types: ComponentType<unknown>[];
