@@ -299,10 +299,12 @@ export function compileRule(
   // cannot change during the run — `count`/`exists` always (membership is
   // stable within a run), a field aggregate when the rule writes no field of
   // that component. Otherwise it is recomputed per entity (Gauss–Seidel).
-  const written = new Set(compiledActions.map((a) => a.componentName))
+  // Compared by resolved type, not spelling: `resolve` may map two names to
+  // one component, and both read the same data.
+  const written = new Set(compiledActions.map((a) => a.component))
   const memo = {
     memoize: (node: Extract<AstNode, { kind: 'aggregate' }>): boolean =>
-      node.component === undefined || !written.has(node.component),
+      node.component === undefined || !written.has(componentsByName.get(node.component)!),
   }
   for (const action of compiledActions) action.run = compileExpression(action.ast, memo)
 
@@ -402,8 +404,13 @@ function registerRuleSystem(
   rng: 'shared' | 'own',
 ): SystemHandle {
   const { def, queryTypes, withoutTypes, spatialSets, spatial, when, actions, componentsByName } = rule
-  // Keyed by the rule's own names, as reads through resolveField are.
-  const actionKeys = actions.map((a) => `${a.componentName}.${a.field}`)
+  // Staging keys name the resolved component type, not the rule's spelling:
+  // `resolve` may map two names to one component, and a read under either
+  // name must see the other's staged write.
+  const typeIndex = new Map<ComponentType<any>, number>()
+  for (const t of componentsByName.values()) if (!typeIndex.has(t)) typeIndex.set(t, typeIndex.size)
+  const keyOf = (component: string, field: string): string => `${typeIndex.get(componentsByName.get(component)!)}.${field}`
+  const actionKeys = actions.map((a) => keyOf(a.componentName, a.field))
   // O-69 (R12): staging lookups are needed only when an action reads a
   // field an earlier action wrote, and commit dedupe only when two actions
   // write the same field. Both are known now, so the common case skips them.
@@ -413,7 +420,7 @@ function registerRuleSystem(
     let hit = false
     walkComponentRefs(a.ast, (c, f) => {
       if (f === null) return
-      const k = actionKeys.indexOf(`${c}.${f}`)
+      const k = actionKeys.indexOf(keyOf(c, f))
       if (k >= 0 && k < i) hit = true
     })
     return hit
@@ -492,7 +499,7 @@ function registerRuleSystem(
         rand: { uniform: () => ctx.rand.uniform() },
         resolveField(component, field) {
           if (staged.size > 0) {
-            const pending = staged.get(component + '.' + field)
+            const pending = staged.get(keyOf(component, field))
             if (pending !== undefined) return pending
           }
           const value = componentOf(component)

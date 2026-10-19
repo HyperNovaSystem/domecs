@@ -225,6 +225,36 @@ describe('E10.3 aggregates', () => {
     expect(run(true)).toEqual(run(false))
   })
 
+  it('memoization and staged reads key on the component type, not its spelling (an aliasing resolve)', () => {
+    // A resolve that maps two names to one type: writing XeHp and summing
+    // Alias.hp read the same data, so the sum must not be memoized.
+    const aliasing = (name: string): ComponentType<any> | undefined => (name === 'Alias' ? Hp : resolve(name))
+    const run = (field: string): number[] => {
+      const w = world()
+      installRules(
+        w,
+        [
+          rule({
+            name: 'agg',
+            query: ['XeHp', 'XeOut'],
+            actions: [
+              { set: 'XeHp.hp', expr: 'XeHp.hp + 1' },
+              { set: 'XeOut.a', expr: `sum(XeOut, ${field}.hp)` },
+            ],
+          }),
+        ],
+        aliasing,
+      )
+      const ids = [0, 1, 2].map(() => w.spawn([entry(Hp, { hp: 0 }), entry(Out, { a: 0, b: 0, c: 0, d: 0 })]))
+      w.stepOnce()
+      return ids.map((id) => w.getComponent(id, Out)!.a)
+    }
+    // Recomputed per entity: lower ids have committed +1 (Gauss–Seidel) and
+    // the evaluated entity sees its own staged +1, whichever name reads it.
+    expect(run('XeHp')).toEqual([1, 2, 3])
+    expect(run('Alias')).toEqual([1, 2, 3])
+  })
+
   it('compileExpression memoizes a marked aggregate once per environment', () => {
     const parsed = parseExpression('sum(S, C.f)')
     if ('errors' in parsed) throw new Error('parse')
