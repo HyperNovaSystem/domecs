@@ -67,5 +67,7 @@ function infer(
     case 'call':
       for (const arg of node.args) numeric(arg, `${node.name}()`)
       return 'number'
+    default:
+      return 'unknown'
   }
 }

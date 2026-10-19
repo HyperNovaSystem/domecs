@@ -8,10 +8,48 @@
  * accurate positions for component-resolution errors raised later by
  * `compileRule` against a successfully-parsed AST (see rules.ts).
  */
-export declare const FUNCTION_NAMES: readonly ["min", "max", "clamp", "abs", "sin", "cos", "floor", "random"];
+export declare const FUNCTION_NAMES: readonly ["min", "max", "clamp", "abs", "sin", "cos", "floor", "random", "sqrt", "pow", "atan2", "hypot", "sign", "round", "ceil", "lerp", "distance"];
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 /** Expected argument count for each whitelisted function. */
 export declare const FUNCTION_ARITY: Readonly<Record<FunctionName, number>>;
+/**
+ * The special forms (2.2, §5.2): calls whose arguments are not all
+ * expressions. `args` lists each argument's role — `'set'` (a component
+ * name: the entities holding it), `'entity'` (`self`, `first(S)`,
+ * `nearest(S[, d])` or `entity(n)`), `'expr'`, or `'memberField'` (a
+ * `Component.field` read on each member). `optional` counts the arguments
+ * that may be left out: trailing ones, except `has`, whose optional
+ * argument is the leading entity (`has(C)` is `has(self, C)`).
+ * `first`, `nearest` and `entity` are selectors: they produce an entity,
+ * which is only usable as `.Component.field`, `.id`, or an entity argument.
+ */
+export declare const SPECIAL_FORMS: Readonly<Record<string, {
+    readonly args: ReadonlyArray<'set' | 'entity' | 'expr' | 'memberField'>;
+    readonly optional: number;
+}>>;
+/**
+ * Names the parser reserves (2.2, §5.2, ED-9): `self` and `tick` now,
+ * `other`, `event` and `pointer` for later minors. A component with one of
+ * these names cannot be referenced in an expression. After an entity, `id`
+ * is reserved too (`e.id` is the entity id).
+ */
+export declare const RESERVED_WORDS: ReadonlySet<string>;
+/** What a selector or `self` refers to (2.2). */
+export type EntityNode = {
+    kind: 'self';
+    pos: number;
+} | {
+    kind: 'select';
+    op: 'first' | 'nearest';
+    set: string;
+    maxDistance?: AstNode;
+    pos: number;
+} | {
+    kind: 'entityById';
+    id: AstNode;
+    pos: number;
+};
+export type AggregateOp = 'count' | 'exists' | 'sum' | 'avg' | 'minOf' | 'maxOf';
 export type BinaryOp = '+' | '-' | '*' | '/' | '%' | '<' | '<=' | '>' | '>=' | '==' | '!=';
 export type LogicalOp = '&&' | '||';
 export type UnaryOp = '!' | '-';
@@ -28,10 +66,10 @@ export type AstNode = {
     value: boolean;
     pos: number;
 }
-/** Bare `dt` / `time` — NOT a component reference. */
+/** Bare `dt` / `time` / `tick` (2.2) — NOT a component reference. */
  | {
     kind: 'identifier';
-    name: 'dt' | 'time';
+    name: 'dt' | 'time' | 'tick';
     pos: number;
 }
 /** Dotted `Component.field` reference. */
@@ -68,13 +106,83 @@ export type AstNode = {
     name: FunctionName;
     args: AstNode[];
     pos: number;
+}
+/** `e.Component.field`; `self.C.f` reads the evaluated entity like `C.f`. */
+ | {
+    kind: 'member';
+    target: EntityNode;
+    component: string;
+    field: string;
+    pos: number;
+}
+/** `e.id`: the entity id as a number. */
+ | {
+    kind: 'entityId';
+    target: EntityNode;
+    pos: number;
+}
+/** `has(C)` / `has(e, C)` (the target defaults to self). */
+ | {
+    kind: 'has';
+    target: EntityNode;
+    component: string;
+    pos: number;
+}
+/** `count(S)`, `exists(S)`, `sum|avg|minOf|maxOf(S, C.f)`. */
+ | {
+    kind: 'aggregate';
+    op: AggregateOp;
+    set: string;
+    component?: string;
+    field?: string;
+    pos: number;
+}
+/** `countWithin(S, r[, e])` (the centre defaults to self). */
+ | {
+    kind: 'countWithin';
+    set: string;
+    radius: AstNode;
+    centre?: EntityNode;
+    pos: number;
+}
+/** `distanceTo(e)`. */
+ | {
+    kind: 'distanceTo';
+    target: EntityNode;
+    pos: number;
+}
+/** `a ?? b`: `b` when evaluating `a` yields no value. */
+ | {
+    kind: 'nullish';
+    left: AstNode;
+    right: AstNode;
+    pos: number;
 };
 /**
- * Walk every `field` (Component.field) leaf reachable from `node`, in
- * left-to-right order. Used by `compileRule` (rules.ts) to resolve every
- * component name referenced inside a parsed expression.
+ * Walk every read of the evaluated entity's own fields reachable from
+ * `node`, in left-to-right order: `Component.field` and (2.2) `self.C.f`,
+ * including inside the expression arguments of the 2.2 forms. Reads of
+ * other entities (`first(S).C.f`), sets and `has` targets are not visited;
+ * {@link walkComponentRefs} visits every component name. Used by
+ * `compileRule` (rules.ts).
  */
 export declare function walkFieldRefs(node: AstNode, visit: (component: string, field: string, pos: number) => void): void;
+/**
+ * Walk every component name reachable from `node`, in left-to-right source
+ * order (2.2, §5.2):
+ * - `'self'`: a read of the evaluated entity's field (`C.f`, `self.C.f`);
+ * - `'member'`: a read of another entity's field (`first(S).C.f`, `e.C.f`)
+ *   or an aggregate's per-member field (`sum(S, C.f)`);
+ * - `'set'` (`field` null): a set (`count(S)`, `first(S)`, …) or a `has`
+ *   target component.
+ *
+ * `pos` is the node's position: the component token for `C.f`, the start of
+ * the entity for `e.C.f`, and the form's name token for sets, aggregates and
+ * `has`. Component renames and `compileRule` resolution use this walker.
+ */
+export declare function walkComponentRefs(node: AstNode, visit: (component: string, field: string | null, pos: number, role: 'self' | 'member' | 'set') => void): void;
+/** Every direct child of `node` (expressions and entity nodes), for depth walks. */
+export declare function childNodes(node: AstNode | EntityNode): Array<AstNode | EntityNode>;
 
 // file: build-id.d.ts
 /**
@@ -155,8 +263,8 @@ export type CompiledExpression = (env: EvalEnv) => number | string | boolean;
 export declare function compileExpression(ast: AstNode): CompiledExpression;
 
 // file: index.d.ts
-export type { AstNode, BinaryOp, FunctionName, LogicalOp, UnaryOp } from './ast.js';
-export { FUNCTION_ARITY, FUNCTION_NAMES } from './ast.js';
+export type { AggregateOp, AstNode, BinaryOp, EntityNode, FunctionName, LogicalOp, UnaryOp } from './ast.js';
+export { FUNCTION_ARITY, FUNCTION_NAMES, SPECIAL_FORMS, walkComponentRefs } from './ast.js';
 export { MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, parseExpression } from './parser.js';
 export type { ParseError } from './parser.js';
 export { evaluate, RuleEvalError } from './evaluator.js';
@@ -187,10 +295,12 @@ export declare function tokenize(source: string): Token[];
 // file: parser.d.ts
 import { type AstNode } from './ast.js';
 /**
- * Rules expression grammar (exactly this, nothing more):
+ * Rules expression grammar (exactly this, nothing more; `(+)` marks the
+ * 2.2 additions, spec §5.2):
  *
  *   expr       := ternary
- *   ternary    := logicOr ( '?' ternary ':' ternary )?        // right-assoc
+ *   ternary    := nullish ( '?' ternary ':' ternary )?        // right-assoc
+ *   nullish    := logicOr ( '??' logicOr )*                    (+) left-assoc
  *   logicOr    := logicAnd ( '||' logicAnd )*
  *   logicAnd   := equality ( '&&' equality )*
  *   equality   := relational ( ('==' | '!=') relational )*
@@ -199,16 +309,36 @@ import { type AstNode } from './ast.js';
  *   multiplicative := unary ( ('*' | '/' | '%') unary )*
  *   unary      := ('!' | '-') unary | primary
  *   primary    := number | string | 'true' | 'false'
- *               | 'dt' | 'time'
+ *               | 'dt' | 'time' | 'tick'                       (+) tick
  *               | IDENT '.' IDENT                              // Component.field
- *               | IDENT '(' args? ')'                          // whitelisted call
+ *               | entity '.' IDENT '.' IDENT                   (+) another entity's field
+ *               | entity '.' 'id'                              (+) entity id
+ *               | call
  *               | '(' expr ')'
+ *   entity     := 'self' | 'first' '(' SET ')'                 (+)
+ *               | 'nearest' '(' SET ( ',' expr )? ')'          (+) optional max distance
+ *               | 'entity' '(' expr ')'                        (+) by numeric id
+ *   call       := FUNC '(' args? ')'                           // whitelisted call
+ *               | 'has' '(' ( entity ',' )? SET ')'            (+)
+ *               | ('count' | 'exists') '(' SET ')'             (+)
+ *               | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
+ *               | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'  (+)
+ *               | 'distanceTo' '(' entity ')'                  (+)
  *   args       := expr ( ',' expr )*
+ *   SET        := IDENT                                        (+) a component name: its holders
  *
  * Function calls are restricted to exactly: min(a,b) max(a,b) clamp(v,lo,hi)
- * abs(v) sin(v) cos(v) floor(v) random(). Wrong arity or an unknown function
- * name is a ParseError, not a runtime error — the whitelist and arg counts
- * are enforced at parse time.
+ * abs(v) sin(v) cos(v) floor(v) random(), and from 2.2 sqrt(v) pow(a,b)
+ * atan2(y,x) hypot(a,b) sign(v) round(v) ceil(v) lerp(a,b,t)
+ * distance(x1,y1,x2,y2). Wrong arity or an unknown function name is a
+ * ParseError, not a runtime error — the whitelist and arg counts are
+ * enforced at parse time.
+ *
+ * Reserved words (2.2): `self`, `tick`, `other`, `event`, `pointer` cannot
+ * name a component in an expression, and `id` cannot after an entity. Only
+ * `first(`, `nearest(` and `entity(` start a selector: `first.x` is still
+ * `Component.field`. An entity is not a value: use `.id` or
+ * `.Component.field`.
  */
 /**
  * O-66: limits that keep rule data from overflowing the stack. The parser,

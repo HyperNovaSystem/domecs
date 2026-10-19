@@ -97,6 +97,7 @@ export function evaluate(ast: AstNode, env: EvalEnv): number | string | boolean 
       return ast.value
 
     case 'identifier':
+      if (ast.name === 'tick') throw notAvailable('tick')
       return ast.name === 'dt' ? env.dt : env.time
 
     case 'field': {
@@ -159,7 +160,14 @@ export function evaluate(ast: AstNode, env: EvalEnv): number | string | boolean 
 
     case 'call':
       return evaluateCall(ast.name, ast.args, env)
+
+    default:
+      throw notAvailable(ast.kind)
   }
+}
+
+function notAvailable(what: string): RuleEvalError {
+  return new RuleEvalError(`"${what}" is not available in this environment`)
 }
 
 function evaluateCall(name: FunctionName, args: AstNode[], env: EvalEnv): number {
@@ -186,6 +194,8 @@ function evaluateCall(name: FunctionName, args: AstNode[], env: EvalEnv): number
       return Math.floor(expectNumber(evaluate(args[0]!, env), 'floor()'))
     case 'random':
       return env.rand.uniform()
+    default:
+      throw notAvailable(`${name}()`)
   }
 }
 
@@ -206,6 +216,7 @@ export function compileExpression(ast: AstNode): CompiledExpression {
       return () => value
     }
     case 'identifier':
+      if (ast.name === 'tick') return () => { throw notAvailable('tick') }
       return ast.name === 'dt' ? (env) => env.dt : (env) => env.time
     case 'field': {
       const { component, field } = ast
@@ -272,7 +283,15 @@ export function compileExpression(ast: AstNode): CompiledExpression {
         case 'cos': return (env) => dmath.cos(n(0, env, 'cos()'))
         case 'floor': return (env) => Math.floor(n(0, env, 'floor()'))
         case 'random': return (env) => env.rand.uniform()
+        default: {
+          const what = `${ast.name}()`
+          return () => { throw notAvailable(what) }
+        }
       }
+    }
+    default: {
+      const what = ast.kind
+      return () => { throw notAvailable(what) }
     }
   }
 }
