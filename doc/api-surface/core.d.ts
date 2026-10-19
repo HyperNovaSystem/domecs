@@ -2728,6 +2728,38 @@ export interface World {
      * `stepN(n, dt)` with a positive `dt`).
      */
     stepOnce(): void;
+    /**
+     * Run the named enabled `tick`/`fixed` systems once now, in run order (the
+     * `fixed` phase, then `tick`; within each, priority, order, registration),
+     * without advancing time, flushing events, or firing tickStart/tickEnd
+     * (§6.3; O-88). Returns the names it ran (one entry per system run, so a
+     * name two systems share appears twice) and the names it skipped: unknown,
+     * disabled, or of another schedule (`event`, `reactive`, `once`).
+     *
+     * Use it only for **derived and transient** state the next tick recomputes
+     * anyway — e.g. priming `composeTransforms` output after `restore()`.
+     * `ctx.time` is the current time (`scaledDelta` is what the last tick left),
+     * `ctx.events` the current view; emits stay queued for the next tick.
+     * Tick systems run even while paused and a fixed `rateHz` divisor is not
+     * applied. A run is a normal run for change windows (O-42). Mutations are
+     * out of tick, so an attached act-log recorder notes an
+     * `out_of_tick_mutation` gap whenever a system runs. A throwing system
+     * propagates; the systems after it do not run. Throws `TypeError` unless
+     * `names` is an array of strings, and `Error` during a tick.
+     */
+    runSystems(names: readonly string[]): {
+        readonly ran: string[];
+        readonly skipped: string[];
+    };
+    /**
+     * Run plugin `onRender` hooks only, with heartbeat `TickInfo`
+     * (`{ heartbeat: true }`): no `tickStart`/`tickEnd` signals or plugin tick
+     * hooks, no systems, no change to `time` (§6.3; O-88). Advances renderer
+     * query windows as the heartbeat render does, so marks are painted once.
+     * Use it to redraw after a restore, scrub or branch selection without
+     * re-triggering `tickEnd` subscribers. Throws `Error` during a tick.
+     */
+    render(): void;
     stepN(n: number, dt?: number): void;
     turn<T>(type: EventType<T>, payload: T, dt?: number): void;
     /**

@@ -398,6 +398,35 @@ export interface World {
    * `stepN(n, dt)` with a positive `dt`).
    */
   stepOnce(): void
+  /**
+   * Run the named enabled `tick`/`fixed` systems once now, in run order (the
+   * `fixed` phase, then `tick`; within each, priority, order, registration),
+   * without advancing time, flushing events, or firing tickStart/tickEnd
+   * (§6.3; O-88). Returns the names it ran (one entry per system run, so a
+   * name two systems share appears twice) and the names it skipped: unknown,
+   * disabled, or of another schedule (`event`, `reactive`, `once`).
+   *
+   * Use it only for **derived and transient** state the next tick recomputes
+   * anyway — e.g. priming `composeTransforms` output after `restore()`.
+   * `ctx.time` is the current time (`scaledDelta` is what the last tick left),
+   * `ctx.events` the current view; emits stay queued for the next tick.
+   * Tick systems run even while paused and a fixed `rateHz` divisor is not
+   * applied. A run is a normal run for change windows (O-42). Mutations are
+   * out of tick, so an attached act-log recorder notes an
+   * `out_of_tick_mutation` gap whenever a system runs. A throwing system
+   * propagates; the systems after it do not run. Throws `TypeError` unless
+   * `names` is an array of strings, and `Error` during a tick.
+   */
+  runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] }
+  /**
+   * Run plugin `onRender` hooks only, with heartbeat `TickInfo`
+   * (`{ heartbeat: true }`): no `tickStart`/`tickEnd` signals or plugin tick
+   * hooks, no systems, no change to `time` (§6.3; O-88). Advances renderer
+   * query windows as the heartbeat render does, so marks are painted once.
+   * Use it to redraw after a restore, scrub or branch selection without
+   * re-triggering `tickEnd` subscribers. Throws `Error` during a tick.
+   */
+  render(): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
@@ -2168,6 +2197,69 @@ export function createWorld(options: WorldOptions = {}): World {
       // systems — use step(fixedStep) (or stepN with a dt) for headless tests
       // of fixed-schedule sims.
       runTick(undefined)
+    },
+
+    runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] } {
+      if (!Array.isArray(names) || names.some((n) => typeof n !== 'string')) {
+        throw new TypeError('domecs: runSystems(names) needs an array of system names (strings)')
+      }
+      if (inTick) {
+        throw new Error('domecs: runSystems must be called outside a tick (not from a system, hook or handler)')
+      }
+      const wanted = new Set(names)
+      // Snapshot both phases first (copy-on-write arrays, O-43): systems a
+      // run registers are not run by this call.
+      const candidates = [
+        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name)),
+        ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
+      ]
+      const ran: string[] = []
+      const ranNames = new Set<string>()
+      if (candidates.length > 0) {
+        const view = bus.view()
+        let noted = false
+        inTick = true
+        try {
+          for (const s of candidates) {
+            if (!isEnabled(s)) continue
+            // §6.3: out of tick, whatever the system writes (or reads from
+            // world.rand); a replay cannot reproduce it.
+            if (!noted) {
+              noted = true
+              tapMutated()
+            }
+            runSystem(s, view)
+            ran.push(s.name)
+            ranNames.add(s.name)
+          }
+        } finally {
+          inTick = false
+        }
+        if (ran.length > 0) wakeDriver()
+      }
+      const skipped: string[] = []
+      const listed = new Set<string>()
+      for (const n of names) {
+        if (ranNames.has(n) || listed.has(n)) continue
+        listed.add(n)
+        skipped.push(n)
+      }
+      return { ran, skipped }
+    },
+
+    render(): void {
+      if (inTick) {
+        throw new Error('domecs: render must be called outside a tick (not from a system, hook or handler)')
+      }
+      inTick = true
+      try {
+        plugins.callRender(world, HEARTBEAT)
+      } finally {
+        inTick = false
+        // As the heartbeat render (O-42): a renderer has read what it
+        // painted, even if a hook threw (O-53).
+        advanceQueryWindows()
+      }
     },
 
     stepN(n: number, dt?: number): void {
