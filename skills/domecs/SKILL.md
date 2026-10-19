@@ -95,6 +95,8 @@ bridge.reset()                         // episode boundary
 - **History vs saves:** `createSnapshotHistory` for undo; `save`/`load` for named slots
 - **Equality / forks:** `hashSnapshot(snap, { includeChanges: true })` for live vs
   fork; `hashEntities` localizes a divergence; `canonicalJson` for keyframes
+- **Events in flight:** forks/keyframes use `snapshot({ pendingEvents: true })`
+  and `register` every event type that can be pending in the restoring world
 - **Trig in systems:** `dmath.sin` / `dmath.cos` (`@domecs/core`), not
   `Math.sin` / `Math.cos`, so Node, Electron and browsers agree bit for bit
 

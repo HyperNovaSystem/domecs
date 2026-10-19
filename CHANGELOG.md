@@ -81,6 +81,19 @@ peer ranges still resolve.
   `position` keeps its meaning (offset within that part's string, or -1).
   New type `RuleDefPath`; the union widens in later minors, so keep a
   default branch when switching on it.
+- `@domecs/core`: pending events travel with opt-in snapshots (G21, O-90).
+  `snapshot({ pendingEvents: true })` records the undelivered events as
+  `WorldSnapshot.pendingEvents: [{ event, payload? }]` (new type
+  `SnapshotPendingEvent`), in bus order, as plain-data copies; a payload
+  that is not plain data throws `TypeError` naming the event and path. The
+  field is omitted when nothing is in flight. `restore()` resolves each name
+  with `lookupEvent` before any state change (unknown or ambiguous throws)
+  and replaces the queue with those events, so a fork taken between an emit
+  and its delivery delivers it too. `world.pendingEvents()` reads the queue
+  without consuming it. `canonicalSnapshot`/`hashSnapshot` include the field;
+  `@domecs/persist` `firstDivergence` reports it (`key: 'pendingEvents'`).
+  Default snapshots are unchanged (the option is off in 2.x). The field is
+  added without a `SNAPSHOT_VERSION` bump; a 2.0 engine ignores it.
 
 #### Changed
 

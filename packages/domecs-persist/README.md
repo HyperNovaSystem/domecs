@@ -80,7 +80,9 @@ else if (!boot.value) { /* first run */ }
   `epsilon` (absolute) for numbers, `components` to restrict, `limit` (default
   10 000) with `truncated`.
 - `firstDivergence(a, b)` — the first difference in canonical order (state
-  fields, then the lowest entity id, then resources), or `null`.
+  fields, including in-flight `pendingEvents`, then the lowest entity id, then
+  resources), or `null`. `save()` and `createSnapshotHistory` take default
+  snapshots, which carry no pending events.
 - `createMemoryStorage()` — in-memory `Storage` for tests/non-persistent use.
 - `serializeComponentType(type, world.describeComponent(type))` /
   `registerComponentTypes(data, reserved)` — persist user-authored component

@@ -110,6 +110,12 @@ or in a boot `once` system when restoring into a fresh world. Not in a plugin
 `onRestore`: it runs before the snapshot is applied, so anything it spawns is
 wiped.
 
+Forks and checkpoints taken between ticks pass
+`snapshot({ pendingEvents: true })` so events in flight are delivered after
+the restore too. Restore resolves them by name: `world.register(...)` every
+event type that can be in flight in the restoring world's setup, or the
+restore throws.
+
 ### Feed coalesce
 External telemetry: queue → coalesce by entity key → one batch event per frame.
 Do not spawn a system tick per network message.

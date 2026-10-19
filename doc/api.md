@@ -360,7 +360,13 @@ interface World {
   // serializable bag is empty once transient components are excluded —
   // transient-only and bare spawn() entities. Persist's
   // pruneTransientOnlyEntities() plugin applies this on the no-arg save() path.
+  // options.pendingEvents (default false): record the undelivered events, so
+  // a fork restored from it delivers them on its next tick (O-90). A pending
+  // payload that is not plain data throws TypeError naming the event.
   snapshot(options?: SnapshotOptions): WorldSnapshot
+  // The undelivered events in bus order (first emit of each type, then
+  // payload order). A fresh array; reading consumes nothing.
+  pendingEvents(): EmittedEvent[]
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
   // The envelope shape (seed, tick, nextId, every entity record's id and
@@ -371,6 +377,9 @@ interface World {
   // validates only at Component.create(). world.rand is rewound in place, so
   // captured references follow the restore (O-46). A snapshot whose version
   // is newer than SNAPSHOT_VERSION throws (O-63); migrate older ones first.
+  // The pending event queue is abandoned — or, when snap.pendingEvents is
+  // present, replaced by it after every name resolves through lookupEvent
+  // (unknown or ambiguous → throws before any state change).
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -721,6 +730,54 @@ w.stepOnce() // tick 2: step-1 flush delivers Hit to the consumer
 assert.deepEqual(seen, [7])
 ```
 
+Events in flight between two ticks travel with a snapshot only when it is
+taken with `{ pendingEvents: true }` (O-90). Restore resolves each name with
+`world.lookupEvent`, so the restoring world must know the type —
+`register` it in setup (or subscribe, or name it in `triggers`). Payloads
+must be plain data; anything else throws `TypeError` at `snapshot()`.
+`world.pendingEvents()` shows the queue without consuming it:
+
+```ts doctest name=pending-events-fork
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, hashSnapshot, type World } from '@domecs/core'
+
+const Score = defineComponent<{ n: number }>('PeScore', { defaults: { n: 0 } })
+const Goal = defineEvent<{ points: number }>('PeGoal')
+
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.register(Goal) // a fork must know every event type that can be in flight
+  w.system('kick', {}, (ctx) => {
+    if (ctx.time.tick === 3) ctx.events.emit(Goal, { points: 2 })
+  })
+  w.system('score', { schedule: 'event', triggers: [Goal] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Score])) {
+      for (const g of ctx.events.of(Goal)) ctx.world.getComponent(id, Score)!.n += g.points
+      ctx.world.markChanged(id, Score)
+    }
+  })
+  return w
+}
+
+const live = build()
+live.spawn([entry(Score, { n: 0 })])
+live.stepOnce()
+live.stepOnce()
+live.stepOnce() // tick 3 emits Goal; it is delivered at tick 4
+assert.deepEqual(live.pendingEvents().map((e) => e.payload), [{ points: 2 }])
+
+const snap = live.snapshot({ pendingEvents: true })
+assert.deepEqual(snap.pendingEvents, [{ event: 'PeGoal', payload: { points: 2 } }])
+assert.equal(live.snapshot().pendingEvents, undefined) // default: not recorded
+
+const fork = build()
+fork.restore(snap)
+live.stepOnce()
+fork.stepOnce()
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork), strict(live)) // both delivered the Goal
+```
+
 ### Time
 
 ```ts
@@ -777,7 +834,16 @@ interface WorldSnapshot {
   // re-issues them so those systems report them at their next run. Omitted
   // when every system has seen every mark.
   readonly changes?: ChangesSnapshot
+  // Undelivered events in bus order, as plain-data copies (O-90). Present
+  // only with snapshot({ pendingEvents: true }) and something in flight.
+  // `payload` is absent for an undefined payload (a void event).
+  readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>
   readonly meta?: Record<string, unknown>
+}
+
+interface SnapshotPendingEvent {
+  readonly event: string        // the event type's name (resolved with lookupEvent)
+  readonly payload?: JsonValue
 }
 
 interface ChangesSnapshot {
@@ -792,6 +858,10 @@ interface SnapshotOptions {
   // Drop entities whose serializable bag is empty once transient components
   // are excluded. Default false (every alive entity is recorded).
   readonly pruneEmptyEntities?: boolean
+  // Record undelivered events in `pendingEvents`. Default false (2.0
+  // behaviour: restore abandons the queue). Forks, keyframes and checkpoints
+  // opt in.
+  readonly pendingEvents?: boolean
 }
 ```
 
@@ -1123,7 +1193,8 @@ Notes:
   does not carry them); restore those explicitly at episode boundaries if
   episodes touch either. Entity-id assignment is stable across `reset()`
   (the snapshot carries the id cursor, O-38) and pending events from the
-  abandoned episode are discarded by `restore()`.
+  abandoned episode are discarded by `restore()` (the baseline is a
+  default snapshot, which carries no pending events).
 - `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
   same as `step()` — guard computed dt values that can round to 0.
 - `act()` validates the payload when the event declares a `schema`
@@ -1476,12 +1547,12 @@ interface FieldChange {
 interface ResourceChange { readonly resource: string; readonly path: string; readonly before: JsonValue | undefined; readonly after: JsonValue | undefined }
 
 /** First difference: state (seed, tick, scaledTime, nextId, rngRoot, rngStreams,
- *  fixedBacklog), then the lowest entity id, then resources. null when equal.
+ *  fixedBacklog, pendingEvents), then the lowest entity id, then resources. null when equal.
  *  version, meta and changes are not compared. */
 function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null
 
 type Divergence =
-  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' }
+  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' | 'pendingEvents' }
   | { where: 'entity'; entity: Entity; change: 'added' | 'removed' | FieldChange }
   | { where: 'resource'; change: ResourceChange }
 ```
