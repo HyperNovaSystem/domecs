@@ -35,6 +35,18 @@ a new unread-marks workload (N entities, every one marked each tick, no
 reader). **If the ceiling is under a 15% p95 improvement on both, this spec
 is shelved** and the mark path is optimized in place instead (A1).
 
+**Step 0 result (2026-10-20, i9-11900H, Node 26.7, 7 paired trials).** An
+unsafe prototype dropped every mark of the unread type:
+
+- Headless windowed: 0.997× (CI 0.96–1.11). There is no gain, because the
+  windowed cost is not in the marks.
+- Soak with no change reader (5,000 entities marked per tick): 0.77× (CI
+  0.67–0.84), about a 23% ceiling.
+
+The gate passes on the unread-marks workload only. Next step: port the A1
+overhead cuts first, re-measure this ceiling on the post-A1 baseline, and
+build the design only if it still clears 15% there.
+
 ## Definitions
 
 - **Change node:** an `OnAdded(T)`, `OnChanged(T)` or `OnRemoved(T)` node.
