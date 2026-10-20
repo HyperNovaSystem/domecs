@@ -24,6 +24,14 @@ export interface ArchetypeBucket {
   readonly key: string
   readonly types: Set<string>
   readonly entities: SortedIdSet
+  /**
+   * WS-5 A1: archetype transition edges, the bucket reached by adding or
+   * removing one component name, filled on first use. Buckets are only ever
+   * discarded all together (restore), so an edge never points at a bucket
+   * that is no longer in use.
+   */
+  readonly addEdges: Map<string, ArchetypeBucket>
+  readonly removeEdges: Map<string, ArchetypeBucket>
 }
 
 export interface CompiledQuery {

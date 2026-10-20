@@ -609,6 +609,18 @@ export function createWorld(options: WorldOptions = {}): World {
   // references the live store does.
   const viewCache = new Map<Entity, EntityView>()
 
+  // WS-5 A1: store lookup by ComponentType identity. storeFor() validates a
+  // type once (name registry, duplicate-name check); after that, the hot
+  // paths (getComponent, markChanged, addComponent) skip the name lookup and
+  // the checks. Cleared on restore, which replaces every store Map.
+  const storeByType = new Map<ComponentType<unknown>, Map<Entity, unknown>>()
+
+  // WS-5 A1: bumped by every change that can alter a structural query's
+  // result or the view objects in it: an entity entering, leaving or moving
+  // between archetypes, and restore. Structural live queries reuse their
+  // last result while it is unchanged.
+  let structEpoch = 0
+
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
 
@@ -680,16 +692,35 @@ export function createWorld(options: WorldOptions = {}): World {
     const key = archetypeKeyFor(types)
     let bucket = archetypes.get(key)
     if (bucket) return bucket
-    bucket = { key, types, entities: new SortedIdSet() }
+    bucket = { key, types, entities: new SortedIdSet(), addEdges: new Map(), removeEdges: new Map() }
     archetypes.set(key, bucket)
     for (const q of queries) evaluateQueryAgainstArchetype(q, bucket)
     return bucket
   }
 
-  function moveEntity(entity: Entity, nextTypes: Set<string>): void {
+  /**
+   * The bucket an entity in `from` lands in when component `name` is added
+   * (or removed): followed through the transition edge, built once per
+   * (bucket, name, direction) instead of copying, sorting and stringifying
+   * the type set on every add/remove (WS-5 A1).
+   */
+  function transition(from: ArchetypeBucket, name: string, adding: boolean): ArchetypeBucket {
+    const edges = adding ? from.addEdges : from.removeEdges
+    let to = edges.get(name)
+    if (to === undefined) {
+      const types = new Set(from.types)
+      if (adding) types.add(name)
+      else types.delete(name)
+      to = ensureArchetype(types)
+      edges.set(name, to)
+    }
+    return to
+  }
+
+  function moveEntity(entity: Entity, next: ArchetypeBucket): void {
     const prev = entityArchetype.get(entity)
-    const next = ensureArchetype(nextTypes)
     if (prev === next) return
+    structEpoch++
     if (prev) prev.entities.delete(entity)
     next.entities.add(entity)
     entityArchetype.set(entity, next)
@@ -773,8 +804,18 @@ export function createWorld(options: WorldOptions = {}): World {
     switch (node.kind) {
       case 'has': requireRegisteredType(node.type); return hasType(entity, node.type.name)
       case 'not': return !evalEntity(node.child, entity)
-      case 'or': return node.children.some((c) => evalEntity(c, entity))
-      case 'and': return node.children.every((c) => evalEntity(c, entity))
+      // Plain loops, not some/every: those allocate a closure per call, and
+      // this runs once per candidate entity on every filtered read (WS-5 A1).
+      case 'or': {
+        const children = node.children
+        for (let i = 0; i < children.length; i++) if (evalEntity(children[i]!, entity)) return true
+        return false
+      }
+      case 'and': {
+        const children = node.children
+        for (let i = 0; i < children.length; i++) if (!evalEntity(children[i]!, entity)) return false
+        return true
+      }
       case 'added': return inWindow(addedStamps, node.type.name, entity)
       case 'changed': return inWindow(changedStamps, node.type.name, entity)
       case 'removed': return inWindow(removedStamps, node.type.name, entity)
@@ -909,6 +950,14 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   function storeFor<T>(type: ComponentType<T>): Map<Entity, T> {
+    const cached = storeByType.get(type as ComponentType<unknown>)
+    if (cached !== undefined) return cached as Map<Entity, T>
+    const s = storeForSlow(type)
+    storeByType.set(type as ComponentType<unknown>, s as Map<Entity, unknown>)
+    return s
+  }
+
+  function storeForSlow<T>(type: ComponentType<T>): Map<Entity, T> {
     let s = stores.get(type.name)
     if (!s) {
       s = new Map()
@@ -939,11 +988,6 @@ export function createWorld(options: WorldOptions = {}): World {
     if (!alive.has(entity)) {
       throw new Error(`domecs: entity ${entity} is not alive`)
     }
-  }
-
-  function currentTypes(entity: Entity): Set<string> {
-    const arch = entityArchetype.get(entity)
-    return arch ? new Set(arch.types) : new Set()
   }
 
   function isEnabled(s: CompiledSystem): boolean {
@@ -1462,23 +1506,43 @@ export function createWorld(options: WorldOptions = {}): World {
     }
 
     let disposed = false
+    // WS-5 A1: a structural query (no Where, no change filter) gives the same
+    // views until an entity enters, leaves or moves between archetypes, so
+    // its last result is reused while structEpoch is unchanged. Callers get
+    // a copy: an array they sort or splice never reaches the next reader.
+    let cachedViews: EntityView[] | null = null
+    let cachedEpoch = -1
     const result: QueryResult = {
       get entities() {
         if (disposed) return []
+        if (!needsEntityFilter && cachedViews !== null && cachedEpoch === structEpoch) {
+          return cachedViews.slice()
+        }
         // Indexed over the length read up front: membership changes made
         // by a Where predicate mid-loop do not leak into this result.
-        const out: EntityView[] = []
+        let out: EntityView[] = []
         if (needsEntityFilter) enterWindowOf(q)
         try {
           const candidates = collectCandidates()
           const n = candidates.length
+          // Sized once to the candidate count and trimmed after, instead of
+          // growing by push: a large read reallocated its array several
+          // times per call (WS-5 A1).
+          out = new Array<EntityView>(n)
+          let k = 0
           for (let i = 0; i < n; i++) {
             const e = candidates[i]!
             if (needsEntityFilter && !evalEntity(node, e)) continue
-            out.push(makeView(e))
+            out[k++] = makeView(e)
           }
+          if (k < n) out.length = k
         } finally {
           if (needsEntityFilter) leaveWindow()
+        }
+        if (!needsEntityFilter) {
+          cachedViews = out
+          cachedEpoch = structEpoch
+          return out.slice()
         }
         return out
       },
@@ -1547,6 +1611,7 @@ export function createWorld(options: WorldOptions = {}): World {
     spawn(components?: ComponentBag): Entity {
       const id = nextId++
       alive.add(id)
+      structEpoch++
       // new entity enters empty archetype
       emptyArch.entities.add(id)
       entityArchetype.set(id, emptyArch)
@@ -1599,6 +1664,7 @@ export function createWorld(options: WorldOptions = {}): World {
       entityArchetype.delete(entity)
       alive.delete(entity)
       viewCache.delete(entity)
+      structEpoch++
       sigEntityDespawned.emit(entity)
       wakeDriver()
     },
@@ -1627,9 +1693,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const merged = type.create(value as Partial<T>)
       store.set(entity, merged)
       record('added', type.name, entity)
-      const nextTypes = currentTypes(entity)
-      nextTypes.add(type.name)
-      moveEntity(entity, nextTypes)
+      moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, true))
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
       wakeDriver()
     },
@@ -1642,17 +1706,12 @@ export function createWorld(options: WorldOptions = {}): World {
       sigComponentRemoved.emit({ entity, type })
       s.delete(entity)
       record('removed', type.name, entity)
-      const nextTypes = currentTypes(entity)
-      nextTypes.delete(type.name)
-      moveEntity(entity, nextTypes)
+      moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, false))
       wakeDriver()
     },
 
     getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined {
-      requireRegisteredType(type)
-      const s = stores.get(type.name)
-      if (!s) return undefined
-      return s.get(entity) as T | undefined
+      return storeFor(type).get(entity)
     },
 
     markChanged<T>(entity: Entity, type: ComponentType<T>): void {
@@ -2052,6 +2111,9 @@ export function createWorld(options: WorldOptions = {}): World {
         throw cause
       }
       applySnapshot(stateCtx, s, clock)
+      // Every store Map and archetype bucket was replaced.
+      storeByType.clear()
+      structEpoch++
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()

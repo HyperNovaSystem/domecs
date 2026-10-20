@@ -218,8 +218,9 @@ Phase 1 (committed):
   in a real browser, allocation/heap metrics, and the frozen verdict
   protocol (O-76). Baseline: soak 1.10× Koota, windowed 1.43×, browser
   frame 1.13×. Multi-machine runs are still open.
-- [ ] Port the prototype's overhead cuts to `src`. Query caching is for
-  structural queries only.
+- [x] Port the prototype's overhead cuts to `src`. Query caching is for
+  structural queries only (O-77: soak with a reader 0.81× its A0 time,
+  allocation 833 → 88 KB/tick; windowed 0.72×).
 - [ ] First-hour traps:
   - [x] `action()` rejects non-event tokens, and the docs stop pairing every
     `act()` with `step()` (O-75, PR #20);
