@@ -58,7 +58,11 @@ try {
   // last measured frame's entry arrives before counting.
   for (let i = 0; i < 3; i++) await nextFrame()
   await new Promise((resolve) => setTimeout(resolve, 50))
-  const loaf = loafEntries.filter((e) => e.start >= measuredFrom && e.start <= measuredTo).map((e) => e.duration)
+  // A LoAF starts at its frame's first task, before that frame's rAF
+  // timestamp, so attribute by overlap with the measured interval.
+  const loaf = loafEntries
+    .filter((e) => e.start + e.duration > measuredFrom && e.start <= measuredTo)
+    .map((e) => e.duration)
   const rows = root.children.length
   window.__benchResult = {
     engine,
