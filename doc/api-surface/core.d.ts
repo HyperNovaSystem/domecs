@@ -317,8 +317,9 @@ export declare function runBranch(world: World, options: RunBranchOptions): Resu
 /**
  * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
  * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
- * `'<version>+g<sha>[-dirty]'` before packing, and a published build
- * carries the plain version. Hosts stamp it next to their runtime identity
+ * `'<version>+g<sha>[-dirty]'` before packing, and `pnpm publish:npm`
+ * stamps the plain version (`scripts/stamp-build-id.mjs`), so a published
+ * build carries it. Hosts stamp it next to their runtime identity
  * so two packs of the same version stay distinguishable.
  */
 export declare const BUILD_ID: string;
@@ -1559,7 +1560,8 @@ export interface Recorder {
 /**
  * The strict state hash act logs use: `hashSnapshot(snapshot({ pendingEvents:
  * true }), { includeChanges: true })`. When a pending event's payload is not
- * plain data (the snapshot throws `TypeError`), pending events are left out.
+ * plain data (the snapshot throws `TypeError`), pending events are left out;
+ * a recorder that starts that way records an `unserializable_payload` gap.
  */
 export declare function actLogHash(world: World): string;
 /**
@@ -1580,7 +1582,8 @@ export declare function actLogHash(world: World): string;
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a
  *   payload that is not plain data (`unserializable_payload`; the act is
- *   dropped), and `restore()` (`restore`).
+ *   dropped, and an event already pending at creation with one is a gap
+ *   at `startTick`), and `restore()` (`restore`).
  *
  * Throws `TypeError` for a world not made by `createWorld` or an invalid
  * `hashEvery`, and `Error` when called during a tick.

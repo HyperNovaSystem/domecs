@@ -321,6 +321,18 @@ describe('createRecorder (§7.1 capture)', () => {
     expect(log.frames[0]!.acts).toBeUndefined()
   })
 
+  it('an unencodable event already pending at creation is a gap at startTick', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    w.spawn([entry(Score, { n: 0, hits: 0 })])
+    w.stepOnce()
+    w.emit(Echo, { from: new Date(0) } as unknown as { from: string })
+    const rec = createRecorder(w)
+    w.stepOnce()
+    // The queue cannot enter the base hash or the log, so a replay never
+    // receives that event: the log does not describe the world from its start.
+    expect(rec.stop().gaps).toEqual([{ tick: 1, reason: 'unserializable_payload' }])
+  })
+
   it('mutations inside a tick (systems) record no gap; a heartbeat mutation does', () => {
     const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
     w.system('spawner', {}, (ctx) => void ctx.world.spawn([entry(Score, { n: 1, hits: 0 })]))

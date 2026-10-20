@@ -233,17 +233,25 @@ export interface Recorder {
 /**
  * The strict state hash act logs use: `hashSnapshot(snapshot({ pendingEvents:
  * true }), { includeChanges: true })`. When a pending event's payload is not
- * plain data (the snapshot throws `TypeError`), pending events are left out.
+ * plain data (the snapshot throws `TypeError`), pending events are left out;
+ * a recorder that starts that way records an `unserializable_payload` gap.
  */
 export function actLogHash(world: World): string {
+  return strictHash(world).hash
+}
+
+/** {@link actLogHash}, plus whether the pending events made it into the hash. */
+function strictHash(world: World): { hash: string; withPending: boolean } {
   let snap
+  let withPending = true
   try {
     snap = world.snapshot({ pendingEvents: true })
   } catch (cause) {
     if (!(cause instanceof TypeError)) throw cause
     snap = world.snapshot()
+    withPending = false
   }
-  return hashSnapshot(snap, { includeChanges: true })
+  return { hash: hashSnapshot(snap, { includeChanges: true }), withPending }
 }
 
 interface FrameDraft {
@@ -275,7 +283,8 @@ interface FrameDraft {
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a
  *   payload that is not plain data (`unserializable_payload`; the act is
- *   dropped), and `restore()` (`restore`).
+ *   dropped, and an event already pending at creation with one is a gap
+ *   at `startTick`), and `restore()` (`restore`).
  *
  * Throws `TypeError` for a world not made by `createWorld` or an invalid
  * `hashEvery`, and `Error` when called during a tick.
@@ -293,10 +302,15 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   const fixedStep = world.time.fixedStep
   const startScale = world.time.scale
   const resumeScale = startScale === 0 ? tap.resumeScale : undefined
-  const baseHash = actLogHash(world)
+  const base = strictHash(world)
+  const baseHash = base.hash
   const frames: FrameDraft[] = []
   const checkpoints: Array<{ tick: number; hash: string }> = []
   const gaps: Array<{ tick: number; reason: ActLogGapReason }> = []
+  // An event already pending whose payload is not plain data is in neither
+  // the base hash nor the log, so a replay never receives it: the log does
+  // not describe the world from its first tick.
+  if (!base.withPending) gaps.push({ tick: startTick, reason: 'unserializable_payload' })
   let pending: ActRecord[] = []
   // Entered but before plugin onTickStart finished: acts still join it.
   let opening: FrameDraft | null = null
