@@ -59,9 +59,11 @@ build the design only if it still clears 15% there.
   candidate per query and is **not** this registry.)
 - **Watched:** `(kind, T)` while at least one registered reader depends on
   it. Disabled, paused, sub-rate and idle `event` systems are registered, so
-  they keep their pairs watched. A `once` system keeps its pairs until it is
-  disposed (running once does not dispose its queries today). A live query
-  keeps its pairs until disposed.
+  they keep their pairs watched. A `once` system stops watching when it has
+  run: it can never read again, and SPEC §7.1 already says a `once` system
+  that has run is not a reader. Its pairs then follow rule 8 (lazy
+  unwatch), even though its compiled queries are not disposed. A live
+  query keeps its pairs until disposed.
 - **Grace window:** the stamps after `lastTickEndSeq`, the end of the last
   completed full tick. A heartbeat (`step(0)`, §4.0) and a tick that throws
   are not completed full ticks.
