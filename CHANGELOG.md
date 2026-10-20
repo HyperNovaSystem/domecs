@@ -13,6 +13,10 @@ All notable changes to DOMECS are documented here. The format is based on
   return `accepted: false` with a reason and neither emit nor tick. Before,
   a string ran a tick that no handler saw and reported `accepted: true`, and
   `null` or `undefined` threw. (O-75)
+- `@domecs/core`: event types made by a second copy of `@domecs/core` (a
+  duplicate install or a bundled dependency) now route correctly. Before,
+  the bus read every such type under one `undefined` key, so they triggered
+  each other's handlers. (O-75)
 - Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
   `createAgentBridge` example no longer follow every `act()` with `step()`,
   which spent two ticks per turn. (O-75)

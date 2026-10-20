@@ -66,7 +66,7 @@ const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
 // act() emits AND runs one tick (pass { dt: 1/60 } for fixed schedules).
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
-agent.step()                         // only to advance with no command;
+// agent.step()                      // only to advance with no command;
                                      // step(1/60) for fixed schedules
 const snap = agent.snapshot()
 agent.reset()                        // back to baseline for next episode
@@ -169,6 +169,9 @@ components are `markChanged`.
 
 - `act()` already runs one tick. Following every `act()` with `step()`
   spends two ticks per turn; call `step()` only to advance with no command.
+  The exception is `act(..., { dt: 0 })` (or negative `dt`): a heartbeat
+  that runs no tick and leaves the command pending with `accepted: false`.
+  It runs on the next real tick, so resending it would run it twice.
 - `act()` takes the token `defineEvent` returned. A name string or a
   look-alike object is rejected (`accepted: false`, no tick) — it has no
   event identity, so no handler could ever see it.

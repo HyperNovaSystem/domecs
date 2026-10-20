@@ -57,8 +57,10 @@ export interface AgentBridge {
     /**
      * Typed command boundary — delegates to {@link World.action}, which emits
      * the command and runs one tick. Do not follow every `act()` with
-     * {@link AgentBridge.step}; that spends two ticks per turn. `type` must be
-     * the token `defineEvent()` returned — a name string is rejected.
+     * {@link AgentBridge.step}; that spends two ticks per turn. With
+     * `opts.dt <= 0` no tick runs and the command stays pending (see
+     * {@link World.action}). `type` must be the token `defineEvent()`
+     * returned — a name string is rejected.
      */
     act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult;
     /**
@@ -85,7 +87,7 @@ export interface AgentBridge {
  * bridge.reset()
  * const obs = bridge.observe()
  * const result = bridge.act(Cmd, { ... }) // runs one tick; { dt: 1/60 } for fixed
- * bridge.step() // only to advance with no command (step(1/60) for fixed)
+ * // bridge.step() — only to advance with no command (step(1/60) for fixed)
  * const snap = bridge.snapshot()
  * ```
  */
@@ -392,8 +394,14 @@ export interface SystemicFault {
 import type { ComponentSchema, FieldSchema } from './types.js';
 /**
  * Per-event nominal-identity tag. Stored on every `EventType` returned by
- * `defineEvent`; the bus keys all internal maps on this symbol so distinct
- * `defineEvent('Same')` calls never collide. F-8.
+ * `defineEvent`; the bus keys all internal maps on the per-event symbol
+ * stored under it, so distinct `defineEvent('Same')` calls never collide.
+ * F-8.
+ *
+ * The tag key itself is a registered symbol, so a token made by a second
+ * copy of `@domecs/core` (a duplicate install, a bundled dependency) is
+ * still read correctly here. Per-event identity is unchanged: each
+ * `defineEvent` call still mints its own unregistered `Symbol(name)`.
  */
 export declare const eventTag: unique symbol;
 export interface EventType<T> {

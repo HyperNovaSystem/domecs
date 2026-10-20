@@ -44,7 +44,7 @@ bridge.captureBaseline()
 const obs = bridge.observe()           // world.describe() + tick/scale
 const result = bridge.act(MyCmd, payload) // emits AND runs one tick
 // fixed-schedule sims: bridge.act(MyCmd, payload, { dt: 1 / 60 })
-bridge.step()                          // only to advance with no command
+// bridge.step()                       // only to advance with no command
 const snap = bridge.snapshot()
 bridge.reset()                         // episode boundary
 ```
@@ -52,7 +52,7 @@ bridge.reset()                         // episode boundary
 | Method | Delegates to |
 |--------|----------------|
 | `observe()` | `world.describe()` + `time` |
-| `act(type, payload, opts?)` | `world.action(...)` — one tick per call |
+| `act(type, payload, opts?)` | `world.action(...)` — runs one tick (none for `dt <= 0`) |
 | `step()` / `step(dt)` | `stepOnce()` / `step(dt)` |
 | `snapshot(opts?)` | `world.snapshot(...)` |
 | `reset()` | `world.restore(baseline)` |
@@ -74,6 +74,9 @@ bridge.reset()                         // episode boundary
 - **act already ticks** — `act()` emits and runs one tick; a `step()` after
   every `act()` spends two ticks per turn. Pass the token `defineEvent`
   returned, never its name string (rejected with `accepted: false`)
+- **act with `dt <= 0` is a heartbeat** — no tick runs and the command stays
+  pending (`accepted: false`); it runs on the next real tick, so do not
+  resend it
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
