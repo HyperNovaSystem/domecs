@@ -98,7 +98,8 @@ not against single runs.
   (identical entity counts by construction) — a standalone `soak` at a
   different `--entities` can never leak into the verdict.
 - **Trials:** the compare phase runs `--trials` (default 7) interleaved
-  trials and reports median p50/p95 and the p95 range per engine.
+  trials, rotating the engine order each trial, and reports median p50/p95
+  and the p95 range per engine. The browser bench rotates the same way.
   `pnpm bench` runs Node with `--expose-gc`.
 - **Browser projection:** `bench/browser/run.mjs` serves the repo, loads
   `bench/browser/page.html` in headless Chromium once per engine per trial
