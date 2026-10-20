@@ -1631,7 +1631,9 @@ interface ActLogFrame {          // one stepOnce() or step(dt > 0); heartbeats a
   readonly scale?: number        // entry scale, when it changed since the previous frame ended
   readonly resumeScale?: number  // paused entry: resume() target the host set between steps
   readonly flushScale?: number   // scale plugin onTickStart set, before the event flush
+  readonly flushResume?: number  // paused there: the resume() target plugin onTickStart set
   readonly hookScale?: number    // scale a signals.tickStart subscriber set, for the systems
+  readonly hookResume?: number   // paused there: the resume() target the subscriber set
   readonly acts?: readonly ActRecord[]       // emitted before the step's event flush
   readonly startActs?: readonly ActRecord[]  // emitted by signals.tickStart subscribers this step
   readonly endActs?: readonly ActRecord[]    // emitted after the systems (render, onTickEnd, tickEnd)

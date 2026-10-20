@@ -814,6 +814,8 @@ describe('replay (§7.1)', () => {
       { ...log, frames: [{ tick: 0, dt: null, flushScale: -1 }] },
       { ...log, frames: [{ tick: 0, dt: null, resumeScale: 0 }] },
       { ...log, frames: [{ tick: 0, dt: null, scale: 2, resumeScale: 3 }] },
+      { ...log, frames: [{ tick: 0, dt: null, flushScale: 1, flushResume: 3 }] },
+      { ...log, frames: [{ tick: 0, dt: null, hookResume: -3 }] },
       { ...log, frames: [{ tick: 0, dt: null, hookInput: { keys: [1] } }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: {} }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 3, via: 'emit' }] }] },
@@ -990,6 +992,53 @@ describe('a pause between frames', () => {
     const w = setup()
     expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 7, hash: strict(live) } })
     expect(w.time.scale).toBe(3)
+  })
+})
+
+describe('a resume target a tick-start hook sets while paused', () => {
+  it('is in place for the event flush (plugin onTickStart) and for the systems (tickStart signal)', () => {
+    const Resume = defineEvent<void>('RpResumeHook')
+    const ResumeSys = defineEvent<void>('RpResumeHookSys')
+    const base0 = (): World => {
+      const w = fresh()
+      w.register(Resume, ResumeSys)
+      w.on(Resume, () => {
+        w.resume()
+        for (const id of w.listEntities([Stats])) w.getComponent(id, Stats)!.hits += w.time.scale
+      })
+      w.system('resumer', { schedule: 'event', triggers: [ResumeSys] }, (ctx) => ctx.world.resume())
+      return w
+    }
+    for (const via of ['plugin', 'signal'] as const) {
+      const live = base0()
+      live.spawn([entry(Stats, { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 })])
+      let retarget = false
+      const hook = (w: World): void => {
+        if (!retarget) return
+        retarget = false
+        w.setScale(3)
+        w.pause()
+      }
+      if (via === 'plugin') {
+        live.use(definePlugin({ name: 'retarget', install: () => ({ onTickStart(world, info) { if (!info.heartbeat) hook(world) } }) }))
+      } else {
+        live.signals.tickStart.subscribe(() => hook(live))
+      }
+      live.pause()
+      const base = live.snapshot({ pendingEvents: true })
+      const rec = createRecorder(live, { hashEvery: 1 })
+      live.step(1 / 60)
+      retarget = true
+      // A flush handler resumes after a plugin's retarget; a system after a signal's.
+      live.emit(via === 'plugin' ? Resume : ResumeSys, undefined)
+      for (let i = 0; i < 4; i++) live.step(1 / 60)
+      const log = rec.stop()
+      expect(live.time.scale, via).toBe(3)
+      const w = base0()
+      w.pause()
+      expect(replay(w, log, { base }), via).toEqual({ ok: true, value: { ticks: 5, hash: strict(live) } })
+      expect(w.time.scale, via).toBe(3)
+    }
   })
 })
 

@@ -1503,6 +1503,8 @@ export interface ActLogFrame {
      * replay sets it at the same point.
      */
     readonly flushScale?: number;
+    /** As `resumeScale`, for a step paused after plugin `onTickStart`: set before the event flush. */
+    readonly flushResume?: number;
     /**
      * `time.scale` after `signals.tickStart`, when it differs from the scale
      * the event flush ran under — a `tickStart` pause control. It governs
@@ -1510,6 +1512,8 @@ export interface ActLogFrame {
      * the same point.
      */
     readonly hookScale?: number;
+    /** As `resumeScale`, for a step paused after `signals.tickStart`: set before the systems. */
+    readonly hookResume?: number;
     /**
      * Events emitted from outside since the previous step and before this
      * step's event flush (out of tick, during heartbeats, from plugin

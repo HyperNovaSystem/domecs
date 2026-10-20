@@ -168,6 +168,8 @@ export interface ActLogFrame {
    * replay sets it at the same point.
    */
   readonly flushScale?: number
+  /** As `resumeScale`, for a step paused after plugin `onTickStart`: set before the event flush. */
+  readonly flushResume?: number
   /**
    * `time.scale` after `signals.tickStart`, when it differs from the scale
    * the event flush ran under — a `tickStart` pause control. It governs
@@ -175,6 +177,8 @@ export interface ActLogFrame {
    * the same point.
    */
   readonly hookScale?: number
+  /** As `resumeScale`, for a step paused after `signals.tickStart`: set before the systems. */
+  readonly hookResume?: number
   /**
    * Events emitted from outside since the previous step and before this
    * step's event flush (out of tick, during heartbeats, from plugin
@@ -281,7 +285,9 @@ interface FrameDraft {
   scale?: number
   resumeScale?: number
   flushScale?: number
+  flushResume?: number
   hookScale?: number
+  hookResume?: number
   acts?: ActRecord[]
   startActs?: ActRecord[]
   endActs?: ActRecord[]
@@ -315,8 +321,9 @@ interface FrameDraft {
  * `hashEvery`, and `Error` when called during a tick.
  */
 export function createRecorder(world: World, options: RecorderOptions = {}): Recorder {
-  const tap = actTapOf(world)
-  if (tap === undefined) throw new TypeError('domecs: createRecorder needs a world made by createWorld')
+  const found = actTapOf(world)
+  if (found === undefined) throw new TypeError('domecs: createRecorder needs a world made by createWorld')
+  const tap = found
   if (tap.inTick) throw new Error('domecs: createRecorder must be called outside a tick (not from a system, hook or handler)')
   const hashEvery = options.hashEvery
   if (hashEvery !== undefined && !(Number.isInteger(hashEvery) && hashEvery > 0)) {
@@ -343,13 +350,11 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   let running: FrameDraft | null = null
   // Whether the running frame's tick-start hooks are done (its systems ran).
   let afterHooks = false
-  let entryScale = startScale
-  // The running frame's scale after plugin onTickStart (the flush's scale).
-  let flushScale = startScale
-  // The scale and resume target the previous frame ended with: a replay
-  // world has them too.
-  let lastScale = startScale
-  let lastResume = tap.resumeScale
+  // The scale and resume target a replay world holds at the current point
+  // of the frame: what the log has set so far (systems and handlers are
+  // reproduced, so each frame end syncs it with the source).
+  let modelScale = startScale
+  let modelResume = startScale === 0 ? tap.resumeScale : startScale
   let lastInput: string | null = null
   // The running frame's input as first read (after plugin onTickStart), to
   // tell whether a tickStart subscriber replaced it.
@@ -384,6 +389,24 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     }
   }
 
+  // Bring the model to the source at this point. The frame carries the
+  // scale when it differs and, while paused, the resume target when the one
+  // replay's setScale(0) leaves is not the source's.
+  function syncScale(): { scale?: number; resume?: number } {
+    const scale = world.time.scale
+    const out: { scale?: number; resume?: number } = {}
+    if (scale !== modelScale) {
+      out.scale = scale
+      modelResume = scale === 0 ? modelScale : scale
+      modelScale = scale
+    }
+    if (scale === 0 && tap.resumeScale !== modelResume) {
+      out.resume = tap.resumeScale
+      modelResume = tap.resumeScale
+    }
+    return out
+  }
+
   function checkRand(): void {
     const now = String(world.rand.seed())
     if (now !== lastRand) {
@@ -410,17 +433,13 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       }
       into.push({ event: type.name, payload: copy, via })
     },
-    frameEntered(tick, dt, scale) {
+    frameEntered(tick, dt) {
       checkRand()
       opening = { tick, dt }
-      entryScale = scale
-      if (scale !== lastScale) opening.scale = scale
-      // Paused on entry: replay's setScale(0) keeps the resume target it had
-      // (the last running scale); the host may have set another one.
-      if (scale === 0) {
-        const replayResume = lastScale !== 0 ? lastScale : lastResume
-        if (tap.resumeScale !== replayResume) opening.resumeScale = tap.resumeScale
-      }
+      // time.scale on entry: what this step's dt is scaled by.
+      const entry = syncScale()
+      if (entry.scale !== undefined) opening.scale = entry.scale
+      if (entry.resume !== undefined) opening.resumeScale = entry.resume
     },
     frameStarted() {
       const f = opening
@@ -431,8 +450,9 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       }
       // Plugin onTickStart is done: the event flush runs under this scale
       // and input.
-      flushScale = world.time.scale
-      if (flushScale !== entryScale) f.flushScale = flushScale
+      const flush = syncScale()
+      if (flush.scale !== undefined) f.flushScale = flush.scale
+      if (flush.resume !== undefined) f.flushResume = flush.resume
       inputSeen = world.input
       readInput(f, 'input')
       opening = null
@@ -443,7 +463,9 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     hooksDone() {
       const f = running
       if (f !== null) {
-        if (world.time.scale !== flushScale) f.hookScale = world.time.scale
+        const hook = syncScale()
+        if (hook.scale !== undefined) f.hookScale = hook.scale
+        if (hook.resume !== undefined) f.hookResume = hook.resume
         // A signals.tickStart subscriber replaced the input: the systems see
         // that one, the event flush before it saw `input`.
         if (world.input !== inputSeen) readInput(f, 'hookInput')
@@ -454,8 +476,8 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       running = null
       inputSeen = null
       afterHooks = false
-      lastScale = world.time.scale
-      lastResume = tap.resumeScale
+      modelScale = world.time.scale
+      modelResume = tap.resumeScale
       lastRand = String(world.rand.seed())
       const tick = world.time.tick
       if (hashEvery !== undefined && tick % hashEvery === 0) {
@@ -621,12 +643,13 @@ function checkFrame(f: unknown): string | null {
   if (!isTick(f.tick)) return 'tick is not a non-negative integer'
   if (f.dt !== null && !(isFinite(f.dt) && f.dt > 0)) return 'dt is not null or a positive finite number'
   if (f.scale !== undefined && !isScale(f.scale)) return 'scale is not a non-negative finite number'
-  if (f.resumeScale !== undefined) {
-    if (!(isFinite(f.resumeScale) && f.resumeScale > 0)) return 'resumeScale is not a positive finite number'
-    if (f.scale !== undefined && f.scale !== 0) return 'resumeScale is only valid on a frame entered paused'
+  for (const [scale, resume] of [['scale', 'resumeScale'], ['flushScale', 'flushResume'], ['hookScale', 'hookResume']] as const) {
+    if (f[scale] !== undefined && !isScale(f[scale])) return `${scale} is not a non-negative finite number`
+    const r = f[resume]
+    if (r === undefined) continue
+    if (!(isFinite(r) && r > 0)) return `${resume} is not a positive finite number`
+    if (f[scale] !== undefined && f[scale] !== 0) return `${resume} is only valid where the step is paused (${scale} 0)`
   }
-  if (f.flushScale !== undefined && !isScale(f.flushScale)) return 'flushScale is not a non-negative finite number'
-  if (f.hookScale !== undefined && !isScale(f.hookScale)) return 'hookScale is not a non-negative finite number'
   for (const field of ['acts', 'startActs', 'endActs'] as const) {
     const acts = f[field]
     if (acts === undefined) continue
@@ -756,28 +779,32 @@ export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | n
     resolveActs(world, frame.startActs, frame.tick, atStart) ??
     resolveActs(world, frame.endActs, frame.tick, atEnd)
   if (failed !== null) return failed
-  if (frame.resumeScale !== undefined) {
-    // Entered paused with a resume target set between steps.
-    world.setScale(frame.resumeScale)
-    world.setScale(0)
-  } else if (frame.scale !== undefined) world.setScale(frame.scale)
+  // A resume target comes with a pause: setScale(target), then setScale(0).
+  const applyScale = (scale: number | undefined, resume: number | undefined): void => {
+    if (resume !== undefined) {
+      world.setScale(resume)
+      world.setScale(0)
+    } else if (scale !== undefined) world.setScale(scale)
+  }
+  applyScale(frame.scale, frame.resumeScale)
   if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
   for (const { type, payload } of before) world.emit(type, payload)
   const unsubscribe: Array<() => void> = []
-  const flushScale = frame.flushScale
-  if (flushScale !== undefined) {
+  if (frame.flushScale !== undefined || frame.flushResume !== undefined) {
     // Where plugin onTickStart set it live: after the tick began, before the
     // event flush (the tap's frameStarted).
+    const apply = (): void => applyScale(frame.flushScale, frame.flushResume)
     const tap = actTapOf(world)
-    if (tap === undefined) world.setScale(flushScale)
-    else unsubscribe.push(tap.attach(onFrameStarted(() => world.setScale(flushScale))))
+    if (tap === undefined) apply()
+    else unsubscribe.push(tap.attach(onFrameStarted(apply)))
   }
   const hookScale = frame.hookScale
+  const hookResume = frame.hookResume
   const hookInput = frame.hookInput === undefined ? undefined : decodeInput(frame.hookInput)
-  if (hookScale !== undefined || hookInput !== undefined || atStart.length > 0) {
+  if (hookScale !== undefined || hookResume !== undefined || hookInput !== undefined || atStart.length > 0) {
     unsubscribe.push(
       world.signals.tickStart.subscribe(() => {
-        if (hookScale !== undefined) world.setScale(hookScale)
+        applyScale(hookScale, hookResume)
         if (hookInput !== undefined) world.setInput(hookInput)
         for (const { type, payload } of atStart) world.emit(type, payload)
       }),
