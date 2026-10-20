@@ -66,6 +66,15 @@ All notable changes to DOMECS are documented here. The format is based on
   resumed to 3. `runBranch` from a mid-log snapshot
   carries a `tickStart` subscriber's `hookInput`, not only the frame's
   `input`. (O-80, O-81, 2.1 release candidate)
+- `@domecs/core`: act logs (Codex review of PR #27). Emits made from
+  `enabled` gates and reactive `Where` predicates during a step are part of
+  the reproduced step and are no longer recorded; replay had emitted them
+  twice. `encodeInput` keeps the input Sets' iteration order instead of
+  sorting, so a system iterating `input.keys` sees the same order after a
+  replay. `stop()` records a gap for a `world.rand` draw after the last step.
+  `createBranch` sets the requested scale before reading `once` gates.
+  SPEC §7.5 now says which signal subscribers stay in a replay setup and
+  where replay applies each stimulus. (O-80, O-81, 2.1 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

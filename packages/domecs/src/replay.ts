@@ -14,16 +14,17 @@ import { plainDataCopy } from './world-state.js'
 
 /**
  * A JSON form of {@link InputSnapshot} (whose key sets are `Set`s). Key
- * arrays are sorted; `pressed`/`released` are omitted when empty, and
+ * arrays keep the Sets' iteration order (a system iterating them sees the
+ * same order after a replay); `pressed`/`released` are omitted when empty, and
  * `mods`, `pointer`, `gamepads` and `focus` when they equal the empty input
  * (no modifier, pointer at rest at 0,0, no gamepad, no focus).
  */
 export interface JsonInput {
-  /** Held keys, sorted. */
+  /** Held keys, in the Set's order. */
   readonly keys: readonly string[]
-  /** Keys pressed this render tick, sorted; omitted when empty. */
+  /** Keys pressed this render tick, in the Set's order; omitted when empty. */
   readonly pressed?: readonly string[]
-  /** Keys released this render tick, sorted; omitted when empty. */
+  /** Keys released this render tick, in the Set's order; omitted when empty. */
   readonly released?: readonly string[]
   readonly mods?: { readonly ctrl: boolean; readonly alt: boolean; readonly shift: boolean; readonly meta: boolean }
   readonly pointer?: {
@@ -38,7 +39,7 @@ export interface JsonInput {
   readonly focus?: { readonly activeTag: string; readonly consumesKeys: boolean }
 }
 
-const sorted = (set: ReadonlySet<string>): string[] => Array.from(set).sort()
+const inOrder = (set: ReadonlySet<string>): string[] => Array.from(set)
 
 /** `-0` is not the empty input's `0`: a lossless encoding keeps it. */
 const isZero = (n: number): boolean => Object.is(n, 0)
@@ -76,9 +77,9 @@ export function encodeInput(input: InputSnapshot): JsonInput {
     pointer?: NonNullable<JsonInput['pointer']>
     gamepads?: GamepadSnapshot[]
     focus?: NonNullable<JsonInput['focus']>
-  } = { keys: sorted(input.keys) }
-  if (input.keyDelta.pressed.size > 0) out.pressed = sorted(input.keyDelta.pressed)
-  if (input.keyDelta.released.size > 0) out.released = sorted(input.keyDelta.released)
+  } = { keys: inOrder(input.keys) }
+  if (input.keyDelta.pressed.size > 0) out.pressed = inOrder(input.keyDelta.pressed)
+  if (input.keyDelta.released.size > 0) out.released = inOrder(input.keyDelta.released)
   const m = input.mods
   if (m.ctrl || m.alt || m.shift || m.meta) {
     out.mods = { ctrl: m.ctrl, alt: m.alt, shift: m.shift, meta: m.meta }
@@ -549,6 +550,8 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     },
     stop() {
       if (finalLog === null) {
+        // A draw on world.rand after the last step is a gap too.
+        checkRand()
         detach()
         active = false
         finalLog = build()

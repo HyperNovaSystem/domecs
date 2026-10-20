@@ -1425,16 +1425,17 @@ import type { Entity } from './types.js';
 import type { World } from './world.js';
 /**
  * A JSON form of {@link InputSnapshot} (whose key sets are `Set`s). Key
- * arrays are sorted; `pressed`/`released` are omitted when empty, and
+ * arrays keep the Sets' iteration order (a system iterating them sees the
+ * same order after a replay); `pressed`/`released` are omitted when empty, and
  * `mods`, `pointer`, `gamepads` and `focus` when they equal the empty input
  * (no modifier, pointer at rest at 0,0, no gamepad, no focus).
  */
 export interface JsonInput {
-    /** Held keys, sorted. */
+    /** Held keys, in the Set's order. */
     readonly keys: readonly string[];
-    /** Keys pressed this render tick, sorted; omitted when empty. */
+    /** Keys pressed this render tick, in the Set's order; omitted when empty. */
     readonly pressed?: readonly string[];
-    /** Keys released this render tick, sorted; omitted when empty. */
+    /** Keys released this render tick, in the Set's order; omitted when empty. */
     readonly released?: readonly string[];
     readonly mods?: {
         readonly ctrl: boolean;

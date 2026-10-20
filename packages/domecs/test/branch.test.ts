@@ -168,6 +168,19 @@ describe('createBranch (§7.2)', () => {
     expect(createBranch(throwing, snap)).toEqual({ ok: false, error: { kind: 'once_systems', names: ['odd'] } })
   })
 
+  it('once gates are read at the scale the branch was asked for', () => {
+    const gated = (w: World): void => {
+      setup(w)
+      w.system('normal-speed-boot', { schedule: 'once', enabled: () => w.time.scale === 1 }, () => {})
+    }
+    const live = createWorld({ headless: true, seed: [9, 8, 7, 6] })
+    gated(live)
+    live.stepOnce()
+    live.setScale(2)
+    const snap = live.snapshot({ pendingEvents: true })
+    expect(createBranch(gated, snap, { scale: 2 }).ok).toBe(true)
+  })
+
   it('a snapshot without a fixed backlog carries no fixedStep: a source at 1/30 needs the option', () => {
     const live = createWorld({ headless: true, fixedStep: 1 / 30, seed: [9, 8, 7, 6] })
     setup(live)

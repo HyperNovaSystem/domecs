@@ -79,12 +79,13 @@ export function createBranch<T = void>(
   } catch (cause) {
     return err({ kind: 'restore_failed', cause: normalizeCause(cause) })
   }
-  // After the restore, so `enabled` gates see the source's state.
+  world.setScale(options.scale ?? 1)
+  // After the restore and the scale, so `enabled` gates see the source's
+  // state.
   if (world.time.tick > 0) {
     const names = actTapOf(world)!.onceDue()
     if (names.length > 0) return err({ kind: 'once_systems', names })
   }
-  world.setScale(options.scale ?? 1)
   return ok({ world, setup: out })
 }
 

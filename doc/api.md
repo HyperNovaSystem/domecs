@@ -1604,7 +1604,7 @@ same setup and restored from the same base replays to the same strict hashes
 function createRecorder(world: World, options?: { readonly hashEvery?: number }): Recorder
 function replay(world: World, log: ActLog, options?: ReplayOptions):
   Result<{ readonly ticks: number; readonly hash: string }, ReplayError>
-function encodeInput(input: InputSnapshot): JsonInput   // Sets -> sorted arrays
+function encodeInput(input: InputSnapshot): JsonInput   // Sets -> arrays, iteration order kept
 function decodeInput(json: JsonInput): InputSnapshot
 
 interface Recorder {

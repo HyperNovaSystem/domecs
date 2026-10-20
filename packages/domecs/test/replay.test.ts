@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  And,
+  OnAdded,
+  Where,
   createRecorder,
   createWorld,
   decodeInput,
@@ -44,11 +47,11 @@ function emptyInputSnapshot(): InputSnapshot {
 }
 
 describe('encodeInput / decodeInput (§7.1 test 2)', () => {
-  it('encodes every part with sorted key arrays', () => {
+  it('encodes every part, key arrays in the Sets\' iteration order', () => {
     const json = encodeInput(fullInput())
     expect(json).toEqual({
-      keys: ['ArrowLeft', 'KeyW', 'Space'],
-      pressed: ['KeyA', 'Space'],
+      keys: ['KeyW', 'ArrowLeft', 'Space'],
+      pressed: ['Space', 'KeyA'],
       released: ['KeyD'],
       mods: { ctrl: true, alt: false, shift: true, meta: false },
       pointer: { x: 12.5, y: -3, buttons: 1, delta: { x: 2, y: -1 }, wheel: 40, entered: [7, 3] },
@@ -59,10 +62,16 @@ describe('encodeInput / decodeInput (§7.1 test 2)', () => {
     })
   })
 
+  it('keeps the order a system iterating the Sets sees', () => {
+    const back = decodeInput(encodeInput({ ...emptyInputSnapshot(), keys: new Set(['b', 'a']), keyDelta: { pressed: new Set(['z', 'y']), released: new Set() } }))
+    expect([...back.keys]).toEqual(['b', 'a'])
+    expect([...back.keyDelta.pressed]).toEqual(['z', 'y'])
+  })
+
   it('omits empty pressed/released and parts equal to the empty input', () => {
     expect(encodeInput(emptyInputSnapshot())).toEqual({ keys: [] })
     const onlyKeys = { ...emptyInputSnapshot(), keys: new Set(['b', 'a']) }
-    expect(encodeInput(onlyKeys)).toEqual({ keys: ['a', 'b'] })
+    expect(encodeInput(onlyKeys)).toEqual({ keys: ['b', 'a'] })
     const json = encodeInput({ ...emptyInputSnapshot(), pointer: { ...emptyInputSnapshot().pointer, x: -0 } })
     expect(Object.is(json.pointer?.x, -0)).toBe(true)
   })
@@ -1039,6 +1048,36 @@ describe('a resume target a tick-start hook sets while paused', () => {
       expect(replay(w, log, { base }), via).toEqual({ ok: true, value: { ticks: 5, hash: strict(live) } })
       expect(w.time.scale, via).toBe(3)
     }
+  })
+})
+
+describe('emits the step reproduces', () => {
+  it('an emit from a reactive Where predicate is not also recorded (replay would double it)', () => {
+    const Flag = defineComponent<{ n: number }>('RpWhereFlag', { defaults: { n: 0 } })
+    const Seen = defineEvent<void>('RpWhereSeen')
+    const setup = (): World => {
+      const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+      w.register(Flag, Seen)
+      w.system('react', { schedule: 'reactive', reactsTo: And(OnAdded(Flag), Where(Flag, () => { w.emit(Seen, undefined); return true })) }, () => {})
+      return w
+    }
+    const live = setup()
+    live.spawn([entry(Flag, { n: 1 })])
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    live.stepOnce()
+    live.stepOnce()
+    const log = rec.stop()
+    expect(log.frames.flatMap((f) => [...(f.endActs ?? []), ...(f.startActs ?? []), ...(f.acts ?? [])])).toEqual([])
+    expect(replay(setup(), log, { base })).toEqual({ ok: true, value: { ticks: 2, hash: strict(live) } })
+  })
+
+  it('stop() notices a draw on world.rand after the last step', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const rec = createRecorder(w, { hashEvery: 1 })
+    w.stepOnce()
+    w.rand.uniform()
+    expect(rec.stop().gaps).toEqual([{ tick: 1, reason: 'out_of_tick_mutation' }])
   })
 })
 

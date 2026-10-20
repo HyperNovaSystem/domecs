@@ -1577,64 +1577,72 @@ export function createWorld(options: WorldOptions = {}): World {
 
       // SPEC §4 step 2 — input collection (stub in headless).
 
-      // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-      // F-3: drive from cumulative unquantized seconds; ms-rounding drift
-      // in per-tick scaledDelta does not entangle the scheduler.
-      if (time.scale !== 0) {
-        const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
-        while (clock.fixedStepsFired < expected) {
-          clock.fixedStepsFired += 1
-          clock.fixedStepCounter += 1
-          for (const s of scheduler.systemsByMode('fixed')) {
+      // Steps 3–6 are reproduced by a replay: emits made here, including
+      // from `enabled` gates and reactive `Where` predicates evaluated
+      // between systems, are not external acts.
+      reproducing++
+      try {
+        // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
+        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
+        // in per-tick scaledDelta does not entangle the scheduler.
+        if (time.scale !== 0) {
+          const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
+          while (clock.fixedStepsFired < expected) {
+            clock.fixedStepsFired += 1
+            clock.fixedStepCounter += 1
+            for (const s of scheduler.systemsByMode('fixed')) {
+              if (!isEnabled(s)) continue
+              if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
+              runSystem(s, eventView)
+            }
+          }
+        }
+        // Kept current even when a tickStart hook paused the world after time
+        // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
+        // and the accumulator reports them.
+        time.fixedAccumulator =
+          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
+
+        // SPEC §3 — `once` systems fire on first tick of world.
+        for (const s of scheduler.systemsByMode('once')) {
+          if (s.ranOnce || !isEnabled(s)) continue
+          runSystem(s, eventView)
+          s.ranOnce = true
+        }
+
+        // SPEC §4 step 4 — tick systems.
+        if (time.scale !== 0) {
+          for (const s of scheduler.systemsByMode('tick')) {
             if (!isEnabled(s)) continue
-            if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
             runSystem(s, eventView)
           }
         }
-      }
-      // Kept current even when a tickStart hook paused the world after time
-      // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
-      // and the accumulator reports them.
-      time.fixedAccumulator =
-        clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
 
-      // SPEC §3 — `once` systems fire on first tick of world.
-      for (const s of scheduler.systemsByMode('once')) {
-        if (s.ranOnce || !isEnabled(s)) continue
-        runSystem(s, eventView)
-        s.ranOnce = true
-      }
-
-      // SPEC §4 step 4 — tick systems.
-      if (time.scale !== 0) {
-        for (const s of scheduler.systemsByMode('tick')) {
+        // SPEC §4 step 5 — event systems for events in this tick's view.
+        for (const s of scheduler.systemsByMode('event')) {
           if (!isEnabled(s)) continue
+          if (!eventMatches(s, eventView)) continue
           runSystem(s, eventView)
         }
-      }
 
-      // SPEC §4 step 5 — event systems for events in this tick's view.
-      for (const s of scheduler.systemsByMode('event')) {
-        if (!isEnabled(s)) continue
-        if (!eventMatches(s, eventView)) continue
-        runSystem(s, eventView)
-      }
-
-      // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
-      for (const s of scheduler.systemsByMode('reactive')) {
-        if (!isEnabled(s) || !s.reactsTo) continue
-        // #16: a reactsTo with no structural entity dependency (no Has leaf)
-        // still fires when one of its ChangedResource targets changed —
-        // supports world-level resource reactions in entity-empty worlds
-        // where the structural member count is zero. Entity-scoped reactsTo
-        // (any Has leaf) is governed by `size` only.
-        if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) {
-          runSystem(s, eventView)
-        } else {
-          // O-42: checked and empty counts as a run — the window is spent,
-          // so a stale mark cannot fire it later when structure changes.
-          s.seenThrough = changes.seq
+        // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
+        for (const s of scheduler.systemsByMode('reactive')) {
+          if (!isEnabled(s) || !s.reactsTo) continue
+          // #16: a reactsTo with no structural entity dependency (no Has leaf)
+          // still fires when one of its ChangedResource targets changed —
+          // supports world-level resource reactions in entity-empty worlds
+          // where the structural member count is zero. Entity-scoped reactsTo
+          // (any Has leaf) is governed by `size` only.
+          if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) {
+            runSystem(s, eventView)
+          } else {
+            // O-42: checked and empty counts as a run — the window is spent,
+            // so a stale mark cannot fire it later when structure changes.
+            s.seenThrough = changes.seq
+          }
         }
+      } finally {
+        reproducing--
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
