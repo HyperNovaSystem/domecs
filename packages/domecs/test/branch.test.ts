@@ -459,6 +459,48 @@ describe('runBranch (§7.2)', () => {
     expect(out2.finalHash).toBe(strict(live2))
   })
 
+  it('a branch from mid-log carries input a tickStart subscriber set (hookInput)', () => {
+    const Keys = defineComponent<{ n: number }>('BrHookKeys', { defaults: { n: 0 } })
+    const keysSetup = (w: World): void => {
+      setup(w)
+      w.register(Keys)
+      w.system('keys', { query: [Keys] }, (ctx) => {
+        for (const e of ctx.entities) {
+          if (ctx.input.keys.has('KeyA')) e.BrHookKeys!.n += 1
+          w.markChanged(e.id, Keys)
+        }
+      })
+    }
+    const held = (keys: string[]) => ({
+      keys: new Set(keys),
+      keyDelta: { pressed: new Set<string>(), released: new Set<string>() },
+      mods: { ctrl: false, alt: false, shift: false, meta: false },
+      pointer: { x: 0, y: 0, buttons: 0, delta: { x: 0, y: 0 }, wheel: 0, entered: [] },
+      gamepads: [],
+      focus: { activeTag: '', consumesKeys: false },
+    })
+    const live = createWorld({ headless: true, seed: [9, 8, 7, 6] })
+    keysSetup(live)
+    live.spawn([entry(Keys, { n: 0 })])
+    steps(live, 30)
+    let next: string[] | null = null
+    live.signals.tickStart.subscribe(() => {
+      if (next !== null) live.setInput(held(next))
+      next = null
+    })
+    const rec = createRecorder(live)
+    next = ['KeyA']
+    steps(live, 10)
+    const mid = live.snapshot({ pendingEvents: true })
+    steps(live, 10)
+    const log = rec.stop()
+    expect(log.frames.filter((f) => f.hookInput !== undefined).map((f) => f.tick)).toEqual([30])
+    const r = createBranch(keysSetup, mid)
+    if (!r.ok) throw new Error('branch failed')
+    const out = run(r.value.world, { steps: 10, log })
+    expect(out.finalHash).toBe(strict(live))
+  })
+
   it('a branch from mid-log starts with the input the log had set before its tick', () => {
     const Keys = defineComponent<{ n: number }>('BrKeys', { defaults: { n: 0 } })
     const keysSetup = (w: World): void => {

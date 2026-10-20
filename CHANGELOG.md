@@ -58,6 +58,12 @@ All notable changes to DOMECS are documented here. The format is based on
   each system's static flag on the empty setup world, so boot work gated on
   snapshotted state (as AGENTS.md advises) was refused as `once_systems`.
   A gate that throws counts as due. (O-81, 2.1 release candidate)
+- `@domecs/core`: an act-log frame entered paused records `resumeScale` when
+  the host changed the resume target between steps (`setScale(3); pause()`),
+  and replay restores it. Before, a `resume()` in a system resumed to 1 in
+  replay while the source resumed to 3. `runBranch` from a mid-log snapshot
+  carries a `tickStart` subscriber's `hookInput`, not only the frame's
+  `input`. (O-80, O-81, 2.1 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

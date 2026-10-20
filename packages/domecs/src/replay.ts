@@ -157,6 +157,12 @@ export interface ActLogFrame {
    */
   readonly scale?: number
   /**
+   * The scale `world.resume()` returns to, for a step entered paused, when it
+   * is not the one a replay world would have (the host changed it between
+   * steps, e.g. `setScale(3); pause()`). Replay restores it before pausing.
+   */
+  readonly resumeScale?: number
+  /**
    * `time.scale` after plugin `onTickStart`, before the step's event flush,
    * when a plugin changed it. Direct `on` handlers in the flush see it;
    * replay sets it at the same point.
@@ -273,6 +279,7 @@ interface FrameDraft {
   tick: number
   dt: number | null
   scale?: number
+  resumeScale?: number
   flushScale?: number
   hookScale?: number
   acts?: ActRecord[]
@@ -339,8 +346,10 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   let entryScale = startScale
   // The running frame's scale after plugin onTickStart (the flush's scale).
   let flushScale = startScale
-  // The scale the previous frame ended with: a replay world has it too.
+  // The scale and resume target the previous frame ended with: a replay
+  // world has them too.
   let lastScale = startScale
+  let lastResume = tap.resumeScale
   let lastInput: string | null = null
   // The running frame's input as first read (after plugin onTickStart), to
   // tell whether a tickStart subscriber replaced it.
@@ -406,6 +415,12 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       opening = { tick, dt }
       entryScale = scale
       if (scale !== lastScale) opening.scale = scale
+      // Paused on entry: replay's setScale(0) keeps the resume target it had
+      // (the last running scale); the host may have set another one.
+      if (scale === 0) {
+        const replayResume = lastScale !== 0 ? lastScale : lastResume
+        if (tap.resumeScale !== replayResume) opening.resumeScale = tap.resumeScale
+      }
     },
     frameStarted() {
       const f = opening
@@ -440,6 +455,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       inputSeen = null
       afterHooks = false
       lastScale = world.time.scale
+      lastResume = tap.resumeScale
       lastRand = String(world.rand.seed())
       const tick = world.time.tick
       if (hashEvery !== undefined && tick % hashEvery === 0) {
@@ -605,6 +621,10 @@ function checkFrame(f: unknown): string | null {
   if (!isTick(f.tick)) return 'tick is not a non-negative integer'
   if (f.dt !== null && !(isFinite(f.dt) && f.dt > 0)) return 'dt is not null or a positive finite number'
   if (f.scale !== undefined && !isScale(f.scale)) return 'scale is not a non-negative finite number'
+  if (f.resumeScale !== undefined) {
+    if (!(isFinite(f.resumeScale) && f.resumeScale > 0)) return 'resumeScale is not a positive finite number'
+    if (f.scale !== undefined && f.scale !== 0) return 'resumeScale is only valid on a frame entered paused'
+  }
   if (f.flushScale !== undefined && !isScale(f.flushScale)) return 'flushScale is not a non-negative finite number'
   if (f.hookScale !== undefined && !isScale(f.hookScale)) return 'hookScale is not a non-negative finite number'
   for (const field of ['acts', 'startActs', 'endActs'] as const) {
@@ -736,7 +756,11 @@ export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | n
     resolveActs(world, frame.startActs, frame.tick, atStart) ??
     resolveActs(world, frame.endActs, frame.tick, atEnd)
   if (failed !== null) return failed
-  if (frame.scale !== undefined) world.setScale(frame.scale)
+  if (frame.resumeScale !== undefined) {
+    // Entered paused with a resume target set between steps.
+    world.setScale(frame.resumeScale)
+    world.setScale(0)
+  } else if (frame.scale !== undefined) world.setScale(frame.scale)
   if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
   for (const { type, payload } of before) world.emit(type, payload)
   const unsubscribe: Array<() => void> = []

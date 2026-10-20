@@ -4,7 +4,7 @@
 // world (or its views).
 import { actTapOf } from './act-tap.js'
 import type { SystemicFault } from './errors.js'
-import { actLogHash, applyActFrame, checkLog, decodeInput, type ActLog, type ActLogFrame, type ReplayError } from './replay.js'
+import { actLogHash, applyActFrame, checkLog, decodeInput, type ActLog, type ActLogFrame, type JsonInput, type ReplayError } from './replay.js'
 import { err, normalizeCause, ok, type JsonValue, type Result, type SerializedError } from './result.js'
 import type { RngState } from './rng.js'
 import { setOwn, type WorldSnapshot } from './snapshot.js'
@@ -198,12 +198,18 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
     for (const f of log.frames) if (!frames.has(f.tick)) frames.set(f.tick, f)
     // Input is delta-encoded and not in a snapshot: a branch that starts
     // after the log's first frame (from a keyframe or a mid-log snapshot)
-    // takes the input the latest earlier frame set, as the source had it.
-    let carried: ActLogFrame | undefined
+    // takes the input the latest earlier frame left, as the source had it: a
+    // tickStart subscriber's replacement (hookInput) when there was one.
+    let carried: JsonInput | undefined
+    let carriedTick = -1
     for (const f of frames.values()) {
-      if (f.input !== undefined && f.tick < world.time.tick && (carried === undefined || f.tick > carried.tick)) carried = f
+      if (f.tick >= world.time.tick || f.tick <= carriedTick) continue
+      const last = f.hookInput ?? f.input
+      if (last === undefined) continue
+      carried = last
+      carriedTick = f.tick
     }
-    if (carried?.input !== undefined) world.setInput(decodeInput(carried.input))
+    if (carried !== undefined) world.setInput(decodeInput(carried))
   }
 
   const samples: Array<{ tick: number; values: Record<string, JsonValue> }> = []

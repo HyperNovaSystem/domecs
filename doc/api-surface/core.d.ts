@@ -1492,6 +1492,12 @@ export interface ActLogFrame {
      */
     readonly scale?: number;
     /**
+     * The scale `world.resume()` returns to, for a step entered paused, when it
+     * is not the one a replay world would have (the host changed it between
+     * steps, e.g. `setScale(3); pause()`). Replay restores it before pausing.
+     */
+    readonly resumeScale?: number;
+    /**
      * `time.scale` after plugin `onTickStart`, before the step's event flush,
      * when a plugin changed it. Direct `on` handlers in the flush see it;
      * replay sets it at the same point.

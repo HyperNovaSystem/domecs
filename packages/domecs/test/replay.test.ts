@@ -812,6 +812,8 @@ describe('replay (§7.1)', () => {
       { ...log, frames: [{ tick: 0, dt: null, scale: -2 }] },
       { ...log, frames: [{ tick: 0, dt: null, hookScale: 'x' }] },
       { ...log, frames: [{ tick: 0, dt: null, flushScale: -1 }] },
+      { ...log, frames: [{ tick: 0, dt: null, resumeScale: 0 }] },
+      { ...log, frames: [{ tick: 0, dt: null, scale: 2, resumeScale: 3 }] },
       { ...log, frames: [{ tick: 0, dt: null, hookInput: { keys: [1] } }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: {} }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 3, via: 'emit' }] }] },
@@ -961,6 +963,33 @@ describe('input set by a signals.tickStart subscriber', () => {
     expect(tenth.input).toBeUndefined()
     expect(tenth.hookInput).toEqual({ keys: ['KeyA'] })
     expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 20, hash: strict(live) } })
+  })
+})
+
+describe('a pause between frames', () => {
+  it('keeps the resume target the host set, so a resume() in a system matches', () => {
+    const Resume = defineEvent<void>('RpResumeMid')
+    const setup = (): World => {
+      const w = fresh()
+      w.register(Resume)
+      w.system('resumer', { schedule: 'event', triggers: [Resume] }, (ctx) => ctx.world.resume())
+      return w
+    }
+    const live = setup()
+    live.spawn([entry(Stats, { t: 0, hits: 0, echoes: 0, keys: 0, r: 0, fixed: 0 })])
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    live.step(1 / 60)
+    live.setScale(3)
+    live.pause()
+    live.step(1 / 60)
+    live.emit(Resume, undefined)
+    for (let i = 0; i < 5; i++) live.step(1 / 60)
+    const log = rec.stop()
+    expect(live.time.scale).toBe(3)
+    const w = setup()
+    expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 7, hash: strict(live) } })
+    expect(w.time.scale).toBe(3)
   })
 })
 
