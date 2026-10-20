@@ -423,6 +423,14 @@ export function applyEffects(
         for (const [type, value] of bag as Iterable<readonly [ComponentType<any>, unknown]>) {
           values.set(type, (isRecord(value) ? clonePlain(value, new Map()) : {}) as Record<string, unknown>)
         }
+        // Prefabs are fetched again at apply time: check every type before
+        // spawning, or a name another type holds would throw from spawn
+        // part-way and leave a bare entity.
+        const conflict = registerProblem(world, [...values.keys(), ...effect.writes.map(([type]) => type)])
+        if (conflict !== null) {
+          fault(effect.source, `${what}: ${conflict}`)
+          break
+        }
         let problem: string | null = null
         for (const [type, field, value] of effect.writes) {
           let target = values.get(type)
@@ -455,6 +463,11 @@ export function applyEffects(
       case 'add': {
         if (!world.isAlive(effect.target)) break
         const what = `add "${effect.type.name}"`
+        const conflict = registerProblem(world, [effect.type])
+        if (conflict !== null) {
+          fault(effect.source, `${what}: ${conflict}`)
+          break
+        }
         const current = world.getComponent(effect.target, effect.type) as Record<string, unknown> | undefined
         if (current !== undefined) {
           // Already there: only `set` applies, checked as a whole first.
@@ -558,4 +571,15 @@ function describe(value: unknown): string {
     // fall through
   }
   return typeof value
+}
+
+/** Registers `types`; a reason when one is not a component type or its name is taken. */
+function registerProblem(world: World, types: readonly ComponentType<any>[]): string | null {
+  let registered
+  try {
+    registered = world.register(...types)
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
+  return registered.ok ? null : `another component type already holds the name "${registered.error.name}" in this world`
 }

@@ -75,6 +75,11 @@ All notable changes to DOMECS are documented here. The format is based on
   `createBranch` sets the requested scale before reading `once` gates.
   SPEC §7.5 now says which signal subscribers stay in a replay setup and
   where replay applies each stimulus. (O-80, O-81, 2.1 release candidate)
+- `@domecs/rules`: a `spawn` effect whose prefab (fetched again at apply
+  time) holds a component type whose name another type holds in the world,
+  or an `add` effect of such a type, faults the entity (`rule_eval_failed`)
+  and changes nothing. Before, it threw out of the tick, and a spawn left a
+  bare entity behind. (O-84, 2.3 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

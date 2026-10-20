@@ -248,6 +248,23 @@ describe('E14.2 spawn', () => {
       expect.stringMatching(/spawn "bullet".*FxBullet\.vx.*expected a number, got string/),
     ])
   })
+
+  it('a prefab with a conflicting component type faults the spawner and spawns nothing', () => {
+    const Impostor = defineComponent<{ x: number; y: number }>('FxPos', { defaults: { x: 0, y: 0 } })
+    let applyTime = false
+    const w = world()
+    install(w, [{ ...SHOOT, effects: [{ spawn: 'bullet' }] }], {
+      ...OPTIONS,
+      prefabs: (name) => (applyTime ? [entry(Bullet, { vx: 1, path: [] }), entry(Impostor, { x: 0, y: 0 })] : prefabs(name)),
+    })
+    const shooter = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    const before = w.listEntities([]).length
+    applyTime = true
+    w.action(Fire, { from: shooter, speed: 1 })
+    expect(w.listEntities([]).length).toBe(before)
+    expect(faultsOf(w, shooter)).toEqual([expect.stringMatching(/spawn "bullet".*another component type.*"FxPos"/)])
+    w.stepOnce() // the world still steps
+  })
 })
 
 describe('E14.2 despawn, add, remove', () => {
@@ -311,6 +328,20 @@ describe('E14.2 despawn, add, remove', () => {
     w.stepOnce()
     expect(w.getComponent(a, Pos)).toEqual({ x: 3, y: 0 })
     expect(w.getComponent(a, Tag)).toEqual({ n: 30 })
+  })
+
+  it('add of a type whose name another type holds in the world faults the entity, never throws', () => {
+    const w = world()
+    const Impostor = defineComponent<{ n: number }>('FxTag', { defaults: { n: 0 } })
+    const errors = installRules(w, [], (n) => (n === 'FxTag' ? Impostor : resolve(n)), OPTIONS).update([
+      { name: 'tagger', schedule: 'tick', query: ['FxHp'], actions: [], effects: [{ add: 'FxTag' }] },
+    ])
+    expect([...errors]).toEqual([])
+    w.register(Tag)
+    const a = w.spawn([entry(Hp, { hp: 1 })])
+    w.stepOnce()
+    expect(w.has(a, Tag)).toBe(false)
+    expect(faultsOf(w, a)).toEqual([expect.stringMatching(/add "FxTag".*another component type.*"FxTag"/)])
   })
 
   it('add of an existing component marks it changed only through set', () => {
