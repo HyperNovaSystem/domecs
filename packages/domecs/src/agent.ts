@@ -56,7 +56,12 @@ export interface AgentBridge {
   captureBaseline(): void
   /** Observe tick/scale/entity counts plus {@link World.describe}. */
   observe(): AgentObservation
-  /** Typed command boundary — delegates to {@link World.action}. */
+  /**
+   * Typed command boundary — delegates to {@link World.action}, which emits
+   * the command and runs one tick. Do not follow every `act()` with
+   * {@link AgentBridge.step}; that spends two ticks per turn. `type` must be
+   * the token `defineEvent()` returned — a name string is rejected.
+   */
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
   /**
    * Advance simulation. Omit `dt` for turn-based {@link World.stepOnce};
@@ -82,8 +87,8 @@ export interface AgentBridge {
  * const bridge = createAgentBridge(world)
  * bridge.reset()
  * const obs = bridge.observe()
- * const result = bridge.act(Cmd, { ... })
- * bridge.step() // or bridge.step(1/60) for fixed schedules
+ * const result = bridge.act(Cmd, { ... }) // runs one tick; { dt: 1/60 } for fixed
+ * bridge.step() // only to advance with no command (step(1/60) for fixed)
  * const snap = bridge.snapshot()
  * ```
  */

@@ -878,6 +878,10 @@ Notes:
   abandoned episode are discarded by `restore()`.
 - `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
   same as `step()` — guard computed dt values that can round to 0.
+- `act()` runs one tick itself (it is `world.action()`); call `step()` only
+  to advance with no command. It takes the `defineEvent()` token, not its
+  name: a string or look-alike object returns `{ accepted: false, reason }`
+  without emitting or ticking.
 - `act()` validates the payload when the event declares a `schema`
   (unknown fields / wrong-typed fields / out-of-enum values →
   `{ accepted: false, reason }`, no tick consumed). Schema-less events are

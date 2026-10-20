@@ -42,8 +42,9 @@ const bridge = createAgentBridge(world)
 bridge.captureBaseline()
 
 const obs = bridge.observe()           // world.describe() + tick/scale
-const result = bridge.act(MyCmd, payload)
-bridge.step()                          // stepOnce; use step(dt) for fixed
+const result = bridge.act(MyCmd, payload) // emits AND runs one tick
+// fixed-schedule sims: bridge.act(MyCmd, payload, { dt: 1 / 60 })
+bridge.step()                          // only to advance with no command
 const snap = bridge.snapshot()
 bridge.reset()                         // episode boundary
 ```
@@ -51,7 +52,7 @@ bridge.reset()                         // episode boundary
 | Method | Delegates to |
 |--------|----------------|
 | `observe()` | `world.describe()` + `time` |
-| `act(type, payload, opts?)` | `world.action(...)` |
+| `act(type, payload, opts?)` | `world.action(...)` — one tick per call |
 | `step()` / `step(dt)` | `stepOnce()` / `step(dt)` |
 | `snapshot(opts?)` | `world.snapshot(...)` |
 | `reset()` | `world.restore(baseline)` |
@@ -70,6 +71,9 @@ bridge.reset()                         // episode boundary
 - **markChanged** after in-place component mutation
 - **spawn shallow-copy** — scalars diverge; nested refs stay shared
 - **stepOnce ≠ fixed** — fixed needs positive `dt`
+- **act already ticks** — `act()` emits and runs one tick; a `step()` after
+  every `act()` spends two ticks per turn. Pass the token `defineEvent`
+  returned, never its name string (rejected with `accepted: false`)
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
@@ -90,7 +94,7 @@ bridge.reset()                         // episode boundary
 ## Done when
 
 - [ ] App runs headless with deterministic seed
-- [ ] Agent can `observe` → `act` → `step` → `snapshot` without private APIs
+- [ ] Agent can `observe` → `act` (→ `step` to idle) → `snapshot` without private APIs
 - [ ] No methods invented outside `@domecs/*` public surface
 - [ ] Tests cover at least one full episode + reset
 

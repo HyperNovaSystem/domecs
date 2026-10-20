@@ -6,6 +6,17 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
+  that `defineEvent()` did not create, such as an event's name string. They
+  return `accepted: false` with a reason and neither emit nor tick. Before,
+  a string ran a tick that no handler saw and reported `accepted: true`, and
+  `null` or `undefined` threw. (O-75)
+- Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
+  `createAgentBridge` example no longer follow every `act()` with `step()`,
+  which spent two ticks per turn. (O-75)
+
 ## [2.0.0] — 2026-10-16
 
 All seven `@domecs/*` packages move to 2.0.0, and `@domecs/scene` and

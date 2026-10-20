@@ -64,8 +64,10 @@ agent.reset()                        // episode-boundary hygiene: every
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
+// act() emits AND runs one tick (pass { dt: 1/60 } for fixed schedules).
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
-agent.step()                         // turn-based; use step(1/60) for fixed
+agent.step()                         // only to advance with no command;
+                                     // step(1/60) for fixed schedules
 const snap = agent.snapshot()
 agent.reset()                        // back to baseline for next episode
 ```
@@ -160,13 +162,20 @@ components are `markChanged`.
 - [ ] Determinism: same seed + same acts → identical `JSON.stringify(snapshot())`
   (key-order-stable today; a canonical serializer/hash is tracked as ledger
   O-11 — switch to it when it ships)
-- [ ] Agent loop: `reset → observe → act → step → snapshot` is enough for the task
+- [ ] Agent loop: `reset → observe → act (→ step to idle) → snapshot` is enough for the task
 - [ ] No invented methods; imports resolve from published `@domecs/*` only
 
-Two `act`/`step` sharp edges: `act()` validates payloads **only when the
-event declares a `schema`** (then typo'd fields / wrong types return
-`accepted: false` with a reason — declare schemas on every agent-facing
-command; schema-less events stay unvalidated), and `bridge.step(0)` is a
-heartbeat (no systems run), unlike `bridge.step()`.
+`act`/`step` sharp edges:
+
+- `act()` already runs one tick. Following every `act()` with `step()`
+  spends two ticks per turn; call `step()` only to advance with no command.
+- `act()` takes the token `defineEvent` returned. A name string or a
+  look-alike object is rejected (`accepted: false`, no tick) — it has no
+  event identity, so no handler could ever see it.
+- `act()` validates payloads **only when the event declares a `schema`**
+  (then typo'd fields / wrong types return `accepted: false` with a reason —
+  declare schemas on every agent-facing command; schema-less events stay
+  unvalidated).
+- `bridge.step(0)` is a heartbeat (no systems run), unlike `bridge.step()`.
 
 Installable skill companion: [`skills/domecs/SKILL.md`](skills/domecs/SKILL.md).

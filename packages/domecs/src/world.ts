@@ -21,6 +21,7 @@ import type {
 } from './errors.js'
 import {
   createEventBus,
+  eventTag,
   internalEvent,
   validateEventPayload,
   type EmittedEvent,
@@ -119,6 +120,18 @@ function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSche
   const out: Record<string, FieldSchema> = {}
   for (const [key, value] of Object.entries(src)) out[key] = { ...value }
   return out
+}
+
+// null when `value` carries defineEvent()'s identity symbol; otherwise a short
+// description of what action() was handed instead, for its rejection reason.
+function describeNonEventToken(value: unknown): string | null {
+  if (typeof value === 'string') return `the string ${JSON.stringify(value)}`
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return String(value)
+  if (typeof (value as { [eventTag]?: unknown })[eventTag] === 'symbol') return null
+  const name = (value as { name?: unknown }).name
+  return typeof name === 'string'
+    ? `an object named ${JSON.stringify(name)} that defineEvent() did not create`
+    : 'an object that defineEvent() did not create'
 }
 
 // Infer a reflection FieldKind from a default value's runtime type. Used by
@@ -1916,6 +1929,20 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // The command boundary is where untyped callers (agent transports,
+      // JSON-driven tools) arrive. The bus routes on the identity symbol that
+      // only defineEvent() sets, so a name string or a look-alike object
+      // would be emitted under no type: the tick runs, no handler fires, and
+      // the command used to come back accepted. Reject it before emitting.
+      const notToken = describeNonEventToken(type)
+      if (notToken !== null) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `not an event type: ${notToken}; pass the token defineEvent() returned, not its name`,
+          events: [],
+        }
+      }
       // O-39: when the event declares a schema, the command boundary rejects
       // malformed payloads outright — no emit, no tick, no consumed turn —
       // instead of accepting a command whose handler will silently no-op or
