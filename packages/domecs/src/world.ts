@@ -867,12 +867,6 @@ export function createWorld(options: WorldOptions = {}): World {
     return bucket
   }
 
-  /**
-   * The bucket an entity in `from` lands in when component `name` is added
-   * (or removed): followed through the transition edge, built once per
-   * (bucket, name, direction) instead of copying, sorting and stringifying
-   * the type set on every add/remove (WS-5 A1).
-   */
   function despawnInner(entity: Entity): void {
     const arch = entityArchetype.get(entity)
     if (arch) {
@@ -907,6 +901,12 @@ export function createWorld(options: WorldOptions = {}): World {
     wakeDriver()
   }
 
+  /**
+   * The bucket an entity in `from` lands in when component `name` is added
+   * (or removed): followed through the transition edge, built once per
+   * (bucket, name, direction) instead of copying, sorting and stringifying
+   * the type set on every add/remove (WS-5 A1).
+   */
   function transition(from: ArchetypeBucket, name: string, adding: boolean): ArchetypeBucket {
     const edges = adding ? from.addEdges : from.removeEdges
     let to = edges.get(name)

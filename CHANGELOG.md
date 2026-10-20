@@ -33,6 +33,14 @@ All notable changes to DOMECS are documented here. The format is based on
 - Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
   `createAgentBridge` example no longer follow every `act()` with `step()`,
   which spent two ticks per turn. (O-92)
+- `@domecs/core`: an act log started while an event with a non-plain payload
+  is pending now records an `unserializable_payload` gap at `startTick`. That
+  event cannot enter `baseHash` or the log, so before, a replay could report
+  `ok` without it. (O-80, 2.1 release candidate)
+- Release: `pnpm publish:npm` stamps each package's `BUILD_ID` with the plain
+  version (`scripts/stamp-build-id.mjs`); before, a published build would
+  have reported `'dev'`. `pnpm cold-install` packs the stamped payload and
+  fails unless every `BUILD_ID` is the version. (ED-15, 2.1 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 
