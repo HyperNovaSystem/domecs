@@ -63,6 +63,9 @@ before the spawn-time `OnAdded` marks were consumed, so a correct index that
 also reacts to `OnAdded(Health)` failed. The grader now steps first, the
 self-test has a must-pass variant for that case, and both runs were
 re-graded with `--regrade` (`*-regraded.json`; the raw files are kept).
+A regrade grades against the run's own engine template, records the grader
+hashes and commit, and only touches workspaces whose `src` is provably
+unchanged since the run.
 
 ## Billing
 

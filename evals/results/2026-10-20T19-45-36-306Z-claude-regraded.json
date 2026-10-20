@@ -1,0 +1,239 @@
+{
+  "when": "2026-10-20T19:45:36.306Z",
+  "agent": "claude",
+  "model": null,
+  "k": 3,
+  "engine": "2.0.0",
+  "commit": "6df0de1",
+  "passAt1": 1,
+  "passPowK": 1,
+  "costUsd": 3.8501322999999994,
+  "perTask": [
+    {
+      "task": "agent-counter",
+      "k": 3,
+      "passes": 3,
+      "passAt1": 1,
+      "passPowK": true
+    },
+    {
+      "task": "change-reader",
+      "k": 3,
+      "passes": 3,
+      "passAt1": 1,
+      "passPowK": true
+    },
+    {
+      "task": "fixed-projectile",
+      "k": 3,
+      "passes": 3,
+      "passAt1": 1,
+      "passPowK": true
+    },
+    {
+      "task": "seeded-walk",
+      "k": 3,
+      "passes": 3,
+      "passAt1": 1,
+      "passPowK": true
+    }
+  ],
+  "attempts": [
+    {
+      "task": "agent-counter",
+      "attempt": 1,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 42946,
+      "costUsd": 0.34949649999999993,
+      "turns": 15,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/agent-counter-P9NCsv"
+    },
+    {
+      "task": "agent-counter",
+      "attempt": 2,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 33279,
+      "costUsd": 0.2116274,
+      "turns": 10,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/agent-counter-DEtQIs"
+    },
+    {
+      "task": "agent-counter",
+      "attempt": 3,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 33100,
+      "costUsd": 0.233738,
+      "turns": 9,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/agent-counter-99z92n"
+    },
+    {
+      "task": "change-reader",
+      "attempt": 1,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 50217,
+      "costUsd": 0.3104516,
+      "turns": 13,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/change-reader-6xzzCV",
+      "graderSha256": "63efcedf81d580d37c370e126d93c00eb6fad56576e7526979efef474fe1aea6",
+      "regraded": true
+    },
+    {
+      "task": "change-reader",
+      "attempt": 2,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 69763,
+      "costUsd": 0.43370339999999996,
+      "turns": 21,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/change-reader-YfoYrd",
+      "graderSha256": "63efcedf81d580d37c370e126d93c00eb6fad56576e7526979efef474fe1aea6",
+      "regraded": true
+    },
+    {
+      "task": "change-reader",
+      "attempt": 3,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 54517,
+      "costUsd": 0.31834460000000003,
+      "turns": 18,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/change-reader-oS7O4Z",
+      "graderSha256": "63efcedf81d580d37c370e126d93c00eb6fad56576e7526979efef474fe1aea6",
+      "regraded": true
+    },
+    {
+      "task": "fixed-projectile",
+      "attempt": 1,
+      "passed": true,
+      "tests": {
+        "pass": 8,
+        "fail": 0,
+        "expected": 8
+      },
+      "durationMs": 85086,
+      "costUsd": 0.5009562000000001,
+      "turns": 20,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/fixed-projectile-hfUz0O"
+    },
+    {
+      "task": "fixed-projectile",
+      "attempt": 2,
+      "passed": true,
+      "tests": {
+        "pass": 8,
+        "fail": 0,
+        "expected": 8
+      },
+      "durationMs": 74949,
+      "costUsd": 0.2920018999999999,
+      "turns": 14,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/fixed-projectile-bwJYFE"
+    },
+    {
+      "task": "fixed-projectile",
+      "attempt": 3,
+      "passed": true,
+      "tests": {
+        "pass": 8,
+        "fail": 0,
+        "expected": 8
+      },
+      "durationMs": 137691,
+      "costUsd": 0.5361347,
+      "turns": 25,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/fixed-projectile-8w8Lb3"
+    },
+    {
+      "task": "seeded-walk",
+      "attempt": 1,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 51362,
+      "costUsd": 0.25345429999999997,
+      "turns": 16,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/seeded-walk-z5ayPS"
+    },
+    {
+      "task": "seeded-walk",
+      "attempt": 2,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 40947,
+      "costUsd": 0.20562369999999996,
+      "turns": 10,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/seeded-walk-f7UeYC"
+    },
+    {
+      "task": "seeded-walk",
+      "attempt": 3,
+      "passed": true,
+      "tests": {
+        "pass": 6,
+        "fail": 0,
+        "expected": 6
+      },
+      "durationMs": 57246,
+      "costUsd": 0.2046,
+      "turns": 9,
+      "agentError": null,
+      "work": "/tmp/domecs-eval-run-2wFrW1/seeded-walk-PrAvho"
+    }
+  ],
+  "regradedAt": "2026-10-20T19:51:57.118Z",
+  "regradedFrom": "2026-10-20T19-45-36-306Z-claude.json",
+  "graders": {
+    "agent-counter": "1edc940ee0e6e16b25c36702c35847526d87c80f94c9c52fff2dae22b2721384",
+    "change-reader": "63efcedf81d580d37c370e126d93c00eb6fad56576e7526979efef474fe1aea6",
+    "fixed-projectile": "0bb815e3bf18045c037679592c2224c2d7daf0d36517bb9ecfb2f1197b55c99b",
+    "seeded-walk": "70064b6e01554c815ca069d128ca49c1d95ec60afbf9456277caa73ba1d2eccd"
+  },
+  "graderCommit": "0a7ee34",
+  "graderTreeClean": true
+}
