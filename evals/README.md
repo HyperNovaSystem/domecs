@@ -38,6 +38,20 @@ path is in the results, so you can read what the agent wrote and the
 grader's TAP output (`grader-result.tap`). Concurrent runs do not share any
 scratch state.
 
+## Billing
+
+Agents run on the CLIs' own logins: `claude` on a claude.ai subscription
+(`claude auth status`), `codex` on a ChatGPT plan (`codex login status`).
+The runner strips `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`OPENAI_API_KEY` and `CODEX_API_KEY` from the agents' environment, so a key
+in your shell cannot switch a run to API billing. On a subscription a run
+uses your plan's limits rather than money; Claude's `costUsd` is then an
+estimate, and `--max-budget-usd` still caps each attempt by that estimate.
+
+The Agent SDKs are not used. Anthropic's terms ask that tools built on the
+Claude Agent SDK authenticate with an API key, while the CLI used directly
+on your own machine runs on your login.
+
 ## Isolation
 
 Each run packs `@domecs/core` into a fresh temp directory outside the repo.

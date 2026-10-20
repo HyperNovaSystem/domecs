@@ -133,6 +133,12 @@ function prepareTemplate(scratch) {
   return template
 }
 
+// Agents run on the CLI's own login (a Claude or ChatGPT subscription), not
+// an API key that happens to be in the shell: with a key in the env, either
+// CLI may bill the API instead.
+const agentEnv = { ...process.env }
+for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete agentEnv[key]
+
 function runAgent(task, work) {
   if (agent === 'reference') {
     fs.cpSync(path.join(task.dir, 'reference'), work, { recursive: true })
@@ -162,7 +168,7 @@ function runAgent(task, work) {
       String(budgetUsd),
     ]
     if (args.model) cli.push('--model', args.model)
-    const r = spawnSync('claude', cli, { cwd: work, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 << 20 })
+    const r = spawnSync('claude', cli, { cwd: work, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 << 20, env: agentEnv })
     let parsed = null
     try {
       parsed = JSON.parse(r.stdout)
@@ -180,7 +186,7 @@ function runAgent(task, work) {
   const cli = ['exec', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '-s', 'workspace-write']
   if (args.model) cli.push('-m', args.model)
   cli.push(task.prompt)
-  const r = spawnSync('codex', cli, { cwd: work, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 << 20, input: '' })
+  const r = spawnSync('codex', cli, { cwd: work, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 << 20, input: '', env: agentEnv })
   const tokens = /tokens used\s*\n?\s*([\d,]+)/.exec(r.stdout + r.stderr)?.[1]
   return {
     meta: {
