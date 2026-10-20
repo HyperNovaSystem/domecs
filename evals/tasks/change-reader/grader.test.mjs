@@ -63,6 +63,18 @@ test('a random sequence stays exact', () => {
   assert.ok(sizes.size > 3, 'the sequence should move entities across the threshold')
 })
 
+test('the index follows marked changes, not rescans', () => {
+  const world = createSim()
+  const ids = world.listEntities([Health])
+  // An unmarked mutation: a change-driven index cannot see it, a rescan can.
+  world.getComponent(ids[3], Health).hp = 1
+  world.step(1 / 60)
+  assert.deepEqual(world.getResource(LowHealth), [], 'LowHealth changed without a marked Health change')
+  damage(world, ids[3], 0) // a marked change reveals it
+  world.step(1 / 60)
+  assert.deepEqual(world.getResource(LowHealth), [ids[3]])
+})
+
 test('the index is maintained by a change-driven system', () => {
   const world = createSim()
   const systems = world.describe().systems

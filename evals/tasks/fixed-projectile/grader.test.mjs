@@ -68,6 +68,19 @@ test('deterministic per seed, different across seeds', () => {
   assert.notEqual(run([1, 1, 1, 1]), run([9, 9, 9, 9]))
 })
 
+test('integration is a fixed-schedule system', () => {
+  const world = createSim([1, 3, 5, 7])
+  assert.ok(world.describe().systems.some((s) => s.schedule === 'fixed'), 'expected a fixed-schedule system')
+})
+
+test('a half step runs no fixed step', () => {
+  const world = createSim([7, 5, 3, 1])
+  const [id] = world.listEntities([Body])
+  const before = { ...world.getComponent(id, Body) }
+  world.step(1 / 120)
+  assert.deepEqual({ ...world.getComponent(id, Body) }, before)
+})
+
 test('integration runs on fixed steps, not render ticks', () => {
   const world = createSim([2, 4, 6, 8])
   const [id] = world.listEntities([Body])

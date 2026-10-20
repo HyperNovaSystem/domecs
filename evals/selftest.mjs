@@ -26,11 +26,13 @@ const mutants = {
     ['stepOnce instead of step(dt)', ['world.step(1 / 60)', 'world.stepOnce()']],
     ['Math.random instead of world.rand', ['world.rand.uniformRange(0, 10), vy: world.rand.uniformRange(0, 10)', 'Math.random() * 10, vy: Math.random() * 10']],
     ["a 'tick' system instead of 'fixed'", ["{ schedule: 'fixed', query: [Body] }", "{ schedule: 'tick', query: [Body] }"]],
+    ["a 'tick' system integrating with the real delta", ["{ schedule: 'fixed', query: [Body] }, ({ entities, time }) => {\n    const dt = time.fixedStep", "{ schedule: 'tick', query: [Body] }, ({ entities, time }) => {\n    const dt = time.delta"]],
     ['no markChanged after moving', ['      world.markChanged(e.id, Body)\n', '']],
   ],
   'change-reader': [
     ['no markChanged after damage', ['  world.getComponent(id, Health).hp -= amount\n  world.markChanged(id, Health)', '  world.getComponent(id, Health).hp -= amount']],
     ['ignores removals', ['Or(OnChanged(Health), OnRemoved(Health))', 'OnChanged(Health)']],
+    ['rescans every tick, with a no-op reactive system beside it', ["    { schedule: 'reactive', reactsTo: Or(OnChanged(Health), OnRemoved(Health)) },", "    { schedule: 'tick' },"], ["  return world\n}", "  world.system('decoy', { schedule: 'reactive', reactsTo: OnChanged(Health) }, () => {})\n  return world\n}"]],
   ],
   'seeded-walk': [
     ['Math.random instead of world.rand', ['rand.uniformRange(-1, 1)\n      e.Walker.y', 'Math.random() * 2 - 1\n      e.Walker.y']],
@@ -54,18 +56,20 @@ let bad = 0
 for (const [task, list] of Object.entries(mutants)) {
   const taskDir = path.join(evalsDir, 'tasks', task)
   const grader = fs.readFileSync(path.join(taskDir, 'grader.test.mjs'), 'utf8')
-  for (const [label, [from, to]] of list) {
+  for (const [label, ...pairs] of list) {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), `domecs-mutant-${task}-`))
     fs.cpSync(template, work, { recursive: true })
     fs.cpSync(path.join(taskDir, 'reference'), work, { recursive: true })
     const file = path.join(work, 'src', 'sim.mjs')
-    const src = fs.readFileSync(file, 'utf8')
-    if (!src.includes(from)) {
+    let src = fs.readFileSync(file, 'utf8')
+    const missing = pairs.find(([from]) => !src.includes(from))
+    if (missing) {
       console.error(`[selftest] ${task} / ${label}: mutation anchor not found`)
       bad++
       continue
     }
-    fs.writeFileSync(file, src.replace(from, to))
+    for (const [from, to] of pairs) src = src.replace(from, to)
+    fs.writeFileSync(file, src)
     fs.mkdirSync(path.join(work, '.grader'))
     fs.writeFileSync(path.join(work, '.grader', 'grader.test.mjs'), grader)
     const r = spawnSync(process.execPath, ['--test', '.grader/grader.test.mjs'], { cwd: work, encoding: 'utf8' })
