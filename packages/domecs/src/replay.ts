@@ -157,10 +157,16 @@ export interface ActLogFrame {
    */
   readonly scale?: number
   /**
-   * `time.scale` after this step's tick-start hooks (plugin `onTickStart`,
-   * `signals.tickStart`), when a hook changed it — a `tickStart` pause
-   * control. It governs whether this step's `fixed` and `tick` systems run;
-   * replay applies it at the same point.
+   * `time.scale` after plugin `onTickStart`, before the step's event flush,
+   * when a plugin changed it. Direct `on` handlers in the flush see it;
+   * replay sets it at the same point.
+   */
+  readonly flushScale?: number
+  /**
+   * `time.scale` after `signals.tickStart`, when it differs from the scale
+   * the event flush ran under — a `tickStart` pause control. It governs
+   * whether this step's `fixed` and `tick` systems run; replay applies it at
+   * the same point.
    */
   readonly hookScale?: number
   /**
@@ -182,8 +188,17 @@ export interface ActLogFrame {
    * at the same point, so the step ends with the same queue (and checkpoint).
    */
   readonly endActs?: readonly ActRecord[]
-  /** `world.input` as systems saw it this step, when it differs from the previous frame's (always on the first frame). */
+  /**
+   * `world.input` after plugin `onTickStart` (what the event flush saw), when
+   * it differs from the previous frame's (always on the first frame).
+   */
   readonly input?: JsonInput
+  /**
+   * `world.input` after a `signals.tickStart` subscriber replaced it — what
+   * this step's systems saw — when it differs from `input`. Replay sets it
+   * at the same point.
+   */
+  readonly hookInput?: JsonInput
 }
 
 /** Why a log stops describing the world at a tick (replay past it is unverified). */
@@ -258,11 +273,13 @@ interface FrameDraft {
   tick: number
   dt: number | null
   scale?: number
+  flushScale?: number
   hookScale?: number
   acts?: ActRecord[]
   startActs?: ActRecord[]
   endActs?: ActRecord[]
   input?: JsonInput
+  hookInput?: JsonInput
 }
 
 /**
@@ -276,9 +293,10 @@ interface FrameDraft {
  *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
  *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
- *   scale on entry, a scale a tick-start hook set, and `world.input` as the
- *   step's systems see it (after plugin `onTickStart` and the `tickStart`
- *   signal), delta-encoded;
+ *   scale on entry, a scale plugin `onTickStart` set (in place for the
+ *   event flush) and one the `tickStart` signal set (for the systems), and
+ *   `world.input` as the event flush sees it (after plugin `onTickStart`,
+ *   delta-encoded) plus the input a `tickStart` subscriber replaced it with;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a
@@ -319,13 +337,14 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   // Whether the running frame's tick-start hooks are done (its systems ran).
   let afterHooks = false
   let entryScale = startScale
+  // The running frame's scale after plugin onTickStart (the flush's scale).
+  let flushScale = startScale
   // The scale the previous frame ended with: a replay world has it too.
   let lastScale = startScale
   let lastInput: string | null = null
-  // The running frame's input as first read (after plugin onTickStart), and
-  // the previous frame's key, to re-read it once the tickStart signal ran.
+  // The running frame's input as first read (after plugin onTickStart), to
+  // tell whether a tickStart subscriber replaced it.
   let inputSeen: unknown = null
-  let prevInput: string | null = null
   // world.rand's state when the previous frame ended: a draw between steps
   // is a direct write a replay cannot reproduce.
   let lastRand = String(world.rand.seed())
@@ -341,13 +360,14 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     gaps.push({ tick, reason })
   }
 
-  // Write world.input into the frame when it differs from the previous frame's.
-  function readInput(f: FrameDraft): void {
+  // Write world.input into the frame's `field` when it differs from the
+  // input the replay world holds at that point (the last one written).
+  function readInput(f: FrameDraft, field: 'input' | 'hookInput'): void {
     try {
       const enc = encodeInput(world.input)
       const key = canonicalJson(enc)
       if (key !== lastInput) {
-        f.input = enc
+        f[field] = enc
         lastInput = key
       }
     } catch {
@@ -394,9 +414,12 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
         f.acts = pending
         pending = []
       }
-      prevInput = lastInput
+      // Plugin onTickStart is done: the event flush runs under this scale
+      // and input.
+      flushScale = world.time.scale
+      if (flushScale !== entryScale) f.flushScale = flushScale
       inputSeen = world.input
-      readInput(f)
+      readInput(f, 'input')
       opening = null
       running = f
       afterHooks = false
@@ -405,14 +428,10 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     hooksDone() {
       const f = running
       if (f !== null) {
-        if (world.time.scale !== entryScale) f.hookScale = world.time.scale
-        // A signals.tickStart subscriber replaced the input: systems see
-        // that one (replay sets it before the step).
-        if (world.input !== inputSeen) {
-          delete f.input
-          lastInput = prevInput
-          readInput(f)
-        }
+        if (world.time.scale !== flushScale) f.hookScale = world.time.scale
+        // A signals.tickStart subscriber replaced the input: the systems see
+        // that one, the event flush before it saw `input`.
+        if (world.input !== inputSeen) readInput(f, 'hookInput')
       }
       afterHooks = true
     },
@@ -586,6 +605,7 @@ function checkFrame(f: unknown): string | null {
   if (!isTick(f.tick)) return 'tick is not a non-negative integer'
   if (f.dt !== null && !(isFinite(f.dt) && f.dt > 0)) return 'dt is not null or a positive finite number'
   if (f.scale !== undefined && !isScale(f.scale)) return 'scale is not a non-negative finite number'
+  if (f.flushScale !== undefined && !isScale(f.flushScale)) return 'flushScale is not a non-negative finite number'
   if (f.hookScale !== undefined && !isScale(f.hookScale)) return 'hookScale is not a non-negative finite number'
   for (const field of ['acts', 'startActs', 'endActs'] as const) {
     const acts = f[field]
@@ -604,9 +624,10 @@ function checkFrame(f: unknown): string | null {
       }
     }
   }
-  if (f.input !== undefined) {
-    const bad = checkInput(f.input)
-    if (bad !== null) return `input ${bad}`
+  for (const field of ['input', 'hookInput'] as const) {
+    if (f[field] === undefined) continue
+    const bad = checkInput(f[field])
+    if (bad !== null) return `${field} ${bad}`
   }
   return null
 }
@@ -668,9 +689,10 @@ export function checkLog(log: unknown): string | null {
  * Apply one log frame to `world` (§7.1 replay step 3): resolve every act
  * (`unknown_event` / `rejected_payload` before any emit), set the scale and
  * input, emit the acts in order, then `stepOnce()` or `step(dt)` — with the
- * frame's `hookScale` set and its `startActs` emitted from a one-step
- * `signals.tickStart` subscription, and its `endActs` emitted from a
- * one-step `signals.tickEnd` subscription.
+ * frame's `flushScale` set once plugin `onTickStart` hooks ran (before the
+ * event flush), its `hookScale` and `hookInput` set and its `startActs`
+ * emitted from a one-step `signals.tickStart` subscription, and its
+ * `endActs` emitted from a one-step `signals.tickEnd` subscription.
  * Returns `null` when the frame was applied. The frame must be valid
  * (checked by {@link replay}); shared with `runBranch` (§7.2).
  */
@@ -690,6 +712,21 @@ function resolveActs(world: World, acts: readonly ActRecord[] | undefined, tick:
   return null
 }
 
+/** A tap listener that only runs `fn` once plugin `onTickStart` hooks are done. */
+function onFrameStarted(fn: () => void): ActTapListener {
+  const none = (): void => {}
+  return {
+    emitted: none,
+    frameEntered: none,
+    frameStarted: fn,
+    hooksDone: none,
+    frameEnded: none,
+    mutated: none,
+    restoreBegan: none,
+    restoreEnded: none,
+  }
+}
+
 export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null {
   const before: ResolvedAct[] = []
   const atStart: ResolvedAct[] = []
@@ -702,12 +739,22 @@ export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | n
   if (frame.scale !== undefined) world.setScale(frame.scale)
   if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
   for (const { type, payload } of before) world.emit(type, payload)
-  const hookScale = frame.hookScale
   const unsubscribe: Array<() => void> = []
-  if (hookScale !== undefined || atStart.length > 0) {
+  const flushScale = frame.flushScale
+  if (flushScale !== undefined) {
+    // Where plugin onTickStart set it live: after the tick began, before the
+    // event flush (the tap's frameStarted).
+    const tap = actTapOf(world)
+    if (tap === undefined) world.setScale(flushScale)
+    else unsubscribe.push(tap.attach(onFrameStarted(() => world.setScale(flushScale))))
+  }
+  const hookScale = frame.hookScale
+  const hookInput = frame.hookInput === undefined ? undefined : decodeInput(frame.hookInput)
+  if (hookScale !== undefined || hookInput !== undefined || atStart.length > 0) {
     unsubscribe.push(
       world.signals.tickStart.subscribe(() => {
         if (hookScale !== undefined) world.setScale(hookScale)
+        if (hookInput !== undefined) world.setInput(hookInput)
         for (const { type, payload } of atStart) world.emit(type, payload)
       }),
     )

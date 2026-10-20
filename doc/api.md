@@ -1629,11 +1629,13 @@ interface ActLogFrame {          // one stepOnce() or step(dt > 0); heartbeats a
   readonly tick: number          // time.tick before the step
   readonly dt: number | null     // null = stepOnce()
   readonly scale?: number        // entry scale, when it changed since the previous frame ended
-  readonly hookScale?: number    // scale a tickStart hook set during this step
+  readonly flushScale?: number   // scale plugin onTickStart set, before the event flush
+  readonly hookScale?: number    // scale a signals.tickStart subscriber set, for the systems
   readonly acts?: readonly ActRecord[]       // emitted before the step's event flush
   readonly startActs?: readonly ActRecord[]  // emitted by signals.tickStart subscribers this step
   readonly endActs?: readonly ActRecord[]    // emitted after the systems (render, onTickEnd, tickEnd)
-  readonly input?: JsonInput     // when it changed (always on the first frame)
+  readonly input?: JsonInput     // what the event flush saw, when it changed (always on the first frame)
+  readonly hookInput?: JsonInput // input a signals.tickStart subscriber set, for the systems
 }
 interface ActRecord {
   readonly event: string         // replay resolves it with world.lookupEvent

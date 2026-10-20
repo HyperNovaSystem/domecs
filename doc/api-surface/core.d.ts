@@ -1483,10 +1483,16 @@ export interface ActLogFrame {
      */
     readonly scale?: number;
     /**
-     * `time.scale` after this step's tick-start hooks (plugin `onTickStart`,
-     * `signals.tickStart`), when a hook changed it — a `tickStart` pause
-     * control. It governs whether this step's `fixed` and `tick` systems run;
-     * replay applies it at the same point.
+     * `time.scale` after plugin `onTickStart`, before the step's event flush,
+     * when a plugin changed it. Direct `on` handlers in the flush see it;
+     * replay sets it at the same point.
+     */
+    readonly flushScale?: number;
+    /**
+     * `time.scale` after `signals.tickStart`, when it differs from the scale
+     * the event flush ran under — a `tickStart` pause control. It governs
+     * whether this step's `fixed` and `tick` systems run; replay applies it at
+     * the same point.
      */
     readonly hookScale?: number;
     /**
@@ -1508,8 +1514,17 @@ export interface ActLogFrame {
      * at the same point, so the step ends with the same queue (and checkpoint).
      */
     readonly endActs?: readonly ActRecord[];
-    /** `world.input` as systems saw it this step, when it differs from the previous frame's (always on the first frame). */
+    /**
+     * `world.input` after plugin `onTickStart` (what the event flush saw), when
+     * it differs from the previous frame's (always on the first frame).
+     */
     readonly input?: JsonInput;
+    /**
+     * `world.input` after a `signals.tickStart` subscriber replaced it — what
+     * this step's systems saw — when it differs from `input`. Replay sets it
+     * at the same point.
+     */
+    readonly hookInput?: JsonInput;
 }
 /** Why a log stops describing the world at a tick (replay past it is unverified). */
 export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore';
@@ -1575,9 +1590,10 @@ export declare function actLogHash(world: World): string;
  *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
  *   `signals.tickEnd`);
  * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
- *   scale on entry, a scale a tick-start hook set, and `world.input` as the
- *   step's systems see it (after plugin `onTickStart` and the `tickStart`
- *   signal), delta-encoded;
+ *   scale on entry, a scale plugin `onTickStart` set (in place for the
+ *   event flush) and one the `tickStart` signal set (for the systems), and
+ *   `world.input` as the event flush sees it (after plugin `onTickStart`,
+ *   delta-encoded) plus the input a `tickStart` subscriber replaced it with;
  * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
  *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
  *   between steps (`out_of_tick_mutation`), a

@@ -705,13 +705,72 @@ describe('replay (§7.1)', () => {
       expect(fixedAtPause).toBeGreaterThan(0)
       const w = fresh()
       expect(replay(w, log, { base }), via).toEqual({ ok: true, value: { ticks: 70, hash: strict(live) } })
-      // The pause tick needs hookScale: the entry scale alone runs that tick's systems.
-      expect(log.frames.filter((f) => f.hookScale !== undefined)).toHaveLength(1)
-      const stripped = { ...log, frames: log.frames.map(({ hookScale: _h, ...f }) => f) }
+      // The pause tick needs its tick-start scale: the entry scale alone runs
+      // that tick's systems. A plugin pauses before the event flush
+      // (flushScale), a signal subscriber after it (hookScale).
+      const field = via === 'plugin' ? 'flushScale' : 'hookScale'
+      expect(log.frames.filter((f) => f.flushScale !== undefined || f.hookScale !== undefined), via).toHaveLength(1)
+      expect(log.frames.filter((f) => f[field] !== undefined), via).toHaveLength(1)
+      const stripped = { ...log, frames: log.frames.map(({ hookScale: _h, flushScale: _f, ...f }) => f) }
       const r = replay(fresh(), stripped, { base })
       expect(r.ok).toBe(false)
       if (!r.ok) expect(r.error).toMatchObject({ kind: 'diverged', tick: pauseAt })
     }
+  })
+
+  it('a scale a plugin sets at onTickStart is in place for the event flush, as it was live', () => {
+    const Seen = defineResource<{ scales: number[] }>('RpSeenScale', { default: { scales: [] } })
+    const setup = (w: World): World => {
+      w.on(Echo, () => {
+        const s = w.getResource(Seen) ?? { scales: [] }
+        w.setResource(Seen, { scales: [...s.scales, w.time.scale] })
+      })
+      return w
+    }
+    const live = setup(createWorld({ headless: true, seed: [1, 2, 3, 4] }))
+    live.use(definePlugin({ name: 'slow', install: () => ({ onTickStart(world, info) { if (!info.heartbeat && world.time.tick === 3) world.setScale(0.5) } }) }))
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    for (let i = 0; i < 5; i++) {
+      live.emit(Echo, { from: `e${i}` })
+      live.step(1 / 60)
+    }
+    const log = rec.stop()
+    expect(live.getResource(Seen)!.scales).toEqual([1, 1, 0.5, 0.5, 0.5])
+    const w = setup(createWorld({ headless: true, seed: [1, 2, 3, 4] }))
+    expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 5, hash: strict(live) } })
+    expect(w.getResource(Seen)!.scales).toEqual([1, 1, 0.5, 0.5, 0.5])
+  })
+
+  it('input a tickStart subscriber sets reaches the systems, not the event flush before it', () => {
+    const Seen = defineResource<{ keys: string[][] }>('RpSeenKeys', { default: { keys: [] } })
+    const KeyLog = defineResource<{ keys: string[][] }>('RpSystemKeys', { default: { keys: [] } })
+    const setup = (w: World): World => {
+      w.on(Echo, () => {
+        const s = w.getResource(Seen) ?? { keys: [] }
+        w.setResource(Seen, { keys: [...s.keys, [...w.input.keys]] })
+      })
+      w.system('keys', { schedule: 'tick' }, () => {
+        const s = w.getResource(KeyLog) ?? { keys: [] }
+        w.setResource(KeyLog, { keys: [...s.keys, [...w.input.keys]] })
+      })
+      return w
+    }
+    const live = setup(createWorld({ headless: true, seed: [1, 2, 3, 4] }))
+    live.signals.tickStart.subscribe((t) => {
+      if (t.tick === 3) live.setInput(inputWith(['KeyQ']))
+    })
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live, { hashEvery: 1 })
+    for (let i = 0; i < 4; i++) {
+      live.emit(Echo, { from: `e${i}` })
+      live.step(1 / 60)
+    }
+    const log = rec.stop()
+    expect(live.getResource(Seen)!.keys).toEqual([[], [], [], ['KeyQ']])
+    expect(live.getResource(KeyLog)!.keys).toEqual([[], [], ['KeyQ'], ['KeyQ']])
+    const w = setup(createWorld({ headless: true, seed: [1, 2, 3, 4] }))
+    expect(replay(w, log, { base })).toEqual({ ok: true, value: { ticks: 4, hash: strict(live) } })
   })
 
   it('base_mismatch when the world is not at the log base', () => {
@@ -752,6 +811,8 @@ describe('replay (§7.1)', () => {
       { ...log, frames: [{ tick: 0, dt: Number.POSITIVE_INFINITY }] },
       { ...log, frames: [{ tick: 0, dt: null, scale: -2 }] },
       { ...log, frames: [{ tick: 0, dt: null, hookScale: 'x' }] },
+      { ...log, frames: [{ tick: 0, dt: null, flushScale: -1 }] },
+      { ...log, frames: [{ tick: 0, dt: null, hookInput: { keys: [1] } }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: {} }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 3, via: 'emit' }] }] },
       { ...log, frames: [{ tick: 0, dt: null, acts: [{ event: 'RpHit', via: 'shout' }] }] },
@@ -886,7 +947,7 @@ describe('out-of-tick draws on world.rand', () => {
 })
 
 describe('input set by a signals.tickStart subscriber', () => {
-  it('is recorded as the input systems saw, and replays without the subscriber', () => {
+  it('is recorded as hookInput, the input systems saw, and replays without the subscriber', () => {
     const live = source()
     live.signals.tickStart.subscribe((t) => {
       if (t.tick % 5 === 0) live.setInput(inputWith(t.tick % 10 === 0 ? ['KeyA'] : []))
@@ -896,7 +957,9 @@ describe('input set by a signals.tickStart subscriber', () => {
     for (let i = 0; i < 20; i++) live.step(1 / 60)
     const log = rec.stop()
     const tenth = log.frames.find((f) => f.tick + 1 === 10)!
-    expect(tenth.input).toEqual({ keys: ['KeyA'] })
+    // The event flush ran before the subscriber: it saw the previous input.
+    expect(tenth.input).toBeUndefined()
+    expect(tenth.hookInput).toEqual({ keys: ['KeyA'] })
     expect(replay(fresh(), log, { base })).toEqual({ ok: true, value: { ticks: 20, hash: strict(live) } })
   })
 })
