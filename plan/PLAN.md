@@ -220,9 +220,10 @@ Phase 1 (committed):
 - [ ] Port the prototype's overhead cuts to `src`. Query caching is for
   structural queries only.
 - [ ] First-hour traps:
-  - [x] `action()` rejects non-event tokens, and the docs stop pairing every
-    `act()` with `step()` (O-75);
-  - [x] Studio Save keeping live edits (Studio FINDINGS 2026-10-20);
+  - [ ] `action()` rejects non-event tokens, and the docs stop pairing every
+    `act()` with `step()` (O-75; in review as domecs PR #20);
+  - [ ] Studio Save keeping live edits (Studio FINDINGS 2026-10-20; in review
+    as studio PR #3);
   - [ ] `reset()` scale/input, O-30, and explicit bans on nondeterministic
     APIs.
 - [ ] Full canonical world hash (closes O-11).
