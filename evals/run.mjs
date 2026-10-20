@@ -39,6 +39,12 @@ if (agent !== 'reference' && args['confirm-cost'] !== true) {
   fail(`--agent ${agent} spends money (about $${budgetUsd} cap per Claude attempt). Re-run with --confirm-cost.`)
 }
 
+// Agents run on the CLI's own login (a Claude or ChatGPT subscription), not
+// an API key that happens to be in the shell: with a key in the env, either
+// CLI may bill the API instead.
+const agentEnv = { ...process.env }
+for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete agentEnv[key]
+
 const tasksDir = path.join(evalsDir, 'tasks')
 const tasks = fs
   .readdirSync(tasksDir)
@@ -132,12 +138,6 @@ function prepareTemplate(scratch) {
   fs.mkdirSync(path.join(template, 'src'))
   return template
 }
-
-// Agents run on the CLI's own login (a Claude or ChatGPT subscription), not
-// an API key that happens to be in the shell: with a key in the env, either
-// CLI may bill the API instead.
-const agentEnv = { ...process.env }
-for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete agentEnv[key]
 
 function runAgent(task, work) {
   if (agent === 'reference') {
