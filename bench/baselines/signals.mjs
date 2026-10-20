@@ -6,16 +6,7 @@
  * Warmup and windowed priming mirror bench/run.mjs exactly — see the note
  * in baselines/koota.mjs.
  */
-import { performance } from 'node:perf_hooks'
-
-function percentiles(samples) {
-  const sorted = [...samples].sort((a, b) => a - b)
-  const at = (p) => {
-    if (sorted.length === 0) return 0
-    return sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))]
-  }
-  return { p50: at(0.5), p95: at(0.95) }
-}
+import { measureTicks } from '../measure.mjs'
 
 /** Per-entity signal: value + subscriber set. */
 function signal(initial) {
@@ -64,21 +55,16 @@ export function runSignalsSoak({ entityCount, ticks, warmupTicks = 0 }) {
     }
   }
   for (let t = 0; t < warmupTicks; t++) tickFn()
+  notifications = 0
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    tickFn()
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(tickFn, ticks)
   return {
     workload: 'signals-soak',
     engine: 'signals',
     entities: entityCount,
     ticks,
-    p50Ms: p50,
-    p95Ms: p95,
+    ...measured,
+    // Per field (x and y), so 2 per entity per tick.
     notifications,
   }
 }
@@ -95,7 +81,7 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize, warmupTicks
   }
 
   let windowStart = 0
-  let domUpdates = 0
+  const dom = { create: 0, update: 0, remove: 0 }
   // Subscribe only to currently visible ranks (fine-grained)
   const unsubs = new Map()
 
@@ -104,16 +90,16 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize, warmupTicks
     unsubs.set(
       e.id,
       e.rank.subscribe(() => {
-        domUpdates++
+        dom.update++
       }),
     )
-    domUpdates++ // create
+    dom.create++
   }
   function unmount(e) {
     e.visible.set(false)
     unsubs.get(e.id)?.()
     unsubs.delete(e.id)
-    domUpdates++ // destroy
+    dom.remove++
   }
 
   const visible = new Set()
@@ -143,24 +129,17 @@ export function runSignalsWindowed({ entityCount, ticks, windowSize, warmupTicks
   // Prime (mounts first window, advances windowStart to 3) + warmup —
   // excluded from timing and from the reported domUpdates.
   for (let t = 0; t < 1 + warmupTicks; t++) tickFn()
+  Object.assign(dom, { create: 0, update: 0, remove: 0 })
 
-  const samples = []
-  const startUpdates = domUpdates
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    tickFn()
-    samples.push(performance.now() - t0)
-  }
-
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(tickFn, ticks)
   return {
     workload: 'signals-windowed',
     engine: 'signals',
     entities: entityCount,
     ticks,
     windowSize,
-    p50Ms: p50,
-    p95Ms: p95,
-    domUpdates: domUpdates - startUpdates,
+    ...measured,
+    domUpdates: dom.create + dom.update + dom.remove,
+    domSplit: { ...dom },
   }
 }

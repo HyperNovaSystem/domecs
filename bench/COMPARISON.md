@@ -8,28 +8,31 @@ Headless characterization of DOMECS vs baselines on the same machine.
 | Label | What it is |
 |-------|------------|
 | **domecs** | `@domecs/core` systems + queries + markChanged |
-| **koota** | [koota](https://github.com/pmndrs/koota) traits + `query().updateEach` |
+| **koota** | [koota](https://github.com/pmndrs/koota) traits + `query().updateEach`; soak also tracks changes (`world.onChange` reader) |
 | **signals** | Hand-rolled per-field signals (fine-grained reactive style) |
 | **baseline-plain** | Bare `Float64Array` loops (floor, not feature-equivalent) |
 
 ## Workloads compared
 
 1. **Soak** — N entities with position/velocity; advance positions for T ticks.
+   Like-for-like since 2026-10-20: both DOMECS and Koota record every
+   change and a reader consumes them (`soakWorkEqual`).
 2. **Windowed** — N entities; maintain a sliding window of W visible rows with
    mount/update/unmount bookkeeping (fleet-shaped projection).
 
 Run:
 
 ```bash
-pnpm --filter @domecs/core build
-node --expose-gc bench/run.mjs --workload compare --entities 5000 --ticks 100
+pnpm bench -- --workload compare      # builds first; 7 trials by default
+pnpm bench:browser                    # the windowed shape in a real DOM
 ```
 
 Every engine gets the same unmeasured warmup (`--warmup`, default 30) before
 sampling, a full GC runs between workloads when `--expose-gc` is set, the
 verdict is computed only from the compare-phase rows (identical entity
-counts), and `compare-summary.windowedWorkEqual` checks the three windowed
-harnesses reported identical `domUpdates` — see bench/README.md
+counts), `soakWorkEqual` and `windowedWorkEqual` check the harnesses did
+the same work, and the verdict is the median paired ratio with a bootstrap
+95% CI (a win needs the CI under 0.70×) — see bench/README.md
 "Methodology".
 
 ## Plumbing complexity (implementation cost)
@@ -78,6 +81,8 @@ If neither clears after honest measurement: correct README claims (already
   signals rows time a bare loop with no frame machinery. That asymmetry is
   deliberate — DOMECS is measured at the cost an app actually pays — but it
   means soak ratios understate DOMECS's raw iteration speed.
-- Windowed p95 is closer to product shape (projection churn).
+- Windowed p95 is closer to product shape (projection churn), and
+  `pnpm bench:browser` measures it with a real DOM and layout, where
+  engine overhead is a smaller share of the frame.
 - Prefer `compare-summary.decisiveRuntimeWins` and Plantroom episode
   complexity over single-number soak bragging.
