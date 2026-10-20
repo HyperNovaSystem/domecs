@@ -157,13 +157,15 @@ if (workload === 'all' || workload === 'compare') {
     () => runKootaWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
     () => runSignalsWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
   ]
-  // Trials interleave the engines, so host drift hits each one alike.
+  // Trials interleave the engines, rotating the order each trial so no
+  // engine always runs first (cold) or last (most drift).
   const trials = []
   for (let t = 0; t < compareTrials; t++) {
-    const rows = []
-    for (const run of compareRunners) {
+    const rows = new Array(compareRunners.length)
+    for (let i = 0; i < compareRunners.length; i++) {
+      const at = (i + t) % compareRunners.length
       maybeGc()
-      rows.push(run())
+      rows[at] = compareRunners[at]()
     }
     trials.push(rows)
   }

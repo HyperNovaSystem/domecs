@@ -53,7 +53,10 @@ const byTrial = []
 try {
   for (let t = 0; t < trials; t++) {
     const rows = {}
-    for (const engine of engines) {
+    // Rotate the order each trial, so no engine always pays the first page
+    // load's cold costs or the end of a trial's drift.
+    const order = engines.map((_, i) => engines[(i + t) % engines.length])
+    for (const engine of order) {
       const page = await browser.newPage({ viewport: { width: 800, height: 1200 } })
       const url = `${base}/bench/browser/page.html?engine=${engine}&n=${entities}&window=${windowSize}&frames=${frames}`
       await page.goto(url)
