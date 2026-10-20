@@ -1,0 +1,6 @@
+{
+  "id": "seeded-walk",
+  "title": "Seeded random walk with snapshot replay",
+  "traps": ["world.rand, not Math.random", "no wall-clock time", "snapshot/restore continuation"],
+  "prompt": "Write src/sim.mjs, an ES module that uses the DOMECS packages installed in node_modules (start from @domecs/core). It must export:\n\n- `Walker`: a component type whose value is `{ x: number, y: number }`.\n- `createSim(seed)`: returns a new headless world seeded with `seed` (an array of four numbers) holding 100 entities with `Walker` at (0, 0), and a system that, on every tick, moves each walker by a random step in x and in y, each drawn uniformly from [-1, 1) with the world's own seeded random generator.\n- `run(seed, ticks)`: creates a sim, advances it `ticks` ticks with `world.step(1/60)`, and returns `JSON.stringify(world.snapshot())`.\n\nThe same seed must give the same output on every run, different seeds must give different output, and a world restored from a snapshot must continue exactly as the original would have. Do not modify node_modules. You can run your code with node to check it."
+}

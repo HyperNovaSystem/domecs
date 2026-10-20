@@ -19,6 +19,8 @@
     "bench": "node --expose-gc bench/run.mjs",
     "bench:write": "node --expose-gc bench/run.mjs --write",
     "test:legibility": "node --test test/agent-legibility.test.mjs",
+    "eval": "node evals/run.mjs",
+    "eval:selftest": "node evals/selftest.mjs",
     "test:plantroom": "node --test example/plantroom/test/episode.test.mjs",
     "plantroom:dev": "pnpm --filter @domecs/example-plantroom dev",
     "plantroom:build": "pnpm --filter @domecs/example-plantroom build",

@@ -1,0 +1,6 @@
+{
+  "id": "fixed-projectile",
+  "title": "Fixed-step projectiles under gravity",
+  "traps": ["stepOnce never fires fixed systems", "world.rand, not Math.random", "markChanged after mutation"],
+  "prompt": "Write src/sim.mjs, an ES module that uses the DOMECS packages installed in node_modules (start from @domecs/core). It must export:\n\n- `Body`: a component type whose value is `{ x: number, y: number, vx: number, vy: number }`.\n- `createSim(seed)`: returns a new headless world (seeded with `seed`, an array of four numbers, and a fixed step of 1/60 s) holding 10 entities with `Body`. Each starts at `x = 0`, `y = 0`, with `vx` and `vy` drawn uniformly from [0, 10) using the world's own seeded random generator. A system on the fixed schedule integrates each body every fixed step with gravity g = -9.8: first `vy += g * dt`, then `x += vx * dt` and `y += vy * dt`, where `dt` is the fixed step.\n- `advance(world, seconds)`: advances simulated time by `seconds` (a multiple of 1/60) so that exactly `seconds * 60` fixed steps run.\n\nThe same seed must always give the same result, and different seeds different results. Do not modify node_modules. You can run your code with node to check it."
+}
