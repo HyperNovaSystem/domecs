@@ -1571,6 +1571,12 @@ export interface StepClock {
 export interface WorldStateCtx {
     alive: Set<Entity>;
     stores: Map<string, Map<Entity, unknown>>;
+    /**
+     * Called whenever restore replaces or clears store Maps, before any
+     * callback can run, so the world's type-identity store cache never hands
+     * out a detached Map (WS-5 A1).
+     */
+    storesReplaced(): void;
     typeRegistry: Map<string, ComponentType<unknown>>;
     archetypes: Map<string, ArchetypeBucket>;
     entityArchetype: Map<Entity, ArchetypeBucket>;

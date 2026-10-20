@@ -612,14 +612,20 @@ export function createWorld(options: WorldOptions = {}): World {
   // WS-5 A1: store lookup by ComponentType identity. storeFor() validates a
   // type once (name registry, duplicate-name check); after that, the hot
   // paths (getComponent, markChanged, addComponent) skip the name lookup and
-  // the checks. Cleared on restore, which replaces every store Map.
-  const storeByType = new Map<ComponentType<unknown>, Map<Entity, unknown>>()
+  // the checks. An entry is valid only for the storesVersion it was cached
+  // under: restore bumps the version every time it clears or replaces a
+  // store Map, before any callback can run (world-state storesReplaced).
+  const storeByType = new Map<ComponentType<unknown>, { version: number; store: Map<Entity, unknown> }>()
+  let storesVersion = 0
 
-  // WS-5 A1: bumped by every change that can alter a structural query's
-  // result or the view objects in it: an entity entering, leaving or moving
-  // between archetypes, and restore. Structural live queries reuse their
-  // last result while it is unchanged.
+  // WS-5 A1: bumped at the start of every change that can alter a
+  // structural query's result or the view objects in it: an entity entering,
+  // leaving or moving between archetypes, and restore. Structural live
+  // queries reuse their last result while it is unchanged. While such a
+  // change is in progress (structuralDepth > 0) query hooks can run against
+  // half-updated membership, so nothing read then is cached.
   let structEpoch = 0
+  let structuralDepth = 0
 
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
@@ -644,6 +650,9 @@ export function createWorld(options: WorldOptions = {}): World {
           seenThrough: sys.seenThrough,
           readsRemovals: sys.watchesRemoved,
         }))
+    },
+    storesReplaced: () => {
+      storesVersion++
     },
     resumeChangeWindows: (base, count, seen) => {
       const end = base + count
@@ -704,6 +713,39 @@ export function createWorld(options: WorldOptions = {}): World {
    * (bucket, name, direction) instead of copying, sorting and stringifying
    * the type set on every add/remove (WS-5 A1).
    */
+  function despawnInner(entity: Entity): void {
+    const arch = entityArchetype.get(entity)
+    if (arch) {
+      // SPEC §2.10: componentRemoved fires before the bag is released.
+      if (sigComponentRemoved.size > 0) {
+        for (const name of arch.types) {
+          const t = typeRegistry.get(name)
+          if (t) sigComponentRemoved.emit({ entity, type: t })
+        }
+      }
+      for (const name of arch.types) {
+        record('removed', name, entity)
+        stores.get(name)?.delete(entity)
+      }
+      // fire onRemove hooks for queries this entity was in
+      for (const q of queries) {
+        if (q.matchingArchetypes.has(arch)) {
+          q.structuralMembers.delete(entity)
+          if (q.onRemoveFns.size > 0) {
+            const view: EntityView = { id: entity }
+            for (const fn of q.onRemoveFns) fn(view)
+          }
+        }
+      }
+      arch.entities.delete(entity)
+    }
+    entityArchetype.delete(entity)
+    alive.delete(entity)
+    viewCache.delete(entity)
+    sigEntityDespawned.emit(entity)
+    wakeDriver()
+  }
+
   function transition(from: ArchetypeBucket, name: string, adding: boolean): ArchetypeBucket {
     const edges = adding ? from.addEdges : from.removeEdges
     let to = edges.get(name)
@@ -721,6 +763,15 @@ export function createWorld(options: WorldOptions = {}): World {
     const prev = entityArchetype.get(entity)
     if (prev === next) return
     structEpoch++
+    structuralDepth++
+    try {
+      moveEntityInner(entity, prev, next)
+    } finally {
+      structuralDepth--
+    }
+  }
+
+  function moveEntityInner(entity: Entity, prev: ArchetypeBucket | undefined, next: ArchetypeBucket): void {
     if (prev) prev.entities.delete(entity)
     next.entities.add(entity)
     entityArchetype.set(entity, next)
@@ -807,13 +858,17 @@ export function createWorld(options: WorldOptions = {}): World {
       // Plain loops, not some/every: those allocate a closure per call, and
       // this runs once per candidate entity on every filtered read (WS-5 A1).
       case 'or': {
+        // Length read once, as some() does: children a predicate appends
+        // mid-read are not evaluated in this read.
         const children = node.children
-        for (let i = 0; i < children.length; i++) if (evalEntity(children[i]!, entity)) return true
+        const n = children.length
+        for (let i = 0; i < n && i < children.length; i++) if (evalEntity(children[i]!, entity)) return true
         return false
       }
       case 'and': {
         const children = node.children
-        for (let i = 0; i < children.length; i++) if (!evalEntity(children[i]!, entity)) return false
+        const n = children.length
+        for (let i = 0; i < n && i < children.length; i++) if (!evalEntity(children[i]!, entity)) return false
         return true
       }
       case 'added': return inWindow(addedStamps, node.type.name, entity)
@@ -951,9 +1006,9 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function storeFor<T>(type: ComponentType<T>): Map<Entity, T> {
     const cached = storeByType.get(type as ComponentType<unknown>)
-    if (cached !== undefined) return cached as Map<Entity, T>
+    if (cached !== undefined && cached.version === storesVersion) return cached.store as Map<Entity, T>
     const s = storeForSlow(type)
-    storeByType.set(type as ComponentType<unknown>, s as Map<Entity, unknown>)
+    storeByType.set(type as ComponentType<unknown>, { version: storesVersion, store: s as Map<Entity, unknown> })
     return s
   }
 
@@ -1515,7 +1570,7 @@ export function createWorld(options: WorldOptions = {}): World {
     const result: QueryResult = {
       get entities() {
         if (disposed) return []
-        if (!needsEntityFilter && cachedViews !== null && cachedEpoch === structEpoch) {
+        if (!needsEntityFilter && structuralDepth === 0 && cachedViews !== null && cachedEpoch === structEpoch) {
           return cachedViews.slice()
         }
         // Indexed over the length read up front: membership changes made
@@ -1539,7 +1594,7 @@ export function createWorld(options: WorldOptions = {}): World {
         } finally {
           if (needsEntityFilter) leaveWindow()
         }
-        if (!needsEntityFilter) {
+        if (!needsEntityFilter && structuralDepth === 0) {
           cachedViews = out
           cachedEpoch = structEpoch
           return out.slice()
@@ -1612,17 +1667,22 @@ export function createWorld(options: WorldOptions = {}): World {
       const id = nextId++
       alive.add(id)
       structEpoch++
-      // new entity enters empty archetype
-      emptyArch.entities.add(id)
-      entityArchetype.set(id, emptyArch)
-      for (const q of queries) {
-        if (q.matchingArchetypes.has(emptyArch)) {
-          q.structuralMembers.add(id)
-          if (q.onAddFns.size > 0) {
-            const view = makeView(id)
-            for (const fn of q.onAddFns) fn(view)
+      structuralDepth++
+      try {
+        // new entity enters empty archetype
+        emptyArch.entities.add(id)
+        entityArchetype.set(id, emptyArch)
+        for (const q of queries) {
+          if (q.matchingArchetypes.has(emptyArch)) {
+            q.structuralMembers.add(id)
+            if (q.onAddFns.size > 0) {
+              const view = makeView(id)
+              for (const fn of q.onAddFns) fn(view)
+            }
           }
         }
+      } finally {
+        structuralDepth--
       }
       if (components) {
         for (const [type, value] of iterateBag(components)) {
@@ -1636,37 +1696,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     despawn(entity: Entity): void {
       if (!alive.has(entity)) return
-      const arch = entityArchetype.get(entity)
-      if (arch) {
-        // SPEC §2.10: componentRemoved fires before the bag is released.
-        if (sigComponentRemoved.size > 0) {
-          for (const name of arch.types) {
-            const t = typeRegistry.get(name)
-            if (t) sigComponentRemoved.emit({ entity, type: t })
-          }
-        }
-        for (const name of arch.types) {
-          record('removed', name, entity)
-          stores.get(name)?.delete(entity)
-        }
-        // fire onRemove hooks for queries this entity was in
-        for (const q of queries) {
-          if (q.matchingArchetypes.has(arch)) {
-            q.structuralMembers.delete(entity)
-            if (q.onRemoveFns.size > 0) {
-              const view: EntityView = { id: entity }
-              for (const fn of q.onRemoveFns) fn(view)
-            }
-          }
-        }
-        arch.entities.delete(entity)
-      }
-      entityArchetype.delete(entity)
-      alive.delete(entity)
-      viewCache.delete(entity)
       structEpoch++
-      sigEntityDespawned.emit(entity)
-      wakeDriver()
+      structuralDepth++
+      try {
+        despawnInner(entity)
+      } finally {
+        structuralDepth--
+      }
     },
 
     isAlive(entity: Entity): boolean {
@@ -2110,10 +2146,17 @@ export function createWorld(options: WorldOptions = {}): World {
         bus.putBackPending(abandoned)
         throw cause
       }
-      applySnapshot(stateCtx, s, clock)
-      // Every store Map and archetype bucket was replaced.
-      storeByType.clear()
+      // Every store Map and archetype bucket is replaced; query hooks fire
+      // while membership is rebuilt, so nothing is cached until it is done
+      // (and a throw part-way leaves no stale cache behind).
       structEpoch++
+      structuralDepth++
+      try {
+        applySnapshot(stateCtx, s, clock)
+      } finally {
+        structuralDepth--
+        structEpoch++
+      }
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()

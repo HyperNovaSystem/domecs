@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
-import { And, Has, Not } from '../src/query.js'
+import { And, Has, Not, Where } from '../src/query.js'
 import { entry } from '../src/types.js'
 import { createWorld } from '../src/world.js'
 
@@ -113,5 +113,82 @@ describe('archetype transition edges', () => {
     expect(onlyB.entities).toEqual([])
     w.removeComponent(y, A)
     expect(onlyB.entities.map((e) => e.id)).toEqual([y])
+  })
+})
+
+// Codex review of the first A1 commit: a query hook can run while a
+// structural change is half-applied, and restore replaces store Maps while
+// hooks fire. Nothing read in that state may be cached or served stale.
+describe('caches during structural changes and restore', () => {
+  it('restore hooks read and write the restored stores', () => {
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(A, { n: 1 })])
+    const q = w.query([A])
+    const snap = w.snapshot()
+    w.getComponent(e, A)!.n = 9
+    void q.entities // warm the result cache
+    const seen: number[] = []
+    q.onAdd((v) => {
+      seen.push(w.getComponent(v.id, A)!.n)
+      w.getComponent(v.id, A)!.n = 5
+    })
+    w.restore(snap)
+    expect(seen).toEqual([1])
+    expect(w.getComponent(e, A)!.n).toBe(5)
+    expect(nOf(q)).toBe(5)
+  })
+
+  it('a hook that throws during restore leaves no stale cache behind', () => {
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(A, { n: 1 })])
+    const q = w.query([A])
+    w.getComponent(e, A)!.n = 2
+    const snap = w.snapshot()
+    w.getComponent(e, A)!.n = 1
+    void q.entities
+    w.getComponent(e, A) // warm the store cache
+    const off = q.onAdd(() => {
+      throw new Error('hook failed')
+    })
+    expect(() => w.restore(snap)).toThrow('hook failed')
+    off()
+    expect(w.getComponent(e, A)!.n).toBe(2)
+    expect(nOf(q)).toBe(2)
+  })
+
+  it("an onAdd hook reading another query never caches its half-updated membership", () => {
+    const w = createWorld({ headless: true })
+    const a = w.query([A])
+    const b = w.query([A])
+    a.onAdd(() => void b.entities)
+    const e = w.spawn([entry(A, { n: 1 })])
+    expect(b.size).toBe(1)
+    expect(b.entities.map((v) => v.id)).toEqual([e])
+  })
+
+  it('an onRemove hook during despawn sees the entity already gone', () => {
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(A, { n: 1 })])
+    const q = w.query([A])
+    void q.entities
+    let during: number[] | null = null
+    q.onRemove(() => {
+      during = q.entities.map((v) => v.id)
+    })
+    w.despawn(e)
+    expect(during).toEqual([])
+    expect(q.entities).toEqual([])
+  })
+
+  it('children a predicate appends mid-read are not evaluated in that read', () => {
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(A, { n: 1 })])
+    const node = And(
+      Where(A, () => {
+        ;(node as unknown as { children: unknown[] }).children.push(Where(A, () => false))
+        return true
+      }),
+    )
+    expect(w.query(node).entities.map((v) => v.id)).toEqual([e])
   })
 })
