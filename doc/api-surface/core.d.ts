@@ -1520,6 +1520,14 @@ export interface ArchetypeBucket {
     readonly key: string;
     readonly types: Set<string>;
     readonly entities: SortedIdSet;
+    /**
+     * WS-5 A1: archetype transition edges, the bucket reached by adding or
+     * removing one component name, filled on first use. Buckets are only ever
+     * discarded all together (restore), so an edge never points at a bucket
+     * that is no longer in use.
+     */
+    readonly addEdges: Map<string, ArchetypeBucket>;
+    readonly removeEdges: Map<string, ArchetypeBucket>;
 }
 export interface CompiledQuery {
     id: number;
@@ -1563,6 +1571,12 @@ export interface StepClock {
 export interface WorldStateCtx {
     alive: Set<Entity>;
     stores: Map<string, Map<Entity, unknown>>;
+    /**
+     * Called whenever restore replaces or clears store Maps, before any
+     * callback can run, so the world's type-identity store cache never hands
+     * out a detached Map (WS-5 A1).
+     */
+    storesReplaced(): void;
     typeRegistry: Map<string, ComponentType<unknown>>;
     archetypes: Map<string, ArchetypeBucket>;
     entityArchetype: Map<Entity, ArchetypeBucket>;

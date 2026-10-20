@@ -6,6 +6,18 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Performance
+
+- `@domecs/core` hot paths no longer pay constant overheads per tick (O-77).
+  Structural live queries reuse their result until membership changes,
+  stores are found by type identity, add/remove follow archetype edges,
+  the change-mark log no longer reallocates every tick, and filtered reads
+  stop allocating per entity. On the bench, a soak with a change reader
+  allocates 88 KB per tick instead of 833 KB and runs about 20% faster;
+  windowed about 20–28%. Behavior is unchanged: `query().entities` still
+  returns a fresh array on every read, and query hooks that run during a
+  spawn, despawn, move or restore see current state.
+
 ### Fixed
 
 - `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
