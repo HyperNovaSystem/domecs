@@ -1,0 +1,6 @@
+{
+  "id": "change-reader",
+  "title": "A change-driven index",
+  "traps": ["markChanged after in-place mutation", "OnChanged readers", "removal handling"],
+  "prompt": "Write src/sim.mjs, an ES module that uses the DOMECS packages installed in node_modules (start from @domecs/core). It must export:\n\n- `Health`: a component type whose value is `{ hp: number }`.\n- `LowHealth`: a resource whose value is an array of entity ids, sorted ascending.\n- `createSim()`: returns a new headless world with 20 entities holding `Health`, entity k (in spawn order, k = 0..19) starting with `hp = 10 + k`, and the `LowHealth` resource holding the ids whose `hp` is below 10 (none at the start).\n- `damage(world, id, amount)`: subtracts `amount` from that entity's `hp` in place.\n- `heal(world, id, amount)`: adds `amount` to that entity's `hp` in place.\n\nAfter any number of `damage`/`heal` calls (and `world.despawn(id)` calls) followed by one `world.step(1/60)`, `world.getResource(LowHealth)` must list exactly the live entities with `hp < 10`. Keep `LowHealth` up to date with a reactive system (`schedule: 'reactive'`) that reacts to changes in `Health`, rather than a system that rescans every entity on every tick. Do not modify node_modules. You can run your code with node to check it."
+}

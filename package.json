@@ -22,6 +22,8 @@
     "bench:profile": "pnpm --filter @domecs/core build && node bench/profile.mjs",
     "test:bench": "node --test test/bench-measure.test.mjs",
     "test:legibility": "node --test test/agent-legibility.test.mjs",
+    "eval": "node evals/run.mjs",
+    "eval:selftest": "node evals/selftest.mjs",
     "test:plantroom": "node --test example/plantroom/test/episode.test.mjs",
     "plantroom:dev": "pnpm --filter @domecs/example-plantroom dev",
     "plantroom:build": "pnpm --filter @domecs/example-plantroom build",

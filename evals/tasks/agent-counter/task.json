@@ -1,0 +1,6 @@
+{
+  "id": "agent-counter",
+  "title": "Agent-operable counter with a validated command",
+  "traps": ["act already ticks", "schema on command events", "reset restores baseline"],
+  "prompt": "Write src/sim.mjs, an ES module that uses the DOMECS packages installed in node_modules (start from @domecs/core). It must export:\n\n- `Counter`: a component type whose value is `{ n: number }`.\n- `Add`: a command event whose payload is `{ by: number }`. A payload with a non-number `by`, or with any other field, must be rejected by the command boundary itself, not by your handler.\n- `createSim()`: returns an agent bridge over a new headless world that has exactly one entity holding `Counter` with `n = 0`, a system that adds `by` to `n` when `Add` arrives, and a baseline captured at that starting state.\n- `count(world)`: returns the current `n` of that entity.\n\nA caller will drive it like this: `const bridge = createSim(); bridge.act(Add, { by: 3 }); count(bridge.world) // 3`. One `act` must apply the command; the caller will not call `step()` in between. `bridge.reset()` must bring `n` back to 0. Do not modify node_modules. You can run your code with node to check it."
+}
