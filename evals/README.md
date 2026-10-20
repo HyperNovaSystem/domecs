@@ -39,7 +39,7 @@ path is in the results, so you can read what the agent wrote and the
 grader's TAP output (`grader-result.tap`). Concurrent runs do not share any
 scratch state.
 
-## Baseline (2026-10-20, engine 2.0.0 at main 6df0de1, k=3)
+## Baseline (2026-10-20, engine from main e1c308f, runner 6df0de1, k=3)
 
 | Task | Claude Code (subscription) | Codex (ChatGPT plan) |
 |---|---|---|
