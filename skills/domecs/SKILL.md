@@ -80,6 +80,10 @@ bridge.reset()                         // episode boundary
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
+- **determinism is on you** — in systems and handlers, never `Math.random`
+  (use `world.rand`), `Date.now`/`performance.now` (use `world.time`), timers
+  or `await`, or DOM/network reads (bring data in with `action`/`setInput`);
+  nothing checks this, so verify by replaying the same seed and actions
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
 - **loadIfPresent** for first-run boot (`@domecs/persist`)

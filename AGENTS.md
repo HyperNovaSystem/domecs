@@ -92,6 +92,24 @@ agent.reset()                        // back to baseline for next episode
    do not wrap everything in try/catch unless the API throws by contract.
 8. **One naming language.** Use `getResource`, `listEntities`, `OnChanged`,
    `startLoop`, `stepOnce` — not legacy aliases from training data.
+9. **Systems and action handlers are deterministic.** Nothing checks this at
+   run time, so these are bans, not warnings. Inside a system, a reactive or
+   event handler, or a `Where` predicate, do not use:
+   - `Math.random()`: use `world.rand`.
+   - `Date.now()`, `new Date()`, `performance.now()`: use `world.time`
+     (`tick`, `elapsed`, `delta`).
+   - `setTimeout`, `setInterval`, `await` or promises: a tick is
+     synchronous, so schedule with `fixed` systems, tick counts or events.
+   - The DOM, `window`, layout, `navigator`, storage or the network: bring
+     outside data in through `world.action`, events, `setInput` or a
+     resource written outside the tick.
+   - Object identity that must survive `restore()`: keep entity ids, not
+     component objects (restore builds fresh ones).
+   - `Math.sin`/`cos`/`exp`/`log`/`pow` when results must match across JS
+     engines (SPEC §8).
+
+   Check it the only way that works: replay the same seed and actions twice
+   and compare `JSON.stringify(snapshot())`.
 
 ---
 
