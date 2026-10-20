@@ -16,8 +16,11 @@
     "doctest": "node scripts/doctest.mjs",
     "doctest:check": "node --test test/doctest.test.mjs",
     "publish:npm": "pnpm -r --filter \"./packages/*\" build && pnpm -r --filter \"./packages/*\" publish --access public",
-    "bench": "node --expose-gc bench/run.mjs",
-    "bench:write": "node --expose-gc bench/run.mjs --write",
+    "bench": "pnpm --filter @domecs/core build && node --expose-gc bench/run.mjs",
+    "bench:write": "pnpm --filter @domecs/core build && node --expose-gc bench/run.mjs --write",
+    "bench:browser": "pnpm --filter @domecs/core --filter @domecs/dom build && node bench/browser/run.mjs",
+    "bench:profile": "pnpm --filter @domecs/core build && node bench/profile.mjs",
+    "test:bench": "node --test test/bench-measure.test.mjs",
     "test:legibility": "node --test test/agent-legibility.test.mjs",
     "eval": "node evals/run.mjs",
     "eval:selftest": "node evals/selftest.mjs",
@@ -35,6 +38,7 @@
     "@types/node": "^22.10.1",
     "jscodeshift": "^17.3.0",
     "koota": "0.6.6",
+    "playwright-core": "1.63.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.9"
   }

@@ -63,6 +63,9 @@ jobs:
       - name: Doctest harness unit tests
         run: pnpm doctest:check
 
+      - name: Bench statistics unit tests
+        run: pnpm test:bench
+
       - name: Release validation
         run: pnpm test:release
 

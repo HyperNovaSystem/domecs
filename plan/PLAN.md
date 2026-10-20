@@ -103,9 +103,9 @@ bet. No date-driven milestones — the order is the only ordering.
   `domUpdates` work-equivalence check, real coalescing pressure in the
   telemetry workload.
 - [ ] Multi-machine stability pass (re-run compare on second host / CI).
-- [ ] Memory metrics: heap growth / GC pressure sampling, per-frame DOM
-  mount/update/remove split, dropped-frame tracking (promised below, not
-  yet recorded by the suite).
+- [x] Memory metrics: allocation per tick and GC count/time for every
+  measured loop, the DOM mount/update/remove split, and Long Animation
+  Frame counts in the browser bench (O-76, 2026-10-20).
 - [x] README product claims stay gated — no unearned win language.
 
 Workloads:
@@ -214,9 +214,10 @@ Decisions (2026-10-20):
 
 Phase 1 (committed):
 
-- [ ] Honest bench: build first, the like-for-like soak, projection measured
-  in a real browser, allocation/heap metrics (the WS-1 open items), and the
-  frozen verdict protocol.
+- [x] Honest bench: build first, the like-for-like soak, projection measured
+  in a real browser, allocation/heap metrics, and the frozen verdict
+  protocol (O-76). Baseline: soak 1.10× Koota, windowed 1.43×, browser
+  frame 1.13×. Multi-machine runs are still open.
 - [ ] Port the prototype's overhead cuts to `src`. Query caching is for
   structural queries only.
 - [ ] First-hour traps:

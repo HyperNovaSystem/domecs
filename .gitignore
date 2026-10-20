@@ -167,5 +167,5 @@ plan/*
 # Machine-local bench output (regenerate with pnpm bench:write)
 bench/results.json
 
-# Eval scratch (packed tarball + template project)
-evals/.cache/
+# CPU profiles from pnpm bench:profile
+bench/profiles/

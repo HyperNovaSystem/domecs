@@ -80,6 +80,16 @@ bridge.reset()                         // episode boundary
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
+- **determinism is on you** — nothing checks it, so verify by replaying the
+  same seed and actions. In systems, handlers and `Where` predicates, never:
+  - `Math.random` (use `world.rand`);
+  - `Date.now`, `new Date()`, `performance.now` (use `world.time`);
+  - timers, `await` or promises;
+  - DOM, `window`, storage or network reads (bring data in with `action`,
+    events or `setInput`);
+  - component objects kept across `restore()` (keep entity ids);
+  - `Math.sin`/`cos`/`tan`/`exp`/`log`, or non-integer `pow`, where results
+    must match across JS engines
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
 - **loadIfPresent** for first-run boot (`@domecs/persist`)
