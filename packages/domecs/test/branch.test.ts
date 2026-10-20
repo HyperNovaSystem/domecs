@@ -5,6 +5,7 @@ import {
   createWorld,
   defineComponent,
   defineEvent,
+  defineResource,
   entry,
   hashSnapshot,
   runBranch,
@@ -129,6 +130,42 @@ describe('createBranch (§7.2)', () => {
     // At tick 0 the source had not run them either.
     const atZero = source().snapshot({ pendingEvents: true })
     expect(createBranch(withOnce, atZero).ok).toBe(true)
+  })
+
+  it('once gates are evaluated against the restored state (AGENTS.md: gate boot work so it is not re-run)', () => {
+    const Booted = defineResource<{ done: boolean }>('BrBooted', { default: { done: false } })
+    const Armed = defineResource<{ on: boolean }>('BrArmed', { default: { on: false } })
+    const withGated = (w: World): void => {
+      w.register(Booted, Armed)
+      // Boot work gated on snapshotted state: done in the source, so a branch
+      // must not refuse it (it will not run).
+      w.system('boot', { schedule: 'once', enabled: () => !w.getResource(Booted)!.done }, () => {
+        w.setResource(Booted, { done: true })
+      })
+    }
+    const live = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    withGated(live)
+    live.setResource(Armed, { on: true })
+    live.stepOnce()
+    live.stepOnce()
+    expect(live.getResource(Booted)!.done).toBe(true)
+    const snap = live.snapshot({ pendingEvents: true })
+    expect(createBranch(withGated, snap).ok).toBe(true)
+
+    // A gate that is false on the empty setup world but true once the source's
+    // state is restored would run on the branch's first step: refused.
+    const armedOnce = (w: World): void => {
+      withGated(w)
+      w.system('arm', { schedule: 'once', enabled: () => w.getResource(Armed)!.on }, () => {})
+    }
+    expect(createBranch(armedOnce, snap)).toEqual({ ok: false, error: { kind: 'once_systems', names: ['arm'] } })
+
+    // A gate that throws is not proven idle: refused.
+    const throwing = (w: World): void => {
+      withGated(w)
+      w.system('odd', { schedule: 'once', enabled: () => { throw new Error('gate') } }, () => {})
+    }
+    expect(createBranch(throwing, snap)).toEqual({ ok: false, error: { kind: 'once_systems', names: ['odd'] } })
   })
 
   it('a snapshot without a fixed backlog carries no fixedStep: a source at 1/30 needs the option', () => {

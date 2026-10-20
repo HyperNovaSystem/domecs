@@ -36,6 +36,12 @@ export interface ActTap {
     readonly inTick: boolean;
     /** The scale `world.resume()` would return to (meaningful while paused). */
     readonly resumeScale: number;
+    /**
+     * Names of the `once` systems the next full step would run: not yet run,
+     * enabled, and an `enabled` gate (evaluated now) that does not return
+     * `false`. A gate that throws counts as due.
+     */
+    onceDue(): string[];
 }
 export declare const ACT_TAP: unique symbol;
 /** The tap of a world made by `createWorld`; `undefined` for anything else. */
@@ -223,9 +229,12 @@ export type BranchError = {
  * - A throw from `setup` is a bug and propagates.
  * - A throw from `restore` (a snapshot that fails validation, an unknown
  *   pending event) is `restore_failed` with the serialized cause.
- * - An enabled `once` system registered by `setup` when `from.tick > 0` is
- *   `once_systems`: the branch would run it on its first step while the
- *   source, past tick 0, already had (`once` run state is not snapshotted).
+ * - A `once` system registered by `setup` that would run on the branch's
+ *   first step, when `from.tick > 0`, is `once_systems`: the source, past
+ *   tick 0, already had (`once` run state is not snapshotted). It is checked
+ *   after the restore, so an `enabled` gate reads the source's state: boot
+ *   work gated on snapshotted state is accepted. A gate that throws counts
+ *   as one that would run.
  *
  * Take `from` with `snapshot({ pendingEvents: true })` and without
  * snapshot-rewriting plugins (redaction), or the branch starts from a

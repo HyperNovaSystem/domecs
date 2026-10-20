@@ -2594,6 +2594,20 @@ export function createWorld(options: WorldOptions = {}): World {
     get resumeScale() {
       return preResumeScale
     },
+    onceDue() {
+      const names: string[] = []
+      for (const s of scheduler.systemsByMode('once')) {
+        if (s.ranOnce || s.removed || !s.enabled) continue
+        let gatedOff = false
+        try {
+          gatedOff = s.def.enabled !== undefined && s.def.enabled() === false
+        } catch {
+          // The step would throw from this gate too: not proven idle.
+        }
+        if (!gatedOff) names.push(s.name)
+      }
+      return names
+    },
   }
   Object.defineProperty(world, ACT_TAP, { value: tap })
 

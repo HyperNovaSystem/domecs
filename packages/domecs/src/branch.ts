@@ -2,6 +2,7 @@
 // cloned; a branch is a fresh headless world built by the source's setup and
 // restored from one of its snapshots, then stepped without touching the live
 // world (or its views).
+import { actTapOf } from './act-tap.js'
 import type { SystemicFault } from './errors.js'
 import { actLogHash, applyActFrame, checkLog, decodeInput, type ActLog, type ActLogFrame, type ReplayError } from './replay.js'
 import { err, normalizeCause, ok, type JsonValue, type Result, type SerializedError } from './result.js'
@@ -49,9 +50,12 @@ export type BranchError =
  * - A throw from `setup` is a bug and propagates.
  * - A throw from `restore` (a snapshot that fails validation, an unknown
  *   pending event) is `restore_failed` with the serialized cause.
- * - An enabled `once` system registered by `setup` when `from.tick > 0` is
- *   `once_systems`: the branch would run it on its first step while the
- *   source, past tick 0, already had (`once` run state is not snapshotted).
+ * - A `once` system registered by `setup` that would run on the branch's
+ *   first step, when `from.tick > 0`, is `once_systems`: the source, past
+ *   tick 0, already had (`once` run state is not snapshotted). It is checked
+ *   after the restore, so an `enabled` gate reads the source's state: boot
+ *   work gated on snapshotted state is accepted. A gate that throws counts
+ *   as one that would run.
  *
  * Take `from` with `snapshot({ pendingEvents: true })` and without
  * snapshot-rewriting plugins (redaction), or the branch starts from a
@@ -70,33 +74,27 @@ export function createBranch<T = void>(
     ...(options.seed !== undefined ? { seed: options.seed } : {}),
   })
   const out = setup(world)
-  if (snapshotTick(from) > 0) {
-    const names = world
-      .describe()
-      .systems.filter((s) => s.schedule === 'once' && s.enabled)
-      .map((s) => s.name)
-    if (names.length > 0) return err({ kind: 'once_systems', names })
-  }
   try {
     world.restore(from)
   } catch (cause) {
     return err({ kind: 'restore_failed', cause: normalizeCause(cause) })
+  }
+  // After the restore, so `enabled` gates see the source's state.
+  if (world.time.tick > 0) {
+    const names = actTapOf(world)!.onceDue()
+    if (names.length > 0) return err({ kind: 'once_systems', names })
   }
   world.setScale(options.scale ?? 1)
   return ok({ world, setup: out })
 }
 
 // `from` is caller data that may be malformed (restore reports that); read
-// the two fields createBranch needs before the restore defensively.
+// the field createBranch needs before the restore defensively.
 function snapshotFixedStep(from: WorldSnapshot): number | undefined {
   const v: unknown = (from as { fixedStep?: unknown } | null)?.fixedStep
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
 }
 
-function snapshotTick(from: WorldSnapshot): number {
-  const v: unknown = (from as { tick?: unknown } | null)?.tick
-  return typeof v === 'number' ? v : 0
-}
 
 /** Options for {@link runBranch}. */
 export interface RunBranchOptions {

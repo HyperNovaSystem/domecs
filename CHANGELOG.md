@@ -53,6 +53,11 @@ All notable changes to DOMECS are documented here. The format is based on
   type holds the name `SceneMember` (or `Parent`, with parent keys) spawns
   nothing and reports one problem. Before, it threw part-way through and
   left a bare entity behind. (2.3 release candidate)
+- `@domecs/core`: `createBranch` checks for `once` systems after restoring
+  the snapshot and evaluates their `enabled` gates there. Before, it read only
+  each system's static flag on the empty setup world, so boot work gated on
+  snapshotted state (as AGENTS.md advises) was refused as `once_systems`.
+  A gate that throws counts as due. (O-81, 2.1 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

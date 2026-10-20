@@ -1785,7 +1785,7 @@ interface BranchOptions {
 }
 type BranchError =
   | { kind: 'restore_failed'; cause: SerializedError }   // restore threw (never thrown)
-  | { kind: 'once_systems'; names: readonly string[] }   // enabled `once` systems and from.tick > 0
+  | { kind: 'once_systems'; names: readonly string[] }   // once systems due on the first step and from.tick > 0
 
 interface RunBranchOptions {
   readonly steps: number
@@ -1816,8 +1816,10 @@ only when it owes fixed steps, and never the scale. For a paused source pass
 the scale it resumes to and `pause()` the branch (`scale: 0` resumes to 1).
 A throw from
 `setup` is a bug and propagates; a throw from `restore` is `restore_failed`.
-If `setup` registers an enabled `once` system and `from.tick > 0`, the branch
-would run it while the source already had, so it is `once_systems`. Take
+If `setup` registers a `once` system that would run on the branch's first step
+and `from.tick > 0`, the branch would run it while the source already had, so
+it is `once_systems`. It is checked after the restore, so an `enabled` gate
+that reads snapshotted state (boot work marked done) is accepted. Take
 `from` with `snapshot({ pendingEvents: true })` and without snapshot-rewriting
 plugins, and register the same systems in the same order as the source:
 nothing can check that.

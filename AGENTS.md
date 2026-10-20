@@ -263,7 +263,8 @@ if (run.ok) console.log(run.value.stoppedBy, run.value.samples, run.value.finalH
 Compare branches (or a branch with the live world) by `finalHash` / `hashes`
 (strict) and by probe samples. Call `runBranch` again to extend a branch.
 `once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
-gate boot work so it is not re-run, or leave it out of the branch setup.
+gate boot work on snapshotted state so it is not re-run (the gate is read
+after the restore), or leave it out of the branch setup.
 Neither `fixedStep` (only with a fixed backlog) nor scale is in the snapshot:
 pass the source's `time.fixedStep` and `time.scale` (for a paused source, its
 resume scale, then `pause()` the branch). A probe that

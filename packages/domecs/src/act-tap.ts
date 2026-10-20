@@ -41,6 +41,12 @@ export interface ActTap {
   readonly inTick: boolean
   /** The scale `world.resume()` would return to (meaningful while paused). */
   readonly resumeScale: number
+  /**
+   * Names of the `once` systems the next full step would run: not yet run,
+   * enabled, and an `enabled` gate (evaluated now) that does not return
+   * `false`. A gate that throws counts as due.
+   */
+  onceDue(): string[]
 }
 
 export const ACT_TAP: unique symbol = Symbol('domecs.actTap')
