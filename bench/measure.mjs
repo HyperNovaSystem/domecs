@@ -34,8 +34,10 @@ export function measureTicks(tickFn, ticks) {
     tickFn()
     samples.push(performance.now() - t0)
   }
-  const gcData = profiler?.stop()
+  // Read the endpoint before stop(): building the GC report allocates, and
+  // those bytes are not the workload's.
   const endUsed = v8.getHeapStatistics().used_heap_size
+  const gcData = profiler?.stop()
   const { p50, p95 } = percentiles(samples)
   const row = { p50Ms: p50, p95Ms: p95 }
   if (gcData) {

@@ -16,7 +16,7 @@
  *   CHROMIUM_PATH=/path/to/chrome node bench/browser/run.mjs
  */
 import { createServer } from 'node:http'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
@@ -78,7 +78,9 @@ const engineRows = engines.map((engine) => {
     scriptP95Ms: median(rs.map((r) => r.scriptP95Ms)),
     frameP50Ms: median(rs.map((r) => r.frameP50Ms)),
     frameP95Ms: median(rs.map((r) => r.frameP95Ms)),
-    longAnimationFrames: rs.reduce((a, r) => a + r.longAnimationFrames, 0),
+    longAnimationFrames: rs.every((r) => r.longAnimationFrames == null)
+      ? null
+      : rs.reduce((a, r) => a + (r.longAnimationFrames ?? 0), 0),
     domSplit: rs[0].domSplit,
     rowsMounted: rs[0].rowsMounted,
   }
@@ -87,10 +89,12 @@ const engineRows = engines.map((engine) => {
 const verdict = {}
 for (const other of ['koota', 'vanilla']) {
   const ratios = byTrial.map((rows) => rows.domecs.frameP95Ms / rows[other].frameP95Ms)
+  // Full precision through the decision (ciHigh); rounded copies for display.
   const ci = bootstrapMedianCI(ratios)
   verdict[`frame_domecs_vs_${other}_p95`] = {
     median: Number(ci.median.toFixed(3)),
     ci95: ci.ci95.map((x) => Number(x.toFixed(3))),
+    ciHigh: ci.ci95[1],
     range: [Math.min(...ratios), Math.max(...ratios)].map((x) => Number(x.toFixed(3))),
   }
 }
@@ -104,11 +108,14 @@ const work = (r, e) => ({
   update: e === 'domecs' ? r.domSplit.update - r.domSplit.create : r.domSplit.update,
   remove: r.domSplit.remove,
 })
-const works = engineRows.map((r) => JSON.stringify(work(r, r.engine)))
-const workEqual = works.every((w) => w === works[0]) && engineRows.every((r) => r.rowsMounted === windowSize)
+// Checked in every trial; a failure voids any win.
+const workEqual = byTrial.every((rows) => {
+  const works = engines.map((e) => JSON.stringify(work(rows[e], e)))
+  return works.every((w) => w === works[0]) && engines.every((e) => rows[e].rowsMounted === windowSize)
+})
 
 const wins = Object.entries(verdict)
-  .filter(([, v]) => v.ci95[1] <= 0.7)
+  .filter(([, v]) => workEqual && v.ciHigh <= 0.7)
   .map(([k, v]) => `${k} (median ${v.median}×, CI ${v.ci95[0]}–${v.ci95[1]}×)`)
 
 const summary = {
@@ -137,9 +144,17 @@ for (const r of engineRows) {
 /** Static server for the repo root, so the page can import dist and koota. */
 function serveRepo() {
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.map': 'application/json' }
+  const realRoot = realpathSync(root)
   const server = createServer((req, res) => {
-    const path = normalize(join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname)))
-    if (!path.startsWith(root + sep) || !existsSync(path) || !statSync(path).isFile()) {
+    let path
+    try {
+      // realpath, so a symlink inside the repo cannot serve a file outside it.
+      path = realpathSync(normalize(join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname))))
+    } catch {
+      res.writeHead(404).end() // malformed URL or missing file
+      return
+    }
+    if (!path.startsWith(realRoot + sep) || !statSync(path).isFile()) {
       res.writeHead(404).end()
       return
     }

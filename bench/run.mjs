@@ -7,18 +7,19 @@
  * URL rather than package name (avoids resolving @domecs scope to src/).
  *
  * Methodology (frozen 2026-10-20, PLAN WS-5 A0):
- * - `pnpm bench` builds @domecs/core first, and this script refuses a dist
- *   older than src (pass --allow-stale to override), so numbers always
- *   describe the current source.
+ * - `pnpm bench` builds @domecs/core first. Run directly, this script
+ *   refuses a dist whose index.js is older than any file in src (an mtime
+ *   heuristic; --allow-stale overrides). The build-first script is the real
+ *   guarantee.
  * - Every workload runs `--warmup` unmeasured ticks first (default 30) so
  *   p50/p95 describe warmed steady state, not JIT/IC cold-start.
- * - Every measured loop goes through measureTicks() (bench/measure.mjs):
+ * - Every measured tick loop goes through measureTicks() (bench/measure.mjs):
  *   per-tick timing plus, via v8.GCProfiler, allocation per tick and the GC
  *   count and pause time inside the window.
  * - Soak is like-for-like: each engine records every change and a reader
  *   consumes them (DOMECS markChanged + an OnChanged reader; Koota
- *   changeDetection 'always' + a Changed query). `changesDelivered` must
- *   match across the two, or the timings compare different work.
+ *   changeDetection 'auto' + a world.onChange reader). In every trial both
+ *   must deliver entities × ticks changes, or no win is declared.
  * - When Node is started with --expose-gc, a full GC runs between workloads
  *   so one engine's garbage is not attributed to the next; `gcBetween` in
  *   the summary records whether that isolation was active. All engines
@@ -516,8 +517,10 @@ function summarizeComparison(compareRows, trials) {
     koota: pick('koota-windowed'),
     signals: pick('signals-windowed'),
   }
-  const ratio = (a, b) =>
-    a && b && b.p95Ms > 0 ? Number((a.p95Ms / b.p95Ms).toFixed(3)) : null
+  // Full precision through the decision; round only for display, so a true
+  // 0.7004 can never round down into a win.
+  const ratio = (a, b) => (a && b && b.p95Ms > 0 ? a.p95Ms / b.p95Ms : null)
+  const round3 = (x) => Number(x.toFixed(3))
 
   const pairs = {
     soak_domecs_vs_koota_p95: ['soak', 'koota-soak'],
@@ -532,16 +535,20 @@ function summarizeComparison(compareRows, trials) {
       .map((rows) => ratio(rows.find((r) => r.workload === a), rows.find((r) => r.workload === b)))
       .filter((r) => r != null)
     const ci = bootstrapMedianCI(rs)
-    verdict[k] = ci
-      ? { median: ci.median, ci95: ci.ci95.map((x) => Number(x.toFixed(3))) }
-      : null
-    verdictRange[k] = rs.length > 0 ? [Math.min(...rs), Math.max(...rs)] : null
+    verdict[k] = ci ? { median: round3(ci.median), ci95: ci.ci95.map(round3), ciHigh: ci.ci95[1] } : null
+    verdictRange[k] = rs.length > 0 ? [round3(Math.min(...rs)), round3(Math.max(...rs))] : null
   }
 
-  // Soak work-equivalence: DOMECS and Koota must deliver the same number of
-  // changes to their readers, or the soak timings compare different work.
-  const soakWorkEqual =
-    soak.domecs != null && soak.koota != null && soak.domecs.changesDelivered === soak.koota.changesDelivered
+  // Work equivalence, checked in every trial: DOMECS and Koota must each
+  // deliver entities × ticks changes to their soak readers, and the three
+  // windowed harnesses must report the same DOM work. A failed check voids
+  // any win, since the timings would compare different work.
+  const soakWorkEqual = trials.every((rows) => {
+    const d = rows.find((r) => r.workload === 'soak')
+    const kt = rows.find((r) => r.workload === 'koota-soak')
+    const expected = d ? d.entities * d.ticks : NaN
+    return d != null && kt != null && d.changesDelivered === expected && kt.changesDelivered === expected
+  })
 
   // Work-equivalence check: the three windowed harnesses must report the
   // same domUpdates for the same logical work, or the timing comparison is
@@ -549,14 +556,19 @@ function summarizeComparison(compareRows, trials) {
   const domUpdateCounts = [windowed.domecs, windowed.koota, windowed.signals]
     .filter(Boolean)
     .map((r) => r.domUpdates)
-  const windowedWorkEqual =
-    domUpdateCounts.length === 3 && domUpdateCounts.every((n) => n === domUpdateCounts[0])
+  const windowedWorkEqual = trials.every((rows) => {
+    const splits = ['windowed', 'koota-windowed', 'signals-windowed']
+      .map((w) => rows.find((r) => r.workload === w)?.domSplit)
+      .map((s) => (s ? JSON.stringify(s) : null))
+    return splits.every((s) => s !== null && s === splits[0])
+  })
 
   // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor, with
   // the bootstrap CI's upper bound under the bar, not just the median.
   const wins = []
   for (const [k, v] of Object.entries(verdict)) {
-    if (v && v.ci95[1] <= 0.7) wins.push(`${k} (median ${v.median}×, CI ${v.ci95[0]}–${v.ci95[1]}×)`)
+    const comparable = k.startsWith('soak_') ? soakWorkEqual : windowedWorkEqual
+    if (v && comparable && v.ciHigh <= 0.7) wins.push(`${k} (median ${v.median}×, CI ${v.ci95[0]}–${v.ci95[1]}×)`)
   }
 
   return {

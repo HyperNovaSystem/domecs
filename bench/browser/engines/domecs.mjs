@@ -24,7 +24,7 @@ export async function setup({ root, n, windowSize }) {
     }
     for (const id of next) {
       if (!visible.has(id)) {
-        world.addComponent(id, Row, { rank: 0, label: String(id) })
+        world.addComponent(id, Row, { rank: 0, label: String(world.getComponent(id, Telemetry).value) })
         visible.add(id)
       } else {
         const r = world.getComponent(id, Row)

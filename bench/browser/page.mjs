@@ -12,13 +12,16 @@ const windowSize = Number(params.get('window') ?? 50)
 const frames = Number(params.get('frames') ?? 300)
 const warmup = Number(params.get('warmup') ?? 60)
 
-const loaf = []
+// Long Animation Frame entries, kept with their start times so only the
+// measured frames count (not page load, setup or warmup).
+const loafEntries = []
+let loafSupported = true
 try {
   new PerformanceObserver((list) => {
-    for (const e of list.getEntries()) loaf.push(e.duration)
+    for (const e of list.getEntries()) loafEntries.push({ start: e.startTime, duration: e.duration })
   }).observe({ type: 'long-animation-frame', buffered: true })
 } catch {
-  // Long Animation Frames unsupported: leave loaf empty.
+  loafSupported = false
 }
 
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
@@ -34,8 +37,11 @@ try {
 
   const script = []
   const frame = []
+  let measuredFrom = 0
+  let measuredTo = 0
   for (let f = 0; f < warmup + frames; f++) {
-    await nextFrame()
+    const frameStart = await nextFrame()
+    if (f === warmup) measuredFrom = frameStart
     const t0 = performance.now()
     harness.tick()
     const t1 = performance.now()
@@ -45,8 +51,14 @@ try {
     if (f >= warmup) {
       script.push(t1 - t0)
       frame.push(t2 - t0)
+      measuredTo = t2
     }
   }
+  // A LoAF entry is delivered after its frame ends: wait a few frames so the
+  // last measured frame's entry arrives before counting.
+  for (let i = 0; i < 3; i++) await nextFrame()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  const loaf = loafEntries.filter((e) => e.start >= measuredFrom && e.start <= measuredTo).map((e) => e.duration)
   const rows = root.children.length
   window.__benchResult = {
     engine,
@@ -57,7 +69,7 @@ try {
     scriptP95Ms: pct(script, 0.95),
     frameP50Ms: pct(frame, 0.5),
     frameP95Ms: pct(frame, 0.95),
-    longAnimationFrames: loaf.length,
+    longAnimationFrames: loafSupported ? loaf.length : null,
     longAnimationFrameMs: Number(loaf.reduce((a, b) => a + b, 0).toFixed(1)),
     domSplit: harness.counts(),
     rowsMounted: rows,

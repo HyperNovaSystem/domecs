@@ -54,24 +54,32 @@ measuring a stale build.
 Frozen 2026-10-20 (PLAN WS-5 A0). Judge optimizations against this protocol,
 not against single runs.
 
-- **Fresh build:** `pnpm bench` builds first, and stale dist is refused.
+- **Fresh build:** `pnpm bench` builds first. Run directly, `bench/run.mjs`
+  refuses a `dist/index.js` older than any file in `src`; that is an mtime
+  heuristic (it misses config changes and deleted sources), so the
+  build-first script is the real guarantee.
 - **Like-for-like soak:** each engine records every change and a reader
   consumes them. DOMECS calls `markChanged` and runs an `OnChanged` reactive
   reader; Koota uses its default `changeDetection: 'auto'` with a
   `world.onChange(Position)` reader (the fastest stable Koota setup we
   found). `compare-summary.soakWorkEqual` asserts both deliver the same
-  number of changes. Before 2026-10-20 the Koota harness tracked no changes
+  number of changes, `entities × ticks`, in every trial. Before 2026-10-20 the Koota harness tracked no changes
   at all: a separate `Changed` query does not switch `auto` tracking on.
 - **Verdict:** per trial, the paired ratio DOMECS p95 / competitor p95. The
   headline is the median ratio with a seeded bootstrap 95% CI over trials
   (default 7); a decisive win needs the CI's upper bound ≤ 0.70.
-  `verdictRange` keeps the per-trial min–max for context. This replaces the
+  Ratios keep full precision through the decision and are rounded only for
+  display. A failed work-equivalence check (soak or windowed, in any trial)
+  voids any win. `verdictRange` keeps the per-trial min–max for context.
+  This replaces the
   2026-10-14 rule ("≤0.70 in every trial"), which let one noisy pairing
   decide the verdict.
-- **Allocation and GC:** every measured loop runs through `measureTicks()`
-  (`bench/measure.mjs`). With `v8.GCProfiler` it reports `allocBytesPerTick`
-  (heap growth plus what each GC inside the window reclaimed), `gcCount` and
-  `gcMs`.
+- **Allocation and GC:** every measured tick loop runs through
+  `measureTicks()` (`bench/measure.mjs`). With `v8.GCProfiler` it reports
+  `allocBytesPerTick` (heap growth plus what each GC inside the window
+  reclaimed; approximate, since the heap also holds the samples array),
+  `gcCount` and `gcMs`. The snapshot workload times `snapshot()` calls and
+  reports no allocation figure.
 - **DOM split:** windowed rows report `domSplit` (create / update / remove)
   as well as the `domUpdates` total.
 - **Warmup:** every workload (including the Koota/signals/plain baselines)
@@ -97,9 +105,13 @@ not against single runs.
   (DOMECS with `@domecs/dom`; Koota and plain JS with hand-written DOM),
   and times each frame's tick plus a forced layout. The page is
   cross-origin isolated so `performance.now()` has 5 µs resolution, not
-  0.1 ms. Long Animation Frames are counted. The same paired-ratio verdict
-  applies, and `workEqual` checks every engine did the same DOM work
-  (DOMECS's first-paint `update` per created row is subtracted).
+  0.1 ms. Long Animation Frames that start inside the measured frames are
+  counted (the runner waits for the last frame's entry). Every engine renders
+  the same text (the row's logical index). The frame time covers script,
+  style and layout, not paint or compositing. The same paired-ratio verdict
+  applies, and `workEqual` checks in every trial that the engines did the
+  same DOM work (DOMECS's first-paint `update` per created row is
+  subtracted).
 - **Snapshot workload:** repeated warmed snapshots (real percentiles), and
   the `deterministic` flag steps the source and the restored twin forward
   together and compares final snapshots and clocks (`elapsed`,

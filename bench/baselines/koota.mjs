@@ -47,6 +47,9 @@ export function runKootaSoak({ entityCount, ticks, warmupTicks = 0 }) {
   changesDelivered = 0
 
   const measured = measureTicks(tickFn, ticks)
+  // Koota registers worlds globally (16 at most): release this one, or GC
+  // cannot reclaim it and later trials run out of worlds.
+  world.destroy()
   return {
     workload: 'koota-soak',
     engine: 'koota',
@@ -99,6 +102,7 @@ export function runKootaWindowed({ entityCount, ticks, windowSize, warmupTicks =
   Object.assign(dom, { create: 0, update: 0, remove: 0 })
 
   const measured = measureTicks(tickFn, ticks)
+  world.destroy()
   return {
     workload: 'koota-windowed',
     engine: 'koota',

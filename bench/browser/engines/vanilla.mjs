@@ -24,7 +24,7 @@ export async function setup({ root, n, windowSize }) {
         const el = document.createElement('div')
         el.className = 'row'
         el.append(document.createElement('span'), document.createElement('span'))
-        el.firstChild.textContent = String(r.id)
+        el.firstChild.textContent = String(r.value)
         el.lastChild.textContent = '0'
         root.append(el)
         r.el = el

@@ -32,7 +32,7 @@ export async function setup({ root, n, windowSize }) {
         const el = document.createElement('div')
         el.className = 'row'
         el.append(document.createElement('span'), document.createElement('span'))
-        el.firstChild.textContent = String(e)
+        el.firstChild.textContent = String(e.get(Telemetry).value)
         el.lastChild.textContent = '0'
         root.append(el)
         nodes.set(e, el)
