@@ -358,6 +358,34 @@ describe('instantiateScene (E21.1)', () => {
     expect(w.has(ids.get('a')!, Hp)).toBe(true)
   })
 
+  it('a world where another type holds SceneMember or Parent spawns nothing and reports it', () => {
+    for (const name of ['SceneMember', 'Parent']) {
+      const w = fresh()
+      const Squatter = defineComponent<{ n: number }>(name, { defaults: { n: 0 } })
+      w.spawn([entry(Squatter, { n: 1 })])
+      const before = w.listEntities([]).length
+      const data: SceneData = {
+        name: 's',
+        entities: [
+          { key: 'root', components: { ScPos: {} } },
+          { key: 'kid', parent: 'root', components: { ScHp: {} } },
+        ],
+      }
+      const { ids, problems } = instantiateScene(w, data, opts)
+      expect(problems, name).toEqual([{ path: '', message: expect.stringContaining(`"${name}"`) }])
+      expect(ids.size, name).toBe(0)
+      expect(w.listEntities([]).length, name).toBe(before)
+    }
+  })
+
+  it('without parent keys, a world where another type holds Parent still takes the scene', () => {
+    const w = fresh()
+    w.register(defineComponent<{ n: number }>('Parent', { defaults: { n: 0 } }))
+    const { ids, problems } = instantiateScene(w, { name: 's', entities: [{ key: 'a', components: { ScPos: {} } }] }, opts)
+    expect(problems).toEqual([])
+    expect(w.has(ids.get('a')!, Pos)).toBe(true)
+  })
+
   it('a resolver that throws or returns a non-type is a problem', () => {
     const w = fresh()
     const { ids, problems } = instantiateScene(

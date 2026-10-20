@@ -41,6 +41,18 @@ All notable changes to DOMECS are documented here. The format is based on
   version (`scripts/stamp-build-id.mjs`); before, a published build would
   have reported `'dev'`. `pnpm cold-install` packs the stamped payload and
   fails unless every `BUILD_ID` is the version. (ED-15, 2.1 release candidate)
+- `@domecs/core`: act-log frames record a scale set by plugin `onTickStart`
+  (`flushScale`) apart from one set by a `signals.tickStart` subscriber
+  (`hookScale`), and the input such a subscriber sets (`hookInput`) apart
+  from `input`, the input the event flush saw. Replay applies each at the
+  point it was set. Before, both were applied at one point, so direct `on`
+  handlers that read `time.scale` or `world.input` during the flush saw
+  different values in replay and the replay diverged. (O-80, 2.1 release
+  candidate)
+- `@domecs/scene`: `instantiateScene` into a world where another component
+  type holds the name `SceneMember` (or `Parent`, with parent keys) spawns
+  nothing and reports one problem. Before, it threw part-way through and
+  left a bare entity behind. (2.3 release candidate)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

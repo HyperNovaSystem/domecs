@@ -96,6 +96,10 @@ export interface InstantiateSceneResult {
  *    is a problem and the field is left unchanged. Values that are not
  *    strings (`null`, numbers) are left as they are.
  *
+ * A world where another component type holds the name `SceneMember` (or
+ * `Parent`, when an entity has a `parent` key) spawns nothing: the result
+ * has no ids and one problem with path `''`.
+ *
  * Keys in the data name the first entity holding them; the suffixed keys
  * exist only in `ids` and `SceneMember`. Instantiating a scene name twice
  * gives two sets of members that {@link unloadScene} removes together.
@@ -126,6 +130,19 @@ export function instantiateScene(
 
   const problems: SceneProblem[] = []
   const ids = new Map<string, Entity>()
+
+  // Every member carries SceneMember, and parent keys link through Parent: a
+  // world where another type holds either name cannot take the scene. Checked
+  // before anything spawns (spawn would throw part-way through an entity).
+  const linksParents = data.entities.some((e) => isRecord(e) && e.parent !== undefined && e.parent !== null)
+  const fixed = linksParents ? world.register(SceneMember, Parent) : world.register(SceneMember)
+  if (!fixed.ok) {
+    problems.push({
+      path: '',
+      message: `another component type already holds the name "${fixed.error.name}" in this world; nothing spawned`,
+    })
+    return { ids, problems }
+  }
   const spawned: Array<{ id: Entity; raw: unknown; components: Map<string, ComponentType<any>> }> = []
 
   // Every authored string key, so a generated key (a duplicate's suffix or a
