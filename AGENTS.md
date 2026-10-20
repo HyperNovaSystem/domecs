@@ -105,8 +105,8 @@ agent.reset()                        // back to baseline for next episode
      resource written outside the tick.
    - Object identity that must survive `restore()`: keep entity ids, not
      component objects (restore builds fresh ones).
-   - `Math.sin`/`cos`/`exp`/`log`/`pow` when results must match across JS
-     engines (SPEC §8).
+   - `Math.sin`/`cos`/`tan`/`exp`/`log`, or `pow` with a non-integer
+     exponent, when results must match across JS engines (SPEC §8).
 
    Check it the only way that works: replay the same seed and actions twice
    and compare `JSON.stringify(snapshot())`.
