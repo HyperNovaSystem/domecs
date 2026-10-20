@@ -7,23 +7,22 @@
  * first window then advances windowStart to 3 with its updates excluded
  * from domUpdates — so timings and counters compare equal work across
  * engines.
+ *
+ * Soak tracks changes like DOMECS does, using Koota's fastest stable
+ * configuration we found: the default `changeDetection: 'auto'`, which
+ * diffs a trait only when something subscribes to it, plus a
+ * `world.onChange(Position)` reader that counts deliveries. (A separate
+ * Changed(Position) query does not switch 'auto' tracking on, so the old
+ * harness measured Koota doing no change tracking at all; 'always' plus a
+ * Changed query delivers too, but ran 1–4 ms per tick from run to run.)
  */
-import { performance } from 'node:perf_hooks'
 import { createWorld, trait } from 'koota'
+import { measureTicks } from '../measure.mjs'
 
 const Position = trait({ x: 0, y: 0 })
 const Velocity = trait({ x: 0, y: 0 })
 const Telemetry = trait({ value: 0 })
 const Visible = trait({ rank: 0 })
-
-function percentiles(samples) {
-  const sorted = [...samples].sort((a, b) => a - b)
-  const at = (p) => {
-    if (sorted.length === 0) return 0
-    return sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))]
-  }
-  return { p50: at(0.5), p95: at(0.95) }
-}
 
 export function runKootaSoak({ entityCount, ticks, warmupTicks = 0 }) {
   const world = createWorld()
@@ -34,6 +33,10 @@ export function runKootaSoak({ entityCount, ticks, warmupTicks = 0 }) {
     )
   }
 
+  let changesDelivered = 0
+  world.onChange(Position, () => {
+    changesDelivered++
+  })
   const tickFn = () => {
     world.query(Position, Velocity).updateEach(([position, velocity]) => {
       position.x += velocity.x
@@ -41,21 +44,16 @@ export function runKootaSoak({ entityCount, ticks, warmupTicks = 0 }) {
     })
   }
   for (let t = 0; t < warmupTicks; t++) tickFn()
+  changesDelivered = 0
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    tickFn()
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(tickFn, ticks)
   return {
     workload: 'koota-soak',
     engine: 'koota',
     entities: entityCount,
     ticks,
-    p50Ms: p50,
-    p95Ms: p95,
+    ...measured,
+    changesDelivered,
   }
 }
 
@@ -67,7 +65,7 @@ export function runKootaWindowed({ entityCount, ticks, windowSize, warmupTicks =
   }
 
   let windowStart = 0
-  let domUpdates = 0
+  const dom = { create: 0, update: 0, remove: 0 }
   const visible = new Set()
 
   const tickFn = () => {
@@ -79,17 +77,17 @@ export function runKootaWindowed({ entityCount, ticks, windowSize, warmupTicks =
       if (!next.has(e)) {
         e.remove(Visible)
         visible.delete(e)
-        domUpdates++
+        dom.remove++
       }
     }
     for (const e of next) {
       if (!visible.has(e)) {
         e.add(Visible({ rank: 0 }))
         visible.add(e)
-        domUpdates++
+        dom.create++
       } else {
         e.set(Visible, (prev) => ({ rank: ((prev?.rank ?? 0) + 1) % 1000 }))
-        domUpdates++
+        dom.update++
       }
     }
     windowStart = (windowStart + 3) % entities.length
@@ -98,24 +96,17 @@ export function runKootaWindowed({ entityCount, ticks, windowSize, warmupTicks =
   // Prime (mounts first window, advances windowStart to 3) + warmup —
   // excluded from timing and from the reported domUpdates.
   for (let t = 0; t < 1 + warmupTicks; t++) tickFn()
+  Object.assign(dom, { create: 0, update: 0, remove: 0 })
 
-  const samples = []
-  const startUpdates = domUpdates
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    tickFn()
-    samples.push(performance.now() - t0)
-  }
-
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(tickFn, ticks)
   return {
     workload: 'koota-windowed',
     engine: 'koota',
     entities: entityCount,
     ticks,
     windowSize,
-    p50Ms: p50,
-    p95Ms: p95,
-    domUpdates: domUpdates - startUpdates,
+    ...measured,
+    domUpdates: dom.create + dom.update + dom.remove,
+    domSplit: { ...dom },
   }
 }
