@@ -94,6 +94,16 @@ describe('world.action — token edge cases', () => {
     expect(w.describe().events.some((e) => typeof e.name !== 'string')).toBe(false)
   })
 
+  it('rejects, rather than throws on, a token whose properties throw when read', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    const w = createWorld({ headless: true })
+    const result = w.action(fakeToken(proxy), { dx: 1 })
+    expect(result.accepted).toBe(false)
+    expect(result.reason).toMatch(/could not be read/)
+    expect(w.time.tick).toBe(0)
+  })
+
   it('accepts a frozen token', () => {
     const Frozen = Object.freeze(defineEvent<{ dx: number }>('Frozen'))
     const w = createWorld({ headless: true })

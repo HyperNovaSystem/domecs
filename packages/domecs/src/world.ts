@@ -127,11 +127,17 @@ function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSche
 function describeNonEventToken(value: unknown): string | null {
   if (typeof value === 'string') return `the string ${JSON.stringify(value)}`
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return String(value)
-  if (typeof (value as { [eventTag]?: unknown })[eventTag] === 'symbol') return null
-  const name = (value as { name?: unknown }).name
-  return typeof name === 'string'
-    ? `an object named ${JSON.stringify(name)} that defineEvent() did not create`
-    : 'an object that defineEvent() did not create'
+  // Reading properties can run getters or proxy traps that throw (a revoked
+  // Proxy, say). The caller expects a structured rejection, not an exception.
+  try {
+    if (typeof (value as { [eventTag]?: unknown })[eventTag] === 'symbol') return null
+    const name = (value as { name?: unknown }).name
+    return typeof name === 'string'
+      ? `an object named ${JSON.stringify(name)} that defineEvent() did not create`
+      : 'an object that defineEvent() did not create'
+  } catch {
+    return 'an object whose properties could not be read'
+  }
 }
 
 // Infer a reflection FieldKind from a default value's runtime type. Used by
