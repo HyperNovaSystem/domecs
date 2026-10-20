@@ -13,6 +13,7 @@
  *   node evals/run.mjs --agent claude --k 3 --confirm-cost [--model sonnet] [--budget 2]
  *   node evals/run.mjs --agent codex  --k 3 --confirm-cost [--model gpt-5]
  *   node evals/run.mjs --task fixed-projectile --agent reference
+ *   node evals/run.mjs --regrade evals/results/<file>.json   # free: re-grade kept workspaces
  *
  * Paid agents run in a temp directory outside the repo and are graded in a
  * separate, fresh workspace that receives only their src/. Isolation from
@@ -28,6 +29,11 @@ import { fileURLToPath } from 'node:url'
 const evalsDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(evalsDir, '..')
 const args = parseArgs(process.argv.slice(2))
+if (typeof args.regrade === 'string') {
+  // Agent fields are taken from the results file being re-graded.
+  args.agent = JSON.parse(fs.readFileSync(args.regrade, 'utf8')).agent
+  args['confirm-cost'] = true
+}
 const agent = args.agent ?? 'reference'
 const k = intArg('k', agent === 'reference' ? 1 : 3, 1, 50)
 const timeoutMs = intArg('timeout', 15 * 60, 30, 3 * 60 * 60) * 1000
@@ -57,6 +63,42 @@ if (tasks.length === 0) fail(`no task matches ${args.task}`)
 // path in an agent's workspace points back at the checkout (and its graders).
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-eval-run-'))
 const template = prepareTemplate(scratch)
+
+// --regrade: re-grade the kept (failed) workspaces of an earlier run with the
+// current graders, without running any agent. Passing attempts' workspaces
+// were deleted, so their verdicts carry over: fix a grader only by making it
+// fairer, and say so in the commit.
+if (typeof args.regrade === 'string') {
+  const prior = JSON.parse(fs.readFileSync(args.regrade, 'utf8'))
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const regraded = prior.attempts.map((a) => {
+    if (a.passed || !fs.existsSync(path.join(a.work, 'src'))) return a
+    const grade = gradeAttempt(byId.get(a.task), a.work)
+    console.error(`[eval] regrade ${a.task} #${a.attempt}: ${grade.passed ? 'PASS' : 'FAIL'} (${grade.tests.pass}/${grade.tests.expected} tests)`)
+    return { ...a, passed: grade.passed, tests: grade.tests, regraded: true }
+  })
+  const perTask = [...new Set(regraded.map((a) => a.task))].map((task) => {
+    const runs = regraded.filter((a) => a.task === task)
+    const passes = runs.filter((a) => a.passed).length
+    return { task, k: runs.length, passes, passAt1: passes / runs.length, passPowK: passes === runs.length }
+  })
+  const out = {
+    ...prior,
+    regradedAt: new Date().toISOString(),
+    regradedFrom: path.basename(args.regrade),
+    graderCommit: spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
+    passAt1: perTask.reduce((a, t) => a + t.passAt1, 0) / perTask.length,
+    passPowK: perTask.filter((t) => t.passPowK).length / perTask.length,
+    perTask,
+    attempts: regraded,
+  }
+  const file = args.regrade.replace(/\.json$/, '-regraded.json')
+  fs.writeFileSync(file, JSON.stringify(out, null, 2) + '\n', { flag: 'wx' })
+  console.error(`[eval] wrote ${path.relative(root, file)}`)
+  console.log(JSON.stringify({ ...out, attempts: undefined }, null, 2))
+  fs.rmSync(scratch, { recursive: true, force: true })
+  process.exit(0)
+}
 const attempts = []
 for (const task of tasks) {
   for (let i = 0; i < k; i++) {

@@ -27,6 +27,7 @@ node evals/run.mjs --agent reference        # free: grades the reference solutio
 node evals/run.mjs --agent claude --k 3 --confirm-cost [--model sonnet] [--budget 2]
 node evals/run.mjs --agent codex  --k 3 --confirm-cost [--model <model>]
 node evals/run.mjs --agent claude --task fixed-projectile --k 5 --confirm-cost
+node evals/run.mjs --regrade evals/results/<file>.json   # free: re-grade kept failed workspaces
 ```
 
 `--k` attempts per task (1–50, default 3). The report gives **pass@1** (the
@@ -37,6 +38,31 @@ the ones a decision rests on. A failed attempt's workspace is kept and its
 path is in the results, so you can read what the agent wrote and the
 grader's TAP output (`grader-result.tap`). Concurrent runs do not share any
 scratch state.
+
+## Baseline (2026-10-20, engine 2.0.0 at main 6df0de1, k=3)
+
+| Task | Claude Code (subscription) | Codex (ChatGPT plan) |
+|---|---|---|
+| `agent-counter` | 3/3, median 33 s, 10 turns, ~$0.23 | 3/3, median 33 s, 23k tokens |
+| `change-reader` | 3/3, median 55 s, 18 turns, ~$0.32 | 3/3, median 38 s, 24k tokens |
+| `fixed-projectile` | 3/3, median 85 s, 20 turns, ~$0.50 | 3/3, median 45 s, 32k tokens |
+| `seeded-walk` | 3/3, median 51 s, 10 turns, ~$0.21 | 3/3, median 33 s, 19k tokens |
+| **pass@1 / pass^3** | **1.0 / 1.0** (est. $3.85 total) | **1.0 / 1.0** |
+
+Both agents solved every task in every attempt, from the npm package alone.
+**These four tasks are at ceiling**: they cannot show a DX improvement.
+Use them as a regression floor, add harder tasks before the next
+improvement run, and track cost, turns and time meanwhile. Candidates for
+harder tasks: DOM projection with `mountDOM`, snapshot branching with
+`restore`, an agent bridge with a resolver, and persistence with
+`loadIfPresent`.
+
+The first grading failed every `change-reader` attempt for both agents.
+That was a grader bug, not the agents: the "unmarked change" test mutated
+before the spawn-time `OnAdded` marks were consumed, so a correct index that
+also reacts to `OnAdded(Health)` failed. The grader now steps first, the
+self-test has a must-pass variant for that case, and both runs were
+re-graded with `--regrade` (`*-regraded.json`; the raw files are kept).
 
 ## Billing
 
@@ -91,4 +117,6 @@ Not covered, so read results with this in mind:
 (node:test, imports `../src/...` and reads `src/` relative to the workspace)
 and `reference/` (a known-good solution). Then add at least one mutant per
 trap to `selftest.mjs`; a grader that passes a mutant is not testing that
-trap. The prompt must state the full export contract the grader relies on.
+trap. Add a must-pass variant for any reasonable alternative implementation,
+since a grader that fails one is testing an implementation choice. The
+prompt must state the full export contract the grader relies on.
