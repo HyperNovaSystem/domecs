@@ -1323,8 +1323,9 @@ assert.equal(
 
 Every package exports `BUILD_ID: string` (ED-15). It is `'dev'` in source and
 workspace builds; `scripts/pack-for-studio.mjs` stamps the packed
-`dist/build-id.js` with `'<version>+g<sha7>[-dirty]'`; a published build
-carries the plain version. Hosts record it next to their runtime identity, so
+`dist/build-id.js` with `'<version>+g<sha7>[-dirty]'`; `pnpm publish:npm`
+stamps the plain version (`scripts/stamp-build-id.mjs`), so a published build
+carries it. Hosts record it next to their runtime identity, so
 two packs of the same version stay distinguishable.
 
 ```ts

@@ -15,7 +15,7 @@
     "api:check": "node --test test/api-surface.test.mjs",
     "doctest": "node scripts/doctest.mjs",
     "doctest:check": "node --test test/doctest.test.mjs",
-    "publish:npm": "pnpm -r --filter \"./packages/*\" build && pnpm -r --filter \"./packages/*\" publish --access public",
+    "publish:npm": "pnpm -r --filter \"./packages/*\" build && node scripts/stamp-build-id.mjs && pnpm -r --filter \"./packages/*\" publish --access public",
     "bench": "pnpm --filter @domecs/core build && node --expose-gc bench/run.mjs",
     "bench:write": "pnpm --filter @domecs/core build && node --expose-gc bench/run.mjs --write",
     "bench:browser": "pnpm --filter @domecs/core --filter @domecs/dom build && node bench/browser/run.mjs",

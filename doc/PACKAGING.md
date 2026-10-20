@@ -169,11 +169,16 @@ Release from the workspace root with:
 pnpm run publish:npm
 ```
 
-The script builds all packages first, then runs:
+The script builds all packages, stamps each `dist/build-id.js` with the plain
+version (`scripts/stamp-build-id.mjs`, so a published `BUILD_ID` is e.g.
+`'2.3.0'`, not `'dev'`), then runs:
 
 ```bash
 pnpm -r --filter './packages/*' publish --access public
 ```
+
+The next `pnpm build` writes `'dev'` again. `pnpm cold-install` packs the same
+stamped payload and fails if a package's `BUILD_ID` is not the version.
 
 Release checklist (all seven packages share one version):
 

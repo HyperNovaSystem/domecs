@@ -202,3 +202,44 @@ test('every package peers on @domecs/core as workspace:^, so it packs as ^<relea
   assert.ok(!satisfiesCaret(published, '2.1.0+g5cb0290'))
   assert.ok(!satisfiesCaret(published, '2.2.0+g4631095'))
 })
+
+test('publish:npm stamps BUILD_ID with the plain version between the build and the publish (PR #27 review)', async () => {
+  const fs = await import('node:fs')
+  const script = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts['publish:npm']
+  const build = script.indexOf(' build')
+  const stamp = script.indexOf('scripts/stamp-build-id.mjs')
+  const publish = script.indexOf(' publish ')
+  assert.ok(build !== -1 && stamp > build && publish > stamp, `publish:npm must build, stamp, then publish: ${script}`)
+})
+
+test('stampPublishBuildIds stamps every package with the shared version and restores byte for byte', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { PACKAGES } = await import('../scripts/pack-for-studio.mjs')
+  const { stampPublishBuildIds } = await import('../scripts/stamp-build-id.mjs')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-stamp-'))
+  try {
+    const dev = "/** doc */\nexport const BUILD_ID = 'dev';\n//# sourceMappingURL=build-id.js.map\n"
+    for (const p of PACKAGES) {
+      fs.mkdirSync(path.join(root, p.dir, 'dist'), { recursive: true })
+      fs.writeFileSync(path.join(root, p.dir, 'package.json'), JSON.stringify({ name: p.name, version: '9.8.7' }))
+      fs.writeFileSync(path.join(root, p.dir, 'dist', 'build-id.js'), dev)
+    }
+    const read = () => PACKAGES.map((p) => fs.readFileSync(path.join(root, p.dir, 'dist', 'build-id.js'), 'utf8'))
+    const { version, restore } = stampPublishBuildIds({ root })
+    assert.equal(version, '9.8.7')
+    for (const text of read()) assert.match(text, /export const BUILD_ID = "9\.8\.7";/)
+    // A second run over stamped files changes nothing.
+    stampPublishBuildIds({ root })
+    for (const text of read()) assert.match(text, /export const BUILD_ID = "9\.8\.7";/)
+    restore()
+    for (const text of read()) assert.equal(text, dev)
+
+    fs.writeFileSync(path.join(root, PACKAGES[3].dir, 'package.json'), JSON.stringify({ version: '9.8.6' }))
+    assert.throws(() => stampPublishBuildIds({ root }), /disagree on version/)
+    for (const text of read()) assert.equal(text, dev)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
