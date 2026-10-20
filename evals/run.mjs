@@ -14,8 +14,10 @@
  *   node evals/run.mjs --agent codex  --k 3 --confirm-cost [--model gpt-5]
  *   node evals/run.mjs --task fixed-projectile --agent reference
  *
- * Paid agents run in a temp directory, isolated from user settings, hooks,
- * plugins and MCP servers as far as each CLI allows (see evals/README.md).
+ * Paid agents run in a temp directory outside the repo and are graded in a
+ * separate, fresh workspace that receives only their src/. Isolation from
+ * user settings, hooks, plugins and MCP servers is as far as each CLI
+ * allows; evals/README.md lists what is not covered.
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -27,12 +29,13 @@ const evalsDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(evalsDir, '..')
 const args = parseArgs(process.argv.slice(2))
 const agent = args.agent ?? 'reference'
-const k = Math.max(1, Number(args.k ?? (agent === 'reference' ? 1 : 3)))
-const timeoutMs = Number(args.timeout ?? 15 * 60) * 1000
-const budgetUsd = Number(args.budget ?? 2)
+const k = intArg('k', agent === 'reference' ? 1 : 3, 1, 50)
+const timeoutMs = intArg('timeout', 15 * 60, 30, 3 * 60 * 60) * 1000
+const budgetUsd = numArg('budget', 2, 0.1, 50)
 
 if (!['reference', 'claude', 'codex'].includes(agent)) fail(`unknown --agent ${agent}`)
-if (agent !== 'reference' && !args['confirm-cost']) {
+if (args['confirm-cost'] !== undefined && args['confirm-cost'] !== true) fail('--confirm-cost takes no value')
+if (agent !== 'reference' && args['confirm-cost'] !== true) {
   fail(`--agent ${agent} spends money (about $${budgetUsd} cap per Claude attempt). Re-run with --confirm-cost.`)
 }
 
@@ -44,11 +47,14 @@ const tasks = fs
   .map((d) => ({ dir: path.join(tasksDir, d), ...JSON.parse(fs.readFileSync(path.join(tasksDir, d, 'task.json'), 'utf8')) }))
 if (tasks.length === 0) fail(`no task matches ${args.task}`)
 
-const template = prepareTemplate()
+// Per-run scratch outside the repo: concurrent runs never share it, and no
+// path in an agent's workspace points back at the checkout (and its graders).
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-eval-run-'))
+const template = prepareTemplate(scratch)
 const attempts = []
 for (const task of tasks) {
   for (let i = 0; i < k; i++) {
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), `domecs-eval-${task.id}-`))
+    const work = fs.mkdtempSync(path.join(scratch, `${task.id}-`))
     fs.cpSync(template, work, { recursive: true })
     const started = Date.now()
     const run = runAgent(task, work)
@@ -68,9 +74,10 @@ for (const task of tasks) {
         (run.meta.costUsd != null ? ` $${run.meta.costUsd.toFixed(2)}` : '') +
         (run.meta.agentError ? ` agent error: ${run.meta.agentError}` : ''),
     )
-    if (grade.passed && !args.keep) fs.rmSync(work, { recursive: true, force: true })
+    if (grade.passed && args.keep !== true) fs.rmSync(work, { recursive: true, force: true })
   }
 }
+if (attempts.every((a) => a.passed) && args.keep !== true) fs.rmSync(scratch, { recursive: true, force: true })
 
 const perTask = tasks.map((task) => {
   const runs = attempts.filter((a) => a.task === task.id)
@@ -90,28 +97,33 @@ const summary = {
   perTask,
   attempts,
 }
-if (agent !== 'reference' || args.write) {
-  const out = path.join(evalsDir, 'results', `${summary.when.slice(0, 10)}-${agent}${args.model ? `-${args.model}` : ''}.json`)
+if (agent !== 'reference' || args.write === true) {
+  // A full timestamp and exclusive create: a before/after pair on the same
+  // day, or two task selections, never overwrite each other.
+  const stamp = summary.when.replace(/[:.]/g, '-')
+  const out = path.join(evalsDir, 'results', `${stamp}-${agent}${args.model ? `-${args.model}` : ''}.json`)
   fs.mkdirSync(path.dirname(out), { recursive: true })
-  fs.writeFileSync(out, JSON.stringify(summary, null, 2) + '\n')
+  fs.writeFileSync(out, JSON.stringify(summary, null, 2) + '\n', { flag: 'wx' })
   console.error(`[eval] wrote ${path.relative(root, out)}`)
 }
 console.log(JSON.stringify({ ...summary, attempts: undefined }, null, 2))
 if (agent === 'reference' && summary.passPowK < 1) process.exit(1)
 
-/** Pack @domecs/core once and install it into a template project. */
-function prepareTemplate() {
-  const cache = path.join(evalsDir, '.cache')
-  const template = path.join(cache, 'template')
-  fs.rmSync(cache, { recursive: true, force: true })
-  fs.mkdirSync(template, { recursive: true })
+/**
+ * Pack @domecs/core once per run and install it into a template project.
+ * The tarball sits inside the template and is referenced relatively, so the
+ * workspace holds no path back to the repo.
+ */
+function prepareTemplate(scratch) {
+  const template = path.join(scratch, 'template')
+  fs.mkdirSync(path.join(template, 'vendor'), { recursive: true })
   run('pnpm', ['--filter', '@domecs/core', 'build'], { cwd: root })
-  run('pnpm', ['pack', '--pack-destination', cache], { cwd: path.join(root, 'packages/domecs') })
-  const tarball = fs.readdirSync(cache).find((f) => f.endsWith('.tgz'))
+  run('pnpm', ['pack', '--pack-destination', path.join(template, 'vendor')], { cwd: path.join(root, 'packages/domecs') })
+  const tarball = fs.readdirSync(path.join(template, 'vendor')).find((f) => f.endsWith('.tgz'))
   fs.writeFileSync(
     path.join(template, 'package.json'),
     JSON.stringify(
-      { name: 'domecs-eval-task', private: true, type: 'module', dependencies: { '@domecs/core': `file:${path.join(cache, tarball)}` } },
+      { name: 'domecs-eval-task', private: true, type: 'module', dependencies: { '@domecs/core': `file:./vendor/${tarball}` } },
       null,
       2,
     ) + '\n',
@@ -134,8 +146,14 @@ function runAgent(task, work) {
       'json',
       '--permission-mode',
       'acceptEdits',
+      // Available tools (not just pre-approved ones), then what runs unasked.
+      '--tools',
+      'Read,Write,Edit,Glob,Grep,Bash',
       '--allowedTools',
       'Read Write Edit Glob Grep Bash(node:*) Bash(ls:*) Bash(cat:*) Bash(mkdir:*)',
+      // The repo (and its graders) lives under /home; the workspace is in tmp.
+      '--settings',
+      JSON.stringify({ permissions: { deny: ['Read(//home/**)', 'Glob(//home/**)', 'Grep(//home/**)'] } }),
       '--setting-sources',
       'project',
       '--strict-mcp-config',
@@ -159,7 +177,7 @@ function runAgent(task, work) {
       },
     }
   }
-  const cli = ['exec', '--skip-git-repo-check', '--ignore-user-config', '--ephemeral', '-s', 'workspace-write']
+  const cli = ['exec', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '-s', 'workspace-write']
   if (args.model) cli.push('-m', args.model)
   cli.push(task.prompt)
   const r = spawnSync('codex', cli, { cwd: work, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 << 20, input: '' })
@@ -172,20 +190,37 @@ function runAgent(task, work) {
   }
 }
 
-/** Copy the hidden grader in after the agent is done, and run it. */
+/**
+ * Grade in a fresh workspace built from the template, holding only the
+ * agent's src/: nothing else the agent wrote (a planted .grader, edited
+ * node_modules) reaches the grader. Passing needs every named test in the
+ * grader to have run and passed; a candidate that exits during import, before
+ * any test registers, shows up as one passing "file" and must not count.
+ */
 function gradeAttempt(task, work) {
-  const graderDir = path.join(work, '.grader')
-  fs.mkdirSync(graderDir, { recursive: true })
-  fs.copyFileSync(path.join(task.dir, 'grader.test.mjs'), path.join(graderDir, 'grader.test.mjs'))
+  const graderFile = path.join(task.dir, 'grader.test.mjs')
+  const expected = (fs.readFileSync(graderFile, 'utf8').match(/^test\(/gm) ?? []).length
+  const grading = fs.mkdtempSync(path.join(path.dirname(work), `${path.basename(work)}-grade-`))
+  fs.cpSync(template, grading, { recursive: true })
+  fs.rmSync(path.join(grading, 'src'), { recursive: true, force: true })
+  if (fs.existsSync(path.join(work, 'src'))) {
+    fs.cpSync(path.join(work, 'src'), path.join(grading, 'src'), { recursive: true, dereference: true })
+  }
+  fs.mkdirSync(path.join(grading, '.grader'))
+  fs.copyFileSync(graderFile, path.join(grading, '.grader', 'grader.test.mjs'))
   const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '.grader/grader.test.mjs'], {
-    cwd: work,
+    cwd: grading,
     encoding: 'utf8',
     timeout: 120_000,
   })
   const count = (label) => Number(new RegExp(`^# ${label} (\\d+)`, 'm').exec(r.stdout)?.[1] ?? 0)
-  const tests = { pass: count('pass'), fail: count('fail') }
-  fs.writeFileSync(path.join(work, '.grader', 'result.tap'), r.stdout + r.stderr)
-  return { passed: r.status === 0 && tests.fail === 0 && tests.pass > 0, tests }
+  // Top-level `ok N - name` lines, one per grader test that ran and passed.
+  const okNamed = (r.stdout.match(/^ok \d+ - (?!\.grader\/)/gm) ?? []).length
+  const tests = { pass: count('pass'), fail: count('fail'), expected }
+  fs.writeFileSync(path.join(work, 'grader-result.tap'), r.stdout + r.stderr)
+  fs.rmSync(grading, { recursive: true, force: true })
+  const passed = r.status === 0 && tests.fail === 0 && expected > 0 && tests.pass === expected && okNamed === expected
+  return { passed, tests }
 }
 
 function run(cmd, cliArgs, opts) {
@@ -197,6 +232,20 @@ function run(cmd, cliArgs, opts) {
 function fail(message) {
   console.error(`[eval] ${message}`)
   process.exit(1)
+}
+
+function intArg(name, fallback, min, max) {
+  if (args[name] === undefined) return fallback
+  const n = Number(args[name])
+  if (!Number.isInteger(n) || n < min || n > max) fail(`--${name} must be an integer from ${min} to ${max}`)
+  return n
+}
+
+function numArg(name, fallback, min, max) {
+  if (args[name] === undefined) return fallback
+  const n = Number(args[name])
+  if (!Number.isFinite(n) || n < min || n > max) fail(`--${name} must be a number from ${min} to ${max}`)
+  return n
 }
 
 function parseArgs(argv) {

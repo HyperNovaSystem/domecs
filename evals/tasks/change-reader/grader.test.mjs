@@ -37,19 +37,30 @@ test('despawned entities leave the index', () => {
 
 test('a random sequence stays exact', () => {
   const world = createSim()
-  let seed = 7
-  const rnd = (n) => ((seed = (seed * 1103515245 + 12345) % 2147483648) % n)
-  for (let round = 0; round < 30; round++) {
+  // mulberry32: an integer-exact generator (an LCG in plain JS doubles loses
+  // precision and barely moves).
+  let a = 0x2f6b1a3d
+  const rnd = (n) => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return (((t ^ (t >>> 14)) >>> 0) % n)
+  }
+  const sizes = new Set()
+  for (let round = 0; round < 40; round++) {
     const ids = world.listEntities([Health])
     for (let k = 0; k < 4; k++) {
       const id = ids[rnd(ids.length)]
-      if (rnd(2)) damage(world, id, rnd(8))
-      else heal(world, id, rnd(8))
+      if (rnd(3) > 0) damage(world, id, 1 + rnd(12))
+      else heal(world, id, 1 + rnd(12))
     }
     if (round % 7 === 6 && ids.length > 5) world.despawn(ids[rnd(ids.length)])
     world.step(1 / 60)
     assert.deepEqual(world.getResource(LowHealth), expected(world), `round ${round}`)
+    sizes.add(world.getResource(LowHealth).length)
   }
+  assert.ok(sizes.size > 3, 'the sequence should move entities across the threshold')
 })
 
 test('the index is maintained by a change-driven system', () => {

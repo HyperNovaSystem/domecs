@@ -2,7 +2,30 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { OnChanged } from '@domecs/core'
 import { Body, advance, createSim } from '../src/sim.mjs'
+
+// Source with comments and string/template literals blanked, so a comment
+// such as "use world.rand, not Math.random" is not mistaken for a call.
+function codeOnly(src) {
+  let out = ""
+  for (let i = 0; i < src.length; ) {
+    const c = src[i]
+    const d = src[i + 1]
+    if (c === "/" && d === "/") { while (i < src.length && src[i] !== "\n") i++; continue }
+    if (c === "/" && d === "*") { i += 2; while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue }
+    if (c === "\"" || c === "'" || c === "`") {
+      i++
+      while (i < src.length && src[i] !== c) i += src[i] === "\\" ? 2 : 1
+      i++
+      out += " "
+      continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
 
 const bodies = (world) => world.listEntities([Body]).map((id) => ({ ...world.getComponent(id, Body) }))
 
@@ -45,10 +68,32 @@ test('deterministic per seed, different across seeds', () => {
   assert.notEqual(run([1, 1, 1, 1]), run([9, 9, 9, 9]))
 })
 
+test('integration runs on fixed steps, not render ticks', () => {
+  const world = createSim([2, 4, 6, 8])
+  const [id] = world.listEntities([Body])
+  const before = { ...world.getComponent(id, Body) }
+  world.step(1 / 120)
+  world.step(1 / 120)
+  const after = world.getComponent(id, Body)
+  const dt = 1 / 60
+  const vy = before.vy - 9.8 * dt
+  assert.ok(Math.abs(after.vy - vy) < 1e-9, `two half-steps should be one fixed step (vy ${after.vy} vs ${vy})`)
+})
+
+test('change readers see every moved body', () => {
+  const world = createSim([3, 3, 3, 3])
+  let seen = 0
+  world.system('grader-reader', { schedule: 'reactive', reactsTo: OnChanged(Body) }, ({ entities }) => {
+    seen += entities.length
+  })
+  world.step(1 / 60)
+  assert.equal(seen, 10)
+})
+
 test('randomness comes from the world, not Math.random', () => {
   const src = readdirSync('src', { recursive: true })
     .filter((f) => /\.(m?js|ts)$/.test(f))
-    .map((f) => readFileSync(join('src', f), 'utf8'))
+    .map((f) => codeOnly(readFileSync(join('src', f), 'utf8')))
     .join('\n')
-  assert.ok(!/Math\.random/.test(src), 'uses Math.random')
+  assert.ok(!/Math\s*\.\s*random/.test(src), 'uses Math.random')
 })

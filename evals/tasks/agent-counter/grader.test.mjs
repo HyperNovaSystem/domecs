@@ -9,6 +9,15 @@ test('exports the contract', () => {
   assert.ok(Counter && typeof Counter.name === 'string')
 })
 
+test('exactly one entity holds Counter, and count() reads it', () => {
+  const bridge = createSim()
+  const ids = bridge.world.listEntities([Counter])
+  assert.equal(ids.length, 1)
+  bridge.act(Add, { by: 4 })
+  assert.equal(bridge.world.getComponent(ids[0], Counter).n, 4)
+  assert.equal(count(bridge.world), 4)
+})
+
 test('one act applies the command and advances exactly one tick', () => {
   const bridge = createSim()
   const t0 = bridge.world.time.tick
