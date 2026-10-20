@@ -286,7 +286,7 @@ Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all function
 
 ### 2.8 PRNG
 
-`world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
+`world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system. Nothing detects it at run time (§8).
 
 ### 2.9 Change tracking
 
