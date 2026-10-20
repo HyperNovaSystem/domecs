@@ -6,9 +6,20 @@
  * still point at TypeScript source for monorepo DX, so we import dist by file
  * URL rather than package name (avoids resolving @domecs scope to src/).
  *
- * Methodology:
+ * Methodology (frozen 2026-10-20, PLAN WS-5 A0):
+ * - `pnpm bench` builds @domecs/core first. Run directly, this script
+ *   refuses a dist whose index.js is older than any file in src (an mtime
+ *   heuristic; --allow-stale overrides). The build-first script is the real
+ *   guarantee.
  * - Every workload runs `--warmup` unmeasured ticks first (default 30) so
  *   p50/p95 describe warmed steady state, not JIT/IC cold-start.
+ * - Every measured tick loop goes through measureTicks() (bench/measure.mjs):
+ *   per-tick timing plus, via v8.GCProfiler, allocation per tick and the GC
+ *   count and pause time inside the window.
+ * - Soak is like-for-like: each engine records every change and a reader
+ *   consumes them (DOMECS markChanged + an OnChanged reader; Koota
+ *   changeDetection 'auto' + a world.onChange reader). In every trial both
+ *   must deliver entities × ticks changes, or no win is declared.
  * - When Node is started with --expose-gc, a full GC runs between workloads
  *   so one engine's garbage is not attributed to the next; `gcBetween` in
  *   the summary records whether that isolation was active. All engines
@@ -17,23 +28,27 @@
  * - Compare-mode rows are tagged `phase: 'compare'` and the verdict is
  *   computed ONLY from those rows, so a standalone soak at a different
  *   entity count can never leak into the ratios.
+ * - Verdict: per trial, the paired ratio DOMECS p95 / competitor p95. The
+ *   headline is the median ratio with a seeded bootstrap 95% CI over
+ *   trials; a decisive win needs the CI's upper bound ≤ 0.70.
  *
  * Usage:
- *   pnpm build
- *   node bench/run.mjs
+ *   pnpm bench                      # builds @domecs/core, then runs all
+ *   node --expose-gc bench/run.mjs  # assumes a fresh build
  *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|contacts|rules|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
- *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 5)
+ *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 7)
  *   node bench/run.mjs --write   # also write bench/results.json
  */
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { register } from 'node:module'
 import { runKootaSoak, runKootaWindowed } from './baselines/koota.mjs'
 import { runSignalsSoak, runSignalsWindowed } from './baselines/signals.mjs'
+import { bootstrapMedianCI, measureTicks, median, percentiles } from './measure.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distEntry = join(root, 'packages/domecs/dist/index.js')
@@ -41,6 +56,16 @@ if (!existsSync(distEntry)) {
   console.error('[bench] packages/domecs/dist not found.')
   console.error('[bench] Build @domecs/core first:  pnpm --filter @domecs/core build')
   process.exit(1)
+}
+// A dist older than src measures code that no longer exists (the stale-dist
+// bug the 2026-10-20 audit found). `pnpm bench` builds first.
+if (!process.argv.includes('--allow-stale')) {
+  const newestSrc = newestMtime(join(root, 'packages/domecs/src'))
+  if (newestSrc > statSync(distEntry).mtimeMs) {
+    console.error('[bench] packages/domecs/dist is older than src. Run `pnpm bench` (it builds first),')
+    console.error('[bench] or `pnpm --filter @domecs/core build`, or pass --allow-stale.')
+    process.exit(1)
+  }
 }
 const { createWorld, defineComponent, entry, OnChanged, hashSnapshot, canonicalSnapshot, dmath } = await import(
   pathToFileURL(distEntry).href
@@ -58,7 +83,7 @@ const compareN = Math.min(entityCount, 5_000)
 const compareWindowN = Math.min(entityCount, 2_000)
 // O-72: the compare phase runs this many interleaved trials and reports the
 // median and spread; one run per engine was not reproducible.
-const compareTrials = Math.max(1, Number(args.trials ?? 5))
+const compareTrials = Math.max(1, Number(args.trials ?? 7))
 const gcAvailable = typeof globalThis.gc === 'function'
 
 /** Full GC between workloads when --expose-gc is set (see header). */
@@ -156,13 +181,15 @@ if (workload === 'all' || workload === 'compare') {
     () => runKootaWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
     () => runSignalsWindowed({ entityCount: compareWindowN, windowSize, ...bench }),
   ]
-  // Trials interleave the engines, so host drift hits each one alike.
+  // Trials interleave the engines, rotating the order each trial so no
+  // engine always runs first (cold) or last (most drift).
   const trials = []
   for (let t = 0; t < compareTrials; t++) {
-    const rows = []
-    for (const run of compareRunners) {
+    const rows = new Array(compareRunners.length)
+    for (let i = 0; i < compareRunners.length; i++) {
+      const at = (i + t) % compareRunners.length
       maybeGc()
-      rows.push(run())
+      rows[at] = compareRunners[at]()
     }
     trials.push(rows)
   }
@@ -198,6 +225,8 @@ for (const r of results) {
         ? ` sinRatio=${r.sin.ratio.toFixed(2)} cosRatio=${r.cos.ratio.toFixed(2)} targetRatio=${r.targetRatio} withinTarget=${r.withinTarget}`
         : '') +
       (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : '') +
+      (r.changesDelivered != null ? ` changes=${r.changesDelivered}` : '') +
+      (r.allocBytesPerTick != null ? ` alloc=${r.allocBytesPerTick}B/tick gc=${r.gcCount}/${r.gcMs}ms` : '') +
       (r.coalesceRatio != null ? ` coalesce=${r.coalesceRatio}` : ''),
   )
 }
@@ -211,6 +240,10 @@ if (writeResults) {
 
 // --- workloads ----------------------------------------------------------------
 
+/**
+ * Entity soak, like-for-like with the Koota baseline: every entity moves and
+ * is marked changed each tick, and a reader consumes the changes.
+ */
 function runSoak({ entityCount, ticks, fixedStep }) {
   const world = createWorld({ headless: true, fixedStep })
   world.system(
@@ -224,6 +257,14 @@ function runSoak({ entityCount, ticks, fixedStep }) {
       }
     },
   )
+  let changesDelivered = 0
+  world.system(
+    'bench-read-changes',
+    { schedule: 'reactive', reactsTo: OnChanged(Position) },
+    ({ entities }) => {
+      changesDelivered += entities.length
+    },
+  )
   for (let i = 0; i < entityCount; i++) {
     world.spawn([
       entry(Position, { x: i % 100, y: (i * 3) % 100 }),
@@ -232,21 +273,16 @@ function runSoak({ entityCount, ticks, fixedStep }) {
   }
 
   for (let t = 0; t < warmupTicks; t++) world.step(fixedStep)
+  changesDelivered = 0
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    world.step(fixedStep)
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(() => world.step(fixedStep), ticks)
   return {
     workload: 'soak',
     engine: 'domecs',
     entities: entityCount,
     ticks,
-    p50Ms: p50,
-    p95Ms: p95,
+    ...measured,
+    changesDelivered,
   }
 }
 
@@ -289,13 +325,7 @@ function runTelemetry({ entityCount, hotEntities, updatesPerTick, ticks }) {
   marksIssued = 0
   changesDelivered = 0
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    world.step(1 / 60)
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(() => world.step(1 / 60), ticks)
   return {
     workload: 'telemetry',
     engine: 'domecs',
@@ -306,8 +336,7 @@ function runTelemetry({ entityCount, hotEntities, updatesPerTick, ticks }) {
     marksIssued,
     changesDelivered,
     coalesceRatio: changesDelivered > 0 ? Number((marksIssued / changesDelivered).toFixed(1)) : null,
-    p50Ms: p50,
-    p95Ms: p95,
+    ...measured,
   }
 }
 
@@ -793,7 +822,7 @@ function runWindowed({ entityCount, ticks, windowSize }) {
     ids.push(world.spawn([entry(Telemetry, { value: i, dirty: false })]))
   }
 
-  let domUpdates = 0
+  const dom = { create: 0, update: 0, remove: 0 }
   let windowStart = 0
   const visible = new Set()
 
@@ -806,21 +835,21 @@ function runWindowed({ entityCount, ticks, windowSize }) {
     for (const id of visible) {
       if (!next.has(id)) {
         world.removeComponent(id, Row)
-        domUpdates++ // destroy
+        dom.remove++
         visible.delete(id)
       }
     }
     for (const id of next) {
       if (!visible.has(id)) {
         world.addComponent(id, Row, { rank: 0, label: String(id) })
-        domUpdates++ // create + first paint
+        dom.create++ // create + first paint
         visible.add(id)
       } else {
         const r = world.getComponent(id, Row)
         if (r) {
           r.rank = (r.rank + 1) % 1000
           world.markChanged(id, Row)
-          domUpdates++ // update
+          dom.update++
         }
       }
     }
@@ -829,24 +858,18 @@ function runWindowed({ entityCount, ticks, windowSize }) {
 
   // Prime first window + warmup (excluded from timing and counters)
   for (let t = 0; t < 1 + warmupTicks; t++) world.step(1 / 60)
+  Object.assign(dom, { create: 0, update: 0, remove: 0 })
 
-  const samples = []
-  const startUpdates = domUpdates
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    world.step(1 / 60)
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(() => world.step(1 / 60), ticks)
   return {
     workload: 'windowed',
     engine: 'domecs',
     entities: entityCount,
     ticks,
     windowSize,
-    p50Ms: p50,
-    p95Ms: p95,
-    domUpdates: domUpdates - startUpdates,
+    ...measured,
+    domUpdates: dom.create + dom.update + dom.remove,
+    domSplit: { ...dom },
   }
 }
 
@@ -873,20 +896,13 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
   }
   for (let t = 0; t < warmupTicks; t++) tickFn()
 
-  const samples = []
-  for (let t = 0; t < ticks; t++) {
-    const t0 = performance.now()
-    tickFn()
-    samples.push(performance.now() - t0)
-  }
-  const { p50, p95 } = percentiles(samples)
+  const measured = measureTicks(tickFn, ticks)
   return {
     workload: 'baseline-plain',
     engine: 'plain',
     entities: entityCount,
     ticks,
-    p50Ms: p50,
-    p95Ms: p95,
+    ...measured,
     note: 'hand-rolled Float64Array loops; not feature-equivalent',
   }
 }
@@ -895,24 +911,25 @@ function runPlainBaseline({ entityCount, ticks, fixedStep }) {
 
 /** One row per engine/workload: median p50/p95 across trials, with spread. */
 function aggregateTrials(rows) {
-  const med = (xs) => {
-    const s = [...xs].sort((a, b) => a - b)
-    return s[Math.floor((s.length - 1) / 2)]
-  }
   const p95s = rows.map((r) => r.p95Ms)
-  return {
+  const out = {
     ...rows[0],
     trials: rows.length,
-    p50Ms: med(rows.map((r) => r.p50Ms)),
-    p95Ms: med(p95s),
+    p50Ms: median(rows.map((r) => r.p50Ms)),
+    p95Ms: median(p95s),
     p95RangeMs: [Math.min(...p95s), Math.max(...p95s)],
   }
+  for (const key of ['allocBytesPerTick', 'gcCount', 'gcMs']) {
+    if (rows.every((r) => typeof r[key] === 'number')) out[key] = median(rows.map((r) => r[key]))
+  }
+  return out
 }
 
 /**
- * Derives the verdict ONLY from the compare-phase rows passed in: ratios of
- * median p95s, with the per-trial range. A win must clear the bar in every
- * trial (O-72).
+ * Derives the verdict ONLY from the compare-phase rows passed in. Per trial,
+ * the paired ratio DOMECS p95 / competitor p95; the headline is the median
+ * ratio with a seeded bootstrap 95% CI, and a decisive win needs the CI's
+ * upper bound ≤ 0.70 (PLAN WS-5). The per-trial range is kept for context.
  */
 function summarizeComparison(compareRows, trials) {
   const pick = (name) => compareRows.find((r) => r.workload === name)
@@ -926,8 +943,10 @@ function summarizeComparison(compareRows, trials) {
     koota: pick('koota-windowed'),
     signals: pick('signals-windowed'),
   }
-  const ratio = (a, b) =>
-    a && b && b.p95Ms > 0 ? Number((a.p95Ms / b.p95Ms).toFixed(3)) : null
+  // Full precision through the decision; round only for display, so a true
+  // 0.7004 can never round down into a win.
+  const ratio = (a, b) => (a && b && b.p95Ms > 0 ? a.p95Ms / b.p95Ms : null)
+  const round3 = (x) => Number(x.toFixed(3))
 
   const pairs = {
     soak_domecs_vs_koota_p95: ['soak', 'koota-soak'],
@@ -935,19 +954,27 @@ function summarizeComparison(compareRows, trials) {
     windowed_domecs_vs_koota_p95: ['windowed', 'koota-windowed'],
     windowed_domecs_vs_signals_p95: ['windowed', 'signals-windowed'],
   }
-  const verdict = {
-    soak_domecs_vs_koota_p95: ratio(soak.domecs, soak.koota),
-    soak_domecs_vs_signals_p95: ratio(soak.domecs, soak.signals),
-    windowed_domecs_vs_koota_p95: ratio(windowed.domecs, windowed.koota),
-    windowed_domecs_vs_signals_p95: ratio(windowed.domecs, windowed.signals),
-  }
+  const verdict = {}
   const verdictRange = {}
   for (const [k, [a, b]] of Object.entries(pairs)) {
     const rs = trials
       .map((rows) => ratio(rows.find((r) => r.workload === a), rows.find((r) => r.workload === b)))
       .filter((r) => r != null)
-    verdictRange[k] = rs.length > 0 ? [Math.min(...rs), Math.max(...rs)] : null
+    const ci = bootstrapMedianCI(rs)
+    verdict[k] = ci ? { median: round3(ci.median), ci95: ci.ci95.map(round3), ciHigh: ci.ci95[1] } : null
+    verdictRange[k] = rs.length > 0 ? [round3(Math.min(...rs)), round3(Math.max(...rs))] : null
   }
+
+  // Work equivalence, checked in every trial: DOMECS and Koota must each
+  // deliver entities × ticks changes to their soak readers, and the three
+  // windowed harnesses must report the same DOM work. A failed check voids
+  // any win, since the timings would compare different work.
+  const soakWorkEqual = trials.every((rows) => {
+    const d = rows.find((r) => r.workload === 'soak')
+    const kt = rows.find((r) => r.workload === 'koota-soak')
+    const expected = d ? d.entities * d.ticks : NaN
+    return d != null && kt != null && d.changesDelivered === expected && kt.changesDelivered === expected
+  })
 
   // Work-equivalence check: the three windowed harnesses must report the
   // same domUpdates for the same logical work, or the timing comparison is
@@ -955,14 +982,19 @@ function summarizeComparison(compareRows, trials) {
   const domUpdateCounts = [windowed.domecs, windowed.koota, windowed.signals]
     .filter(Boolean)
     .map((r) => r.domUpdates)
-  const windowedWorkEqual =
-    domUpdateCounts.length === 3 && domUpdateCounts.every((n) => n === domUpdateCounts[0])
+  const windowedWorkEqual = trials.every((rows) => {
+    const splits = ['windowed', 'koota-windowed', 'signals-windowed']
+      .map((w) => rows.find((r) => r.workload === w)?.domSplit)
+      .map((s) => (s ? JSON.stringify(s) : null))
+    return splits.every((s) => s !== null && s === splits[0])
+  })
 
-  // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor — in
-  // every trial, not just the median.
+  // Success bar: ≥30% better p95 means ratio ≤ 0.70 vs competitor, with
+  // the bootstrap CI's upper bound under the bar, not just the median.
   const wins = []
-  for (const [k, range] of Object.entries(verdictRange)) {
-    if (range && range[1] <= 0.7) wins.push(`${k} (${range[0]}–${range[1]}×)`)
+  for (const [k, v] of Object.entries(verdict)) {
+    const comparable = k.startsWith('soak_') ? soakWorkEqual : windowedWorkEqual
+    if (v && comparable && v.ciHigh <= 0.7) wins.push(`${k} (median ${v.median}×, CI ${v.ci95[0]}–${v.ci95[1]}×)`)
   }
 
   return {
@@ -974,27 +1006,31 @@ function summarizeComparison(compareRows, trials) {
     trials: trials.length,
     verdict,
     verdictRange,
+    soakWorkEqual,
+    soakChangesDelivered: [soak.domecs?.changesDelivered, soak.koota?.changesDelivered],
     windowedWorkEqual,
     windowedDomUpdates: domUpdateCounts,
     decisiveRuntimeWins: wins,
     note:
+      (soakWorkEqual ? '' : 'WARNING: soak changesDelivered differ between DOMECS and Koota — timings are not comparing equal work. ') +
       (windowedWorkEqual ? '' : 'WARNING: windowed domUpdates differ across engines — timings are not comparing equal work. ') +
       (wins.length > 0
         ? `Decisive runtime win(s): ${wins.join('; ')}`
-        : `No runtime win clearing ≥30% p95 in all ${trials.length} trials on this host; check plumbing comparison in bench/COMPARISON.md`),
+        : `No runtime win with a bootstrap CI under 0.70× p95 over ${trials.length} trials on this host; check plumbing comparison in bench/COMPARISON.md`),
   }
 }
 
 // --- utils --------------------------------------------------------------------
 
-function percentiles(samples) {
-  const sorted = [...samples].sort((a, b) => a - b)
-  const at = (p) => {
-    if (sorted.length === 0) return 0
-    const idx = Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))
-    return sorted[idx]
+/** Newest file mtime under `dir`, recursively. */
+function newestMtime(dir) {
+  let newest = 0
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    const st = statSync(path)
+    newest = Math.max(newest, st.isDirectory() ? newestMtime(path) : st.mtimeMs)
   }
-  return { p50: at(0.5), p95: at(0.95) }
+  return newest
 }
 
 function fmtMs(n) {

@@ -51,10 +51,8 @@ if (!observation.manifest.components.some((c) => c.name === 'Score')) {
   throw new Error('observe() must surface Score via world.describe()')
 }
 
-bridge.act(Add, { delta: 5 })
-bridge.step()
+bridge.act(Add, { delta: 5 }) // act() runs its own tick
 bridge.act(Add, { delta: 2 })
-bridge.step()
 const mid = world.getComponent(entity, Score).value
 const snapA = JSON.stringify(bridge.snapshot())
 
@@ -63,10 +61,8 @@ if (world.getComponent(entity, Score).value !== 0) {
   throw new Error('reset() must restore baseline score 0')
 }
 
-bridge.act(Add, { delta: 5 })
-bridge.step()
+bridge.act(Add, { delta: 5 }) // act() runs its own tick
 bridge.act(Add, { delta: 2 })
-bridge.step()
 const finalScore = world.getComponent(entity, Score).value
 const snapB = JSON.stringify(bridge.snapshot())
 

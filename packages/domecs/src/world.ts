@@ -24,6 +24,7 @@ import type {
 } from './errors.js'
 import {
   createEventBus,
+  eventTag,
   internalEvent,
   isEventType,
   validateEventPayload,
@@ -131,6 +132,24 @@ function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSche
   const out: Record<string, FieldSchema> = {}
   for (const [key, value] of Object.entries(src)) out[key] = { ...value }
   return out
+}
+
+// null when `value` carries defineEvent()'s identity symbol; otherwise a short
+// description of what action() was handed instead, for its rejection reason.
+function describeNonEventToken(value: unknown): string | null {
+  if (typeof value === 'string') return `the string ${JSON.stringify(value)}`
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return String(value)
+  // Reading properties can run getters or proxy traps that throw (a revoked
+  // Proxy, say). The caller expects a structured rejection, not an exception.
+  try {
+    if (typeof (value as { [eventTag]?: unknown })[eventTag] === 'symbol') return null
+    const name = (value as { name?: unknown }).name
+    return typeof name === 'string'
+      ? `an object named ${JSON.stringify(name)} that defineEvent() did not create`
+      : 'an object that defineEvent() did not create'
+  } catch {
+    return 'an object whose properties could not be read'
+  }
 }
 
 // Infer a reflection FieldKind from a default value's runtime type. Used by
@@ -737,6 +756,24 @@ export function createWorld(options: WorldOptions = {}): World {
   // references the live store does.
   const viewCache = new Map<Entity, EntityView>()
 
+  // WS-5 A1: store lookup by ComponentType identity. storeFor() validates a
+  // type once (name registry, duplicate-name check); after that, the hot
+  // paths (getComponent, markChanged, addComponent) skip the name lookup and
+  // the checks. An entry is valid only for the storesVersion it was cached
+  // under: restore bumps the version every time it clears or replaces a
+  // store Map, before any callback can run (world-state storesReplaced).
+  const storeByType = new Map<ComponentType<unknown>, { version: number; store: Map<Entity, unknown> }>()
+  let storesVersion = 0
+
+  // WS-5 A1: bumped at the start of every change that can alter a
+  // structural query's result or the view objects in it: an entity entering,
+  // leaving or moving between archetypes, and restore. Structural live
+  // queries reuse their last result while it is unchanged. While such a
+  // change is in progress (structuralDepth > 0) query hooks can run against
+  // half-updated membership, so nothing read then is cached.
+  let structEpoch = 0
+  let structuralDepth = 0
+
   const EMPTY_ARCH_KEY = ''
   let emptyArch = ensureArchetype(new Set<string>())
 
@@ -760,6 +797,9 @@ export function createWorld(options: WorldOptions = {}): World {
           seenThrough: sys.seenThrough,
           readsRemovals: sys.watchesRemoved,
         }))
+    },
+    storesReplaced: () => {
+      storesVersion++
     },
     resumeChangeWindows: (base, count, seen) => {
       const end = base + count
@@ -815,16 +855,84 @@ export function createWorld(options: WorldOptions = {}): World {
     // entity happened to gain them. Despawn marks, componentRemoved,
     // archetype() and snapshot keys follow this order, so a world restored
     // from canonicalJson text (sorted keys) records what the live one does.
-    bucket = { key, types: new Set(Array.from(types).sort()), entities: new SortedIdSet() }
+    bucket = {
+      key,
+      types: new Set(Array.from(types).sort()),
+      entities: new SortedIdSet(),
+      addEdges: new Map(),
+      removeEdges: new Map(),
+    }
     archetypes.set(key, bucket)
     for (const q of queries) evaluateQueryAgainstArchetype(q, bucket)
     return bucket
   }
 
-  function moveEntity(entity: Entity, nextTypes: Set<string>): void {
+  /**
+   * The bucket an entity in `from` lands in when component `name` is added
+   * (or removed): followed through the transition edge, built once per
+   * (bucket, name, direction) instead of copying, sorting and stringifying
+   * the type set on every add/remove (WS-5 A1).
+   */
+  function despawnInner(entity: Entity): void {
+    const arch = entityArchetype.get(entity)
+    if (arch) {
+      // SPEC §2.10: componentRemoved fires before the bag is released.
+      if (sigComponentRemoved.size > 0) {
+        for (const name of arch.types) {
+          const t = typeRegistry.get(name)
+          if (t) sigComponentRemoved.emit({ entity, type: t })
+        }
+      }
+      for (const name of arch.types) {
+        record('removed', name, entity)
+        stores.get(name)?.delete(entity)
+      }
+      // fire onRemove hooks for queries this entity was in
+      for (const q of queries) {
+        if (q.matchingArchetypes.has(arch)) {
+          q.structuralMembers.delete(entity)
+          if (q.onRemoveFns.size > 0) {
+            const view: EntityView = { id: entity }
+            for (const fn of q.onRemoveFns) fn(view)
+          }
+        }
+      }
+      arch.entities.delete(entity)
+    }
+    entityArchetype.delete(entity)
+    alive.delete(entity)
+    viewCache.delete(entity)
+    sigEntityDespawned.emit(entity)
+    if (tapAttached) tapMutated()
+    wakeDriver()
+  }
+
+  function transition(from: ArchetypeBucket, name: string, adding: boolean): ArchetypeBucket {
+    const edges = adding ? from.addEdges : from.removeEdges
+    let to = edges.get(name)
+    if (to === undefined) {
+      const types = new Set(from.types)
+      if (adding) types.add(name)
+      else types.delete(name)
+      to = ensureArchetype(types)
+      edges.set(name, to)
+    }
+    return to
+  }
+
+  function moveEntity(entity: Entity, next: ArchetypeBucket): void {
     const prev = entityArchetype.get(entity)
-    const next = ensureArchetype(nextTypes)
     if (prev === next) return
+    structEpoch++
+    structuralDepth++
+    try {
+      moveEntityInner(entity, prev, next)
+    } finally {
+      structuralDepth--
+    }
+  }
+
+  function moveEntityInner(entity: Entity, prev: ArchetypeBucket | undefined, next: ArchetypeBucket): void {
     if (prev) prev.entities.delete(entity)
     next.entities.add(entity)
     entityArchetype.set(entity, next)
@@ -908,8 +1016,22 @@ export function createWorld(options: WorldOptions = {}): World {
     switch (node.kind) {
       case 'has': requireRegisteredType(node.type); return hasType(entity, node.type.name)
       case 'not': return !evalEntity(node.child, entity)
-      case 'or': return node.children.some((c) => evalEntity(c, entity))
-      case 'and': return node.children.every((c) => evalEntity(c, entity))
+      // Plain loops, not some/every: those allocate a closure per call, and
+      // this runs once per candidate entity on every filtered read (WS-5 A1).
+      case 'or': {
+        // Length read once, as some() does: children a predicate appends
+        // mid-read are not evaluated in this read.
+        const children = node.children
+        const n = children.length
+        for (let i = 0; i < n && i < children.length; i++) if (evalEntity(children[i]!, entity)) return true
+        return false
+      }
+      case 'and': {
+        const children = node.children
+        const n = children.length
+        for (let i = 0; i < n && i < children.length; i++) if (!evalEntity(children[i]!, entity)) return false
+        return true
+      }
       case 'added': return inWindow(addedStamps, node.type.name, entity)
       case 'changed': return inWindow(changedStamps, node.type.name, entity)
       case 'removed': return inWindow(removedStamps, node.type.name, entity)
@@ -1103,6 +1225,14 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   function storeFor<T>(type: ComponentType<T>): Map<Entity, T> {
+    const cached = storeByType.get(type as ComponentType<unknown>)
+    if (cached !== undefined && cached.version === storesVersion) return cached.store as Map<Entity, T>
+    const s = storeForSlow(type)
+    storeByType.set(type as ComponentType<unknown>, { version: storesVersion, store: s as Map<Entity, unknown> })
+    return s
+  }
+
+  function storeForSlow<T>(type: ComponentType<T>): Map<Entity, T> {
     let s = stores.get(type.name)
     if (!s) {
       s = new Map()
@@ -1133,11 +1263,6 @@ export function createWorld(options: WorldOptions = {}): World {
     if (!alive.has(entity)) {
       throw new Error(`domecs: entity ${entity} is not alive`)
     }
-  }
-
-  function currentTypes(entity: Entity): Set<string> {
-    const arch = entityArchetype.get(entity)
-    return arch ? new Set(arch.types) : new Set()
   }
 
   function isEnabled(s: CompiledSystem): boolean {
@@ -1675,23 +1800,43 @@ export function createWorld(options: WorldOptions = {}): World {
     }
 
     let disposed = false
+    // WS-5 A1: a structural query (no Where, no change filter) gives the same
+    // views until an entity enters, leaves or moves between archetypes, so
+    // its last result is reused while structEpoch is unchanged. Callers get
+    // a copy: an array they sort or splice never reaches the next reader.
+    let cachedViews: EntityView[] | null = null
+    let cachedEpoch = -1
     const result: QueryResult = {
       get entities() {
         if (disposed) return []
+        if (!needsEntityFilter && structuralDepth === 0 && cachedViews !== null && cachedEpoch === structEpoch) {
+          return cachedViews.slice()
+        }
         // Indexed over the length read up front: membership changes made
         // by a Where predicate mid-loop do not leak into this result.
-        const out: EntityView[] = []
+        let out: EntityView[] = []
         if (needsEntityFilter) enterWindowOf(q)
         try {
           const candidates = collectCandidates()
           const n = candidates.length
+          // Sized once to the candidate count and trimmed after, instead of
+          // growing by push: a large read reallocated its array several
+          // times per call (WS-5 A1).
+          out = new Array<EntityView>(n)
+          let k = 0
           for (let i = 0; i < n; i++) {
             const e = candidates[i]!
             if (needsEntityFilter && !evalEntity(node, e)) continue
-            out.push(makeView(e))
+            out[k++] = makeView(e)
           }
+          if (k < n) out.length = k
         } finally {
           if (needsEntityFilter) leaveWindow()
+        }
+        if (!needsEntityFilter && structuralDepth === 0) {
+          cachedViews = out
+          cachedEpoch = structEpoch
+          return out.slice()
         }
         return out
       },
@@ -1765,17 +1910,23 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       const id = nextId++
       alive.add(id)
-      // new entity enters empty archetype
-      emptyArch.entities.add(id)
-      entityArchetype.set(id, emptyArch)
-      for (const q of queries) {
-        if (q.matchingArchetypes.has(emptyArch)) {
-          q.structuralMembers.add(id)
-          if (q.onAddFns.size > 0) {
-            const view = makeView(id)
-            for (const fn of q.onAddFns) fn(view)
+      structEpoch++
+      structuralDepth++
+      try {
+        // new entity enters empty archetype
+        emptyArch.entities.add(id)
+        entityArchetype.set(id, emptyArch)
+        for (const q of queries) {
+          if (q.matchingArchetypes.has(emptyArch)) {
+            q.structuralMembers.add(id)
+            if (q.onAddFns.size > 0) {
+              const view = makeView(id)
+              for (const fn of q.onAddFns) fn(view)
+            }
           }
         }
+      } finally {
+        structuralDepth--
       }
       if (components) {
         for (const [type, value] of iterateBag(components)) {
@@ -1790,37 +1941,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     despawn(entity: Entity): void {
       if (!alive.has(entity)) return
-      const arch = entityArchetype.get(entity)
-      if (arch) {
-        // SPEC §2.10: componentRemoved fires before the bag is released.
-        if (sigComponentRemoved.size > 0) {
-          for (const name of arch.types) {
-            const t = typeRegistry.get(name)
-            if (t) sigComponentRemoved.emit({ entity, type: t })
-          }
-        }
-        for (const name of arch.types) {
-          record('removed', name, entity)
-          stores.get(name)?.delete(entity)
-        }
-        // fire onRemove hooks for queries this entity was in
-        for (const q of queries) {
-          if (q.matchingArchetypes.has(arch)) {
-            q.structuralMembers.delete(entity)
-            if (q.onRemoveFns.size > 0) {
-              const view: EntityView = { id: entity }
-              for (const fn of q.onRemoveFns) fn(view)
-            }
-          }
-        }
-        arch.entities.delete(entity)
+      structEpoch++
+      structuralDepth++
+      try {
+        despawnInner(entity)
+      } finally {
+        structuralDepth--
       }
-      entityArchetype.delete(entity)
-      alive.delete(entity)
-      viewCache.delete(entity)
-      sigEntityDespawned.emit(entity)
-      if (tapAttached) tapMutated()
-      wakeDriver()
     },
 
     isAlive(entity: Entity): boolean {
@@ -1847,9 +1974,7 @@ export function createWorld(options: WorldOptions = {}): World {
       const merged = type.create(value as Partial<T>)
       store.set(entity, merged)
       record('added', type.name, entity)
-      const nextTypes = currentTypes(entity)
-      nextTypes.add(type.name)
-      moveEntity(entity, nextTypes)
+      moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, true))
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
       if (tapAttached) tapMutated()
       wakeDriver()
@@ -1863,18 +1988,13 @@ export function createWorld(options: WorldOptions = {}): World {
       sigComponentRemoved.emit({ entity, type })
       s.delete(entity)
       record('removed', type.name, entity)
-      const nextTypes = currentTypes(entity)
-      nextTypes.delete(type.name)
-      moveEntity(entity, nextTypes)
+      moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, false))
       if (tapAttached) tapMutated()
       wakeDriver()
     },
 
     getComponent<T>(entity: Entity, type: ComponentType<T>): T | undefined {
-      requireRegisteredType(type)
-      const s = stores.get(type.name)
-      if (!s) return undefined
-      return s.get(entity) as T | undefined
+      return storeFor(type).get(entity)
     },
 
     markChanged<T>(entity: Entity, type: ComponentType<T>): void {
@@ -2292,6 +2412,20 @@ export function createWorld(options: WorldOptions = {}): World {
     },
 
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
+      // The command boundary is where untyped callers (agent transports,
+      // JSON-driven tools) arrive. The bus routes on the identity symbol that
+      // only defineEvent() sets, so a name string or a look-alike object
+      // would be emitted under no type: the tick runs, no handler fires, and
+      // the command used to come back accepted. Reject it before emitting.
+      const notToken = describeNonEventToken(type)
+      if (notToken !== null) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `not an event type: ${notToken}; pass the token defineEvent() returned, not its name`,
+          events: [],
+        }
+      }
       // O-39: when the event declares a schema, the command boundary rejects
       // malformed payloads outright — no emit, no tick, no consumed turn —
       // instead of accepting a command whose handler will silently no-op or
@@ -2413,7 +2547,17 @@ export function createWorld(options: WorldOptions = {}): World {
         if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(false)
         throw cause
       }
-      applySnapshot(stateCtx, s, clock)
+      // Every store Map and archetype bucket is replaced; query hooks fire
+      // while membership is rebuilt, so nothing is cached until it is done
+      // (and a throw part-way leaves no stale cache behind).
+      structEpoch++
+      structuralDepth++
+      try {
+        applySnapshot(stateCtx, s, clock)
+      } finally {
+        structuralDepth--
+        structEpoch++
+      }
       // The flushed view belongs to the abandoned timeline too (O-88): a
       // restored world reads what a fresh one restored from `s` reads.
       bus.clearCurrent()

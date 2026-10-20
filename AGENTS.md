@@ -65,8 +65,10 @@ agent.reset({ scale: 1, input: 'empty' })
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
+// act() emits AND runs one tick (pass { dt: 1/60 } for fixed schedules).
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
-agent.step()                         // turn-based; use step(1/60) for fixed
+// agent.step()                      // only to advance with no command;
+                                     // step(1/60) for fixed schedules
 const snap = agent.snapshot()
 agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
 ```
@@ -91,6 +93,24 @@ agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
    do not wrap everything in try/catch unless the API throws by contract.
 8. **One naming language.** Use `getResource`, `listEntities`, `OnChanged`,
    `startLoop`, `stepOnce` — not legacy aliases from training data.
+9. **Systems and action handlers are deterministic.** Nothing checks this at
+   run time, so these are bans, not warnings. Inside a system, a reactive or
+   event handler, or a `Where` predicate, do not use:
+   - `Math.random()`: use `world.rand`.
+   - `Date.now()`, `new Date()`, `performance.now()`: use `world.time`
+     (`tick`, `elapsed`, `delta`).
+   - `setTimeout`, `setInterval`, `await` or promises: a tick is
+     synchronous, so schedule with `fixed` systems, tick counts or events.
+   - The DOM, `window`, layout, `navigator`, storage or the network: bring
+     outside data in through `world.action`, events, `setInput` or a
+     resource written outside the tick.
+   - Object identity that must survive `restore()`: keep entity ids, not
+     component objects (restore builds fresh ones).
+   - `Math.sin`/`cos`/`tan`/`exp`/`log`, or `pow` with a non-integer
+     exponent, when results must match across JS engines (SPEC §8).
+
+   Check it the only way that works: replay the same seed and actions twice
+   and compare `JSON.stringify(snapshot())`.
 
 ---
 
@@ -294,14 +314,25 @@ components are `markChanged`.
 - [ ] Cross-runtime determinism: authoritative systems use `dmath.sin` /
   `dmath.cos` from `@domecs/core`, never `Math.sin` / `Math.cos` (they differ
   by up to 1 ulp between engines); rules do this automatically
-- [ ] Agent loop: `reset → observe → act → step → snapshot` is enough for the task
+- [ ] Agent loop: `reset → observe → act (→ step to idle) → snapshot` is enough for the task
 - [ ] No invented methods; imports resolve from published `@domecs/*` only
 
-Two `act`/`step` sharp edges: `act()` validates payloads **only when the
-event declares a `schema`** (then typo'd fields / wrong types return
-`accepted: false` with a reason — declare schemas on every agent-facing
-command; schema-less events stay unvalidated), and `bridge.step(0)` is a
-heartbeat (no systems run), unlike `bridge.step()`.
+`act`/`step` sharp edges:
+
+- `act()` already runs one tick. Following every `act()` with `step()`
+  spends two ticks per turn; call `step()` only to advance with no command.
+  The exception is `act(..., { dt: 0 })` (or negative `dt`): a heartbeat
+  that runs no tick and leaves the command pending with `accepted: false`.
+  It runs on the next real tick, so resending it would run it twice.
+- `world.action()` takes the token `defineEvent` returned. A name string or
+  a look-alike object is rejected (`accepted: false`, no tick) — it has no
+  event identity, so no handler could ever see it. `bridge.act('Name', …)`
+  resolves a name to its token first (below).
+- `act()` validates payloads **only when the event declares a `schema`**
+  (then typo'd fields / wrong types return `accepted: false` with a reason —
+  declare schemas on every agent-facing command; schema-less events stay
+  unvalidated).
+- `bridge.step(0)` is a heartbeat (no systems run), unlike `bridge.step()`.
 
 Name-based act: `bridge.act('Damage', payload)` resolves through
 `world.lookupEvent`. Call `world.register(...commandEvents)` at setup so each

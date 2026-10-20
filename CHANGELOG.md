@@ -6,6 +6,34 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Performance
+
+- `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).
+  Structural live queries reuse their result until membership changes,
+  stores are found by type identity, add/remove follow archetype edges,
+  the change-mark log no longer reallocates every tick, and filtered reads
+  stop allocating per entity. On the bench, a soak with a change reader
+  allocates 88 KB per tick instead of 833 KB and runs about 20% faster;
+  windowed about 20–28%. Behavior is unchanged: `query().entities` still
+  returns a fresh array on every read, and query hooks that run during a
+  spawn, despawn, move or restore see current state.
+
+### Fixed
+
+- `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
+  that `defineEvent()` did not create, such as a look-alike object (and, for
+  `world.action()`, an event's name string; `bridge.act('Name', …)` resolves
+  the name first). They return `accepted: false` with a reason and neither
+  emit nor tick. Before, a string ran a tick that no handler saw and
+  reported `accepted: true`, and `null` or `undefined` threw. (O-92)
+- `@domecs/core`: event types made by a second copy of `@domecs/core` (a
+  duplicate install or a bundled dependency) now route correctly. Before,
+  the bus read every such type under one `undefined` key, so they triggered
+  each other's handlers. (O-92)
+- Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
+  `createAgentBridge` example no longer follow every `act()` with `step()`,
+  which spent two ticks per turn. (O-92)
+
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 
 All seven `@domecs/*` packages move to 2.3.0 together. Additive minor:

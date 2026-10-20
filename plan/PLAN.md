@@ -26,10 +26,15 @@ file and ROADMAP disagree on priority, this file wins.
 - Value workloads: dashboards, ops/control-room tooling, digital twins,
   trainers, management sims — anywhere the evolving model *is* the product.
 - Primary customer: the author's own applications. External adoption is a
-  gated bonus (§7), not a goal to chase.
+  gated bonus (§7), not a goal to chase. **DOMECS Studio** (`../studio`) is
+  both the author's tool for building those applications and the reference
+  application (WS-5, §7 gate 3).
 - The AI-age wedge is **agents operating DOMECS worlds** (observe / act /
-  step / snapshot through the typed action boundary) — not "AI can write
-  DOMECS code", which is table stakes and already served by incumbents.
+  step / snapshot through the typed action boundary). The same operating
+  surface is also the **coding agent's verification loop**: an agent that
+  writes DOMECS code checks its work by stepping, snapshotting and replaying
+  the world, not by reading it. "AI can write DOMECS code" on its own stays
+  table stakes. (Widened 2026-10-20, WS-5.)
 
 ### Why (review consensus)
 
@@ -98,9 +103,9 @@ bet. No date-driven milestones — the order is the only ordering.
   `domUpdates` work-equivalence check, real coalescing pressure in the
   telemetry workload.
 - [ ] Multi-machine stability pass (re-run compare on second host / CI).
-- [ ] Memory metrics: heap growth / GC pressure sampling, per-frame DOM
-  mount/update/remove split, dropped-frame tracking (promised below, not
-  yet recorded by the suite).
+- [x] Memory metrics: allocation per tick and GC count/time for every
+  measured loop, the DOM mount/update/remove split, and Long Animation
+  Frame counts in the browser bench (O-93, 2026-10-20).
 - [x] README product claims stay gated — no unearned win language.
 
 Workloads:
@@ -175,6 +180,64 @@ In-repo flagship: **`example/plantroom/`** (`@domecs/example-plantroom`).
 Demo moment (headless + UI): fault → agent proposal → operator approve/reject
 **or** branch-compare naive vs reset+start → historian scrub/restore.
 
+### WS-5 — Engine performance and agent DX (adopted 2026-10-20)
+
+From the 2026-10-20 performance/DX proposal (local
+`plan/PROPOSAL-perf-dx.md`, with its evidence in
+`plan/proposal-perf-dx-evidence/`; reviewed by Codex, Reqall #9178/#9179).
+Two findings drive it. First, `pnpm bench` measured a stale `dist`. Second,
+the soak compare was uneven: DOMECS tracked every change, while Koota's
+harness tracked none. Profiling a fresh build put ~70% of soak time in
+constant overheads (change marking, component lookup, per-query arrays), and
+a throwaway prototype cut soak step time 35–40%.
+
+Decisions (2026-10-20):
+
+- **Bench:** always a fresh build of the latest source. One headline
+  comparison does the same work on both engines (each with a change reader).
+  The verdict is the median ratio with a bootstrap confidence interval,
+  replacing the worst paired ratio.
+- **Components stay mutable plain objects** (SPEC §2.2), as the single
+  storage model. No opt-in columnar or strict-marks modes; performance comes
+  from removing overhead. History sharing compares before it shares, with
+  no new mutation contract.
+- **Mark only what is read** goes ahead. The spec work comes first:
+  disabled, sub-rate and event readers; snapshot carry-over; restore.
+- **Studio is the reference app and the product.** Agent tooling lands
+  where Studio needs it. The MCP transport stays in Studio until a second
+  consumer appears.
+- **Evals run on demand**, with each improvement run. There are no nightly
+  runs.
+- **The API-surface gate keeps every emitted `.d.ts`.** Internal
+  declarations still reach the public surface (for example
+  `ChangesSnapshot`), and nothing else checks them.
+
+Phase 1 (committed):
+
+- [x] Honest bench: build first, the like-for-like soak, projection measured
+  in a real browser, allocation/heap metrics, and the frozen verdict
+  protocol (O-93). Baseline: soak 1.10× Koota, windowed 1.43×, browser
+  frame 1.13×. Multi-machine runs are still open.
+- [x] Port the prototype's overhead cuts to `src`. Query caching is for
+  structural queries only (O-94: soak with a reader 0.81× its A0 time,
+  allocation 833 → 88 KB/tick; windowed 0.72×).
+- [ ] First-hour traps:
+  - [x] `action()` rejects non-event tokens, and the docs stop pairing every
+    `act()` with `step()` (O-92, PR #20);
+  - [x] Studio Save keeps live edits (Studio FINDINGS 2026-10-20, studio
+    PR #3);
+  - [ ] `reset()` scale/input, O-30, and explicit bans on nondeterministic
+    APIs.
+- [ ] Full canonical world hash (closes O-11).
+- [ ] Episode record/replay, as the oracle for agents.
+- [ ] Spec for mark-only-what-is-read.
+- [ ] An eval baseline, run on demand.
+
+After Phase 1, each item starts only when a named consumer (usually Studio)
+needs it *and* the bench or an eval shows the benefit. Candidates: preorder
+scene layout, history sharing, `domecs check`, docs inside the npm package,
+and the Studio cockpit (fork → diff → replay under approval).
+
 ## 4. Stop-doing list (frozen until a kill gate clears)
 
 - `@domecs/sprites` — CSS animation is the supported story.
@@ -198,6 +261,7 @@ WS-1–WS-4 or a real application hits them. Expected early pulls:
 - **O-9** — async/chunked snapshot: benchmark workload 1 will quantify it.
 - **O-30** — eager component registration: agent/editor tooling (WS-3) hits
   it.
+- **O-11** — canonical world hash, and **O-14** memory metrics: WS-5 Phase 1.
 
 Everything else waits for a real collision.
 
@@ -231,9 +295,9 @@ clear:
    workload (≈30% p95, or ≈half the plumbing).
 2. **Independent adoption** — someone outside the org ships something
    nontrivial on the published packages without cloning engine source.
-3. **Unique reference case** — WS-4 is materially cleaner than the
-   equivalent build without DOMECS, because of determinism + actions +
-   snapshots + projection *together*.
+3. **Unique reference case** — WS-4, and since 2026-10-20 Studio (WS-5), is
+   materially cleaner than the equivalent build without DOMECS, because of
+   determinism + actions + snapshots + projection *together*.
 
 If the gates don't clear: freeze DOMECS as the author's personal application
 substrate — packages stay published, the engine stays in use, ecosystem

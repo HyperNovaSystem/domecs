@@ -346,7 +346,7 @@ Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all function
 
 ### 2.8 PRNG
 
-`world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system — the inspector warns on detection.
+`world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system. Nothing detects it at run time (§8).
 
 **Per-system streams (2.1, O-77, normative).** `world.rand` is the **shared** stream: every system that draws from it changes what every later draw returns, so adding, removing or editing one random-drawing system reshuffles all the others. A system registered with `rng: 'own'` instead receives its own stream as `ctx.rand`:
 

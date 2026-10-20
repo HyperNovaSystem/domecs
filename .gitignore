@@ -166,3 +166,6 @@ plan/*
 
 # Machine-local bench output (regenerate with pnpm bench:write)
 bench/results.json
+
+# CPU profiles from pnpm bench:profile
+bench/profiles/

@@ -2,10 +2,16 @@ import type { ComponentSchema, FieldSchema } from './types.js'
 
 /**
  * Per-event nominal-identity tag. Stored on every `EventType` returned by
- * `defineEvent`; the bus keys all internal maps on this symbol so distinct
- * `defineEvent('Same')` calls never collide. F-8.
+ * `defineEvent`; the bus keys all internal maps on the per-event symbol
+ * stored under it, so distinct `defineEvent('Same')` calls never collide.
+ * F-8.
+ *
+ * The tag key itself is a registered symbol, so a token made by a second
+ * copy of `@domecs/core` (a duplicate install, a bundled dependency) is
+ * still read correctly here. Per-event identity is unchanged: each
+ * `defineEvent` call still mints its own unregistered `Symbol(name)`.
  */
-export const eventTag: unique symbol = Symbol('domecs.eventTag')
+export const eventTag: unique symbol = Symbol.for('domecs.eventTag')
 
 export interface EventType<T> {
   readonly name: string

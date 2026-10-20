@@ -124,7 +124,15 @@ export interface AgentBridge {
     captureBaseline(): void;
     /** Observe tick/scale/entity counts plus {@link World.describe}. */
     observe(): AgentObservation;
-    /** Typed command boundary — delegates to {@link World.action}. */
+    /**
+     * Typed command boundary — delegates to {@link World.action}, which emits
+     * the command and runs one tick. Do not follow every `act()` with
+     * {@link AgentBridge.step}; that spends two ticks per turn. With
+     * `opts.dt <= 0` no tick runs and the command stays pending (see
+     * {@link World.action}). `type` must be the token `defineEvent()`
+     * returned — a look-alike object is rejected; pass a name string to the
+     * overload below instead.
+     */
     act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult;
     /**
      * Name-based command boundary for JSON callers (MCP tools, HTTP, act
@@ -161,8 +169,8 @@ export interface AgentBridge {
  * const bridge = createAgentBridge(world)
  * bridge.reset({ scale: 1, input: 'empty' })
  * const obs = bridge.observe()
- * const result = bridge.act(Cmd, { ... })
- * bridge.step() // or bridge.step(1/60) for fixed schedules
+ * const result = bridge.act(Cmd, { ... }) // runs one tick; { dt: 1/60 } for fixed
+ * // bridge.step() — only to advance with no command (step(1/60) for fixed)
  * const snap = bridge.snapshot()
  * ```
  */
@@ -741,8 +749,14 @@ export interface SystemicFault {
 import type { ComponentSchema, FieldSchema } from './types.js';
 /**
  * Per-event nominal-identity tag. Stored on every `EventType` returned by
- * `defineEvent`; the bus keys all internal maps on this symbol so distinct
- * `defineEvent('Same')` calls never collide. F-8.
+ * `defineEvent`; the bus keys all internal maps on the per-event symbol
+ * stored under it, so distinct `defineEvent('Same')` calls never collide.
+ * F-8.
+ *
+ * The tag key itself is a registered symbol, so a token made by a second
+ * copy of `@domecs/core` (a duplicate install, a bundled dependency) is
+ * still read correctly here. Per-event identity is unchanged: each
+ * `defineEvent` call still mints its own unregistered `Symbol(name)`.
  */
 export declare const eventTag: unique symbol;
 export interface EventType<T> {
@@ -2381,6 +2395,14 @@ export interface ArchetypeBucket {
     readonly key: string;
     readonly types: Set<string>;
     readonly entities: SortedIdSet;
+    /**
+     * WS-5 A1: archetype transition edges, the bucket reached by adding or
+     * removing one component name, filled on first use. Buckets are only ever
+     * discarded all together (restore), so an edge never points at a bucket
+     * that is no longer in use.
+     */
+    readonly addEdges: Map<string, ArchetypeBucket>;
+    readonly removeEdges: Map<string, ArchetypeBucket>;
 }
 export interface CompiledQuery {
     id: number;
@@ -2424,6 +2446,12 @@ export interface StepClock {
 export interface WorldStateCtx {
     alive: Set<Entity>;
     stores: Map<string, Map<Entity, unknown>>;
+    /**
+     * Called whenever restore replaces or clears store Maps, before any
+     * callback can run, so the world's type-identity store cache never hands
+     * out a detached Map (WS-5 A1).
+     */
+    storesReplaced(): void;
     typeRegistry: Map<string, ComponentType<unknown>>;
     archetypes: Map<string, ArchetypeBucket>;
     entityArchetype: Map<Entity, ArchetypeBucket>;

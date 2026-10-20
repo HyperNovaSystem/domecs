@@ -42,8 +42,9 @@ const bridge = createAgentBridge(world)
 bridge.captureBaseline()
 
 const obs = bridge.observe()           // world.describe() + tick/scale
-const result = bridge.act(MyCmd, payload)
-bridge.step()                          // stepOnce; use step(dt) for fixed
+const result = bridge.act(MyCmd, payload) // emits AND runs one tick
+// fixed-schedule sims: bridge.act(MyCmd, payload, { dt: 1 / 60 })
+// bridge.step()                       // only to advance with no command
 const snap = bridge.snapshot()
 bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are not snapshotted)
 ```
@@ -51,7 +52,7 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
 | Method | Delegates to |
 |--------|----------------|
 | `observe()` | `world.describe()` + `time` |
-| `act(type, payload, opts?)` | `world.action(...)` |
+| `act(type, payload, opts?)` | `world.action(...)` — runs one tick (none for `dt <= 0`) |
 | `act(name, payload, opts?)` | `world.lookupEvent(name)` → `world.action(...)`; unknown/ambiguous name → `accepted: false`, no tick |
 | `step()` / `step(dt)` | `stepOnce()` / `step(dt)` |
 | `snapshot(opts?)` | `world.snapshot(...)` |
@@ -73,6 +74,12 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
 - **markChanged** after in-place component mutation
 - **spawn shallow-copy** — scalars diverge; nested refs stay shared
 - **stepOnce ≠ fixed** — fixed needs positive `dt`
+- **act already ticks** — `act()` emits and runs one tick; a `step()` after
+  every `act()` spends two ticks per turn. Pass the token `defineEvent`
+  returned, never its name string (rejected with `accepted: false`)
+- **act with `dt <= 0` is a heartbeat** — no tick runs and the command stays
+  pending (`accepted: false`); it runs on the next real tick, so do not
+  resend it
 - **declare `schema` on command events** — `world.action`/`bridge.act`
   then rejects malformed payloads (`accepted: false` + reason); without a
   schema, payloads pass through unvalidated
@@ -80,6 +87,17 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   `world.lookupEvent`; two `defineEvent('Name')` types make the name
   ambiguous (rejected). `world.register(Cmd)` asserts uniqueness
   (`name_conflict`)
+- **determinism is on you** — nothing checks it, so verify by replaying the
+  same seed and actions. In systems, handlers and `Where` predicates, never:
+  - `Math.random` (use `world.rand`);
+  - `Date.now`, `new Date()`, `performance.now` (use `world.time`);
+  - timers, `await` or promises;
+  - DOM, `window`, storage or network reads (bring data in with `action`,
+    events or `setInput`);
+  - component objects kept across `restore()` (keep entity ids);
+  - `Math.sin`/`cos`/`tan`/`exp`/`log`, or non-integer `pow`, where results
+    must match across JS engines (`dmath` covers `sin`/`cos`/`atan2`/
+    `hypot`/`pow`; see below)
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
 - **loadIfPresent** for first-run boot (`@domecs/persist`)
@@ -160,7 +178,7 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
 - [ ] App runs headless with deterministic seed
 - [ ] Same seed + same acts → equal `hashSnapshot(snap, { includeChanges: true })`
   (never compare `JSON.stringify(snapshot())`; keyframes use `canonicalJson`)
-- [ ] Agent can `observe` → `act` → `step` → `snapshot` without private APIs
+- [ ] Agent can `observe` → `act` (→ `step` to idle) → `snapshot` without private APIs
 - [ ] No methods invented outside `@domecs/*` public surface
 - [ ] Tests cover at least one full episode + reset
 

@@ -60,10 +60,13 @@ export function createChangeLog() {
   // O-54: added/changed marks per type in stamp order, so a window read
   // visits the marks in the window instead of every holder of the type.
   // Entries a later mark or `forget` superseded stay until compaction.
-  // Parallel arrays (stamp, entity) so a mark allocates nothing. A log is
-  // kept only while some query reads it (`readers`), so marks of types no
-  // such query watches cost nothing extra.
-  interface MarkLog { st: number[]; en: Entity[]; readers: number }
+  // Parallel typed arrays (stamp, entity) with an explicit length, so a mark
+  // allocates nothing and compaction never shrinks the backing store (WS-5
+  // A1: plain arrays were shrunk and regrown every tick by a workload that
+  // re-marks every entity). Capacity only doubles. A log is kept only while
+  // some query reads it (`readers`), so marks of types no such query
+  // watches cost nothing extra.
+  interface MarkLog { st: Float64Array; en: Float64Array; len: number; readers: number }
   let watchedLogs = 0
   const marksLog: Record<'added' | 'changed', Map<string, MarkLog>> = {
     added: new Map(),
@@ -87,23 +90,26 @@ export function createChangeLog() {
     if (watchedLogs === 0) return
     const log = marksLog[kind].get(name)
     if (!log) return
-    log.st.push(stamp)
-    log.en.push(entity)
-    // Rebuild from the live stamps once stale entries dominate: amortized
-    // O(1) per mark, memory proportional to the live marks.
-    if (log.st.length > 64 && log.st.length > 2 * m.size) {
+    if (log.len === log.st.length) growLog(log)
+    log.st[log.len] = stamp
+    log.en[log.len] = entity
+    log.len++
+    // Compact in place once stale entries dominate: amortized O(1) per mark,
+    // live entries proportional to the live marks.
+    if (log.len > 64 && log.len > 2 * m.size) {
       // Keeping the current entries keeps stamp order: no sort needed.
-      const st: number[] = []
-      const en: Entity[] = []
-      for (let i = 0; i < log.st.length; i++) {
-        const e = log.en[i]!
-        if (m.get(e) === log.st[i]) {
-          st.push(log.st[i]!)
-          en.push(e)
+      const st = log.st
+      const en = log.en
+      let j = 0
+      for (let i = 0; i < log.len; i++) {
+        const e = en[i]!
+        if (m.get(e) === st[i]) {
+          st[j] = st[i]!
+          en[j] = e
+          j++
         }
       }
-      log.st = st
-      log.en = en
+      log.len = j
     }
   }
 
@@ -177,8 +183,8 @@ export function createChangeLog() {
     if (!log) return null
     if (!live) return []
     const st = log.st
-    const lo = upperBound(st, from)
-    const hi = upperBound(st, to)
+    const lo = upperBound(st, log.len, from)
+    const hi = upperBound(st, log.len, to)
     if (hi - lo > limit) return null
     const out: Entity[] = []
     for (let i = lo; i < hi; i++) {
@@ -215,13 +221,28 @@ export function createChangeLog() {
   function buildLog(kind: 'added' | 'changed', name: string): MarkLog {
     const pairs = Array.from(stamps[kind].get(name) ?? [], ([e, st]) => [st, e] as const)
     pairs.sort((a, b) => a[0] - b[0])
-    return { st: pairs.map((p) => p[0]), en: pairs.map((p) => p[1]), readers: 0 }
+    const capacity = Math.max(64, pairs.length * 2)
+    const log: MarkLog = { st: new Float64Array(capacity), en: new Float64Array(capacity), len: pairs.length, readers: 0 }
+    pairs.forEach(([st, e], i) => {
+      log.st[i] = st
+      log.en[i] = e
+    })
+    return log
   }
 
-  /** Index of the first stamp in ascending `st` greater than `x`. */
-  function upperBound(st: readonly number[], x: number): number {
+  function growLog(log: MarkLog): void {
+    const st = new Float64Array(log.st.length * 2)
+    const en = new Float64Array(log.en.length * 2)
+    st.set(log.st)
+    en.set(log.en)
+    log.st = st
+    log.en = en
+  }
+
+  /** Index of the first of the first `len` ascending stamps in `st` greater than `x`. */
+  function upperBound(st: Float64Array, len: number, x: number): number {
     let lo = 0
-    let hi = st.length
+    let hi = len
     while (lo < hi) {
       const mid = (lo + hi) >>> 1
       if (st[mid]! <= x) lo = mid + 1
@@ -253,10 +274,7 @@ export function createChangeLog() {
     stamps.removed.clear()
     resourceStamps.clear()
     for (const logs of [marksLog.added, marksLog.changed]) {
-      for (const log of logs.values()) {
-        log.st = []
-        log.en = []
-      }
+      for (const log of logs.values()) log.len = 0
     }
     removedLog = []
     removedHead = 0
