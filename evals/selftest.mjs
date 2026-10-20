@@ -41,6 +41,14 @@ const mutants = {
   ],
 }
 
+// Variants of a reference that are still correct and must PASS: a grader
+// that fails one is unfair (it tests an implementation choice, not the task).
+const mustPass = {
+  'change-reader': [
+    ['also reacts to OnAdded(Health)', ['Or(OnChanged(Health), OnRemoved(Health))', 'Or(OnAdded(Health), OnChanged(Health), OnRemoved(Health))'], ["import { OnChanged,", "import { OnAdded, OnChanged,"]],
+  ],
+}
+
 // 1. The references, graded exactly as an agent's work would be.
 const ref = spawnSync(process.execPath, [path.join(evalsDir, 'run.mjs'), '--agent', 'reference', '--keep'], { encoding: 'utf8' })
 process.stderr.write(ref.stderr.split('\n').filter((l) => l.startsWith('[eval]')).join('\n') + '\n')
@@ -82,6 +90,32 @@ for (const [task, list] of Object.entries(mutants)) {
     fs.rmSync(work, { recursive: true, force: true })
   }
 }
+// 2b. Correct variants must pass.
+for (const [task, list] of Object.entries(mustPass)) {
+  const taskDir = path.join(evalsDir, 'tasks', task)
+  const grader = fs.readFileSync(path.join(taskDir, 'grader.test.mjs'), 'utf8')
+  for (const [label, ...pairs] of list) {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), `domecs-variant-${task}-`))
+    fs.cpSync(template, work, { recursive: true })
+    fs.cpSync(path.join(taskDir, 'reference'), work, { recursive: true })
+    const file = path.join(work, 'src', 'sim.mjs')
+    let src = fs.readFileSync(file, 'utf8')
+    if (pairs.some(([from]) => !src.includes(from))) {
+      console.error(`[selftest] ${task} / ${label}: variant anchor not found`)
+      bad++
+      continue
+    }
+    for (const [from, to] of pairs) src = src.replace(from, to)
+    fs.writeFileSync(file, src)
+    fs.mkdirSync(path.join(work, '.grader'))
+    fs.writeFileSync(path.join(work, '.grader', 'grader.test.mjs'), grader)
+    const r = spawnSync(process.execPath, ['--test', '.grader/grader.test.mjs'], { cwd: work, encoding: 'utf8' })
+    console.error(`[selftest] ${task} / correct variant "${label}": ${r.status === 0 ? 'passes' : 'FAILS (unfair grader)'}`)
+    if (r.status !== 0) bad++
+    fs.rmSync(work, { recursive: true, force: true })
+  }
+}
+
 // 3. A candidate that exits during import, before any grader test
 // registers, makes node --test report the file as one passing test. run.mjs
 // must still fail it: it needs every named grader test to have run.

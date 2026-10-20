@@ -66,6 +66,9 @@ test('a random sequence stays exact', () => {
 test('the index follows marked changes, not rescans', () => {
   const world = createSim()
   const ids = world.listEntities([Health])
+  // Let the spawn-time marks be consumed first: an index that also reacts to
+  // OnAdded(Health) correctly reads every entity on the first step.
+  world.step(1 / 60)
   // An unmarked mutation: a change-driven index cannot see it, a rescan can.
   world.getComponent(ids[3], Health).hp = 1
   world.step(1 / 60)

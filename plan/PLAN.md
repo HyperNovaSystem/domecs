@@ -231,7 +231,10 @@ Phase 1 (committed):
 - [ ] Full canonical world hash (closes O-11).
 - [ ] Episode record/replay, as the oracle for agents.
 - [ ] Spec for mark-only-what-is-read.
-- [ ] An eval baseline, run on demand.
+- [x] An eval baseline, run on demand (2026-10-20, `evals/README.md`):
+  Claude Code and Codex both pass@1 = pass^3 = 1.0 on all four tasks, so
+  the tasks are at ceiling. Harder tasks come before the next improvement
+  run.
 
 After Phase 1, each item starts only when a named consumer (usually Studio)
 needs it *and* the bench or an eval shows the benefit. Candidates: preorder

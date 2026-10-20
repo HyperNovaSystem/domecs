@@ -13,6 +13,7 @@
  *   node evals/run.mjs --agent claude --k 3 --confirm-cost [--model sonnet] [--budget 2]
  *   node evals/run.mjs --agent codex  --k 3 --confirm-cost [--model gpt-5]
  *   node evals/run.mjs --task fixed-projectile --agent reference
+ *   node evals/run.mjs --regrade evals/results/<file>.json   # free: re-grade kept workspaces
  *
  * Paid agents run in a temp directory outside the repo and are graded in a
  * separate, fresh workspace that receives only their src/. Isolation from
@@ -20,6 +21,7 @@
  * allows; evals/README.md lists what is not covered.
  */
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -28,6 +30,11 @@ import { fileURLToPath } from 'node:url'
 const evalsDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(evalsDir, '..')
 const args = parseArgs(process.argv.slice(2))
+if (typeof args.regrade === 'string') {
+  // Agent fields are taken from the results file being re-graded.
+  args.agent = JSON.parse(fs.readFileSync(args.regrade, 'utf8')).agent
+  args['confirm-cost'] = true
+}
 const agent = args.agent ?? 'reference'
 const k = intArg('k', agent === 'reference' ? 1 : 3, 1, 50)
 const timeoutMs = intArg('timeout', 15 * 60, 30, 3 * 60 * 60) * 1000
@@ -39,6 +46,12 @@ if (agent !== 'reference' && args['confirm-cost'] !== true) {
   fail(`--agent ${agent} spends money (about $${budgetUsd} cap per Claude attempt). Re-run with --confirm-cost.`)
 }
 
+// Agents run on the CLI's own login (a Claude or ChatGPT subscription), not
+// an API key that happens to be in the shell: with a key in the env, either
+// CLI may bill the API instead.
+const agentEnv = { ...process.env }
+for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete agentEnv[key]
+
 const tasksDir = path.join(evalsDir, 'tasks')
 const tasks = fs
   .readdirSync(tasksDir)
@@ -47,10 +60,62 @@ const tasks = fs
   .map((d) => ({ dir: path.join(tasksDir, d), ...JSON.parse(fs.readFileSync(path.join(tasksDir, d, 'task.json'), 'utf8')) }))
 if (tasks.length === 0) fail(`no task matches ${args.task}`)
 
+// --regrade: re-grade the kept (failed) workspaces of an earlier run with the
+// current graders, without running any agent. Each is graded against that
+// run's own kept template (the engine it was evaluated on), and only if its
+// src is provably unchanged since the run: the recorded srcSha256, or for
+// results that predate it, no src file newer than the run's end. Passing
+// attempts' workspaces were deleted, so their verdicts carry over: fix a
+// grader only by making it fairer, and say so in the commit.
+if (typeof args.regrade === 'string') {
+  const prior = JSON.parse(fs.readFileSync(args.regrade, 'utf8'))
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const runEnd = Date.parse(prior.when)
+  const regraded = prior.attempts.map((a) => {
+    if (a.passed) return a
+    const skip = (why) => {
+      console.error(`[eval] regrade ${a.task} #${a.attempt}: kept as FAIL (${why})`)
+      return { ...a, regradeSkipped: why }
+    }
+    if (!fs.existsSync(path.join(a.work, 'src'))) return skip('workspace gone')
+    const originalTemplate = path.join(path.dirname(a.work), 'template')
+    if (!fs.existsSync(path.join(originalTemplate, 'node_modules'))) return skip("the run's engine template is gone")
+    if (a.srcSha256 ? srcSha256(a.work) !== a.srcSha256 : newestMtime(path.join(a.work, 'src')) > runEnd) {
+      return skip('src changed since the run')
+    }
+    const grade = gradeAttempt(byId.get(a.task), a.work, originalTemplate)
+    console.error(`[eval] regrade ${a.task} #${a.attempt}: ${grade.passed ? 'PASS' : 'FAIL'} (${grade.tests.pass}/${grade.tests.expected} tests)`)
+    return { ...a, passed: grade.passed, tests: grade.tests, graderSha256: graderSha256(byId.get(a.task)), regraded: true }
+  })
+  const perTask = [...new Set(regraded.map((a) => a.task))].map((task) => {
+    const runs = regraded.filter((a) => a.task === task)
+    const passes = runs.filter((a) => a.passed).length
+    return { task, k: runs.length, passes, passAt1: passes / runs.length, passPowK: passes === runs.length }
+  })
+  const out = {
+    ...prior,
+    regradedAt: new Date().toISOString(),
+    regradedFrom: path.basename(args.regrade),
+    graders: Object.fromEntries(tasks.map((t) => [t.id, graderSha256(t)])),
+    graderCommit: gitHead(),
+    graderTreeClean: gitClean('evals/tasks'),
+    passAt1: perTask.reduce((a, t) => a + t.passAt1, 0) / perTask.length,
+    passPowK: perTask.filter((t) => t.passPowK).length / perTask.length,
+    perTask,
+    attempts: regraded,
+  }
+  const file = args.regrade.replace(/\.json$/, '-regraded.json')
+  fs.writeFileSync(file, JSON.stringify(out, null, 2) + '\n', { flag: 'wx' })
+  console.error(`[eval] wrote ${path.relative(root, file)}`)
+  console.log(JSON.stringify({ ...out, attempts: undefined }, null, 2))
+  process.exit(0)
+}
+
 // Per-run scratch outside the repo: concurrent runs never share it, and no
 // path in an agent's workspace points back at the checkout (and its graders).
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-eval-run-'))
 const template = prepareTemplate(scratch)
+
 const attempts = []
 for (const task of tasks) {
   for (let i = 0; i < k; i++) {
@@ -67,6 +132,9 @@ for (const task of tasks) {
       durationMs: Date.now() - started,
       ...run.meta,
       work,
+      // What was graded, so a later --regrade can prove it is unchanged.
+      srcSha256: srcSha256(work),
+      graderSha256: graderSha256(task),
     }
     attempts.push(attempt)
     console.error(
@@ -90,7 +158,9 @@ const summary = {
   model: args.model ?? null,
   k,
   engine: JSON.parse(fs.readFileSync(path.join(root, 'packages/domecs/package.json'), 'utf8')).version,
-  commit: spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
+  commit: gitHead(),
+  treeClean: gitClean('.'),
+  graders: Object.fromEntries(tasks.map((t) => [t.id, graderSha256(t)])),
   passAt1: perTask.reduce((a, t) => a + t.passAt1, 0) / perTask.length,
   passPowK: perTask.filter((t) => t.passPowK).length / perTask.length,
   costUsd: attempts.some((a) => a.costUsd != null) ? attempts.reduce((a, t) => a + (t.costUsd ?? 0), 0) : null,
@@ -132,12 +202,6 @@ function prepareTemplate(scratch) {
   fs.mkdirSync(path.join(template, 'src'))
   return template
 }
-
-// Agents run on the CLI's own login (a Claude or ChatGPT subscription), not
-// an API key that happens to be in the shell: with a key in the env, either
-// CLI may bill the API instead.
-const agentEnv = { ...process.env }
-for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete agentEnv[key]
 
 function runAgent(task, work) {
   if (agent === 'reference') {
@@ -203,11 +267,11 @@ function runAgent(task, work) {
  * grader to have run and passed; a candidate that exits during import, before
  * any test registers, shows up as one passing "file" and must not count.
  */
-function gradeAttempt(task, work) {
+function gradeAttempt(task, work, templateDir = template) {
   const graderFile = path.join(task.dir, 'grader.test.mjs')
   const expected = (fs.readFileSync(graderFile, 'utf8').match(/^test\(/gm) ?? []).length
   const grading = fs.mkdtempSync(path.join(path.dirname(work), `${path.basename(work)}-grade-`))
-  fs.cpSync(template, grading, { recursive: true })
+  fs.cpSync(templateDir, grading, { recursive: true })
   fs.rmSync(path.join(grading, 'src'), { recursive: true, force: true })
   if (fs.existsSync(path.join(work, 'src'))) {
     fs.cpSync(path.join(work, 'src'), path.join(grading, 'src'), { recursive: true, dereference: true })
@@ -227,6 +291,41 @@ function gradeAttempt(task, work) {
   fs.rmSync(grading, { recursive: true, force: true })
   const passed = r.status === 0 && tests.fail === 0 && expected > 0 && tests.pass === expected && okNamed === expected
   return { passed, tests }
+}
+
+/** sha256 over the workspace's src/ files (sorted relative paths and contents). */
+function srcSha256(work) {
+  const dir = path.join(work, 'src')
+  const hash = createHash('sha256')
+  if (!fs.existsSync(dir)) return hash.digest('hex')
+  const files = fs.readdirSync(dir, { recursive: true }).map(String).sort()
+  for (const f of files) {
+    const full = path.join(dir, f)
+    if (!fs.statSync(full).isFile()) continue
+    hash.update(f + '\0').update(fs.readFileSync(full)).update('\0')
+  }
+  return hash.digest('hex')
+}
+
+function graderSha256(task) {
+  return createHash('sha256').update(fs.readFileSync(path.join(task.dir, 'grader.test.mjs'))).digest('hex')
+}
+
+function newestMtime(dir) {
+  let newest = 0
+  for (const f of fs.readdirSync(dir, { recursive: true }).map(String)) {
+    newest = Math.max(newest, fs.statSync(path.join(dir, f)).mtimeMs)
+  }
+  return newest
+}
+
+function gitHead() {
+  return spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+}
+
+/** Whether `pathspec` has no uncommitted changes, so gitHead() describes it. */
+function gitClean(pathspec) {
+  return spawnSync('git', ['status', '--porcelain', '--', pathspec], { cwd: root, encoding: 'utf8' }).stdout.trim() === ''
 }
 
 function run(cmd, cliArgs, opts) {
