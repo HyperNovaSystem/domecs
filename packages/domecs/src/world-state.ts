@@ -109,8 +109,14 @@ export interface WorldStateCtx {
   getRngRoot(): RngState
   /** Every own stream the world has created, by key (§4.4). */
   getStreams(): ReadonlyMap<string, Rng>
+  /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
+  getStreamOwners(): Record<string, string> | undefined
   /** Adopt a validated snapshot's root and streams (§4.4). */
-  restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined): void
+  restoreStreams(
+    root: RngState | undefined,
+    streams: Readonly<Record<string, RngState>> | undefined,
+    owners: Readonly<Record<string, string>> | undefined,
+  ): void
   getNextId(): Entity
   setNextId(id: Entity): void
   setEmptyArch(arch: ArchetypeBucket): void
@@ -163,12 +169,14 @@ export function buildSnapshot(
     rngStreams ??= {}
     setOwn(rngStreams, key, rng.seed())
   }
+  const rngOwners = ctx.getStreamOwners()
   const root = ctx.getRngRoot()
   return {
     version: SNAPSHOT_VERSION,
     seed: ctx.getRand().seed(),
     rngRoot: [root[0], root[1], root[2], root[3]],
     ...(rngStreams !== undefined ? { rngStreams } : {}),
+    ...(rngOwners !== undefined ? { rngOwners } : {}),
     tick: ctx.time.tick,
     scaledTime: ctx.clock.totalScaledSeconds,
     ...(fixedBacklog > 0 ? { fixedBacklog, fixedStep: ctx.time.fixedStep } : {}),
@@ -395,7 +403,7 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   // captured `world.rand` handle follows the restore (O-46).
   if (!rewindRng(ctx.getRand(), s.seed)) ctx.setRand(restoreRng(s.seed))
   // §4.4: own streams — the snapshot's root and map, missing keys re-derived.
-  ctx.restoreStreams(s.rngRoot, s.rngStreams)
+  ctx.restoreStreams(s.rngRoot, s.rngStreams, s.rngOwners)
   ctx.time.tick = s.tick
   ctx.time.delta = 0
   ctx.time.scaledDelta = 0
@@ -559,6 +567,13 @@ function validateEnvelope(s: WorldSnapshot): void {
       if (!isRngState(streams[key])) {
         throw invalid(`rngStreams[${JSON.stringify(key)}]`, 'an array of 4 finite numbers', streams[key])
       }
+    }
+  }
+  if (s.rngOwners !== undefined) {
+    const owners: unknown = s.rngOwners
+    if (!isRecord(owners)) throw invalid('rngOwners', 'an object', owners)
+    for (const key of Object.keys(owners)) {
+      if (typeof owners[key] !== 'string') throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a string', owners[key])
     }
   }
   if (!isNonNegativeInt(s.tick)) throw invalid('tick', 'an integer >= 0', s.tick)

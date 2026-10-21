@@ -91,7 +91,15 @@ All notable changes to DOMECS are documented here. The format is based on
   frame stayed in the log and the next step's emits were attached to it.
   `runBranch` called again on the same branch with the same log keeps the
   input the branch's systems left, instead of re-applying the log's, so
-  two `steps: 1` calls equal one `steps: 2` call. (O-80, O-81)
+  two `steps: 1` calls equal one `steps: 2` call; a call with another log
+  is a new start. `Recorder.stop()` throws when called during a tick.
+  (O-80, O-81)
+- `@domecs/core`: snapshots record `rngOwners` (cursor key → stream key)
+  for live own-stream systems that do not hold their cursor key's stream,
+  and restore re-keys each live own-stream system from it. Before, the
+  survivor of two same-named systems whose first was removed drew from the
+  removed one's stream after a restore into a world with only the current
+  systems. `@domecs/persist`'s `firstDivergence` compares the field. (O-77)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

@@ -1593,7 +1593,11 @@ export interface Recorder {
     readonly active: boolean;
     /** The log so far (a copy). */
     peek(): ActLog;
-    /** Stop recording and return the log. Later calls return the same log (a copy). */
+    /**
+     * Stop recording and return the log. Later calls return the same log (a
+     * copy). Throws `Error` when called during a tick: the running frame has
+     * not ended.
+     */
     stop(): ActLog;
 }
 /**
@@ -2101,6 +2105,16 @@ export interface WorldSnapshot {
      * undefined }` type-checks under `exactOptionalPropertyTypes`.
      */
     readonly rngStreams?: Readonly<Record<string, RngState>> | undefined;
+    /**
+     * §4.4: which stream each live own-stream system holds, by cursor key,
+     * for the systems whose stream key is not their cursor key (a survivor of
+     * same-named systems whose first was removed holds `name#1` while its
+     * cursor key is `name`). Omitted when every system holds its cursor key.
+     * Restore gives each live own system the stream this names (else its
+     * cursor key's), so a world built with only the current systems draws as
+     * the source does.
+     */
+    readonly rngOwners?: Readonly<Record<string, string>> | undefined;
     readonly tick: number;
     /**
      * Cumulative unquantized scaled time in seconds — the drift-free total
@@ -2519,8 +2533,10 @@ export interface WorldStateCtx {
     getRngRoot(): RngState;
     /** Every own stream the world has created, by key (§4.4). */
     getStreams(): ReadonlyMap<string, Rng>;
+    /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
+    getStreamOwners(): Record<string, string> | undefined;
     /** Adopt a validated snapshot's root and streams (§4.4). */
-    restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined): void;
+    restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined, owners: Readonly<Record<string, string>> | undefined): void;
     getNextId(): Entity;
     setNextId(id: Entity): void;
     setEmptyArch(arch: ArchetypeBucket): void;

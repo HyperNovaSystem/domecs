@@ -119,6 +119,33 @@ describe('§4.4 per-system RNG streams', () => {
     expect(run(true)).toEqual(firstDraws(deriveStream(seedToState(9), 's'), 4))
   })
 
+  it('the survivor of two same-named own systems keeps its stream through a restore into a fresh world', () => {
+    const live = createWorld({ headless: true, seed: 9 })
+    const a = live.spawn([entry(Draws, { log: [] })])
+    const b = live.spawn([entry(Draws, { log: [] })])
+    const first = drawer(live, 's', 'own', a)
+    drawer(live, 's', 'own', b) // key s#1
+    live.stepOnce()
+    live.stepOnce()
+    first.remove()
+    live.stepOnce()
+    const snap = live.snapshot()
+    // A fresh world with only the current systems: its one 's' claims key s.
+    const fresh = createWorld({ headless: true, seed: 9 })
+    drawer(fresh, 's', 'own', b)
+    fresh.restore(JSON.parse(JSON.stringify(snap)) as WorldSnapshot)
+    for (let i = 0; i < 3; i++) {
+      live.stepOnce()
+      fresh.stepOnce()
+    }
+    expect(logOf(fresh, b)).toEqual(logOf(live, b))
+    expect(hashSnapshot(fresh.snapshot())).toBe(hashSnapshot(live.snapshot()))
+    // A survivor that holds its cursor key writes no owner map.
+    const plain = createWorld({ headless: true, seed: 9 })
+    drawer(plain, 's', 'own', plain.spawn([entry(Draws, { log: [] })]))
+    expect(plain.snapshot().rngOwners).toBeUndefined()
+  })
+
   it('removal keeps the entry; re-registering under the key resumes it', () => {
     const w = createWorld({ headless: true, seed: [4, 3, 2, 1] })
     const a = w.spawn([entry(Draws, { log: [] })])

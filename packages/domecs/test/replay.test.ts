@@ -1089,6 +1089,23 @@ describe('emits the step reproduces', () => {
     expect(log.frames[1]!.endActs).toBeUndefined()
   })
 
+  it('stop() inside a tick throws and leaves the recorder running', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const rec = createRecorder(w)
+    let thrown: unknown
+    w.system('stopper', {}, () => {
+      try {
+        rec.stop()
+      } catch (e) {
+        thrown = e
+      }
+    })
+    w.stepOnce()
+    expect(String(thrown)).toMatch(/outside a tick/)
+    expect(rec.active).toBe(true)
+    expect(rec.stop().frames.map((f) => f.tick)).toEqual([0])
+  })
+
   it('stop() notices a draw on world.rand after the last step', () => {
     const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
     const rec = createRecorder(w, { hashEvery: 1 })

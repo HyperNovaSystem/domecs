@@ -46,6 +46,7 @@ import { err, normalizeCause, ok, toJsonValue, type Result } from './result.js'
 import { createRng, deriveStream, rewindRng, seedToState, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
+  setOwn,
   SNAPSHOT_VERSION,
   type SnapshotOptions,
   type WorldSnapshot,
@@ -830,7 +831,16 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     getRngRoot: () => rngRoot,
     getStreams: () => streams,
-    restoreStreams: (root, rec) => restoreStreams(root, rec),
+    getStreamOwners: () => {
+      let owners: Record<string, string> | undefined
+      for (const [sys, cursor] of cursorKeys()) {
+        if (sys.rngKey === undefined || sys.rngKey === cursor) continue
+        owners ??= {}
+        setOwn(owners, cursor, sys.rngKey)
+      }
+      return owners
+    },
+    restoreStreams: (root, rec, owners) => restoreStreams(root, rec, owners),
     getNextId: () => nextId,
     setNextId: (id) => {
       nextId = id
@@ -1185,18 +1195,33 @@ export function createWorld(options: WorldOptions = {}): World {
   function restoreStreams(
     root: RngState | undefined,
     rec: Readonly<Record<string, RngState>> | undefined,
+    owners: Readonly<Record<string, string>> | undefined,
   ): void {
     rngRoot = root !== undefined ? seedToState(root) : createRoot
     const prev = streams
     const next = new Map<string, Rng>()
     const held = new Map<string, Rng>()
+    // A snapshot with streams says which stream each live system holds: its
+    // cursor key's, unless `owners` names another. This world's own key
+    // history (which keys were free when each system registered) does not
+    // decide it.
+    const keys = rec !== undefined ? cursorKeys() : undefined
     for (const sys of scheduler.all()) {
-      if (sys.rngKey !== undefined && sys.ownRand !== undefined) held.set(sys.rngKey, sys.ownRand)
+      if (sys.rngKey === undefined || sys.ownRand === undefined) continue
+      if (keys !== undefined) {
+        const cursor = keys.get(sys)!
+        sys.rngKey = owners !== undefined && Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
+      }
+      held.set(sys.rngKey, sys.ownRand)
     }
+    // A generator a live system now holds under another key is not reused
+    // for its old key.
+    const live = new Set(held.values())
     if (rec !== undefined) {
       for (const key of Object.keys(rec)) {
         const state = rec[key]!
-        const rng = held.get(key) ?? prev.get(key)
+        const old = prev.get(key)
+        const rng = held.get(key) ?? (old !== undefined && !live.has(old) ? old : undefined)
         if (rng !== undefined && rewindRng(rng, state)) next.set(key, rng)
         else next.set(key, createRng(state))
       }

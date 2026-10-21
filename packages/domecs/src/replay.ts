@@ -252,7 +252,11 @@ export interface Recorder {
   readonly active: boolean
   /** The log so far (a copy). */
   peek(): ActLog
-  /** Stop recording and return the log. Later calls return the same log (a copy). */
+  /**
+   * Stop recording and return the log. Later calls return the same log (a
+   * copy). Throws `Error` when called during a tick: the running frame has
+   * not ended.
+   */
   stop(): ActLog
 }
 
@@ -564,6 +568,7 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
     },
     stop() {
       if (finalLog === null) {
+        if (tap.inTick) throw new Error('domecs: Recorder.stop must be called outside a tick (not from a system, hook or handler)')
         // A draw on world.rand after the last step is a gap too.
         checkRand()
         detach()

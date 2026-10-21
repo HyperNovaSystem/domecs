@@ -247,6 +247,7 @@ export type Divergence =
         | 'nextId'
         | 'rngRoot'
         | 'rngStreams'
+        | 'rngOwners'
         | 'fixedBacklog'
         | 'pendingEvents'
     }
@@ -493,6 +494,7 @@ const STATE_KEYS = [
   'nextId',
   'rngRoot',
   'rngStreams',
+  'rngOwners',
   'fixedBacklog',
   'pendingEvents',
 ] as const
@@ -500,7 +502,7 @@ const STATE_KEYS = [
 /**
  * The first difference between two snapshots, in canonical order: the
  * top-level state fields (`seed`, `tick`, `scaledTime`, `nextId`,
- * `rngRoot`, `rngStreams`, `fixedBacklog` with its `fixedStep`, then the
+ * `rngRoot`, `rngStreams`, `rngOwners`, `fixedBacklog` with its `fixedStep`, then the
  * in-flight `pendingEvents` as a whole, §4.7), then
  * the lowest entity id that differs (added, removed, or its first field
  * change by sorted component name and key; a component present on one side
