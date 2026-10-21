@@ -1,8 +1,20 @@
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and `pnpm publish:npm`
+ * stamps the plain version (`scripts/stamp-build-id.mjs`), so a published
+ * build carries it. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
 // file: index.d.ts
 export { defineView } from './view.js';
 export { mountDOM } from './mount.js';
 export type { ViewDef, ChangedOn } from './view.js';
 export type { MountOptions, MountHandle, MountError } from './mount.js';
+export { BUILD_ID } from './build-id.js';
 
 // file: mount.d.ts
 import type { World } from '@domecs/core';

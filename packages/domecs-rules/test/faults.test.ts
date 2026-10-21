@@ -67,7 +67,7 @@ describe('rules — compile-time type errors', () => {
     const r = compileRule(rule({ actions: [{ set: 'FtHp.hp', expr: 'FtHp.hp + "1"' }] }), resolve)
     expect(r.rule).toBeNull()
     expect(r.errors).toEqual([
-      { rule: 'r', position: 10, message: 'Expected a number for "+", got string' },
+      { rule: 'r', position: 10, message: 'Expected a number for "+", got string', field: { action: 0, part: 'expr' } },
     ])
     const r2 = compileRule(rule({ when: '-"a" > 0', actions: [] }), resolve)
     expect(r2.errors[0]).toMatchObject({ position: 1, message: 'Expected a number for unary "-", got string' })

@@ -108,6 +108,15 @@ function clonePlain(value: unknown, seen: Map<object, unknown>): unknown {
   return out
 }
 
+/** Whether `value` is a {@link ComponentType} made by `defineComponent`. */
+export function isComponentType(value: unknown): value is ComponentType<unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    (value as { __tag?: unknown }).__tag === tag
+  )
+}
+
 export function internal<T>(type: ComponentType<T>): InternalComponentType<T> {
   return type as InternalComponentType<T>
 }

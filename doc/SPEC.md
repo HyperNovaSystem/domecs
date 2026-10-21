@@ -1,6 +1,6 @@
 # DOMECS — Specification v1.0
 
-**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 2.0.0; `@domecs/sprites`, `@domecs/worker`, and `@domecs/math` are planned and do not exist yet. Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
+**Status:** v1.0 — final/authoritative. Code has shipped: seven `@domecs/*` packages (`core`, `dom`, `input`, `persist`, `inspector`, `scene`, `rules`) are published at 2.0.0; `@domecs/sprites` and `@domecs/worker` are planned and do not exist yet (the once-planned `@domecs/math` is superseded by `dmath` in `@domecs/core`, 2.1). Incorporates the design critique (formerly `critique.md`, removed — see git history) and the exemplar requirements in `exemplars.md`. References to "v0.1" below are retained as historical context describing the feature set this specification originally locked in; the README supersedes only where marked.
 
 **Scope:** this document specifies the *behavior* of DOMECS. The API surface is in `api.md`.
 
@@ -28,8 +28,8 @@ Shipped (1.0.0; `scene` and `rules` since 2.0.0):
 @domecs/input          — input collector: keyboard, pointer, touch, gamepad
 @domecs/persist        — snapshot save/load over a Storage interface, migrations, schema I/O
 @domecs/inspector      — headless fault/timeline recorder (see §10)
-@domecs/scene          — Parent component, hierarchy queries, transform composition
-@domecs/rules          — data-defined expression language and rule interpreter
+@domecs/scene          — Parent component, hierarchy queries, transform composition, world-bound spatial index (2.2), contact events (2.3)
+@domecs/rules          — data-defined expression language and rule interpreter (Appendix A)
 ```
 
 Planned (do not exist yet):
@@ -38,6 +38,10 @@ Planned (do not exist yet):
 @domecs/sprites        — sprite sheet components + frame animation (DOM renderer plugin)
 @domecs/worker         — off-main-thread simulation host
 ```
+
+Deterministic math is not a separate package: `@domecs/core` exports `dmath` (2.1; §8). The `@domecs/math` package earlier drafts planned will not ship.
+
+The spatial grid is split the same way (2.2; §2.12): the pure, world-free `createSpatialGrid` lives in `@domecs/core`, so `@domecs/rules` can build on it without depending on `@domecs/scene`; the world-bound `createSpatialHash` lives in `@domecs/scene`.
 
 ### Module dependency DAG
 
@@ -108,7 +112,9 @@ enum `options`, label, readonly). `world.describeComponent(type)` returns a
 (`fieldsSource: 'schema'`), otherwise inferred from `defaults` by runtime
 `typeof` (`'defaults'`), otherwise empty (`'none'`). This lets dev tools render
 edit widgets from the world alone, with no per-app schema registry. Reflection
-is descriptive only — it does not validate or constrain component values.
+is descriptive only — it does not validate or constrain component values. A
+`FieldSchema` MAY carry a free-text `description` (units, what 0 means) for
+humans and agents; `@domecs/persist` round-trips it.
 
 **Invariant (I-1 — tick-scoped references).**  A reference obtained from a query result, `world.getComponent`, or any adapter wrapper is valid *only within the tick that produced it*.  Consumers must not stash the reference across tick boundaries; they must copy the data they need, or re-query on the next tick.  This applies equally to vanilla systems, Svelte `$state` proxies, and React `useQuery` results — the framework adapters do not, and cannot, extend the lifetime of a component reference.
 
@@ -119,6 +125,35 @@ v0.1 treats I-1 as a caller contract, not as a proxy-enforced runtime feature. S
 A world owns: entities, component stores, archetype index, query cache, system scheduler, event buffer, time state, input state, plugins, and a PRNG.
 
 Worlds are independent.  Two worlds never share mutable state.
+
+**Registry and name lookup (§4.5 of the harness spec; O-30, O-78).** A world
+keeps three name-keyed registries — components, events, resources — each its
+own namespace. A type enters its registry implicitly on first use (a component
+store access, an emit / `on` / event-system trigger, a resource access) or
+eagerly through `world.register(...types)`, so reflection lists it before
+anything uses it. `register` is idempotent, all-or-nothing, and returns
+`err({ kind: 'name_conflict', registry, name })` (never throws) when a name is
+already held by a different type object of the same kind, or by another
+argument of the same call; it throws `TypeError` only for a value that is not a
+type. It touches nothing the snapshot carries (no resource default is
+materialized), and registries persist across `restore()`.
+
+`lookupComponent(name)` / `lookupResource(name)` return the registered type or
+`undefined`. `lookupEvent(name)` returns `undefined` both for an unknown name
+and for an ambiguous one (two distinct known event types share it, §2.6).
+`componentTypes()`, `eventTypes()` and `resourceTypes()` list each registry in
+first-seen order.
+
+**Manifest.** `world.describe()` is the single machine-readable description of
+the live world: `components`, `resources`, `events` (descriptors, including an
+event's `description`), `systems`, `plugins`, `capabilities`,
+`snapshotVersion`, and the live counts `entityCount`, `componentCounts`,
+`archetypes`. Each `systems` entry is `{ name, schedule, enabled, priority,
+order, components, meta? }`: `components` is the sorted, de-duplicated list of
+component names every leaf of the system's `query` / `reactsTo` names (`Not`
+branches included, resource leaves excluded), computed once at registration;
+`meta` is the system's `SystemDef.meta`, cloned at registration and again per
+call. `describe()` stays O(systems + types).
 
 ### 2.4 Query
 
@@ -214,7 +249,7 @@ interface SystemContext {
   input:    InputSnapshot    // tick-consistent
   events:   EventView        // tick-consistent; emit() schedules for next tick
   world:    WorldAPI         // spawn, despawn, component mutation
-  rand:     Rng              // seeded per-world PRNG
+  rand:     Rng              // world.rand, or the system's own stream (rng: 'own', §2.8)
   state:    unknown          // system-local slot; see SystemDef.state
 }
 ```
@@ -226,13 +261,26 @@ world.system(name, {
   query:     QueryDef,
   schedule:  'tick' | 'fixed' | 'event' | 'once' | 'reactive',
   priority?: number,         // lower runs first; default 0
+  order?:    number,         // tie-break within a priority; default 0, finite (§3)
   rateHz?:   number,         // fixed only
   triggers?: EventType[],    // event only
   reactsTo?: QueryDef,       // reactive only
   enabled?:  () => boolean,
   state?:    unknown,        // system-local; preserved across hot-swap (§9.5)
+  meta?:     JsonValue,      // annotation for tools; cloned, surfaced in describe()
+  rng?:      'shared' | 'own', // which stream ctx.rand is; default 'shared' (§2.8)
 }, fn)
 ```
+
+`rng` picks the generator `ctx.rand` is: `'shared'` (default) is `world.rand`;
+`'own'` is the system's own stream (§2.8). `describe().systems[i].rng` reports
+it. Any other value makes `world.system()` throw before anything is registered.
+
+`meta` is a JSON-safe annotation the runtime never reads; `describe().systems`
+reports a clone of it. `@domecs/rules` sets `{ rule: name }` on each rule's
+system. A `meta` JSON cannot carry (a function, `undefined`, a non-finite
+number, a class instance, a cycle) makes `world.system()` throw `TypeError`
+before anything is registered.
 
 `state` is the system's private slot, readable and writable as `ctx.state` inside `fn`. It is preserved across dev-mode hot-swap (§9.5). It is **not** part of the world snapshot — on `restore()`, systems re-register and `state` resets. Closures over module-scope values are not preserved across hot-swap; swap-durable state must live in `state`.
 
@@ -244,7 +292,19 @@ Events are typed messages.  Emitted events are **buffered** and flushed at step 
 
 Events never carry live component references; they carry data or entity ids.
 
+**Event names.** Event identity is the type object (F-8): two
+`defineEvent('X')` calls make distinct types that coexist on the bus without
+colliding. The name is a label, and a name two known types share is
+*ambiguous*: `world.lookupEvent('X')` returns `undefined`, and
+`bridge.act('X', …)` is rejected without emitting or ticking. An agent-facing
+command name MUST be unique within a world; `world.register(Cmd)` asserts it
+(`name_conflict` otherwise) and makes the command known before first use. An
+event MAY carry a free-text `description` (`defineEvent(name, { description })`),
+surfaced by `describeEvent` and `describe().events`.
+
 An event emitted during an event system's execution is delivered at step 1 of *the next tick* (not the same tick, not the end of the current tick).  This is the rule; it is not a surprise.
+
+**Pending events (§7.1).** The undelivered queue is readable with `world.pendingEvents()` — `{ type, payload }` pairs in bus order (by first emit of each type, then payload order within a type), a fresh array that consumes nothing. A snapshot taken with `{ pendingEvents: true }` carries the queue, so a fork taken between the emit at tick N and its delivery at tick N+1 sees the same deliveries as the live world. Restoring such a snapshot resolves every event name through `world.lookupEvent`: a world that restores snapshots with events in flight must know those types — `register` them in setup, or subscribe to them, or name them as an event system's `triggers`.
 
 ### 2.7 Time
 
@@ -287,6 +347,15 @@ Because `elapsed`, the fixed-step count, and `fixedAccumulator` are all function
 ### 2.8 PRNG
 
 `world.rand` is a seeded PRNG. Default algorithm: **xoshiro128**\*\*. The seed is part of the snapshot. `Math.random` must not be used by any authoritative system. Nothing detects it at run time (§8).
+
+**Per-system streams (2.1, O-77, normative).** `world.rand` is the **shared** stream: every system that draws from it changes what every later draw returns, so adding, removing or editing one random-drawing system reshuffles all the others. A system registered with `rng: 'own'` instead receives its own stream as `ctx.rand`:
+
+- **Root.** The world's root seed state is `seedToState(options.seed ?? 0)`, fixed at `createWorld`; it never advances. `restore()` adopts a snapshot's `rngRoot` (a v2 snapshot, which has none, restores onto the world's own `createWorld` root, whatever it restored before), so systems registered after a restore derive the streams the source world would.
+- **Key.** The stream key is fixed at registration: the lowest of `name`, `name#1`, `name#2`, … that no live own-stream system holds. With no earlier same-named system removed, that is the system's cursor key (§7.1: its name, or `name#k` for the k-th live system sharing it); removing a system and re-registering it while a same-named one stays live (two rules handles sharing a rule name, each `update()`) resumes the key it left. Rules are keyed `rule:<name>`.
+- **Derivation.** `deriveStream(root, key)` (exported from `@domecs/core`): `h` = FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`; word `i` of the state is the first `splitmix32` output seeded with `root[i] XOR rotl(h, 8·i)`; an all-zero state is fixed up as `seedToState` does; then 8 outputs are discarded as warm-up. The function is pinned by a golden test and is part of the snapshot contract: changing it requires a `SNAPSHOT_VERSION` bump.
+- **Lifetime is by key.** The world keeps every own stream it has created, by key. A system registering under key *k* resumes the stream if one exists (a removed system's stream is kept), otherwise it derives it from the root. `RulesHandle.update()` removes and re-registers every rule, and the streams survive that, so a live world and a fresh fork stay equal. The map grows by the number of distinct own-stream keys ever used (renaming a rule leaves an orphan entry, which round-trips).
+- **Snapshot.** `snapshot()` writes `rngRoot` always and `rngStreams` (every entry) once a stream exists (§7.1). A live own-stream system whose stream key is not its cursor key (the survivor of two same-named systems after the first was removed holds `name#1` with cursor key `name`) is listed in `rngOwners` (cursor key → stream key; omitted when there is none). `restore()` of a snapshot with `rngStreams` gives each live own-stream system the stream `rngOwners` names for its cursor key (else its cursor key's), whatever keys this world assigned at registration, so a world built with only the current systems draws as the source does. It then replaces the map with `rngStreams` (absent: empty), rewinding live generators in place so captured `ctx.rand` handles follow (O-46), and re-derives from the restored root the stream of every registered own-stream system whose key is missing and adds it to the map. Reseeding is data-only: `{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }` restores into a world whose shared stream and every own stream derive from `s`.
+- **Scope.** Adding, removing or editing system A does not change own-stream system B's draws. B's own draws still depend on how many entities it visits (one stream per system; per-entity streams are out of scope). An own-stream system that calls `world.rand` directly still draws the shared stream: use `ctx.rand`.
 
 ### 2.9 Change tracking
 
@@ -356,7 +425,40 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 
 **Change tracking (normative).** Resource changes are marks like component marks (§2.9): `setResource` and `markResourceChanged` record the change whenever they are called, and `OnChangedResource(R)` (§2.4) reports it within each reader's change window. `setResource` replaces the value and marks it changed; `markResourceChanged` marks without replacing, for callers that mutate a resource object in place. Both wake an idle driver (§3 idle suspension) so a resource change cannot be lost to suspension.
 
-**Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first, so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
+**Snapshot (normative).** Resources are part of `world.snapshot()` and `restore()` (§7.1): the snapshot carries a `resources` map of name → deep-cloned value, omitted entirely when no resource has a value. `restore()` clears all live resources first (except transient ones, below), so restoring a snapshot with no `resources` yields a world whose resources fall back to their defaults. Resource values follow the same JSON-serializability contract as component values.
+
+**Transient resources (normative; 2.3, O-36).** `defineResource(name, { transient: true })` declares render-only or derived state that a host rebuilds rather than saves (a camera, a HUD cache) — the resource counterpart of transient components. `snapshot()` writes neither its value nor its change marks (`changes`, §7.1), so changing it leaves the default and the strict `hashSnapshot` unchanged and `@domecs/persist` never saves it. `restore()` keeps its live value and its live value only: a value the snapshot carries for a registered transient resource (a save written before the flag) is ignored and not validated. Restored into a fresh world, it falls back to its default. Its change marks are cleared by a restore like every other mark, so an `OnChangedResource` reader does not report a change made before the restore. Everything else is unchanged: `getResource`, `setResource` (with `validate`), `markResourceChanged`, `OnChangedResource` within a run, and `describeResource(R).transient` reports the flag. The flag is read from the registered type, so a name the restoring world has not registered yet is restored like any other resource; the first use that registers it as transient (`getResource`, `setResource`, `markResourceChanged`, `describeResource`, or a plugin's `resources`) drops that value, so the stale value is never read and the next snapshot does not carry it.
+
+### 2.12 Spatial queries
+
+2D neighbour queries over points (2.2; O-8). Two layers:
+
+- **`createSpatialGrid(cellSize)`** (`@domecs/core`) — a pure, world-free uniform grid keyed by entity id: `set(id, x, y)` inserts or moves, `delete`, `clear`, `position`, `size`; queries `within(x, y, r, accept?)`, `nearest(x, y, { maxDistance?, accept? }?)` and `pairs(r, accept?)`.
+- **`createSpatialHash(world, { component, x?, y?, cellSize })`** (`@domecs/scene`) — a `SpatialIndex` over one position component (fields `x`/`y` by default). `refresh()` rebuilds from the component's current values in ascending id order (`iterEntitiesWith`); the index also refreshes once at creation. Queries take tag filters (`within(x, y, r, filter?)`, `nearest(x, y, { maxDistance?, filter?, exclude? }?)`, `pairs(r, a, b)`); a filter is a list of component types the entity must all hold, read live with `world.has` at query time. `dispose()` drops the index; any later call throws.
+
+**Results (normative).**
+
+- Distance is compared squared, as `dx * dx + dy * dy` with `dx = px - x`, `dy = py - y`, against `r * r`. Every query returns exactly what a brute-force scan over the indexed points with that expression returns. A negative or NaN radius or `maxDistance` matches nothing.
+- Results **never depend on `cellSize`**, on insertion order, or on the order cells are visited. Cell size is a performance setting only.
+- `within` is sorted by ascending id. `nearest` returns the minimum distance, ties → lowest id. `pairs(r)` (grid) lists unordered pairs `a < b`, sorted by `(a, b)`. `pairs(r, a, b)` (index) lists ordered pairs whose first element holds `a` and second holds `b`: for `a ≠ b` every such pair (an entity holding both tags can appear on either side), for `a == b` first < second; sorted by `(first, second)`.
+- A position with a non-finite coordinate (NaN, ±∞), or for the index a field that is not a number, is not indexed (setting one removes the id).
+- `accept` callbacks should be pure: `within` and `pairs` call them in output order on the matches; `nearest` may call them in any order and any number of times.
+
+**Cells.** Cell coordinates are `Math.floor(v / cellSize)`: an exact integer, computed deterministically, but the division rounds, so a point within a few ulps of `v` of a cell border can land in the neighbouring cell; the bounds below absorb that. Cell keys pack the integer coordinates by an exact rule (small integer, then a 52-bit integer, then a string), so distinct cells never share a key. A point whose cell coordinate exceeds 2^50 in magnitude (or overflows) is kept on a side list that every query scans. `cellSize` must be finite and > 0 (`RangeError` otherwise).
+
+**`nearest` termination.** Rings of cells expand around the query cell. The search stops only when a conservative lower bound on the distance of every unvisited cell is strictly greater than the best distance found (or than `maxDistance`): for ring `k` the bound is `(k − 1) × cellSize`, reduced by a relative slack of 2^-40 and an absolute slack of `(|x| + |y| + cellSize) × 2^-40`, compared as squared distance, so floating-point rounding can only make the search visit more cells, never fewer. When a ring would need more cell lookups than there are occupied cells, the search scans every point instead (same result by definition). `within` and `pairs` likewise fall back to a scan when the covering block of cells is larger than the occupied grid.
+
+**Derived state (normative).** Grids and indexes are never part of a snapshot (§7.1); building, refreshing or querying one leaves `hashSnapshot` unchanged. After `restore()` rebuild or `refresh()` them from the restored positions. Positions are as of the last `refresh()`; call it once per step before querying (for example at the start of the system that queries).
+
+**Cost** (`bench/` `spatial` workload, informational): `refresh()` targets ≤ 0.1 ms and `nearest` ≤ 2 µs average at 1000 uniformly spread entities. In 2.2 `refresh()` is a full O(n) pass; an incremental refresh from change windows is a follow-up. Out of scope: occupancy layers (`firstAt`/`allAt`/`isBlocked`, the rest of O-8), 3D, AABB/broadphase trees.
+
+**Contacts (2.3; O-85).** `installContacts(options)` (`@domecs/scene`) is a plugin whose system (default `fixed`, priority 150: the contacts band of §3) turns overlaps into `Contact` events for rules:
+
+- **Colliders** are the entities holding the position component (`position.component`, fields `x`/`y` by default) with a finite position, a radius (`radius`: a fixed finite number ≥ 0, or a component field read live that must be a finite number ≥ 0) and at least one tag of `pairs`. Two colliders overlap when `dx * dx + dy * dy <= (ra + rb) * (ra + rb)` (touching counts). Each run rebuilds a `createSpatialGrid` from the live positions; results never depend on `cellSize`.
+- **Pairs (normative).** For each tag pair `[A, B]`, a pair `[a, b]` has `a` holding `A` and `b` holding `B`; for `A == B`, `a < b`. An entity holding both tags can appear on either side; a pair found through two tag pairs counts once. The current set is sorted by `(a, b)` and diffed against the `ContactState` resource (`{ pairs }`, sorted), giving `begin` (new), `end` (gone) and, with `stay: true`, `stay` (kept).
+- **Emission (normative).** `Contact { a, b, phase }` (a declared schema; `phase` is `'begin' | 'stay' | 'end'`) is emitted with `ctx.events.emit` in phase order `end`, `begin`, `stay`, each sorted by `(a, b)`, so it is delivered next tick (§4.1): rules see it through `on: 'Contact', self: 'event.a', other: 'event.b'` (Appendix A). A despawned entity, or one that lost its tag, radius or finite position, produces its `end` once on the next run.
+- **State.** `ContactState` is an ordinary resource, so a snapshot carries it and a restored world continues `begin`/`end` exactly (live == fork); a fork also needs `snapshot({ pendingEvents: true })` (§7.1) for contacts emitted but not yet delivered. The grid is derived state.
+- `installContacts` registers `Contact` and `ContactState` by name (install fails when another type holds either name). One contacts plugin per world (capability `domecs-scene:contacts`). Invalid options throw at the call. Out of scope: AABB and polygon shapes, physics response, continuous collision. Cost (`bench/` `contacts` workload, informational): ≤ 0.5 ms per run at 1000 entities × 2 tag pairs.
 
 ---
 
@@ -370,10 +472,20 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 | `event`    | events buffered from previous tick      | event view                          |
 | `reactive` | query result changed (debounced to tick)| query delta (added/removed/changed) or resource change |
 
-Priorities disambiguate within a mode.
-Systems registered with the same priority run in **registration order**.
+**Run order within a mode (normative).** Systems run by the triple **(priority, order, registration index)**, each ascending: `priority` first (default 0), then `order` (default 0), then registration order. `order` must be a finite number; a non-finite or non-number `order` throws at `world.system()`, as an invalid `rateHz` does. With every `order` left at 0 this is the 1.x/2.0 rule: equal priorities run in registration order. `order` lets a library place its systems deterministically regardless of when they were registered or re-registered (O-76): `installRules(world, defs, resolve, { order: 'stable' })` from `@domecs/rules` registers rule *i* of the de-duplicated defs with `order: orderBase + i` (default base 1), so a rule's position is a function of (priority, defs order) only, and every equal-priority system left at order 0 runs before the rules. The default `order: 'registration'` keeps the 2.0 behaviour, where `RulesHandle.update()` re-registers every rule and so moves them after every equal-priority system registered earlier (a 3.0 candidate to flip). Two stable rule handles on one world need disjoint `orderBase` ranges, or their rules tie-break by registration index again. `describe().systems[i]` reports `priority` and `order`.
 
-**Schedule changes during a phase (O-43, normative).** Each phase of §4.1 runs the systems that were registered when the phase began. A system removed during the phase does not run later in it, and the systems after it still run. A system registered during the phase first runs at that schedule's next phase: the next fixed sub-step, or the next tick for the other modes. Registration order is a monotonic counter, so equal-priority systems keep their order after removals.
+**Recommended priority bands (convention, not enforced).** A world whose systems keep to these bands has a run order that depends only on what it registers, not on when:
+
+| Band | Priority | Examples |
+|---|---|---|
+| commands, input | −100 | command handlers, std command systems |
+| rules | strictly between −100 and 100 (default 0) | `installRules` |
+| derived transforms | 100 | `composeTransforms({ priority: 100 })` |
+| contacts | 150 | `installContacts` (`@domecs/scene`, §2.12) |
+| derived, render-only | 200 | caches, view state |
+| level switching | 1000 | scene-goto systems |
+
+**Schedule changes during a phase (O-43, normative).** Each phase of §4.1 runs the systems that were registered when the phase began. A system removed during the phase does not run later in it, and the systems after it still run. A system registered during the phase first runs at that schedule's next phase: the next fixed sub-step, or the next tick for the other modes. Registration order is a monotonic counter, so systems equal in priority and `order` keep their order after removals.
 
 ### Fixed-rate rule (normative)
 
@@ -455,6 +567,13 @@ An **explicit** call of `step(0)` (or any non-positive `dt`) is a *heartbeat*, n
 A heartbeat is idempotent: any number of consecutive `step(0)` calls leave the world state identical to the moment the first one was invoked. Marks made before a heartbeat stay unseen by systems until their next run. A live query read during the heartbeat's render (a renderer's change gate) has seen what it read: its window advances at the end of the heartbeat (§2.9), so a heartbeat paints between-tick marks once and the next tick does not repaint them.
 
 **Legacy carve-out.** A no-argument `step()` call (`dt === undefined`) is *not* a heartbeat — it advances a tick with `time.delta = 0` for backwards compatibility with turn-based exemplars. Turn-based callers should use `turn(event, payload)` (which invokes `step()` internally) rather than passing literal zero. Code that wants explicit "do nothing now but keep the UI alive" behavior MUST pass `0` explicitly.
+
+**Render and named systems without a tick (O-88, normative).** Two calls do part of a tick's work without being one:
+
+- `world.render()` calls plugin `onRender` only, with `{ heartbeat: true }`. Unlike a heartbeat it fires no `onTickStart`/`onTickEnd` hooks and no `tickStart`/`tickEnd` signals, and leaves `time` (including `delta`) unchanged. Live-query windows advance at its end exactly as at the end of a heartbeat (also when a hook threw), so a mark is painted once. It changes no snapshot field: the default and strict hashes are unchanged unless a hook writes.
+- `world.runSystems(names)` runs the named **enabled `tick` and `fixed`** systems once, in run order — the `fixed` phase, then `tick`, each by priority, order, registration (§3) — and returns `{ ran, skipped }`. `ran` has one entry per system run (a name two systems share appears twice); `skipped` lists, once each in input order, every name with no system run: unknown, disabled (its `enabled` gate is checked just before its run), or of another schedule (`event`, `reactive` and `once` are never run on demand). It does not advance time, flush events, apply pending `replaceFn` bodies or fire hooks or signals. `ctx.time` is the current `time` (its `scaledDelta` is what the last tick left) and `ctx.events` the current view; emits stay queued for the next tick. `tick` systems run while paused and a `fixed` system's `rateHz` divisor is not applied. Each run is a normal run for change windows (§2.9): the system's window advances. A throwing system propagates and the systems after it do not run. Use it only for **derived and transient** state the next tick recomputes anyway (priming `composeTransforms` after `restore()`): its writes are out of tick, so an attached act-log recorder (§7.5) notes an `out_of_tick_mutation` gap whenever a system runs. On worlds compared by hash, call it on all of them or none — it adds change marks. An idle `startLoop` driver repaints after it with a heartbeat frame, as after `restore()`, and does not step.
+
+Both throw `Error` when called during a tick or heartbeat (from a system, hook or handler); `runSystems` throws `TypeError` unless `names` is an array of strings.
 
 ### 4.1 Normal tick order
 
@@ -642,8 +761,11 @@ Keybinding layer is *not* part of core — it is a plugin that translates `Input
 
 ```ts
 interface WorldSnapshot {
-  version:    number                             // current SNAPSHOT_VERSION = 2
-  seed:       [number, number, number, number]  // PRNG state
+  version:    number                             // current SNAPSHOT_VERSION = 3
+  seed:       [number, number, number, number]  // shared PRNG state (world.rand)
+  rngRoot?:   [number, number, number, number]  // root seed own streams derive from (v3; §2.8)
+  rngStreams?: Record<string, [number, number, number, number]> // own streams by key (v3; §2.8)
+  rngOwners?: Record<string, string> // cursor key → stream key where they differ (v3; §2.8)
   tick:       number
   scaledTime?: number                            // cumulative scaled seconds (O-40); see below
   fixedBacklog?: number                          // fixed steps due but not yet run (O-40)
@@ -652,11 +774,12 @@ interface WorldSnapshot {
   nextId?:    number                             // entity-id cursor (O-38); see below
   resources?: Record<string, unknown>            // name → value; omitted when none (v2+)
   changes?:   ChangesSnapshot                    // marks a system has not seen (O-42); see below
+  pendingEvents?: { event: string; payload?: JsonValue }[] // undelivered events, opt-in (O-90); see below
   meta?:      Record<string, unknown>
 }
 ```
 
-`SNAPSHOT_VERSION` is **2**. Version 2 added the optional `resources` map (§2.11). The `@domecs/persist` loader ships a built-in `1 → 2` migration (§7.3), so a legacy v1 save — which simply lacks `resources` — loads transparently and falls back to resource defaults.
+`SNAPSHOT_VERSION` is **3**. Version 2 added the optional `resources` map (§2.11). Version 3 (2.1) added the optional `rngRoot`, `rngStreams` and `rngOwners` (§2.8, O-77) and `pendingEvents` (O-90) fields. **Every snapshot a 2.1 world writes is v3**, whether or not it uses own streams or pending events: `rngRoot` is always written; `rngStreams` is omitted while the world has never created an own stream, and `pendingEvents` while none was recorded (restoring an absent field and an empty one behave identically). 2.0 engines reject v3 snapshots ("newer than this engine supports"). `restore()` accepts any version ≤ 3: a v2 snapshot lacks the v3 fields, so the world uses its own `createWorld` root, re-derives every own stream and abandons its event queue. The `@domecs/persist` loader ships built-in `1 → 2` and `2 → 3` migrations (§7.3), so a legacy v1 save — which simply lacks `resources` — and a 2.0 save load transparently. `canonicalSnapshot` excludes `version`, so the bump alone changes no hash; `rngRoot` is state and is hashed.
 
 **Entity-id cursor (O-38, normative).** `snapshot()` records the world's id cursor as `nextId`; `restore()` sets the cursor to `max(snap.nextId, maxAliveId + 1)`, so ids assigned after a restore match the ids the live world would have assigned even when the highest-id entity was despawned before the snapshot (the old maxAliveId+1 derivation recycled despawned ids, making episode runs incomparable). The field is optional — snapshots from older builds lack it and restore falls back to the derived cursor; the `max()` guard means a corrupt cursor can never re-issue a live id.
 
@@ -664,18 +787,19 @@ interface WorldSnapshot {
 
 **Unseen change marks (O-42, normative).** A mark a system has not seen yet (§2.9) is part of the live world's future: that system reports it at its next run. `snapshot()` records such marks as `changes: { marks, seen }` — `marks` in the order they were made (`[kind, componentName, entityId]` for `added`/`changed`/`removed`, `["resource", name]`), and `seen[systemName]`, how many of them that system had already seen; a system missing from `seen` had seen them all. Only systems whose `query` or `reactsTo` has a change-detection node are recorded. `restore()` re-issues the marks, after every mark the restoring world has issued, and positions each system with that name accordingly — including one registered after the restore and before the next tick ends. Systems not in `seen`, and every other live query, start having seen all of them. The field is omitted when every system has seen every mark; a snapshot without it restores with no marks (the pre-O-42 behavior).
 
-The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. A snapshot taken while a system is running records that system's position before the run.
+The cursor key is the system's name; when several live systems share a name, the k-th (from 0, in registration order) is keyed `name#k`. A `once` system that has run is not a reader. Removal marks are carried only while a system with an `OnRemoved` filter has not seen them. Restore keeps every carried mark, even one for a component the entity no longer has (a transient component, an entity a prune plugin dropped), so the restored world's next snapshot carries what the live world's would. Cursor keys depend on registration order, including the `__observe_N` systems behind `observe()`; restore into a world that registered the same systems in the same order. The restored world also continues the live one exactly only if its systems run in the same order (§3). A live world whose rules were re-registered by `RulesHandle.update()` runs them in a different order from a fresh world built from the same defs, unless the rules were installed with `{ order: 'stable' }`; with stable rules, the rules' run order no longer depends on when `update()` ran, so a fresh world that registers its other systems the same way and installs the current defs is a valid restore target. A snapshot taken while a system is running records that system's position before the run.
 
-**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
+**Validation before any effect (normative).** `restore()` runs the plugin `onRestore` hooks first — they may decode what their `onSnapshot` encoded, so it is the envelope they produce that must be valid — then validates it: the envelope shape (O-41: `seed` four finite numbers, `rngRoot` when present four finite numbers, `rngStreams` when present an object whose every value is four finite numbers, `tick` an integer ≥ 0, `nextId` when present an integer ≥ 0, `resources` when present an object (`null` is invalid for both), and every entity record an object with a unique integer `id` ≥ 0 and an object `components` bag), registered resource values (§2.11), and the clock fields (`scaledTime` a finite number ≥ 0, `fixedBacklog` an integer ≥ 0, `fixedStep` a finite number > 0; `null` is invalid, only an absent field means "older build"). An invalid envelope, or a throwing hook, throws before world state is touched and leaves the pending events as they were (events a hook emitted are dropped). Hooks have run by then, so a hook should not commit plugin state that a failed restore would leave inconsistent.
 
 **What restore continues (O-40).** Given the same systems and plugins, `restore(snapshot())` followed by the same `step`/`action` calls reproduces the live world's future: entities, components, resources, the PRNG state, the tick, the id cursor (O-38), the clock, query iteration order (§8, ascending entity id), and the change marks systems have not seen (O-42). State outside the envelope is not carried:
 
-- Events still pending in the bus — emitted during the last tick (delivered at the next tick's step 1) or between ticks. Restore discards them (the pending-events rule below).
+- Events still pending in the bus — emitted during the last tick (delivered at the next tick's step 1) or between ticks — **unless** the snapshot was taken with `{ pendingEvents: true }` (the pending-events rule below). Without it, restore discards them.
 - `time.scale` and pause state — host controls; restore leaves the restoring world's own.
 - System `state` and closure variables — keep durable state in components or resources.
-- `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick.
+- `once` systems: restoring into a fresh world does not mark them as run, so they fire on its first tick. Restoring in place leaves them as they were: a `once` system that has run does not re-run, so `AgentBridge.reset()` episodes never repeat boot work (put per-episode setup in the baseline). `AgentBridge.reset({ scale, input: 'empty' })` re-applies the scale and empties the input after the restore (O-89).
+- Transient resources (§2.11) — never written; `restore()` keeps their live values.
 
-Continuation is therefore exact when the snapshot is taken between ticks with no undelivered events. Change marks systems have not seen — including marks from out-of-tick mutations — are carried (`changes`, above); marks a non-system query has not read yet are not. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
+Continuation is therefore exact when the snapshot is taken between ticks and either carries the pending events (`{ pendingEvents: true }`) or none were in flight. Change marks systems have not seen — including marks from out-of-tick mutations — are carried (`changes`, above); marks a non-system query has not read yet are not. Durable cross-tick history belongs in components or resources (the durable-log pattern), which the snapshot does carry.
 
 `snapshot()` is a **synchronous**, coherent-world-at-tick-T deep copy. It is the explicit-save / export / determinism-test path. No transient components are included. The contract is **plain-data / JSON-oriented**: component and resource values must be plain objects, arrays, and JSON primitives. The clone is a plain recursive walk — there is no structured-clone codec — so `Date`, `Map`, `Set`, functions, and class instances are not meaningfully preserved, and **cyclic values overflow the stack during `snapshot()`** (before `save()`'s `persist_io` error boundary can catch anything). Components holding non-plain data must declare themselves transient (§2.3). At 50k entities the sync walk is O(entities × components) on the main thread — use it for user-initiated saves, not per-tick autosave.
 
@@ -683,9 +807,20 @@ Continuation is therefore exact when the snapshot is taken between ticks with no
 
 `restore(snap)` is a trusted authored-snapshot path in v0.1. Restore rehydrates name-keyed component bags and depends on user code to register matching `ComponentType` objects before those components are queried or mutated. The snapshot does not carry rich schema metadata or component signals, and restore does not run `ComponentOptions.validate`; strict validation, unknown-component reporting, and metadata-backed restore belong to the future persistence/reflection work.
 
-**PRNG and driver (O-46, O-48).** `restore()` rewinds the world's generator in place, so a `world.rand` reference captured before the restore draws the restored stream. A restore also gives an idle `startLoop` driver one heartbeat frame, so the restored state is painted while the world stays at the checkpoint, paused or not (§3 Idle suspension).
+**PRNG and driver (O-46, O-48).** `restore()` rewinds the world's generator in place, so a `world.rand` reference captured before the restore draws the restored stream; own streams (§2.8) are rewound in place the same way. A restore also gives an idle `startLoop` driver one heartbeat frame, so the restored state is painted while the world stays at the checkpoint, paused or not (§3 Idle suspension).
 
-**Pending events (normative).** `restore()` discards all pending (undelivered) events before applying the snapshot: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. Events a plugin emits during its `onRestore` hook are preserved when the restore succeeds (the pending events are set aside before the hooks run). The event bus is transient by design and is never part of the snapshot envelope; durable history belongs in components/resources (the durable-log pattern).
+**Pending events (normative; O-90).** `restore()` sets aside all pending (undelivered) events before the plugin hooks run: events emitted on the timeline being abandoned must not fire into the first tick after the restore — otherwise identical episodes (e.g. `AgentBridge.reset()` loops) diverge on leftover event state. **The abandoned timeline's queue is replaced by the snapshot's queue when the snapshot carries one.** Events a plugin emits during its `onRestore` hook are preserved when the restore succeeds, queued after the snapshot's. A successful restore also empties the already-delivered view (`world.events`, and `ctx.events` of `runSystems` before the next flush; O-88): it holds what the abandoned timeline delivered and no snapshot carries it, so a world restored in place reads what a fresh world restored from the same snapshot reads.
+
+- `snapshot({ pendingEvents: true })` records the queue as `pendingEvents: [{ event, payload }]` in bus order (by first emit of each type, then payload order within a type). Each payload is copied as plain data: `null`, booleans, strings, finite numbers (`-0` kept), arrays, and objects whose prototype is `Object.prototype` or `null`; an `undefined` object property is omitted, and an `undefined` payload (a `defineEvent<void>` event) omits `payload`. Any other payload — `undefined` inside an array, a non-finite number, BigInt, symbol, function, class instance (`Date`, `Map`, …) or a cycle — throws `TypeError` naming the event and the path (`payload.at`). Because the record is by name, a pending event whose name another known event type shares (§2.6) also throws `TypeError`: restore would refuse the name as ambiguous, or re-queue the wrong type in a world that knows only the twin. The field is omitted when nothing is in flight, so the option changes neither the envelope nor the hash of a world with an empty queue. Default `false` in 2.x (ED-16): the field is absent and behaviour is 2.0's. Every fork, keyframe or checkpoint whose future must match the live world's opts in.
+- When the field is present, `restore()` validates it (an array of objects with a string `event`) and resolves every name through `world.lookupEvent` **before any effect**, alongside the envelope validation above: a malformed field, an unknown name, or an ambiguous one (two known types share it, §2.6) throws with the world, and its pending queue, untouched. It then re-queues the events in order, with cloned payloads. A world that restores snapshots with events in flight must therefore know those types: `register` them in setup (or subscribe to them, or name them as `triggers`).
+- `world.pendingEvents()` returns the same queue as `{ type, payload }` pairs without consuming it, so a host can report what an act produced without `world.action()` (which inserts a tick).
+- `@domecs/persist`'s `save()` and `createSnapshotHistory` call the no-arg `snapshot()` and therefore do not carry pending events.
+
+**Canonical form (O-11, normative).** `canonicalJson(value)` (core) is the canonical text of a plain-data value: `JSON.stringify` value semantics with every object's keys sorted ascending by UTF-16 code unit, so two values that are equal as data serialize identically whatever order their keys were inserted in (field order inside a component value is insertion order; before 2.3 an entity's component bag also followed the order its archetype was first built in, which differed between worlds in the same state — since 2.3 archetypes keep their component names sorted, so despawn marks, `componentRemoved`, `archetype()` and snapshot keys follow name order and a world restored from canonical text records the same marks as the live one). `undefined`, function and symbol values are omitted in objects and become `null` in arrays; numbers are written with ECMAScript `Number::toString` (spec-defined, identical across engines) **except `-0`, which is written as the literal `-0`** — valid JSON, and `JSON.parse('-0')` returns `-0`. A non-finite number (`NaN`, `±Infinity`), a BigInt or a cycle throws `TypeError` naming the path (`"entities[3].components.Body.vx"`); mapping them to `null` would change the value's type on restore and hide a divergence. The form is **lossless**: `canonicalJson(JSON.parse(canonicalJson(x))) === canonicalJson(x)`, and a world restored from `JSON.parse(canonicalJson(snap))` continues exactly like one restored from `snap`. `JSON.stringify` is not lossless (it writes `-0` as `0`), so keyframes and forks taken from disk serialize with `canonicalJson`; `@domecs/persist` `save()` still uses `JSON.stringify` (switching is a follow-up).
+
+`canonicalSnapshot(snap, options?)` is the canonical text of a snapshot's simulation state: every top-level field except `version` (format, not state — a migrated snapshot hashes the same), `meta` and `changes`. That includes `pendingEvents` when present, so two worlds that differ only in what is about to be delivered hash differently. `options.includeMeta` adds `meta`; `options.includeChanges` adds `changes`. `hashSnapshot(snap, options?)` is FNV-1a-64 over the UTF-8 bytes of that text, as 16 lowercase hex characters (`HASH_ALGORITHM === 'fnv1a64'`; not cryptographic). `hashEntities(snap)` maps each entity id, ascending, to the hash of its canonical `components`, so comparing two maps localizes a divergence; `hashValue(value)` hashes `canonicalJson(value)`.
+
+**Strict hash for restore equivalence (normative).** Two worlds with equal default hashes can still have different futures: `changes` carries the marks and cursors that decide what change-gated systems do next, and marks and cursors can differ between worlds in the same state (a render hook that marks a component during a heartbeat, §4.0, adds a mark without changing any value). Every restore-equivalence check — fork vs live, checkpoints, keyframe verification — compares `hashSnapshot(snap, { includeChanges: true })`. The default hash is for cache keys and UI.
 
 ### 7.2 Autosave — eventually consistent (planned; not in v1.0)
 
@@ -731,12 +866,52 @@ createPersistence(world, {
 Migrations are per-component, not per-world.
 The codec system allows one component schema to evolve without forcing monolithic world-level migration.
 
-**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a step that does not produce exactly version N+1, or a snapshot newer than the target (O-63). `world.restore()` itself throws on a snapshot whose `version` is newer than the engine's `SNAPSHOT_VERSION`; older snapshots should go through `migrate()` (as `load()` does). `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships the `1 → 2` resources bump (§7.1) as the sole built-in; it is a pure version bump because a v1 snapshot simply lacks `resources`.
+**Snapshot-version chain (implemented).** Alongside the per-component codecs, the implemented `@domecs/persist` surface migrates the *envelope* by `version`: `migrate(snap, targetVersion, migrations)` applies single-step functions keyed by source version (`MigrationMap.get(N)` → the `N → N+1` step) until reaching the target, hard-failing with `migration_failed` on a gap, a step that does not produce exactly version N+1, or a snapshot newer than the target (O-63). `world.restore()` itself throws on a snapshot whose `version` is newer than the engine's `SNAPSHOT_VERSION`; older snapshots should go through `migrate()` (as `load()` does). `load()` overlays caller-supplied steps on top of `BUILTIN_MIGRATIONS` via `withBuiltinMigrations` (caller keys win on collision), so framework version bumps load transparently while userland can still override or extend any step. The framework ships two built-ins, both pure version bumps: `1 → 2` (a v1 snapshot simply lacks `resources`, §7.1) and `2 → 3` (2.1: a v2 snapshot simply lacks `rngRoot`, `rngStreams` and `pendingEvents`). `save()` writes v3.
 
 ### 7.4 Ring buffer (time-travel)
 
 The inspector (§10) consumes a bounded ring buffer of **diff snapshots**: each entry records only the components that changed since the previous snapshot.
 Memory is `O(changes)` not `O(entities × snapshots)`.
+
+### 7.5 Act logs, replay and branches (`@domecs/core`, 2.2)
+
+An act log (`ActLog`, `format: 'domecs-actlog'`, `version: 1`) records what entered a world from outside so that another world, built by the same setup and restored from the same base, replays to equal strict hashes (harness spec §7.1; O-80). It is a separate artifact; the snapshot format is unchanged.
+
+**Recording.** `createRecorder(world, { hashEvery? })` attaches to a world-internal tap (not a public signal) and records the base (`startTick`, `fixedStep`, `startScale` — plus `resumeScale`, the scale `resume()` returns to, when it is 0 — and `baseHash` = `hashSnapshot(snapshot({ pendingEvents: true }), { includeChanges: true })`). Then:
+
+- **Acts.** Every emit not made by a system or a direct `on` handler — `world.emit`, `world.events.emit` outside a tick, `turn`, `action` (`via: 'action'`, the others `via: 'emit'`), and emits from plugin hooks and signal subscribers during full ticks **and** heartbeats — is recorded by event name with a plain-data copy of its payload (absent for `undefined`), in emit order: into the next frame's `acts` when made before a step's event flush (out of tick, during heartbeats, from plugin `onTickStart` — which runs before the flush, so its emits join the frame of the tick that delivers them); during a full step after the flush, into that frame's `startActs` (`signals.tickStart` subscribers, before the systems) or `endActs` (render, plugin `onTickEnd`, `signals.tickEnd`, after the systems). Replay emits `startActs` and `endActs` at the same points, so they keep their place among the events the step's systems emit and the step ends with the same queue.
+- **Frames.** Each full step (`stepOnce()`, or `step(dt)` with `dt > 0`) is one frame `{ tick, dt, scale?, resumeScale?, flushScale?, flushResume?, hookScale?, hookResume?, acts?, startActs?, endActs?, input?, hookInput? }`: `tick` before the step, the caller's `dt` (`null` for `stepOnce`), `scale` = `time.scale` on entry to the tick (the scale its dt is scaled by) when it differs from the scale the previous frame ended with, `resumeScale` = the scale `resume()` returns to, for a step entered paused, when it is not the one a replay world would have (the host changed it between steps, e.g. `setScale(3); pause()`; replay calls `setScale(resumeScale)` then `setScale(0)`; `flushResume` and `hookResume` do the same where the step is paused after plugin `onTickStart` and after `signals.tickStart`), `flushScale` = the scale after plugin `onTickStart`, before the step's event flush, when a plugin changed it (direct `on` handlers in the flush run under it), `hookScale` = the scale after `signals.tickStart` when it differs from the scale the flush ran under (with `flushScale`, it decides whether that step's `fixed` and `tick` systems run), `input` = `encodeInput(world.input)` after plugin `onTickStart` — what the event flush sees — when it differs from the previous frame's (always on the first frame), and `hookInput` = the input a `signals.tickStart` subscriber replaced it with — what the step's systems see — when it differs from `input`. Heartbeats (`step(dt <= 0)`) are not frames: acts emitted around them carry over to the next frame, and a `setInput` followed only by a heartbeat records nothing.
+- **Gaps.** `out_of_tick_mutation` (spawn, despawn, add/remove component, `markChanged`, `setResource`, `markResourceChanged` outside a full tick, heartbeats included; a draw on `world.rand` between steps), `unserializable_payload` (a payload that is not plain data; the act is dropped — an event already pending when recording starts with such a payload is left out of `baseHash` and is a gap at `startTick`) `restore` (acts the restore abandoned are dropped; `onRestore` emits are kept) and `step_threw` (a full step threw part-way; its frame is dropped). The log stops describing the world at a gap. Route every runtime perturbation through a command.
+- **Checkpoints.** With `hashEvery: k`, the strict hash at each full-tick end where `tick % k === 0`.
+
+`encodeInput` / `decodeInput` convert `InputSnapshot` (whose key sets are `Set`s) to `JsonInput` (arrays in the Sets' iteration order, so a system iterating them sees the same order after a replay; empty `pressed`/`released` and parts equal to the empty input omitted) and back.
+
+**Replay.** `replay(world, log, { base?, toTick?, verify?, onFrame? })` returns `Result<{ ticks, hash }, ReplayError>` and never throws for a bad log:
+
+1. Check the log's shape (`invalid_log`, also for a `fixedStep` other than `world.time.fixedStep`, an unknown gap reason, or a checkpoint that does not follow a frame end in frame order — it would leave every later checkpoint uncompared).
+2. `restore(base)` when given, then `setScale(log.resumeScale)` when present and `setScale(log.startScale)`; compare the strict hash with `baseHash` (`base_mismatch`).
+3. Per frame (stopping before the first frame whose `tick >= toTick`): resolve every act with `lookupEvent` (an unknown or ambiguous name is `unknown_event`) and check `via: 'action'` payloads against the event's schema (`rejected_payload`; raw emits are never validated live, so `via: 'emit'` acts are not), both before any emit; set `scale` (with `resumeScale`, `setScale(resumeScale)` then `setScale(0)`) and `input` (else keep the previous ones); emit the acts in order; `stepOnce()` or `step(dt)`, applying `flushScale`/`flushResume` once plugin `onTickStart` hooks ran (before the event flush), and `hookScale`/`hookResume` and `hookInput` and emitting `startActs` from a one-step `signals.tickStart` subscription and emitting `endActs` from a one-step `signals.tickEnd` subscription.
+4. Compare the checkpoint taken at that frame's end (`diverged`), unless `verify: false`.
+
+**Preconditions** (§8): the replay world has the same setup (systems, plugins, order) as the recording world **minus every stimulus source** — no input plugin (it would overwrite `world.input` at `onTickStart`) and no plugin hook or signal subscriber that emits events, and none that sets `time.scale` at tick start (their effects are already in the log) — and no enabled `once` system the source had already run (`once` run state is not snapshotted). Signal subscribers that a system, handler, `enabled` gate or reactive predicate triggers during steps 3–6 (`entitySpawned`, `componentAdded`, `faultRaised`, …) run inside the reproduced step and are not stimulus: keep them in the replay setup (their emits are not recorded). Replay applies the stimulus at phase boundaries: `scale`/`resumeScale` and `input` before the step, `flushScale`/`flushResume` after every plugin `onTickStart`, and `hookScale`/`hookResume`/`hookInput`/`startActs` after every other `tickStart` subscriber. A plugin hook or `tickStart` subscriber kept in the replay setup must therefore not read what a stimulus source in the same phase changes: live, it may run before or after that source. A stimulus source is left out whole, so it must do nothing else a replay needs: its `world.rand` draws and world writes during a full tick are not in the log. Under them the same base, setup and log give the same hashes, tick systems (`scaledDelta` comes from the recorded dt and scale) and own RNG streams included. Not recorded: `runSystems` calls, draws on an own stream outside a tick, changes to the setup, acts emitted after the last frame (the log has no frame for them, so a replay ends without them in its queue), and what a step that throws out of `step` (a plugin hook that throws) did: the log drops its frame and records a `step_threw` gap at its tick.
+
+**Branches** (harness spec §7.2; O-81). Systems are closures, so a world cannot be cloned; a branch is a fresh world built by the source's setup and restored from one of its snapshots. `createBranch(setup, from, { fixedStep?, seed?, scale? })` runs `createWorld({ headless: true, fixedStep: fixedStep ?? from.fixedStep ?? 1/60, seed })`, `setup(world)`, `world.restore(from)` and `setScale(scale ?? 1)`, and returns `Result<{ world, setup }, BranchError>` with `setup`'s return value. A throw from `setup` is a bug and propagates; a throw from `restore` is `restore_failed` (the cause serialized with `normalizeCause`); a `once` system registered by `setup` that would run on the branch's first step when `from.tick > 0` is `once_systems` (the source had already run it). This is checked after the restore, so an `enabled` gate reads the source's state: boot work gated on snapshotted state (false in the source past boot) is accepted, and a gate that throws counts as one that would run. `seed` matters only for a v2 `from`, which has no `rngRoot`. A snapshot carries `fixedStep` only with a fixed backlog and never carries the scale, so the caller passes the source's `time.fixedStep` (when it is not 1/60) and `time.scale`; for a paused source, the scale it resumes to, then `pause()` on the branch (`scale: 0` resumes to 1).
+
+`runBranch(world, { steps, dt?, log?, probes?, sampleEvery?, keyframeEvery?, hashEvery?, until?, shouldStop? })` steps the world it is given, synchronously, and returns `Result<BranchRun, ReplayError>` with `{ ticks, stoppedBy: 'steps' | 'until' | 'cancelled', samples, keyframes, hashes, faults, finalHash }`. Called again, it extends the branch from where it stopped. Before each step it polls `shouldStop`; it applies the `log` frame whose `tick` is the current tick, when there is one, with the replay frame code (acts resolved and checked first; scale, input, dt), else `stepOnce()` (`dt: null`) or `step(dt ?? time.fixedStep)`; after it, `until` is checked. Before the first step, the input of the latest log frame earlier than the current tick is set (input is delta-encoded and not snapshotted), so a branch from a mid-log keyframe starts with the source's input; the scale is not carried (it is `createBranch`'s `scale`). `sampleEvery` (default 1 with probes), `keyframeEvery` and `hashEvery` count the steps of this call, not absolute ticks; probes are also sampled after the final step whatever stopped the run (once at the current tick when no step was taken). Keyframes are `snapshot({ pendingEvents: true })`; every hash is strict; probe values are copied as plain data; `faults` are the `signals.faultRaised` faults of this call. A malformed log or one for another `fixedStep` is `invalid_log`, and an act that does not resolve or validate is `unknown_event` / `rejected_payload`, with the steps already taken left taken. Equal `(setup, from, options)` give equal `finalHash`, `hashes` and `samples`.
+
+**Restore-continuation preconditions** (§7.1 "What restore continues"): `setup` registers the same types, systems and plugins in the same order as the source world (stable rules make the order a function of the definitions); `from` is taken with `{ pendingEvents: true }` and without snapshot-rewriting plugins (redaction); `scale` is the source's `time.scale`; and every event type that can be pending is registered. Probes must be read-only: at the first sample of each call `runBranch` compares the strict hash before and after each probe and throws an `Error` naming one that changed it. A `log` given to a branch follows replay's preconditions (no stimulus sources in `setup`). Nothing else can verify these.
+
+### 7.6 Scenes (`@domecs/scene`, 2.3)
+
+A scene is plain data, `SceneData { name, entities: [{ key, components, parent? }] }`, that `instantiateScene(world, data, { resolve, refFields? })` spawns (harness spec §7.3; O-13 partly closed: unknown component types are surfaced as problems).
+
+- **Order (normative).** (1) Spawn in array order, each entity with `SceneMember { scene: name, key }` and its components, each the component's defaults plus the given fields (a plain-data copy, built with `create`). Equal data on equal worlds gives equal ids. (2) `setParent` by key, in array order. (3) `refFields` (`[component, field]` pairs): a string key in such a field becomes the live id and the component is marked changed; other values are left alone. The result is `{ ids, problems }`, `ids` mapping final keys to live ids in data order.
+- **Problems are reported, never thrown or dropped** (`SceneProblem { path, message }`, `path` into the data such as `entities[3].components.Target.entity`). An unknown component name (or a resolver that throws or returns a non-type), fields that are not an object or that `validate` rejects (`validate` runs when the component is built, before step 3, so it sees the authored key in a ref field), a type whose name another type holds in the world, a component given twice, and `Parent` or `SceneMember` given as a component (parent links come only from `parent` keys) are skipped and the entity still spawns. A duplicate key spawns as `key#2` (`#3`, …; keys in the data name the first holder); an entry that is not an object (an array hole included) or whose key is not a string spawns as `#<index>`. A generated key never takes a key authored anywhere in the data; it moves on to the next free suffix. A missing parent key, a self-parent or a cycle leaves the entity a root. An unknown `refFields` key leaves the field unchanged. Only a malformed `data` or `options` shape throws (`TypeError`).
+- **Fixed types.** A world where another component type holds the name `SceneMember` (or `Parent`, when an entity has a `parent` key) spawns nothing: the result has no ids and one problem with path `''`. This is checked before the first spawn, so a conflict leaves the world unchanged.
+- **Unload.** `unloadScene(world, name)` runs `despawnTree` (`@domecs/scene` hierarchy) over the member roots — members whose parent is not a member — in ascending id, then over any member still alive (a corrupted `Parent` cycle), and returns the number of entities removed. `sceneEntities(world, name)` lists the members in ascending id.
+- **Snapshots.** `SceneMember` (schema'd, persistent) and `Parent` are ordinary components: scenes survive `snapshot`/`restore`, saves and replay, and a world restored from a snapshot unloads and instantiates like the source. A host that swaps scenes between steps makes out-of-tick changes, which an act-log recorder notes as gaps (§7.5).
+- **"Goto level"** is a schema'd command handled by an event rule (Appendix A) that writes the requested scene name into a level-state entity; after the step the host calls `unloadScene` + `instantiateScene`. Forks taken with `snapshot({ pendingEvents: true })` while the command is in flight reach equal strict hashes. There is no scene rule effect.
+- Out of scope: a codec registry that keeps unknown component types as inspectable data (the rest of O-13), streaming or partial loads, a `loadScene` rule effect.
 
 ---
 
@@ -748,13 +923,16 @@ DOMECS promises:
 
 This relies on:
 
-- `world.rand` is the only PRNG used in authoritative systems.
+- `world.rand` — or the system's own stream, `ctx.rand` under `rng: 'own'` (§2.8) — is the only PRNG used in authoritative systems. An own stream is keyed by the system's cursor key and derived from the world's root seed, and its state travels in the snapshot.
 - Systems do not read `Date.now()`, `performance.now()`, or wall-clock APIs.
 - Query iteration order is **ascending entity id** — live `query().entities`, system `ctx.entities`, reactive deltas, `listEntities`, `selectViews`, `countEntities`, and `iterEntitiesWith` alike — regardless of the order entities joined a query or archetypes were created. `Where` predicates are evaluated in the same order, so a predicate with side effects makes the same calls. Archetype creation order is not part of the snapshot, so a restored world could not reproduce it; id order it can (O-40).
-- Transcendentals (`Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`, `Math.pow` with non-integer exponent) are **not** guaranteed bit-identical across JS engines; systems that require determinism must use fixed-point tables (a planned `@domecs/math` plugin would ship them; none exists yet).
+- **Transcendentals go through `dmath` (O-75).** `Math.sin`, `Math.cos`, `Math.tan`, `Math.atan2`, `Math.exp`, `Math.log`, `Math.pow`, `Math.hypot` and the other platform transcendentals are implementation-approximated under ECMA-262 and differ by up to 1 ulp between engine builds (Node 24 and Electron 44 disagree on thousands of inputs per 200k). Authoritative systems use `dmath` from `@domecs/core` instead: `dmath.sin`, `dmath.cos` and (2.2) `dmath.atan2` and `dmath.hypot` are straight-line ports of musl libm (generic C, non-FMA), `dmath.pow` (2.2) of fdlibm `e_pow.c`, and they return the same bits on every ECMA-262 engine; `dmath.sqrt` is `Math.sqrt`. `dmath.pow`'s special values are ECMAScript `**`'s. `@domecs/rules` does this automatically: `sin()`/`cos()` evaluate with `dmath` from 2.1, `atan2()`/`hypot()`/`pow()` from 2.2. `Math.sqrt`, the arithmetic operators, `Math.floor`, `Math.round`, `Math.abs`, `Math.min` and `Math.max` are exact under ECMA-262 / IEEE-754 and need no wrapper.
+- **Runtime stamp.** Determinism holds per runtime build until every transcendental goes through `dmath`. Rules guarantee that; hand-written JS systems may not, so a host comparing runs across runtimes stamps its runtime identity (engine and version, arch, platform) plus each package's `BUILD_ID`.
 - `Map`/`Set` insertion order is preserved; object key order is insertion order for string keys.
 
-Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `JSON.stringify(snapshot())`.
+- **Equality is by hash (O-11).** "Same state" means equal `hashSnapshot` (§7.1 "Canonical form"): canonical JSON with sorted keys and a lossless `-0`, hashed with FNV-1a-64. Restore-equivalence checks (fork vs live, checkpoints, keyframes) use the strict form, `hashSnapshot(snap, { includeChanges: true })`. `JSON.stringify(snapshot())` is not an equality test: it depends on key insertion order inside values and writes `-0` as `0`.
+
+Nothing enforces these rules at run time: no shipped tool detects `Math.random`, wall-clock or transcendental use in a system. Check determinism by replay — same seed and inputs, compare `hashSnapshot(snapshot(), { includeChanges: true })`. `createRecorder` / `replay` (§7.5) record a live session and re-run it with checkpoint verification; `createBranch` / `runBranch` (§7.5) run a headless fork from a snapshot and compare its hashes and probe samples.
 
 ---
 
@@ -944,3 +1122,162 @@ Headless mode (§3) makes system tests fast and framework-free.
 - `critique.md` — design flaws in the README proposal and the corrections applied here. (Removed after the v1.0 freeze; retrieve from git history.)
 - `exemplars.md` — six applications whose requirements shaped v0.1.
 - `api.md` — concrete type and function signatures (next document).
+- Appendix A below — the rules expression language (`@domecs/rules`).
+
+---
+
+## Appendix A. Rules expression language (`@domecs/rules`, normative from 2.2)
+
+A rule (`RuleDef`) runs as a system named `rule:<name>` over the entities
+holding every `query` component and (2.2) none of the `without` components.
+For each entity, in ascending id, it evaluates `when` and then every action
+expression, and commits the action writes atomically (§2.8 for streams,
+§3 for ordering). The package README is the tutorial; this appendix is the
+contract.
+
+**Grammar** (precedence lowest first; `(+)` = 2.2, `(++)` = 2.3):
+
+```
+expr           := nullish ( '?' expr ':' expr )?                  right-assoc
+nullish        := logicOr ( '??' logicOr )*                       (+) left-assoc
+logicOr        := logicAnd ( '||' logicAnd )*
+logicAnd       := equality ( '&&' equality )*
+equality       := relational ( ('==' | '!=') relational )*
+relational     := additive ( ('<' | '<=' | '>' | '>=') additive )*
+additive       := multiplicative ( ('+' | '-') multiplicative )*
+multiplicative := unary ( ('*' | '/' | '%') unary )*
+unary          := ('!' | '-') unary | primary
+primary        := number | string | 'true' | 'false' | 'dt' | 'time'
+                | 'tick'                                          (+)
+                | IDENT '.' IDENT                                 self Component.field
+                | entity '.' IDENT '.' IDENT                      (+)
+                | entity '.' 'id'                                 (+)
+                | 'pointer' '.' ('x' | 'y' | 'buttons' | 'wheel')  (+) input
+                | 'event' '.' IDENT                               (++) payload field; event rules only
+                | call | '(' expr ')'
+entity         := 'self' | 'first' '(' SET ')'                    (+)
+                | 'other'                                         (++) event rules with an `other` binding only
+                | 'nearest' '(' SET ( ',' expr )? ')'             (+)
+                | 'entity' '(' expr ')'                           (+)
+call           := FUNC '(' ( expr ( ',' expr )* )? ')'
+                | 'has' '(' ( entity ',' )? SET ')'               (+)
+                | ('count' | 'exists') '(' SET ')'                (+)
+                | 'countWithin' '(' SET ',' expr ( ',' entity )? ')'   (+)
+                | ('sum' | 'avg' | 'minOf' | 'maxOf') '(' SET ',' IDENT '.' IDENT ')'   (+)
+                | 'distanceTo' '(' entity ')'                     (+)
+                | ('key' | 'pressed' | 'released' | 'mod') '(' expr ')'   (+) input; arg a string
+SET            := IDENT                                           (+) the holders of that component
+FUNC           := min/2 max/2 clamp/3 abs/1 sin/1 cos/1 floor/1 random/0
+                | sqrt/1 pow/2 atan2/2 hypot/2 sign/1 round/1 ceil/1 lerp/3 distance/4   (+)
+```
+
+Number literals are decimal without exponent; strings take `\n \t \r \\ \" \'`.
+Limits (O-66): 16384 characters, 128 levels of AST depth. Unknown functions
+and wrong arities are parse errors.
+
+**Reserved words (2.2).** `self`, `tick`, `other`, `event`, `pointer` cannot
+name a component in an expression ("reserved word" at the name); after an
+entity, `id` is reserved. From 2.3 `event.f` and `other` parse (event
+rules). Only `first(`, `nearest(`, `entity(` start a
+selector (`first.x` is `Component.field`), and only `key(`, `pressed(`,
+`released(`, `mod(` read input (`key.x` is `Component.field`). An entity is
+not a value: outside a member base, `has`/`countWithin`/`distanceTo`
+argument it is a parse error.
+
+**Values and kinds.** Values are numbers, strings and booleans. Arithmetic,
+comparison and function arguments require numbers (a `RuleEvalError`
+otherwise); `==`/`!=` compare with `===`; `!`, `&&`, `||`, `?:` use JS
+truthiness and short-circuit, as does `??`. Type errors certain before the
+rule runs are compile errors (`has`/`exists` are boolean; `count`,
+`countWithin`, `distanceTo`, `e.id`, `tick`, the aggregates and every
+function are numbers; `key`/`pressed`/`released`/`mod` are boolean and take
+a string; `pointer.*` are numbers; field reads are unknown).
+
+**Semantics (2.2).**
+
+- `SET` is the entities holding the component, ascending id, computed once
+  per rule run (membership never changes within a run).
+- `first(S)`: lowest-id member other than the evaluated entity.
+  `nearest(S[, d])`: the member minimizing squared distance from the
+  evaluated entity's position, ties to the lowest id, excluding itself,
+  within `d` (inclusive) if given. `entity(n)`: the alive entity with id `n`
+  (`n` must be an integer, else a type error).
+- `e.C.f` reads `C.f` on `e` as an own property; `e.id` is the id;
+  `self.C.f` is `C.f` (it sees the entity's staged writes). `has([e,] C)` is
+  a boolean, `e` defaulting to the evaluated entity.
+- `count(S)`, `exists(S)` = `count > 0`; `sum/avg/minOf/maxOf(S, C.f)` read
+  `C.f` on each member including the evaluated entity, skip members without
+  it, and fault on a non-number. `sum` of none is 0; `avg`/`minOf`/`maxOf`
+  of none have no value. `countWithin(S, r[, e])` counts members within `r`
+  of `e` (default the evaluated entity), excluding `e`.
+- `distanceTo(e)` = `sqrt(dx² + dy²)` between the evaluated entity's and
+  `e`'s live positions; `distance(x1, y1, x2, y2)` likewise.
+- Positions come from `installRules(..., { spatial: { component, x?, y?,
+  cellSize? } })`; without it, `nearest`/`countWithin`/`distanceTo` are
+  compile errors. A missing or non-finite position is no value. Candidate
+  selection (`nearest`, `countWithin`) uses a `createSpatialGrid` (§2.12)
+  built from positions at the start of the rule run; results never depend
+  on `cellSize`.
+- **No value**: a missing self or member field, an empty selector, a dead
+  `entity(n)`, an empty `avg`/`minOf`/`maxOf`, a missing position. `a ?? b`
+  evaluates `b` only on no value; other errors propagate. An uncaught error
+  skips the entity for that run with a `rule_eval_failed` fault (nothing is
+  written).
+- **Read timing**: reads are live; entity *k* sees the committed writes of
+  lower ids from the same run (Gauss–Seidel). Rules write only the
+  evaluated entity.
+- **Math**: `sin`, `cos`, `atan2`, `hypot`, `pow` evaluate with `dmath`
+  (§8); every other function is exact IEEE-754 arithmetic (`lerp(a, b, t)`
+  = `a + (b - a) * t`). A non-finite intermediate is allowed; a non-finite
+  write is rejected.
+- **Determinism**: iteration is ascending id, distances are exact double
+  arithmetic with id tie-breaks, caches never outlive a run, nothing
+  derived is snapshotted, and `random()` draws the rule's stream (§2.8).
+- **Input** (2.2): rules read `ctx.input`, the snapshot installed for the
+  tick (`setInput` or an input plugin). `key(n)` = `keys.has(n)` (held);
+  `pressed(n)` / `released(n)` = `keyDelta.pressed/released.has(n)` (edges,
+  one render tick); `mod(n)` = `mods[n]` for `n` in `ctrl`, `alt`, `shift`,
+  `meta` (another name is a type error); `pointer.x|y|buttons|wheel` are the
+  pointer's numbers. A non-string argument is a type error. `pressed`,
+  `released` and `pointer.wheel` in a `fixed` rule are compile errors (§6:
+  edges and the wheel last one render tick). Input is not snapshotted: a
+  host replays it by installing the same snapshots before the same steps.
+- **Event rules** (2.3, `schedule: 'event'`): `on` names the trigger
+  (resolved by `resolveEvent`, default `world.lookupEvent`); the rule is a
+  core event system with `triggers: [event]` and runs, per payload in
+  emission order, for the entity `self` evaluates to (dead or not matching
+  `query`/`without`: no-op; no value or not an integer: a systemic
+  `rule_eval_failed` fault), else for every `query` match in ascending id,
+  else once with no entity (world scope: empty `query`; `set` actions and
+  evaluated-entity reads are compile errors). `event.f` reads the payload's
+  own field (absent, `undefined`, `null` = no value; with a schema, an
+  undeclared field is a compile error). `other` is the entity the `other`
+  binding gives; unbound or dead = no value. The `self`/`other` bindings
+  cannot read the evaluated entity or `other`. `event.f` and `other`
+  outside an event rule (and in world expressions) are compile errors.
+- **Effects** (2.3, `effects`: `emit`, `spawn`, `despawn`, `add`,
+  `remove`): queued per entity only when `when` held and every action
+  succeeded, with their expressions evaluated then (self = the queuing
+  entity, seeing its staged writes; `random()` draws then), and applied at
+  the end of the rule's run in queue order (payload, entity ascending,
+  effect index). `emit` is validated with `validateEventPayload` when
+  applied (invalid: a `rule_eval_failed` fault on the queuing entity) and
+  delivered next tick. `spawn` calls `prefabs(name)` per spawn,
+  plain-data clones each entry, writes `at` (the `spatial` position fields)
+  then `set` (`Component.field`), and assigns ids in apply order. `despawn`
+  is idempotent and later effects targeting a dead entity are skipped.
+  `add` uses defaults plus `set`, or only `set` when the component exists;
+  `remove` of an absent component is a no-op. Effect writes are checked
+  like action writes; a rejected one skips that effect with a fault. No
+  snapshot format change: emits in flight travel with
+  `snapshot({ pendingEvents: true })` (§7), spawns advance the id cursor.
+- **World expressions** (`compileWorldExpression`, 2.2): the same grammar
+  with no evaluated entity. Bare `C.f`, `self`, `has(C)`, `countWithin(S, r)`
+  without a centre, `distanceTo`, `nearest`, `dt`, `random()` and every
+  input form are compile errors. `time` = `world.time.elapsed`, `tick` = `world.time.tick`.
+  Evaluation reads with `listEntities`/`getComponent` only (no RNG, no
+  change windows, no registration of a type no entity holds), so the strict
+  snapshot hash and `describe().componentCounts` are unchanged; an uncaught
+  error or a non-finite number result is `err({ kind: 'rule_eval_failed',
+  rule: '<expr>', message })`.
+

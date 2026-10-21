@@ -118,3 +118,52 @@ describe('@domecs/persist — schema', () => {
     expect(() => registerComponentTypes(data, new Set(['Position']))).not.toThrow()
   })
 })
+
+// §4.5 (O-78): FieldSchema.description round-trips; never dropped.
+describe('@domecs/persist — field descriptions', () => {
+  const Described = defineComponent<{ hp: number; mode: string }>('Described', {
+    defaults: { hp: 10, mode: 'idle' },
+    schema: {
+      fields: {
+        hp: { kind: 'number', min: 0, description: 'Hit points; 0 means dead' },
+        mode: { kind: 'enum', options: ['idle', 'run'] },
+      },
+    },
+  })
+
+  it('serializeComponentType carries description', () => {
+    const w = createWorld()
+    const data = serializeComponentType(Described, w.describeComponent(Described))
+    expect(data.fields[0]).toEqual({
+      name: 'hp',
+      kind: 'number',
+      default: 10,
+      min: 0,
+      description: 'Hit points; 0 means dead',
+    })
+    expect('description' in data.fields[1]!).toBe(false)
+  })
+
+  it('registerComponentTypes restores description into the field schema', () => {
+    const w = createWorld()
+    const data = serializeComponentType(Described, w.describeComponent(Described))
+    const { types, problems } = registerComponentTypes([data], new Set())
+    expect(problems).toEqual([])
+    const fields = createWorld().describeComponent(types[0]!).fields
+    expect(fields.hp).toEqual({ kind: 'number', min: 0, description: 'Hit points; 0 means dead' })
+    expect('description' in fields.mode!).toBe(false)
+    // and a second serialize is identical (no drift)
+    expect(serializeComponentType(types[0]!, createWorld().describeComponent(types[0]!))).toEqual(data)
+  })
+
+  it('drops a non-string description as a problem, keeping the field', () => {
+    const data: ComponentTypeData[] = [
+      { name: 'Bad', fields: [{ name: 'x', kind: 'number', description: 5 as unknown as string }] },
+    ]
+    const { types, problems } = registerComponentTypes(data, new Set())
+    expect(problems).toEqual([
+      { path: 'componentTypes[0].fields[0].description', message: 'description must be a string' },
+    ])
+    expect(createWorld().describeComponent(types[0]!).fields.x).toEqual({ kind: 'number' })
+  })
+})

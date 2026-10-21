@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent } from '../src/component.js'
 import { OnRemoved } from '../src/query.js'
+import { defineEvent } from '../src/events.js'
 import { definePlugin } from '../src/plugin.js'
 import { createRng, rewindRng } from '../src/rng.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
@@ -60,6 +61,25 @@ describe('O-41: restore validates the whole snapshot before wiping the world', (
     w.spawn([entry(Hp, { hp: 1 })])
     w.restore(snap)
     expect(JSON.stringify(w.snapshot())).toBe(JSON.stringify(snap))
+  })
+})
+
+describe('security review 2026-10-19: entity ids stay safe integers', () => {
+  it('a restored id cursor at MAX_SAFE_INTEGER hands out that id once, then refuses instead of reusing ids', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const snap = { ...w.snapshot(), nextId: Number.MAX_SAFE_INTEGER, entities: [] }
+    w.restore(snap as WorldSnapshot)
+    expect(w.spawn([entry(Hp, { hp: 1 })])).toBe(Number.MAX_SAFE_INTEGER)
+    // 2^53 and 2^53 + 1 are the same double: two "new" entities would share an id
+    expect(() => w.spawn([entry(Hp, { hp: 2 })])).toThrow(/entity ids are exhausted/)
+    expect(w.listEntities([Hp])).toHaveLength(1)
+  })
+
+  it('a snapshot whose highest entity id is MAX_SAFE_INTEGER restores, and the next spawn refuses', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const snap = { ...w.snapshot(), nextId: undefined, entities: [{ id: Number.MAX_SAFE_INTEGER, components: { KhHp: { hp: 3 } } }] }
+    w.restore(snap as unknown as WorldSnapshot)
+    expect(() => w.spawn([entry(Hp, { hp: 2 })])).toThrow(/entity ids are exhausted/)
   })
 })
 
@@ -317,6 +337,92 @@ describe('driver', () => {
       w.stop()
     })
   }
+
+  it('O-48 + §4.7: an idle loop restored with events in flight delivers them', () => {
+    raf = installRaf()
+    const KhPing = defineEvent<{ n: number }>('KhPing')
+    const seen: number[] = []
+    const build = () => {
+      const w = createWorld()
+      w.system('kh-recv', { schedule: 'event', triggers: [KhPing] }, (ctx) => {
+        for (const p of ctx.events.of(KhPing)) seen.push(p.n)
+      })
+      return w
+    }
+    const src = build()
+    src.emit(KhPing, { n: 7 })
+    const snap = src.snapshot({ pendingEvents: true })
+    const w = build()
+    w.startLoop()
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    expect(raf.pending()).toBe(false)
+    w.restore(snap)
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    // The repaint frame does not tick; the queue keeps the loop awake for one
+    // step that delivers the event, then the loop sleeps again.
+    expect(seen).toEqual([7])
+    expect(w.time.tick).toBe(snap.tick + 1)
+    expect(raf.pending()).toBe(false)
+    w.stop()
+  })
+
+  // §6.3 (O-88): runSystems primes derived state; an idle loop repaints it
+  // with a heartbeat frame and does not tick (tick identity stays put, as
+  // after a restore).
+  for (const afterRestore of [false, true]) {
+    it(`O-88: runSystems repaints an idle paused loop without ticking${afterRestore ? ' (after restore)' : ''}`, () => {
+      raf = installRaf()
+      const Dv = defineComponent<{ hp: number }>('KhDerived', { defaults: { hp: 0 } })
+      const w = createWorld()
+      w.system('kh-derive', { schedule: 'tick', query: [Hp] }, (ctx) => {
+        for (const e of ctx.entities) w.addComponent(e.id, Dv, { hp: e.KhHp!.hp * 2 })
+      })
+      const painted: Array<number | undefined> = []
+      w.use(
+        definePlugin({
+          name: 'kh:paint',
+          install: () => ({ onRender: () => void painted.push(w.getComponent(id, Dv)?.hp) }),
+        }),
+      )
+      const id = w.spawn([entry(Hp, { hp: 3 })])
+      w.pause()
+      w.startLoop()
+      for (let i = 0; i < 4; i++) raf.advance(16)
+      expect(raf.pending()).toBe(false)
+      if (afterRestore) w.restore(w.snapshot())
+      const tick = w.time.tick
+      painted.length = 0
+      expect(w.runSystems(['kh-derive']).ran).toEqual(['kh-derive'])
+      expect(raf.pending()).toBe(true)
+      for (let i = 0; i < 4; i++) raf.advance(16)
+      expect(w.time.tick).toBe(tick)
+      expect(painted).toEqual([6])
+      expect(raf.pending()).toBe(false)
+      w.stop()
+    })
+  }
+
+  it('O-88: a throwing runSystems still repaints what ran before the throw', () => {
+    raf = installRaf()
+    const w = createWorld()
+    let renders = 0
+    w.use(definePlugin({ name: 'kh:render-count2', install: () => ({ onRender: () => void renders++ }) }))
+    w.system('kh-write', { schedule: 'tick', priority: 0 }, () => void w.spawn([entry(Hp, { hp: 1 })]))
+    w.system('kh-boom', { schedule: 'tick', priority: 1 }, () => {
+      throw new Error('boom')
+    })
+    w.pause()
+    w.startLoop()
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    expect(raf.pending()).toBe(false)
+    const tick = w.time.tick
+    renders = 0
+    expect(() => w.runSystems(['kh-write', 'kh-boom'])).toThrow('boom')
+    for (let i = 0; i < 4; i++) raf.advance(16)
+    expect(renders).toBe(1)
+    expect(w.time.tick).toBe(tick)
+    w.stop()
+  })
 
   it('O-48: a mutation before the repaint frame turns it into a step', () => {
     raf = installRaf()

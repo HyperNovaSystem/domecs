@@ -11,7 +11,7 @@ describe('world.describeResource — resource reflection (§6)', () => {
   it('reports name, hasDefault, and hasValue=false before first read', () => {
     const w = createWorld()
     const d = w.describeResource(Config)
-    expect(d).toEqual({ name: 'Config', hasValue: false, hasDefault: false })
+    expect(d).toEqual({ name: 'Config', hasValue: false, hasDefault: false, transient: false })
   })
 
   it('hasDefault is true when a default factory was declared', () => {

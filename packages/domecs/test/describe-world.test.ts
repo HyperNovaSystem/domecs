@@ -116,3 +116,23 @@ describe('world.describe — commands are discoverable (O-51)', () => {
     })
   })
 })
+
+describe('describe().componentCounts across restore (E11 verify)', () => {
+  it('restore keeps an empty store for every registered type, so reads after it change nothing', () => {
+    // Before: a registered type nobody holds counted 0 until restore, then
+    // vanished, then came back as 0 on the next read of it (has, getComponent,
+    // listEntities) — a read changed describe(), which a read-only probe
+    // (a rules world expression) must not do.
+    const w = createWorld({ headless: true })
+    const e = w.spawn([entry(Position, { x: 1, y: 2 })])
+    w.despawn(w.spawn([entry(Velocity, { dx: 1 })]))
+    const live = JSON.stringify(w.describe().componentCounts)
+    expect(w.describe().componentCounts.Velocity).toBe(0)
+    w.restore(w.snapshot())
+    expect(JSON.stringify(w.describe().componentCounts)).toBe(live)
+    expect(w.has(e, Velocity)).toBe(false)
+    expect(w.getComponent(e, Velocity)).toBeUndefined()
+    expect(w.listEntities([Velocity])).toEqual([])
+    expect(JSON.stringify(w.describe().componentCounts)).toBe(live)
+  })
+})

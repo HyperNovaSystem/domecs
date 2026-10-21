@@ -1,3 +1,54 @@
+// file: act-tap.d.ts
+import type { EventType } from './events.js';
+/** How an external emit entered the world (§7.1 `ActRecord.via`). */
+export type ActVia = 'emit' | 'action';
+/** What the world reports to an attached recorder. Listeners must not throw. */
+export interface ActTapListener {
+    /**
+     * An emit not made by a system or an `on` handler: `world.emit`, `turn`,
+     * `action`, `world.events.emit` outside a tick, or a plugin hook / signal
+     * subscriber during a tick or heartbeat.
+     */
+    emitted(type: EventType<unknown>, payload: unknown, via: ActVia): void;
+    /**
+     * A full (non-heartbeat) `runTick` was entered: `tick` is `time.tick`
+     * before the step, `dt` the caller's dt (`null` for `stepOnce`), `scale`
+     * `time.scale` on entry — the scale this step's dt is scaled by.
+     */
+    frameEntered(tick: number, dt: number | null, scale: number): void;
+    /** Plugin `onTickStart` hooks ran (the step's input is in place). */
+    frameStarted(): void;
+    /** The `tickStart` signal ran: `time.scale` is now what systems run under. */
+    hooksDone(): void;
+    /** The full tick completed. */
+    frameEnded(): void;
+    /** The full tick threw after `frameEntered`: no `frameEnded` follows. */
+    frameAborted(): void;
+    /** Spawn/despawn/add/remove/`markChanged`/`setResource`/`markResourceChanged` outside a full tick. */
+    mutated(): void;
+    /** `restore()` began (before plugin `onRestore` hooks). */
+    restoreBegan(): void;
+    /** `restore()` finished: `ok` false when it threw and left the world as it was. */
+    restoreEnded(ok: boolean): void;
+}
+export interface ActTap {
+    /** Attach `listener`; returns a detach function. */
+    attach(listener: ActTapListener): () => void;
+    /** Whether a full tick or a heartbeat is running. */
+    readonly inTick: boolean;
+    /** The scale `world.resume()` would return to (meaningful while paused). */
+    readonly resumeScale: number;
+    /**
+     * Names of the `once` systems the next full step would run: not yet run,
+     * enabled, and an `enabled` gate (evaluated now) that does not return
+     * `false`. A gate that throws counts as due.
+     */
+    onceDue(): string[];
+}
+export declare const ACT_TAP: unique symbol;
+/** The tap of a world made by `createWorld`; `undefined` for anything else. */
+export declare function actTapOf(world: object): ActTap | undefined;
+
 // file: agent.d.ts
 /**
  * Thin agent operability facade (PLAN WS-3).
@@ -17,6 +68,27 @@ export interface AgentBridgeOptions {
      * has already performed).
      */
     baseline?: WorldSnapshot;
+}
+/**
+ * Options for {@link AgentBridge.reset}: the host controls a snapshot does
+ * not carry, applied after the baseline is restored (O-89).
+ */
+export interface AgentResetOptions {
+    /**
+     * `world.setScale(scale)` after the restore: `0` pauses, a positive scale
+     * resumes at it. Omitted: the world keeps its current scale. Must be a
+     * finite number ≥ 0 (checked before anything is restored). `0` has
+     * `setScale(0)` semantics: the resume target stays the last positive
+     * scale, so a later `world.resume()` runs at the previous episode's
+     * speed; pass a positive scale to choose the next episode's speed.
+     */
+    scale?: number;
+    /**
+     * `'empty'` replaces `world.input` with an empty input (no keys held, no
+     * key edges, pointer at the origin, no gamepads); `'keep'` (the default)
+     * leaves it as the last episode left it.
+     */
+    input?: 'keep' | 'empty';
 }
 /**
  * Compact observation for agent control loops.
@@ -41,15 +113,21 @@ export interface AgentBridge {
      *
      * Not restored (the snapshot does not carry them): `time.scale` and
      * input state. An episode that ends paused/rescaled or with stale
-     * `setInput` data carries that into the next episode — restore them
-     * explicitly at episode boundaries if your episodes touch either.
+     * `setInput` data carries that into the next episode unless `options`
+     * resets them: `reset({ scale: 1, input: 'empty' })` restores the
+     * baseline, then sets the scale and empties the input (O-89). An invalid
+     * option throws before anything is restored.
+     *
+     * `once` systems do not re-run: they ran on the world's first tick and
+     * the snapshot does not record that, so a restore leaves them as run
+     * (SPEC §7.1). Put per-episode setup in the baseline instead.
      *
      * Entity-id assignment is stable across `reset()`: the snapshot carries
      * the id cursor (O-38), so ids assigned after a restore match ids the
      * live world would have assigned. Pending events are discarded by
      * `restore()`, so an abandoned episode's events never fire into the next.
      */
-    reset(): void;
+    reset(options?: AgentResetOptions): void;
     /** Replace the baseline with a snapshot of the current world state. */
     captureBaseline(): void;
     /** Observe tick/scale/entity counts plus {@link World.describe}. */
@@ -60,9 +138,22 @@ export interface AgentBridge {
      * {@link AgentBridge.step}; that spends two ticks per turn. With
      * `opts.dt <= 0` no tick runs and the command stays pending (see
      * {@link World.action}). `type` must be the token `defineEvent()`
-     * returned — a name string is rejected.
+     * returned — a look-alike object is rejected; pass a name string to the
+     * overload below instead.
      */
     act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult;
+    /**
+     * Name-based command boundary for JSON callers (MCP tools, HTTP, act
+     * logs): resolves `name` through {@link World.lookupEvent}, then behaves
+     * exactly like `act(type, …)`, schema validation included (O-39).
+     *
+     * An unknown name, or one shared by two distinct known event types, is
+     * rejected with `{ accepted: false, consumedTurn: false, reason, events: [] }`
+     * — no emit, no tick. An event becomes known when it is registered,
+     * emitted, subscribed to or named as a trigger; `world.register` it (and
+     * keep agent-facing command names unique) so it resolves before first use.
+     */
+    act(name: string, payload: unknown, opts?: ActionOptions): ActionResult;
     /**
      * Advance simulation. Omit `dt` for turn-based {@link World.stepOnce};
      * pass a positive `dt` for {@link World.step} (required for `fixed`
@@ -84,7 +175,7 @@ export interface AgentBridge {
  * hygiene — every episode then starts from the identical restored state):
  * ```ts
  * const bridge = createAgentBridge(world)
- * bridge.reset()
+ * bridge.reset({ scale: 1, input: 'empty' })
  * const obs = bridge.observe()
  * const result = bridge.act(Cmd, { ... }) // runs one tick; { dt: 1/60 } for fixed
  * // bridge.step() — only to advance with no command (step(1/60) for fixed)
@@ -92,6 +183,222 @@ export interface AgentBridge {
  * ```
  */
 export declare function createAgentBridge(world: World, opts?: AgentBridgeOptions): AgentBridge;
+
+// file: branch.d.ts
+import type { SystemicFault } from './errors.js';
+import { type ActLog, type ReplayError } from './replay.js';
+import { type JsonValue, type Result, type SerializedError } from './result.js';
+import type { RngState } from './rng.js';
+import { type WorldSnapshot } from './snapshot.js';
+import { type World } from './world.js';
+/**
+ * Registers types, systems and plugins on a world in a fixed order; spawns
+ * nothing. May return setup output (handles, metadata) for the caller.
+ * A branch's setup must register the same systems, in the same order, as the
+ * world the snapshot came from (SPEC §7.1); nothing can verify this.
+ */
+export type WorldSetup<T = void> = (world: World) => T;
+/** Options for {@link createBranch}. */
+export interface BranchOptions {
+    /**
+     * Default `from.fixedStep ?? 1/60`. A snapshot carries `fixedStep` only
+     * with a fixed backlog, so pass the source's `time.fixedStep` whenever it
+     * is not 1/60.
+     */
+    readonly fixedStep?: number;
+    /** The `createWorld` seed; only matters for a v2 `from` (no `rngRoot`). */
+    readonly seed?: number | RngState;
+    /**
+     * `time.scale` of the source; default 1. Scale is not snapshotted. For a
+     * paused source, pass the scale it resumes to and `pause()` the branch:
+     * `scale: 0` resumes to 1.
+     */
+    readonly scale?: number;
+}
+/** Why {@link createBranch} could not build a branch. */
+export type BranchError = {
+    readonly kind: 'restore_failed';
+    readonly cause: SerializedError;
+} | {
+    readonly kind: 'once_systems';
+    readonly names: readonly string[];
+};
+/**
+ * Build a branch of a world (§7.2): `createWorld({ headless: true, fixedStep,
+ * seed })`, `setup(world)`, `world.restore(from)`, `setScale(options.scale ??
+ * 1)`.
+ *
+ * - A throw from `setup` is a bug and propagates.
+ * - A throw from `restore` (a snapshot that fails validation, an unknown
+ *   pending event) is `restore_failed` with the serialized cause.
+ * - A `once` system registered by `setup` that would run on the branch's
+ *   first step, when `from.tick > 0`, is `once_systems`: the source, past
+ *   tick 0, already had (`once` run state is not snapshotted). It is checked
+ *   after the restore, so an `enabled` gate reads the source's state: boot
+ *   work gated on snapshotted state is accepted. A gate that throws counts
+ *   as one that would run.
+ *
+ * Take `from` with `snapshot({ pendingEvents: true })` and without
+ * snapshot-rewriting plugins (redaction), or the branch starts from a
+ * different state than the source had. Pass the source's `fixedStep` and
+ * `scale`: neither is in a snapshot (`fixedStep` only with a backlog).
+ */
+export declare function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, options?: BranchOptions): Result<{
+    readonly world: World;
+    readonly setup: T;
+}, BranchError>;
+/** Options for {@link runBranch}. */
+export interface RunBranchOptions {
+    /** How many steps to take at most (a non-negative integer). */
+    readonly steps: number;
+    /** Per-step dt; `null` = `stepOnce()`. Default `world.time.fixedStep`. Frames from `log` override. */
+    readonly dt?: number | null;
+    /**
+     * Acts, input, scale and dt to apply at matching ticks: before a step, the
+     * log's frame whose `tick` is `world.time.tick` is applied with §7.1's
+     * frame code (the first such frame, when ticks repeat after a `restore`
+     * gap). Steps with no frame use `dt`. `baseHash` and checkpoints are not
+     * compared (that is `replay`'s job). Before the first step, the input of
+     * the latest frame earlier than `world.time.tick` is set (input is
+     * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
+     * or keyframe starts with the source's input; a call that continues the
+     * previous call on this world (same log object, same tick, input unchanged
+     * since) keeps the input the branch's systems left. The scale is not carried:
+     * pass the source's scale at that tick to {@link createBranch}.
+     */
+    readonly log?: ActLog;
+    /** Read-only probes sampled into `samples` (values are copied as plain data). */
+    readonly probes?: Readonly<Record<string, (world: World) => JsonValue>>;
+    /** Sample after every `sampleEvery`-th step of this call (default 1 when probes are given). */
+    readonly sampleEvery?: number;
+    /** Take a `snapshot({ pendingEvents: true })` after every `keyframeEvery`-th step of this call; default none. */
+    readonly keyframeEvery?: number;
+    /** Take a strict hash after every `hashEvery`-th step of this call; default none. */
+    readonly hashEvery?: number;
+    /** Checked after each step; `true` stops the run (`stoppedBy: 'until'`). */
+    readonly until?: (world: World) => boolean;
+    /** Polled before each step for cooperative cancellation (`stoppedBy: 'cancelled'`). */
+    readonly shouldStop?: () => boolean;
+}
+/** What {@link runBranch} observed. */
+export interface BranchRun {
+    /** Steps taken by this call. */
+    readonly ticks: number;
+    readonly stoppedBy: 'steps' | 'until' | 'cancelled';
+    readonly samples: ReadonlyArray<{
+        readonly tick: number;
+        readonly values: Readonly<Record<string, JsonValue>>;
+    }>;
+    readonly keyframes: ReadonlyArray<{
+        readonly tick: number;
+        readonly snapshot: WorldSnapshot;
+    }>;
+    readonly hashes: ReadonlyArray<{
+        readonly tick: number;
+        readonly hash: string;
+    }>;
+    /** Systemic faults raised (`signals.faultRaised`) during this call. */
+    readonly faults: readonly SystemicFault[];
+    /** Strict hash (`includeChanges: true`, pending events included) when the call returned. */
+    readonly finalHash: string;
+}
+/**
+ * Step `world` — usually a {@link createBranch} world — and observe it (§7.2).
+ * Synchronous; a host runs it in a worker and cancels through `shouldStop`.
+ * Call it again to extend the branch from where it stopped.
+ *
+ * Each step applies the `log` frame for the current tick when there is one
+ * (§7.1 frame code), else `stepOnce()` / `step(dt)`. Probes are sampled after
+ * every `sampleEvery`-th step **counted from this call's start**, and always
+ * after the final step whatever stopped the run (with no step taken, the
+ * current state is sampled once); `keyframeEvery` and `hashEvery` count the
+ * same way. All hashes are strict. Equal `(setup, from, options)` give equal
+ * `finalHash`, `hashes` and `samples`.
+ *
+ * Probes must be read-only: at the first sample of each call, the world's
+ * strict hash is compared before and after every probe, and a probe that
+ * changed it throws an `Error` naming it. A probe value that is not plain
+ * data throws `TypeError`.
+ *
+ * A malformed log, a log for another `fixedStep`, or an act that does not
+ * resolve or validate is a {@link ReplayError} value (the steps already taken
+ * stay taken). Malformed options throw `TypeError` before any step.
+ */
+export declare function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>;
+
+// file: build-id.d.ts
+/**
+ * Build identity (ED-15). `'dev'` in source and in a plain workspace build;
+ * `scripts/pack-for-studio.mjs` rewrites the built `dist/build-id.js` to
+ * `'<version>+g<sha>[-dirty]'` before packing, and `pnpm publish:npm`
+ * stamps the plain version (`scripts/stamp-build-id.mjs`), so a published
+ * build carries it. Hosts stamp it next to their runtime identity
+ * so two packs of the same version stay distinguishable.
+ */
+export declare const BUILD_ID: string;
+
+// file: canonical.d.ts
+/**
+ * Canonical JSON and the snapshot hash (O-11, SPEC §7.1 "Canonical form").
+ *
+ * `canonicalJson` is `JSON.stringify` value semantics with object keys
+ * sorted by UTF-16 code unit, so two values that are equal as data
+ * serialize to the same text regardless of key insertion order. It is
+ * lossless where `JSON.stringify` is not: `-0` is written as the literal
+ * `-0` (valid JSON; `JSON.parse('-0')` is `-0`). A non-finite number, a
+ * BigInt or a cycle throws a `TypeError` naming the path, since snapshots
+ * are plain data by contract.
+ *
+ * Everything here is a pure function of its input: no clock, no
+ * randomness, identical across runs and JS engines.
+ */
+import type { WorldSnapshot } from './snapshot.js';
+import type { Entity } from './types.js';
+/**
+ * Canonical JSON of any plain-data value: sorted keys, JSON value
+ * semantics, lossless `-0`.
+ *
+ * - `undefined`, function and symbol values are omitted in objects and
+ *   become `null` in arrays; at the top level they throw (no JSON text).
+ * - Numbers use ECMAScript `Number::toString`, except `-0` → `-0`.
+ * - `NaN`/`±Infinity`, BigInt and cycles throw `TypeError` with the path
+ *   (`"entities[3].components.Body.vx"`).
+ * - `toJSON` is honoured on class instances (a `Date`, say), as
+ *   `JSON.stringify` does; plain objects and arrays are walked as data.
+ */
+export declare function canonicalJson(value: unknown): string;
+/** The algorithm behind `hashSnapshot`, `hashEntities` and `hashValue`. */
+export declare const HASH_ALGORITHM: "fnv1a64";
+/** FNV-1a-64 of `canonicalJson(value)`. For metric results, act logs, doc versions. */
+export declare function hashValue(value: unknown): string;
+/** Options for {@link canonicalSnapshot} and {@link hashSnapshot}. */
+export interface CanonicalOptions {
+    /**
+     * Include `changes` (unseen marks + system cursors, O-42). Default false.
+     * Pass `true` for every restore-equivalence check (fork vs live,
+     * checkpoints, keyframes): `changes` decides what change-gated systems do
+     * next, so two worlds with equal default hashes can still diverge.
+     */
+    readonly includeChanges?: boolean;
+    /** Include `meta`. Default false. */
+    readonly includeMeta?: boolean;
+}
+/**
+ * Canonical JSON of a snapshot's simulation state. `version` (format, not
+ * state), `meta` and `changes` are left out unless the options ask for
+ * them; every other top-level field — `seed`, `tick`, `scaledTime`,
+ * `fixedBacklog`, `fixedStep`, `nextId`, `entities`, `resources`, and the
+ * fields later snapshot versions add — is state and is included.
+ */
+export declare function canonicalSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string;
+/** 16 lowercase hex chars: FNV-1a-64 over the UTF-8 bytes of {@link canonicalSnapshot}. */
+export declare function hashSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string;
+/**
+ * Per-entity hash of each record's canonical `components`, in ascending
+ * entity id. Comparing two maps localizes a divergence to the entities
+ * whose hashes differ.
+ */
+export declare function hashEntities(snap: WorldSnapshot): Map<Entity, string>;
 
 // file: change-log.d.ts
 import type { Entity } from './types.js';
@@ -152,7 +459,7 @@ export declare function createChangeLog(): {
     watchMarks: (kind: "added" | "changed", name: string) => () => void;
     pruneRemoved: (horizon: number) => void;
     clear: () => void;
-    encode: (cursors: readonly ChangeCursor[]) => ChangesSnapshot | undefined;
+    encode: (cursors: readonly ChangeCursor[], skipResource?: (name: string) => boolean) => ChangesSnapshot | undefined;
     decode: (snap: ChangesSnapshot | undefined) => {
         base: number;
         count: number;
@@ -181,7 +488,69 @@ export interface InternalComponentType<T, Name extends string = string> extends 
  */
 export declare function defineComponent<T, const Name extends string>(name: Name, options?: ComponentOptions<T>): ComponentType<T, Name>;
 export declare function defineComponent<T>(name: string, options?: ComponentOptions<T>): ComponentType<T, string>;
+/** Whether `value` is a {@link ComponentType} made by `defineComponent`. */
+export declare function isComponentType(value: unknown): value is ComponentType<unknown>;
 export declare function internal<T>(type: ComponentType<T>): InternalComponentType<T>;
+
+// file: dmath.d.ts
+/**
+ * Deterministic math (spec §4.2, ED-1, ED-18; ledger O-75).
+ *
+ * `Math.sin`/`Math.cos` are implementation-approximated under ECMA-262, and
+ * real engines disagree by up to 1 ulp on thousands of inputs. `dmath` is a
+ * straight-line port of **musl libm** (generic C, non-FMA paths):
+ * `sin.c`, `cos.c`, `__sin.c`, `__cos.c`, `__rem_pio2.c`,
+ * `__rem_pio2_large.c` (themselves from FreeBSD msun / Sun fdlibm); from
+ * 2.2 also `atan.c`, `atan2.c`, `hypot.c`, plus Sun fdlibm 5.3 `e_pow.c`.
+ *
+ * Why it is bit-exact everywhere: ECMA-262 numbers are IEEE-754 binary64
+ * with round-to-nearest-even, no FMA contraction and no extended precision,
+ * so evaluating the C expressions in the same order reproduces the same bits
+ * on every engine. Bit access goes through one module-level `DataView` with
+ * explicit little-endian offsets (no platform-endianness dependence). Every
+ * constant is built from its hex words: the C sources spell them with 21
+ * significant digits, and ECMA-262 lets an engine round literals past the
+ * 20th digit either way. `FORCE_EVAL` / `fp_barrier` (exception-flag side
+ * effects) have no JS meaning and are dropped.
+ *
+ * Do not "simplify" an expression here: reassociating changes rounding.
+ *
+ * musl: Copyright © 2005-2020 Rich Felker, et al. (MIT).
+ * fdlibm: Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ * Developed at SunSoft, a Sun Microsystems, Inc. business. Permission to
+ * use, copy, modify, and distribute this software is freely granted,
+ * provided that this notice is preserved. `__rem_pio2` optimized by
+ * Bruce D. Evans.
+ */
+/**
+ * Bit-reproducible math: identical results on every ECMA-262 engine.
+ *
+ * - `sin`, `cos`: musl libm ports, < 1 ulp from the true result; ±0, ±∞,
+ *   NaN and subnormals follow C99 Annex F; huge arguments reduce exactly
+ *   (Payne–Hanek).
+ * - `sqrt`: `Math.sqrt`, which IEEE-754 already makes correctly rounded;
+ *   re-exported so authors need one namespace.
+ * - `atan2`, `hypot` (2.2): musl libm ports, < 1 ulp; specials follow C99
+ *   Annex F (the same as `Math.atan2` / two-argument `Math.hypot`).
+ * - `pow` (2.2): a port of fdlibm `e_pow.c`, < 1 ulp; specials follow
+ *   ECMAScript `**` (`(±1) ** ±Infinity` and `1 ** NaN` are NaN, where C99
+ *   Annex F says 1).
+ *
+ * Authoritative (deterministic) systems use these instead of `Math.sin` /
+ * `Math.cos` (SPEC §8). `@domecs/rules` evaluates `sin()` / `cos()` with them.
+ */
+export declare const dmath: Readonly<{
+    sin(x: number): number;
+    cos(x: number): number;
+    /** = Math.sqrt (correctly rounded by IEEE-754; re-exported so authors need one namespace). */
+    sqrt(x: number): number;
+    /** Angle of (x, y) from the +x axis in (-π, π] (musl `atan2`; 2.2). */
+    atan2(y: number, x: number): number;
+    /** sqrt(x² + y²) without undue overflow or underflow (musl `hypot`; 2.2). */
+    hypot(x: number, y: number): number;
+    /** x raised to y (fdlibm `e_pow.c`; specials as ECMAScript `**`; 2.2). */
+    pow(x: number, y: number): number;
+}>;
 
 // file: driver.d.ts
 /**
@@ -417,22 +786,38 @@ export interface EventDefOptions {
      * same way it renders a component.
      */
     readonly schema?: ComponentSchema;
+    /**
+     * Free-text meaning of the event (what the command does, when it is
+     * emitted) for humans and agents. Surfaced by `describeEvent` and
+     * `describe().events`; reflection only.
+     */
+    readonly description?: string;
 }
 /** Internal view of an {@link EventType} carrying its optional payload schema. */
 export interface InternalEventType<T> extends EventType<T> {
     readonly __schema?: ComponentSchema;
+    readonly __description?: string;
 }
 export declare function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>;
+/** Whether `value` is an {@link EventType} (carries the `eventTag` brand). */
+export declare function isEventType(value: unknown): value is EventType<unknown>;
 export declare function internalEvent<T>(type: EventType<T>): InternalEventType<T>;
 /**
  * O-39: shallow payload validation against an event's declared schema, used
- * by `world.action()` so the typed command boundary rejects malformed
- * commands instead of accepting them as no-ops. Only applies when the event
- * was defined with `{ schema }` — schema-less events stay unvalidated.
+ * by `world.action()` / `bridge.act()` so the typed command boundary rejects
+ * malformed commands instead of accepting them as no-ops. Only applies when
+ * the event was defined with `{ schema }` — schema-less events stay
+ * unvalidated (always `null`).
+ *
+ * Public so hosts (editors, agent harnesses) can pre-validate a payload with
+ * exactly the check `action()` applies, without emitting or stepping. For a
+ * rejected payload, `action()` reports
+ * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
- * - payload must be a plain object
- * - keys not declared in the schema are rejected (catches typo'd fields)
+ * - payload must be a non-null, non-array object
+ * - own keys not declared in the schema are rejected (catches typo'd
+ *   fields; names inherited from `Object.prototype` count as undeclared)
  * - declared keys, when present, must match their `kind` (`enum` must be a
  *   member of `options`); `unknown` accepts anything
  *
@@ -449,6 +834,8 @@ export interface EventDescriptor {
     readonly name: string;
     readonly fields: Readonly<Record<string, FieldSchema>>;
     readonly fieldsSource: 'schema' | 'none';
+    /** The `description` given to `defineEvent`; absent when none was. */
+    readonly description?: string;
 }
 export interface EventView {
     of<T>(type: EventType<T>): readonly T[];
@@ -487,6 +874,13 @@ export interface EventBus {
     /** Record `type` as known without emitting or subscribing (O-51). */
     note(type: EventType<unknown>): void;
     /**
+     * The known event type named `name`, or `undefined` when none is known or
+     * when two distinct known types share the name (§4.5).
+     */
+    lookup(name: string): EventType<unknown> | undefined;
+    /** Whether a known event type other than `type` already holds `type.name`. */
+    nameTakenByOther(type: EventType<unknown>): boolean;
+    /**
      * Set all pending (undelivered) events aside and start an empty queue,
      * returning the set-aside events. Called by `world.restore()`: events
      * queued before a restore belong to the abandoned timeline and must not
@@ -496,11 +890,25 @@ export interface EventBus {
      */
     takePending(): PendingEvents;
     /**
+     * Empty the current (already-flushed) view. Called by a successful
+     * `world.restore()`: the view holds what the abandoned timeline delivered
+     * and no snapshot carries it, so a restored world reads the same (empty)
+     * view as a fresh world restored from the same snapshot (§6.3, O-88:
+     * `world.events` and `runSystems`' `ctx.events` before the next flush).
+     */
+    clearCurrent(): void;
+    /**
      * Make `taken` the pending queue again, dropping anything emitted since
      * {@link takePending}. `world.restore()` calls it when the restore throws,
      * so a failed restore leaves the pending events as they were.
      */
     putBackPending(taken: PendingEvents): void;
+    /**
+     * Queue `events` ahead of whatever is pending, in their order (§4.7):
+     * `world.restore()` replaces the restoring world's queue with a snapshot's
+     * `pendingEvents`, keeping after them anything an `onRestore` hook emitted.
+     */
+    prependPending(events: readonly EmittedEvent[]): void;
 }
 /** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
 export type PendingEvents = Map<symbol, unknown[]>;
@@ -512,7 +920,14 @@ export type PendingEvents = Map<symbol, unknown[]>;
  * `signals.faultRaised`; the bus itself stays decoupled from fault plumbing.
  */
 export type HandlerFaultSink = (eventName: string, cause: unknown) => void;
-export declare function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus;
+/**
+ * Optional observer of every emit (`bus.emit` and a view's `emit`), called
+ * after the event is queued. Not called for events re-queued by
+ * {@link EventBus.prependPending}. The world uses it for the act-log tap
+ * (§7.1).
+ */
+export type EmitObserver = (type: EventType<unknown>, payload: unknown) => void;
+export declare function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitObserver): EventBus;
 
 // file: faulted.d.ts
 import type { FaultEntry } from './errors.js';
@@ -599,12 +1014,12 @@ export { defineComponent } from './component.js';
 export { defineResource } from './resource.js';
 export { createWorld } from './world.js';
 export { createAgentBridge } from './agent.js';
-export type { AgentBridge, AgentBridgeOptions, AgentObservation, } from './agent.js';
-export { defineEvent } from './events.js';
-export { createRng, restoreRng, seedToState } from './rng.js';
+export type { AgentBridge, AgentBridgeOptions, AgentObservation, AgentResetOptions, } from './agent.js';
+export { defineEvent, validateEventPayload } from './events.js';
+export { createRng, deriveStream, restoreRng, seedToState } from './rng.js';
 export { createTime, quantizeMs } from './time.js';
 export { Has, Not, Or, And, OnAdded, OnRemoved, OnChanged, Where, OnChangedResource, normalize as normalizeQuery, collectHasComponents, QueryNodeKind, } from './query.js';
-export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, } from './world.js';
+export type { World, WorldOptions, WorldSignals, ActionEvent, ActionVerdict, ActionResolver, ActionOptions, ActionResult, RegisterError, } from './world.js';
 export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js';
 export type { WorldManifest, PluginManifestEntry } from './manifest.js';
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js';
@@ -613,7 +1028,12 @@ export type { Signal } from './signals.js';
 export { definePlugin } from './plugin.js';
 export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js';
 export { SNAPSHOT_VERSION } from './snapshot.js';
-export type { SnapshotOptions, WorldSnapshot } from './snapshot.js';
+export type { SnapshotOptions, SnapshotPendingEvent, WorldSnapshot } from './snapshot.js';
+export { canonicalJson, canonicalSnapshot, hashSnapshot, hashEntities, hashValue, HASH_ALGORITHM, } from './canonical.js';
+export type { CanonicalOptions } from './canonical.js';
+export { dmath } from './dmath.js';
+export { createSpatialGrid } from './spatial-grid.js';
+export type { SpatialGrid } from './spatial-grid.js';
 export type { ChangesSnapshot } from './change-log.js';
 export type { Rng, RngState } from './rng.js';
 export type { TimeState } from './time.js';
@@ -625,6 +1045,13 @@ export type { Result, Ok, Err, JsonValue, SerializedError } from './result.js';
 export { describeError, ERROR_KINDS, isKnownDomecsErrorKind, getErrorRepairHint } from './errors.js';
 export type { DomecsError, ErrorKind, PluginError, PluginResult, SystemFault, SystemResult, SystemicFault, SystemId, ComponentId, EventId, FaultEntry, } from './errors.js';
 export { Faulted, CONSOLIDATE_FAULTS_NAME, CONSOLIDATE_FAULTS_PRIORITY, } from './faulted.js';
+export { BUILD_ID } from './build-id.js';
+export { encodeInput, decodeInput } from './replay.js';
+export type { JsonInput } from './replay.js';
+export { createRecorder, replay } from './replay.js';
+export type { ActLog, ActLogFrame, ActLogGapReason, ActRecord, Recorder, RecorderOptions, ReplayError, ReplayOptions, } from './replay.js';
+export { createBranch, runBranch } from './branch.js';
+export type { BranchError, BranchOptions, BranchRun, RunBranchOptions, WorldSetup } from './branch.js';
 
 // file: input.d.ts
 import type { Entity } from './types.js';
@@ -690,6 +1117,7 @@ export declare function emptyInput(): InputSnapshot;
 
 // file: manifest.d.ts
 import type { EventDescriptor } from './events.js';
+import type { JsonValue } from './result.js';
 import type { SystemSchedule } from './scheduler.js';
 import type { ComponentDescriptor, ResourceDescriptor } from './types.js';
 /**
@@ -721,6 +1149,20 @@ export interface WorldManifest {
         readonly name: string;
         readonly schedule: SystemSchedule;
         readonly enabled: boolean;
+        /** Primary sort key within a schedule (lower runs first). */
+        readonly priority: number;
+        /** Secondary sort key within a priority (default 0; SPEC §3). */
+        readonly order: number;
+        /** Which generator its `ctx.rand` is: the shared stream or its own (§4.4). */
+        readonly rng: 'shared' | 'own';
+        /**
+         * Names of the components the system's `query` / `reactsTo` reference
+         * (any leaf, `Not` branches included), sorted and de-duplicated.
+         * Computed once at registration.
+         */
+        readonly components: string[];
+        /** The system's `meta` annotation, cloned per call; absent when none was given. */
+        readonly meta?: JsonValue;
     }[];
     readonly plugins: PluginManifestEntry[];
     readonly capabilities: string[];
@@ -979,6 +1421,280 @@ export declare function collectTypesByKind(node: QueryNode, kind: QueryNode['kin
 export declare function collectHasComponents(node: QueryNode, out?: Map<string, ComponentType<unknown>>, inNot?: boolean): Map<string, ComponentType<unknown>>;
 export {};
 
+// file: replay.d.ts
+import type { GamepadSnapshot, InputSnapshot } from './input.js';
+import { type JsonValue, type Result } from './result.js';
+import { type WorldSnapshot } from './snapshot.js';
+import type { Entity } from './types.js';
+import type { World } from './world.js';
+/**
+ * A JSON form of {@link InputSnapshot} (whose key sets are `Set`s). Key
+ * arrays keep the Sets' iteration order (a system iterating them sees the
+ * same order after a replay); `pressed`/`released` are omitted when empty, and
+ * `mods`, `pointer`, `gamepads` and `focus` when they equal the empty input
+ * (no modifier, pointer at rest at 0,0, no gamepad, no focus).
+ */
+export interface JsonInput {
+    /** Held keys, in the Set's order. */
+    readonly keys: readonly string[];
+    /** Keys pressed this render tick, in the Set's order; omitted when empty. */
+    readonly pressed?: readonly string[];
+    /** Keys released this render tick, in the Set's order; omitted when empty. */
+    readonly released?: readonly string[];
+    readonly mods?: {
+        readonly ctrl: boolean;
+        readonly alt: boolean;
+        readonly shift: boolean;
+        readonly meta: boolean;
+    };
+    readonly pointer?: {
+        readonly x: number;
+        readonly y: number;
+        readonly buttons: number;
+        readonly delta: {
+            readonly x: number;
+            readonly y: number;
+        };
+        readonly wheel: number;
+        readonly entered: readonly Entity[];
+    };
+    readonly gamepads?: readonly GamepadSnapshot[];
+    readonly focus?: {
+        readonly activeTag: string;
+        readonly consumesKeys: boolean;
+    };
+}
+/**
+ * Encode an input snapshot as plain JSON data (§7.1). The result shares no
+ * object with `input`; {@link decodeInput} rebuilds an equal snapshot.
+ */
+export declare function encodeInput(input: InputSnapshot): JsonInput;
+/**
+ * Rebuild an {@link InputSnapshot} from {@link encodeInput}'s form: `Set`s
+ * for the key arrays, the empty input's value for every omitted part. The
+ * result shares no object with `json`.
+ */
+export declare function decodeInput(json: JsonInput): InputSnapshot;
+/** One external emit, by event name (§7.1). */
+export interface ActRecord {
+    /** The event's name; replay resolves it with `world.lookupEvent`. */
+    readonly event: string;
+    /** A plain-data copy of the payload taken at emit time; absent for an `undefined` payload. */
+    readonly payload?: JsonValue;
+    /** How the act entered the world. Only `'action'` acts are schema-validated on replay. */
+    readonly via: 'emit' | 'action';
+}
+/** One full step (a `stepOnce()` or a `step(dt)` with `dt > 0`). Heartbeats are not frames. */
+export interface ActLogFrame {
+    /** `world.time.tick` before this step. */
+    readonly tick: number;
+    /** The dt passed to `step(dt)`; `null` = `stepOnce()`. */
+    readonly dt: number | null;
+    /**
+     * `time.scale` on entry to this step, when it differs from the scale the
+     * previous frame ended with (for the first frame: the log's `startScale`).
+     * This step's dt is scaled by it.
+     */
+    readonly scale?: number;
+    /**
+     * The scale `world.resume()` returns to, for a step entered paused, when it
+     * is not the one a replay world would have (the host changed it between
+     * steps, e.g. `setScale(3); pause()`). Replay restores it before pausing.
+     */
+    readonly resumeScale?: number;
+    /**
+     * `time.scale` after plugin `onTickStart`, before the step's event flush,
+     * when a plugin changed it. Direct `on` handlers in the flush see it;
+     * replay sets it at the same point.
+     */
+    readonly flushScale?: number;
+    /** As `resumeScale`, for a step paused after plugin `onTickStart`: set before the event flush. */
+    readonly flushResume?: number;
+    /**
+     * `time.scale` after `signals.tickStart`, when it differs from the scale
+     * the event flush ran under — a `tickStart` pause control. It governs
+     * whether this step's `fixed` and `tick` systems run; replay applies it at
+     * the same point.
+     */
+    readonly hookScale?: number;
+    /** As `resumeScale`, for a step paused after `signals.tickStart`: set before the systems. */
+    readonly hookResume?: number;
+    /**
+     * Events emitted from outside since the previous step and before this
+     * step's event flush (out of tick, during heartbeats, from plugin
+     * `onTickStart`), in emit order. Replay emits them before the step.
+     */
+    readonly acts?: readonly ActRecord[];
+    /**
+     * Events emitted from outside during this step after its event flush and
+     * before its systems (`signals.tickStart` subscribers), in emit order.
+     * Replay emits them at the same point, so they keep their place among the
+     * events the step's systems emit.
+     */
+    readonly startActs?: readonly ActRecord[];
+    /**
+     * Events emitted from outside during this step after its systems (render,
+     * plugin `onTickEnd`, `signals.tickEnd`), in emit order. Replay emits them
+     * at the same point, so the step ends with the same queue (and checkpoint).
+     */
+    readonly endActs?: readonly ActRecord[];
+    /**
+     * `world.input` after plugin `onTickStart` (what the event flush saw), when
+     * it differs from the previous frame's (always on the first frame).
+     */
+    readonly input?: JsonInput;
+    /**
+     * `world.input` after a `signals.tickStart` subscriber replaced it — what
+     * this step's systems saw — when it differs from `input`. Replay sets it
+     * at the same point.
+     */
+    readonly hookInput?: JsonInput;
+}
+/** Why a log stops describing the world at a tick (replay past it is unverified). */
+export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw';
+/** A recorded session (§7.1): a new artifact with its own `format` and `version`. */
+export interface ActLog {
+    readonly format: 'domecs-actlog';
+    readonly version: 1;
+    /** `world.time.tick` when recording started. */
+    readonly startTick: number;
+    /** `world.time.fixedStep` of the recording world. */
+    readonly fixedStep: number;
+    /** `time.scale` when recording started. */
+    readonly startScale: number;
+    /**
+     * Present when recording started paused (`startScale` 0): the scale
+     * `world.resume()` returned to then. Replay restores it, so a system that
+     * resumes the world resumes it to the same scale.
+     */
+    readonly resumeScale?: number;
+    /** `hashSnapshot(world.snapshot({ pendingEvents: true }), { includeChanges: true })` when recording started. */
+    readonly baseHash: string;
+    readonly frames: readonly ActLogFrame[];
+    /** Strict hashes at tick ends (`hashEvery`). */
+    readonly checkpoints?: ReadonlyArray<{
+        readonly tick: number;
+        readonly hash: string;
+    }>;
+    /** Points where the log stops describing the world (replay past them is unverified). */
+    readonly gaps?: ReadonlyArray<{
+        readonly tick: number;
+        readonly reason: ActLogGapReason;
+    }>;
+}
+/** Options for {@link createRecorder}. */
+export interface RecorderOptions {
+    /** Append a strict-hash checkpoint at each tick end where `tick % hashEvery === 0` (a positive integer). */
+    readonly hashEvery?: number;
+}
+/** A running act-log recording (§7.1). */
+export interface Recorder {
+    /** `false` once {@link stop} was called. */
+    readonly active: boolean;
+    /** The log so far (a copy). Throws `Error` during a tick, as {@link stop} does. */
+    peek(): ActLog;
+    /**
+     * Stop recording and return the log. Later calls return the same log (a
+     * copy). Throws `Error` when called during a tick: the running frame has
+     * not ended.
+     */
+    stop(): ActLog;
+}
+/**
+ * The strict state hash act logs use: `hashSnapshot(snapshot({ pendingEvents:
+ * true }), { includeChanges: true })`. When a pending event's payload is not
+ * plain data (the snapshot throws `TypeError`), pending events are left out;
+ * a recorder that starts that way records an `unserializable_payload` gap.
+ */
+export declare function actLogHash(world: World): string;
+/**
+ * Start recording `world` (§7.1). The recorder listens on a world-internal
+ * tap and writes down what a replay cannot reproduce by itself:
+ *
+ * - every emit **not made by a system or an `on` handler** (`world.emit`,
+ *   `turn`, `action`, plugin hooks and signal subscribers, heartbeats
+ *   included), with `via`: into the next frame's `acts`, or, when made
+ *   during a full step after its event flush, into that frame's
+ *   `startActs` (`signals.tickStart`) or `endActs` (render, `onTickEnd`,
+ *   `signals.tickEnd`);
+ * - per full step: the tick, the caller's dt (`null` for `stepOnce`), the
+ *   scale on entry, a scale plugin `onTickStart` set (in place for the
+ *   event flush) and one the `tickStart` signal set (for the systems), and
+ *   `world.input` as the event flush sees it (after plugin `onTickStart`,
+ *   delta-encoded) plus the input a `tickStart` subscriber replaced it with;
+ * - gaps: spawn/despawn/add/remove/`markChanged`/`setResource`/
+ *   `markResourceChanged` outside a full tick, or a draw on `world.rand`
+ *   between steps (`out_of_tick_mutation`), a
+ *   payload that is not plain data (`unserializable_payload`; the act is
+ *   dropped, and an event already pending at creation with one is a gap
+ *   at `startTick`), and `restore()` (`restore`).
+ *
+ * Throws `TypeError` for a world not made by `createWorld` or an invalid
+ * `hashEvery`, and `Error` when called during a tick.
+ */
+export declare function createRecorder(world: World, options?: RecorderOptions): Recorder;
+/** Why {@link replay} stopped. Errors are data: a bad log never throws. */
+export type ReplayError = {
+    readonly kind: 'invalid_log';
+    readonly reason: string;
+} | {
+    readonly kind: 'base_mismatch';
+    readonly expected: string;
+    readonly actual: string;
+} | {
+    readonly kind: 'unknown_event';
+    readonly event: string;
+    readonly tick: number;
+} | {
+    readonly kind: 'rejected_payload';
+    readonly event: string;
+    readonly tick: number;
+    readonly reason: string;
+} | {
+    readonly kind: 'diverged';
+    readonly tick: number;
+    readonly expected: string;
+    readonly actual: string;
+};
+/** Options for {@link replay}. */
+export interface ReplayOptions {
+    /** Restore this first (else the world must already be at the log's base). Take it with `{ pendingEvents: true }`. */
+    readonly base?: WorldSnapshot;
+    /** Stop after the frame that ends at this tick. */
+    readonly toTick?: number;
+    /** Compare checkpoints (default true). */
+    readonly verify?: boolean;
+    /** Called after each replayed frame with `world.time.tick`. */
+    readonly onFrame?: (tick: number, world: World) => void;
+}
+/**
+ * A reason the log is malformed, or `null`. Reads defensively; never throws.
+ * Internal (not exported from the package); shared with `runBranch` (§7.2).
+ */
+export declare function checkLog(log: unknown): string | null;
+export declare function applyActFrame(world: World, frame: ActLogFrame): ReplayError | null;
+/**
+ * Replay `log` on `world` (§7.1): optionally `restore(options.base)`, then
+ * `setScale(log.startScale)`, check the strict base hash, and apply every
+ * frame (acts by name through `lookupEvent`, schema-validated only when
+ * recorded `via: 'action'`; scale; input; `stepOnce()`/`step(dt)`),
+ * comparing checkpoints unless `verify: false`.
+ *
+ * Preconditions (SPEC §7.5): the same setup (systems, plugins, order) as the
+ * recording world, minus every stimulus source — no input plugin, no plugin
+ * or hook that emits events or sets `time.scale` at tick start (their
+ * effects are in the log) — and no enabled `once` system the source had
+ * already run.
+ *
+ * A malformed log, a log for another `fixedStep`, a world not at the base,
+ * an unknown act or a checkpoint mismatch is an error value, never a throw.
+ * `restore(base)` throws for a malformed snapshot, by its own contract.
+ */
+export declare function replay(world: World, log: ActLog, options?: ReplayOptions): Result<{
+    readonly ticks: number;
+    readonly hash: string;
+}, ReplayError>;
+
 // file: resource.d.ts
 import type { ResourceOptions, ResourceType } from './types.js';
 export interface InternalResourceType<T, Name extends string = string> extends ResourceType<T, Name> {
@@ -986,9 +1702,13 @@ export interface InternalResourceType<T, Name extends string = string> extends R
     /** Produces a fresh default value, or `undefined` when none was declared. */
     readonly __default: (() => T) | undefined;
     readonly __validate: ((value: T) => true | string) | undefined;
+    /** Left out of snapshots; restore keeps the live value (O-36). */
+    readonly __transient: boolean;
 }
 export declare function defineResource<T, const Name extends string>(name: Name, options?: ResourceOptions<T>): ResourceType<T, Name>;
 export declare function defineResource<T>(name: string, options?: ResourceOptions<T>): ResourceType<T, string>;
+/** Whether `value` is a {@link ResourceType} made by `defineResource`. */
+export declare function isResourceType(value: unknown): value is ResourceType<unknown>;
 export declare function internalResource<T>(type: ResourceType<T>): InternalResourceType<T>;
 
 // file: result.d.ts
@@ -1105,11 +1825,28 @@ export declare function restoreRng(state: RngState): Rng;
  * Returns false when `rng` was not made by {@link createRng}.
  */
 export declare function rewindRng(rng: Rng, state: RngState): boolean;
+/**
+ * The initial state of the stream `key` under the root seed `root` (§4.4):
+ * the world's per-system stream for a system with `rng: 'own'`, keyed by its
+ * cursor key. Independent of when the system registered and of every other
+ * system's draws.
+ *
+ * - `h` = FNV-1a-32 over the UTF-16 code units of `"domecs:stream:" + key`;
+ * - word `i` = the first `splitmix32` output seeded with
+ *   `root[i] XOR rotl(h, 8·i)` (the rotation keeps equal root words apart);
+ * - an all-zero result is fixed up as {@link seedToState} does;
+ * - 8 xoshiro128** outputs are discarded as warm-up.
+ *
+ * Pinned by a golden test and part of the snapshot contract: changing it
+ * requires a `SNAPSHOT_VERSION` bump.
+ */
+export declare function deriveStream(root: RngState, key: string): RngState;
 
 // file: scheduler.d.ts
 import type { EventType, EventView } from './events.js';
 import type { InputSnapshot } from './input.js';
 import { type EntityView, type QueryDef, type QueryResult } from './query.js';
+import type { JsonValue } from './result.js';
 import type { Rng } from './rng.js';
 import type { TimeState } from './time.js';
 import type { World } from './world.js';
@@ -1121,8 +1858,35 @@ export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive';
 interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
     query?: QueryDef;
     priority?: number;
+    /**
+     * Secondary sort key within a priority (default 0; finite). Run order in a
+     * mode is priority, then order, then registration index. Lets a library
+     * place its systems deterministically regardless of when they were
+     * (re)registered (SPEC §3; O-76).
+     */
+    order?: number;
     enabled?: () => boolean;
     state?: State;
+    /**
+     * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
+     * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
+     * Cloned at registration; the runtime never reads it. A value JSON cannot
+     * carry (function, `undefined`, non-finite number, class instance, cycle)
+     * makes `world.system()` throw `TypeError`.
+     */
+    meta?: JsonValue;
+    /**
+     * Which generator `ctx.rand` is (§4.4; SPEC §2.8).
+     * 'shared' (default): `ctx.rand` is `world.rand`, so every system's draws
+     * depend on every other system's.
+     * 'own': `ctx.rand` is this system's stream, keyed by its cursor key (its
+     * name, or `name#k` on a clash) and derived from the world's root seed —
+     * independent of registration time and of every other system's draws. The
+     * stream outlives the system (re-registering under the key resumes it) and
+     * travels in the snapshot (`rngStreams`). Calling `world.rand` directly
+     * still draws the shared stream. Any other value throws at `world.system()`.
+     */
+    rng?: 'shared' | 'own';
     /**
      * Erased Fields phantom — keeps a structural slot for the inferred field
      * shape so callers can ascribe it explicitly when needed. The runtime
@@ -1196,6 +1960,18 @@ export interface CompiledSystem {
     pendingFn?: System;
     schedule: SystemSchedule;
     priority: number;
+    /** Secondary sort key within a priority (default 0). */
+    order: number;
+    /** Sorted names of the components its query / reactsTo reference (manifest). */
+    components: string[];
+    /** Clone of `def.meta` taken at registration (manifest). */
+    meta?: JsonValue;
+    /** `def.rng ?? 'shared'` (manifest). */
+    rng: 'shared' | 'own';
+    /** For `rng: 'own'`: the stream key, fixed at registration (§4.4). */
+    rngKey?: string;
+    /** For `rng: 'own'`: the stream `ctx.rand` is; the world's map holds it. */
+    ownRand?: Rng;
     enabled: boolean;
     state: unknown;
     query?: QueryResult;
@@ -1246,8 +2022,13 @@ export interface Scheduler {
  *   is the system's (O-42).
  * @param initialSeen the change-log stamp a newly registered system's
  *   window starts after.
+ * @param claimStream the own stream (§4.4) a system registering now under
+ *   `name` with `rng: 'own'` draws from, and its key.
  */
-export declare function createScheduler(makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult, fixedStep: number, initialSeen: (name: string) => number): Scheduler;
+export declare function createScheduler(makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult, fixedStep: number, initialSeen: (name: string) => number, claimStream: (name: string) => {
+    key: string;
+    rng: Rng;
+}): Scheduler;
 export {};
 
 // file: signals.d.ts
@@ -1265,8 +2046,10 @@ export declare function createSignal<T>(): EmittableSignal<T>;
 
 // file: snapshot.d.ts
 import type { ChangesSnapshot } from './change-log.js';
+import type { JsonValue } from './result.js';
+import type { RngState } from './rng.js';
 import type { Entity } from './types.js';
-export declare const SNAPSHOT_VERSION = 2;
+export declare const SNAPSHOT_VERSION = 3;
 /** Options for `world.snapshot()`. */
 export interface SnapshotOptions {
     /**
@@ -1277,10 +2060,61 @@ export interface SnapshotOptions {
      * `pruneTransientOnlyEntities()` applies it to the no-arg `save()` path.
      */
     readonly pruneEmptyEntities?: boolean;
+    /**
+     * Record the undelivered events in the snapshot's `pendingEvents` field
+     * (§4.7, ED-16). Default `false`: the field is absent and restore abandons
+     * the restoring world's queue, as in 2.0. Every fork, keyframe or
+     * checkpoint whose future must match the live world's should pass `true`.
+     * Throws `TypeError` naming the event when a pending payload is not plain
+     * data, or when another known event type shares a pending event's name
+     * (the record is by name, so it could not restore as the same type).
+     */
+    readonly pendingEvents?: boolean;
+}
+/**
+ * One undelivered event in {@link WorldSnapshot.pendingEvents}: the event
+ * type's name and a plain-data copy of its payload. `payload` is absent when
+ * the payload was `undefined` (a `defineEvent<void>` event).
+ */
+export interface SnapshotPendingEvent {
+    readonly event: string;
+    readonly payload?: JsonValue;
 }
 export interface WorldSnapshot {
     readonly version: number;
+    /** State of the shared stream (`world.rand`) at snapshot time. */
     readonly seed: readonly [number, number, number, number];
+    /**
+     * The world's root seed state — the `createWorld` seed — from which every
+     * `rng: 'own'` stream derives (§4.4, v3). It never advances. Written by
+     * every 2.1 snapshot. Restore adopts it, so systems registered after the
+     * restore derive the streams the source world would; absent (a v2
+     * snapshot), the restoring world uses its own `createWorld` root, not one
+     * adopted from an earlier restore.
+     */
+    readonly rngRoot?: RngState;
+    /**
+     * Current state of every own stream this world has created, by stream key
+     * (the owning system's cursor key: its name, or `name#k` on a clash), v3.
+     * Entries outlive their systems (a removed system's entry is kept, so a
+     * re-registered system resumes it). Omitted while the world has never
+     * created an own stream. Restore replaces the world's map with it and
+     * re-derives, from the restored root, the stream of every registered own
+     * system whose key is missing. An explicit `undefined` counts as absent,
+     * so the reseed recipe `{ ...snap, seed: s, rngRoot: s, rngStreams:
+     * undefined }` type-checks under `exactOptionalPropertyTypes`.
+     */
+    readonly rngStreams?: Readonly<Record<string, RngState>> | undefined;
+    /**
+     * §4.4: which stream each live own-stream system holds, by cursor key,
+     * for the systems whose stream key is not their cursor key (a survivor of
+     * same-named systems whose first was removed holds `name#1` while its
+     * cursor key is `name`). Omitted when every system holds its cursor key.
+     * Restore gives each live own system the stream this names (else its
+     * cursor key's), so a world built with only the current systems draws as
+     * the source does.
+     */
+    readonly rngOwners?: Readonly<Record<string, string>> | undefined;
     readonly tick: number;
     /**
      * Cumulative unquantized scaled time in seconds — the drift-free total
@@ -1331,9 +2165,86 @@ export interface WorldSnapshot {
      * Omitted when every system has seen every mark.
      */
     readonly changes?: ChangesSnapshot;
+    /**
+     * Undelivered events, in bus order (by first emit of each type, then
+     * payload order within a type). Present only when snapshotted with
+     * `{ pendingEvents: true }` and at least one event was in flight (§4.7).
+     * Restore resolves each name with `world.lookupEvent` before touching any
+     * state — an unknown or ambiguous name throws — then replaces the
+     * restoring world's queue with these events. Absent, restore abandons the
+     * queue (2.0 behaviour).
+     */
+    readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>;
     readonly meta?: Record<string, unknown>;
 }
 export declare function cloneSerializable<T>(value: T): T;
+/**
+ * `out[k] = v` as an own data property. Plain assignment of `"__proto__"`
+ * (an own key `JSON.parse` creates) would set `out`'s prototype instead and
+ * drop the data from the copy and from its canonical hash.
+ */
+export declare function setOwn(out: Record<string, unknown>, k: string, v: unknown): void;
+
+// file: spatial-grid.d.ts
+import type { Entity } from './types.js';
+/**
+ * A pure, world-free uniform grid over 2D points (O-8, spec §5.1, ED-7).
+ *
+ * Results of {@link SpatialGrid.within}, {@link SpatialGrid.nearest} and
+ * {@link SpatialGrid.pairs} are normative: they equal a brute-force scan
+ * over every indexed point and never depend on `cellSize`, on insertion
+ * order or on cell iteration order. Cell size is a pure performance
+ * setting. Distances are compared as `dx * dx + dy * dy` with
+ * `dx = px - x`, `dy = py - y`, the same expression a brute-force scan
+ * would use.
+ *
+ * The grid is derived state: it is never part of a snapshot. Rebuild it from
+ * snapshotted positions.
+ */
+export interface SpatialGrid {
+    readonly cellSize: number;
+    /** Number of indexed ids. */
+    readonly size: number;
+    clear(): void;
+    /** Insert or move. Non-finite coordinates are not indexed (the id is removed). */
+    set(id: Entity, x: number, y: number): void;
+    /** Remove `id`; unknown ids are a no-op. */
+    delete(id: Entity): void;
+    /** The indexed position of `id`, or `undefined` when it is not indexed. */
+    position(id: Entity): {
+        readonly x: number;
+        readonly y: number;
+    } | undefined;
+    /**
+     * Ids with distance² <= r², ascending id. A negative or NaN `r` matches
+     * nothing. `accept` is called in ascending id order on the ids within
+     * range; it should be pure.
+     */
+    within(x: number, y: number, r: number, accept?: (id: Entity) => boolean): Entity[];
+    /**
+     * The id with the minimum distance²; ties → lowest id. `maxDistance`
+     * (inclusive) bounds the search; a negative or NaN `maxDistance` matches
+     * nothing. `accept` may be called in any order and any number of times,
+     * so it should be pure.
+     */
+    nearest(x: number, y: number, options?: {
+        maxDistance?: number;
+        accept?: (id: Entity) => boolean;
+    }): Entity | undefined;
+    /**
+     * Unordered pairs with distance <= r (a < b), sorted by (a, b). A negative
+     * or NaN `r` matches nothing. `accept` is called in output order on the
+     * pairs within range; it should be pure.
+     */
+    pairs(r: number, accept?: (a: Entity, b: Entity) => boolean): Array<[Entity, Entity]>;
+}
+/**
+ * Create an empty {@link SpatialGrid}. `cellSize` must be a finite number
+ * greater than 0 (throws `RangeError` otherwise); it changes speed, never
+ * results. A cell a little larger than the typical query radius is a good
+ * start.
+ */
+export declare function createSpatialGrid(cellSize: number): SpatialGrid;
 
 // file: time.d.ts
 export interface TimeState {
@@ -1391,7 +2302,7 @@ export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'u
 /**
  * Per-field reflection metadata. `kind` is required; the rest are optional
  * widget hints (numeric range/step, enum `options`, display `label`,
- * `readonly`). Field names are plain strings, not keyed to `T` — this is a
+ * `readonly`) and a free-text `description`. Field names are plain strings, not keyed to `T` — this is a
  * runtime descriptor consumed by tooling, not a type-level constraint.
  */
 export interface FieldSchema {
@@ -1402,6 +2313,11 @@ export interface FieldSchema {
     readonly options?: ReadonlyArray<string | number>;
     readonly label?: string;
     readonly readonly?: boolean;
+    /**
+     * Free-text meaning of the field for humans and agents (units, range
+     * semantics, what 0 means). Reflection only; never validated against.
+     */
+    readonly description?: string;
 }
 /** A component's field schema: a map of field name → {@link FieldSchema}. */
 export interface ComponentSchema {
@@ -1432,6 +2348,8 @@ export interface ResourceDescriptor {
     readonly name: string;
     readonly hasValue: boolean;
     readonly hasDefault: boolean;
+    /** Declared with `defineResource(name, { transient: true })`: not snapshotted. */
+    readonly transient: boolean;
 }
 /**
  * A world-singleton value, addressed by identity rather than per-entity
@@ -1461,6 +2379,15 @@ export interface ResourceOptions<T> {
     default?: T | (() => T);
     /** Reject invalid values on `setResource` / lazy default; return `true` or a message. */
     validate?: (value: T) => true | string;
+    /**
+     * Render-only or derived state (a camera, a HUD cache) that is rebuilt
+     * rather than saved (O-36). `snapshot()` leaves the value — and its change
+     * marks — out, so it never changes `hashSnapshot`; `restore()` keeps the
+     * live value (a snapshot value for it is ignored), and a fresh world
+     * restored from a snapshot falls back to the default. Reads, writes,
+     * validation and `OnChangedResource` are unchanged. Default `false`.
+     */
+    transient?: boolean;
 }
 /**
  * Tagged spawn entry — a (type, value) pair whose value position is tied to
@@ -1494,6 +2421,9 @@ export declare function createResourceState(recordChange: (name: string) => void
     markChanged: <T>(type: ResourceType<T>) => void;
     types: () => ResourceType<unknown>[];
     describe: <T>(type: ResourceType<T>) => ResourceDescriptor;
+    register: (type: ResourceType<unknown>) => void;
+    lookup: (name: string) => ResourceType<unknown> | undefined;
+    isTransient: (name: string) => boolean;
     snapshotValues: () => Record<string, unknown> | undefined;
     validateSnapshot: (snapResources: Record<string, unknown>) => void;
     clearForRestore: () => void;
@@ -1502,8 +2432,10 @@ export declare function createResourceState(recordChange: (name: string) => void
 
 // file: world-state.d.ts
 import type { ChangeCursor, ChangeLog } from './change-log.js';
-import { type Rng } from './rng.js';
-import { type WorldSnapshot } from './snapshot.js';
+import { type Rng, type RngState } from './rng.js';
+import type { EmittedEvent, EventType } from './events.js';
+import type { JsonValue } from './result.js';
+import { type SnapshotPendingEvent, type WorldSnapshot } from './snapshot.js';
 import { type TimeState } from './time.js';
 import type { ComponentType, Entity } from './types.js';
 import type { SortedIdSet } from './id-set.js';
@@ -1597,11 +2529,64 @@ export interface WorldStateCtx {
     ensureArchetype(types: Set<string>): ArchetypeBucket;
     getRand(): Rng;
     setRand(r: Rng): void;
+    /** The root own streams derive from (§4.4). */
+    getRngRoot(): RngState;
+    /** Every own stream the world has created, by key (§4.4). */
+    getStreams(): ReadonlyMap<string, Rng>;
+    /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
+    getStreamOwners(): Record<string, string> | undefined;
+    /** The cursor keys of the live own-stream systems. */
+    ownStreamCursorKeys(): string[];
+    /** Adopt a validated snapshot's root and streams (§4.4). */
+    restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined, owners: Readonly<Record<string, string>> | undefined): void;
     getNextId(): Entity;
     setNextId(id: Entity): void;
     setEmptyArch(arch: ArchetypeBucket): void;
 }
-export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSnapshot;
+/**
+ * Build the snapshot envelope. `pending` is the bus's undelivered events when
+ * the caller asked for `{ pendingEvents: true }` (§4.7), else `undefined`;
+ * the field is written only when at least one event is in flight, so the
+ * option does not change the hash of a world with an empty queue (restoring
+ * an absent field and an empty one both leave the queue empty).
+ */
+export declare function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean, pending?: readonly EmittedEvent[], lookup?: (name: string) => EventType<unknown> | undefined): WorldSnapshot;
+/**
+ * Plain-data copies of the undelivered events, in bus order. A payload
+ * that is not plain data throws `TypeError` naming the event and the path.
+ *
+ * Plain data: `null`, booleans, strings, finite numbers (`-0` kept), arrays
+ * and objects whose prototype is `Object.prototype` or `null`. An
+ * `undefined` object property is omitted (JSON semantics); an `undefined`
+ * payload omits `payload` (a void event). Anything else — `undefined` in an
+ * array, a non-finite number, BigInt, symbol, function, class instance
+ * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
+ * coerced payload would restore as a different value.
+ *
+ * `lookup` is the snapshotting world's name lookup (`bus.lookup`). The record
+ * is by name, so an event whose name does not resolve back to its own type —
+ * two distinct known types share it — throws `TypeError` too: restore would
+ * refuse it as ambiguous, or re-queue it as the twin in a world that knows
+ * only the other type.
+ */
+export declare function encodePendingEvents(events: readonly EmittedEvent[], lookup?: (name: string) => EventType<unknown> | undefined): SnapshotPendingEvent[];
+/**
+ * A plain-data copy of `value` under the rules {@link encodePendingEvents}
+ * applies (finite numbers with `-0` kept, plain objects and arrays, no
+ * cycles; an `undefined` object property is omitted). Anything else throws
+ * `TypeError` naming `label` and the path. Used by the act-log recorder
+ * (§7.1) for act payloads.
+ */
+export declare function plainDataCopy(value: unknown, label: string): JsonValue;
+/**
+ * Check a snapshot's `pendingEvents` field and resolve each name through
+ * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
+ * malformed field, an unknown name or an ambiguous one throws. Returns the
+ * events to queue, with payloads copied under {@link plainDataCopy}'s rules
+ * (what a snapshot records), so the queue never aliases the snapshot and a
+ * non-plain payload throws `TypeError`; `undefined` when the field is absent.
+ */
+export declare function resolvePendingEvents(s: WorldSnapshot, lookup: (name: string) => EventType<unknown> | undefined, known: () => readonly EventType<unknown>[]): EmittedEvent[] | undefined;
 /**
  * Replace world state with `s`. The caller has already passed `s` through
  * {@link validateSnapshot} — before any state is wiped, so an invalid
@@ -1753,6 +2738,43 @@ export interface World {
     /** Every resource type registered or touched in this world. */
     resourceTypes(): ResourceType<unknown>[];
     /**
+     * Every known event type — registered, emitted, subscribed to, or named as
+     * an event system's trigger — in first-seen order (parity with
+     * {@link componentTypes} / {@link resourceTypes}). A fresh array each call.
+     */
+    eventTypes(): EventType<unknown>[];
+    /**
+     * Eagerly register component, event and resource types so reflection
+     * (`componentTypes()`, `eventTypes()`, `resourceTypes()`, `describe()`) and
+     * the `lookup*` methods list them before first use (O-30, §4.5).
+     *
+     * Registering is idempotent and touches no state the snapshot carries: a
+     * resource's default is not materialized, no entity or event is created.
+     * Implicit discovery (spawn, emit, `on`, triggers, resource access) works as
+     * before; `register` is how to assert that a name is unique — an
+     * agent-facing command name must be.
+     *
+     * All-or-nothing: when any argument's name is already held by a different
+     * type of the same kind (or by another argument), nothing is registered and
+     * the first conflict is returned as `name_conflict`. Components, events and
+     * resources are separate namespaces. Throws `TypeError` for an argument that
+     * is not a type made by `defineComponent` / `defineEvent` / `defineResource`.
+     *
+     * (Resources are taken as `ResourceType<never>` so a `ResourceType<T>` of
+     * any `T` is accepted: its brand is contravariant in `T`.)
+     */
+    register(...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>): Result<void, RegisterError>;
+    /** The component type registered under `name` (eagerly or by first use), or `undefined`. */
+    lookupComponent(name: string): ComponentType<unknown> | undefined;
+    /**
+     * The known event type named `name`, or `undefined` when none is known, or
+     * when two distinct known event types share the name (F-8 lets them
+     * coexist; the name is then ambiguous).
+     */
+    lookupEvent(name: string): EventType<unknown> | undefined;
+    /** The resource type registered under `name` (eagerly or by first use), or `undefined`. */
+    lookupResource(name: string): ResourceType<unknown> | undefined;
+    /**
      * Iterate every live entity that currently holds component `type`, paired
      * with its value. Convenience over `world.query(Has(type))` + per-entity
      * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
@@ -1761,6 +2783,11 @@ export interface World {
         id: Entity;
         value: T;
     }>;
+    /**
+     * The component types `entity` holds, sorted by name (2.3; before, in the
+     * order its archetype was first built). Despawn marks, `componentRemoved`
+     * and snapshot component keys follow the same order.
+     */
     archetype(entity: Entity): ComponentType<unknown>[];
     /**
      * Reflect a component's name, transient flag, default value, and field
@@ -1826,9 +2853,10 @@ export interface World {
     /**
      * Advance the world by `dt` seconds (real-time tick).
      * - `dt > 0` → normal real-time tick; time advances by `dt`.
-     * - `dt <= 0` → **heartbeat**: plugin hooks + render fire, but system
-     *   execution and change-detection buffer swap are skipped. Use for
-     *   lightweight UI repaints between turns (SPEC F-6).
+     * - `dt <= 0` → **heartbeat**: plugin hooks (`onTickStart`, `onRender`,
+     *   `onTickEnd`) and the `tickStart`/`tickEnd` signals fire, but system
+     *   execution and change-detection buffer swap are skipped (SPEC F-6). To
+     *   repaint without re-firing `tickStart`/`tickEnd`, use {@link render}.
      *
      * For the turn-based no-arg single advance, use {@link stepOnce}.
      */
@@ -1845,6 +2873,38 @@ export interface World {
      * `stepN(n, dt)` with a positive `dt`).
      */
     stepOnce(): void;
+    /**
+     * Run the named enabled `tick`/`fixed` systems once now, in run order (the
+     * `fixed` phase, then `tick`; within each, priority, order, registration),
+     * without advancing time, flushing events, or firing tickStart/tickEnd
+     * (§6.3; O-88). Returns the names it ran (one entry per system run, so a
+     * name two systems share appears twice) and the names it skipped: unknown,
+     * disabled, or of another schedule (`event`, `reactive`, `once`).
+     *
+     * Use it only for **derived and transient** state the next tick recomputes
+     * anyway — e.g. priming `composeTransforms` output after `restore()`.
+     * `ctx.time` is the current time (`scaledDelta` is what the last tick left),
+     * `ctx.events` the current view; emits stay queued for the next tick.
+     * Tick systems run even while paused and a fixed `rateHz` divisor is not
+     * applied. A run is a normal run for change windows (O-42). Mutations are
+     * out of tick, so an attached act-log recorder notes an
+     * `out_of_tick_mutation` gap whenever a system runs. A throwing system
+     * propagates; the systems after it do not run. Throws `TypeError` unless
+     * `names` is an array of strings, and `Error` during a tick.
+     */
+    runSystems(names: readonly string[]): {
+        readonly ran: string[];
+        readonly skipped: string[];
+    };
+    /**
+     * Run plugin `onRender` hooks only, with heartbeat `TickInfo`
+     * (`{ heartbeat: true }`): no `tickStart`/`tickEnd` signals or plugin tick
+     * hooks, no systems, no change to `time` (§6.3; O-88). Advances renderer
+     * query windows as the heartbeat render does, so marks are painted once.
+     * Use it to redraw after a restore, scrub or branch selection without
+     * re-triggering `tickEnd` subscribers. Throws `Error` during a tick.
+     */
+    render(): void;
     stepN(n: number, dt?: number): void;
     turn<T>(type: EventType<T>, payload: T, dt?: number): void;
     /**
@@ -1867,7 +2927,26 @@ export interface World {
      */
     use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>;
     capability<K extends string>(name: K): Capability<K>;
+    /**
+     * The undelivered events — emitted this tick or between ticks, delivered
+     * at step 1 of the next tick — in bus order: by first emit of each type,
+     * then payload order within a type (§4.7). A fresh array each call; reading
+     * it consumes nothing. Lets a host report what an act produced without
+     * `action()`'s extra tick.
+     */
+    pendingEvents(): EmittedEvent[];
+    /**
+     * Serialize world state. With `{ pendingEvents: true }` the undelivered
+     * events travel too (§4.7), so a world restored from it delivers them on
+     * its next tick like the live one.
+     */
     snapshot(options?: SnapshotOptions): WorldSnapshot;
+    /**
+     * Replace world state with `snap`. When `snap.pendingEvents` is present,
+     * each name resolves through {@link lookupEvent} before any state changes
+     * (unknown or ambiguous throws) and the queue becomes those events;
+     * otherwise the queue is abandoned (SPEC §7.1).
+     */
     restore(snap: WorldSnapshot): void;
 }
 export interface WorldOptions {
@@ -1960,5 +3039,14 @@ export interface ActionResult {
     reason?: string;
     events: readonly ActionEvent[];
     snapshot?: WorldSnapshot;
+}
+/**
+ * Why {@link World.register} refused: `name` is already held, in `registry`,
+ * by a different type object (§4.5).
+ */
+export interface RegisterError {
+    readonly kind: 'name_conflict';
+    readonly registry: 'component' | 'event' | 'resource';
+    readonly name: string;
 }
 export declare function createWorld(options?: WorldOptions): World;

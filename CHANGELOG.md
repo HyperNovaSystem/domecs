@@ -8,7 +8,7 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ### Performance
 
-- `@domecs/core` hot paths no longer pay constant overheads per tick (O-77).
+- `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).
   Structural live queries reuse their result until membership changes,
   stores are found by type identity, add/remove follow archetype edges,
   the change-mark log no longer reallocates every tick, and filtered reads
@@ -21,17 +21,546 @@ All notable changes to DOMECS are documented here. The format is based on
 ### Fixed
 
 - `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
-  that `defineEvent()` did not create, such as an event's name string. They
-  return `accepted: false` with a reason and neither emit nor tick. Before,
-  a string ran a tick that no handler saw and reported `accepted: true`, and
-  `null` or `undefined` threw. (O-75)
+  that `defineEvent()` did not create, such as a look-alike object (and, for
+  `world.action()`, an event's name string; `bridge.act('Name', …)` resolves
+  the name first). They return `accepted: false` with a reason and neither
+  emit nor tick. Before, a string ran a tick that no handler saw and
+  reported `accepted: true`, and `null` or `undefined` threw. (O-92)
 - `@domecs/core`: event types made by a second copy of `@domecs/core` (a
   duplicate install or a bundled dependency) now route correctly. Before,
   the bus read every such type under one `undefined` key, so they triggered
-  each other's handlers. (O-75)
+  each other's handlers. (O-92)
 - Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
   `createAgentBridge` example no longer follow every `act()` with `step()`,
-  which spent two ticks per turn. (O-75)
+  which spent two ticks per turn. (O-92)
+- `@domecs/core`: an act log started while an event with a non-plain payload
+  is pending now records an `unserializable_payload` gap at `startTick`. That
+  event cannot enter `baseHash` or the log, so before, a replay could report
+  `ok` without it. (O-80, 2.1 release candidate)
+- Release: `pnpm publish:npm` stamps each package's `BUILD_ID` with the plain
+  version (`scripts/stamp-build-id.mjs`); before, a published build would
+  have reported `'dev'`. `pnpm cold-install` packs the stamped payload and
+  fails unless every `BUILD_ID` is the version. (ED-15, 2.1 release candidate)
+- `@domecs/core`: act-log frames record a scale set by plugin `onTickStart`
+  (`flushScale`) apart from one set by a `signals.tickStart` subscriber
+  (`hookScale`), and the input such a subscriber sets (`hookInput`) apart
+  from `input`, the input the event flush saw. Replay applies each at the
+  point it was set. Before, both were applied at one point, so direct `on`
+  handlers that read `time.scale` or `world.input` during the flush saw
+  different values in replay and the replay diverged. (O-80, 2.1 release
+  candidate)
+- `@domecs/scene`: `instantiateScene` into a world where another component
+  type holds the name `SceneMember` (or `Parent`, with parent keys) spawns
+  nothing and reports one problem. Before, it threw part-way through and
+  left a bare entity behind. (2.3 release candidate)
+- `@domecs/core`: `createBranch` checks for `once` systems after restoring
+  the snapshot and evaluates their `enabled` gates there. Before, it read only
+  each system's static flag on the empty setup world, so boot work gated on
+  snapshotted state (as AGENTS.md advises) was refused as `once_systems`.
+  A gate that throws counts as due. (O-81, 2.1 release candidate)
+- `@domecs/core`: an act-log frame entered paused records `resumeScale` when
+  the host changed the resume target between steps (`setScale(3); pause()`),
+  and replay restores it; `flushResume` and `hookResume` do the same for a
+  target a tick-start hook set while leaving the world paused. Before, a
+  `resume()` in a handler or system resumed to 1 in replay while the source
+  resumed to 3. `runBranch` from a mid-log snapshot
+  carries a `tickStart` subscriber's `hookInput`, not only the frame's
+  `input`. (O-80, O-81, 2.1 release candidate)
+- `@domecs/core`: act logs (Codex review of PR #27). Emits made from
+  `enabled` gates and reactive `Where` predicates during a step are part of
+  the reproduced step and are no longer recorded; replay had emitted them
+  twice. `encodeInput` keeps the input Sets' iteration order instead of
+  sorting, so a system iterating `input.keys` sees the same order after a
+  replay. `stop()` records a gap for a `world.rand` draw after the last step.
+  `createBranch` sets the requested scale before reading `once` gates.
+  SPEC §7.5 now says which signal subscribers stay in a replay setup and
+  where replay applies each stimulus. (O-80, O-81, 2.1 release candidate)
+- `@domecs/rules`: a `spawn` effect whose prefab (fetched again at apply
+  time) holds a component type whose name another type holds in the world,
+  or an `add` effect of such a type, faults the entity (`rule_eval_failed`)
+  and changes nothing. Before, it threw out of the tick, and a spawn left a
+  bare entity behind. (O-84, 2.3 release candidate)
+- `@domecs/core`: `restore()` refuses a snapshot whose pending-event payload
+  is not plain data (a `Date`, `NaN`, a `Map`) with a `TypeError` before any
+  state changes, under the rules `snapshot({ pendingEvents: true })` records
+  by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
+- `@domecs/rules`: a component or event resolver or a `prefabs` callback that
+  throws is a compile error (`compileRule`, `compileWorldExpression`,
+  `RulesHandle.update`) or, when a `spawn` effect is applied, a
+  `rule_eval_failed` fault that skips that effect. Before, the throw escaped:
+  it aborted `update()` after the rule's old registration was removed, or
+  ended the tick part-way through the queued effects.
+- `@domecs/rules`: an `add` effect on a component the entity already has
+  runs the component's `validate` on the written value first; a rejected
+  value is a `rule_eval_failed` fault and the component is unchanged.
+- `@domecs/core`: act logs. When a full step throws, the recorder drops that
+  step's frame and records a new `step_threw` gap. Before, the half-built
+  frame stayed in the log and the next step's emits were attached to it.
+  `runBranch` called again on the same branch with the same log keeps the
+  input the branch's systems left, instead of re-applying the log's, so
+  two `steps: 1` calls equal one `steps: 2` call; a call with another log
+  is a new start. `Recorder.stop()` and `peek()` throw when called during a
+  tick.
+  (O-80, O-81)
+- `@domecs/core`: snapshots record `rngOwners` (cursor key → stream key)
+  for live own-stream systems that do not hold their cursor key's stream,
+  and restore re-keys each live own-stream system from it. Before, the
+  survivor of two same-named systems whose first was removed drew from the
+  removed one's stream after a restore into a world with only the current
+  systems. `@domecs/persist`'s `firstDivergence` compares the field.
+  `restore()` validates `rngOwners`: each target is a key of `rngStreams`,
+  names one owner, and no two live own systems end up on one stream. Every
+  restore puts each live own system on the stream the snapshot names (its
+  cursor key's for a v2 or streamless one), so an earlier restore's owners
+  do not carry over. (O-77)
+- `@domecs/core`: `runBranch`'s first-sample probe check also compares
+  `world.input`, `time.scale` and the resume target, which the strict hash
+  leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
+  `resume` throws. (O-81)
+
+## [2.3.0] — release candidate (2026-10-19; not yet published)
+
+All seven `@domecs/*` packages move to 2.3.0 together. Additive minor:
+behaviour language II (event-triggered rules, rule effects, contacts),
+authoring ergonomics (`runSystems` / `render`, transient resources, bridge
+reset options) and scenes for the Studio harness. `^2.0.0` peer ranges still
+resolve; the packages' `@domecs/core` peer range packs as `^2.3.0`.
+Snapshots stay format v3. Release notes:
+[`doc/release-notes/v2.3.0.md`](doc/release-notes/v2.3.0.md).
+
+### Added
+
+- Fork-equivalence suite for 2.3 (`packages/domecs-rules/test/fork-equivalence.test.ts`):
+  a post-edit live world with rule effects, contacts on composed positions
+  and host scene swaps is matched after every tick by a fresh build restored
+  from its snapshot and by forks taken with contacts and rule emits in
+  flight (half through `canonicalJson` text), with swaps between them.
+- Dual-runtime golden fixture `rules-event-chain`
+  (`scripts/determinism-golden.mjs`, `test/golden/determinism.json`): event
+  rules and effects forked at step 500 with events in flight, restored
+  through `canonicalJson` text; the script requires the fork and the live
+  world to reach the same strict hash. Only the key is added; every 2.1 and
+  2.2 value is unchanged.
+
+- `@domecs/core` transient resources (2.3, harness spec §6.4, O-36):
+  `defineResource(name, { transient: true })` (new `ResourceOptions.transient`).
+  `snapshot()` leaves the value and its change marks out, so a camera or HUD
+  cache changes neither the default nor the strict `hashSnapshot` and
+  `@domecs/persist` never saves it; `restore()` keeps the live value (a
+  snapshot value for it is ignored, not validated). `ResourceDescriptor`
+  gains `transient`. Docs: SPEC §2.11, `doc/api.md` doctest
+  `transient-resources`, persist README.
+- `@domecs/core` `AgentBridge.reset(options?: AgentResetOptions)` (2.3,
+  harness spec §6.4, O-89): `{ scale?, input?: 'keep' | 'empty' }` re-applies
+  the scale and empties the input after restoring the baseline, so an
+  episode that ends paused or with a key held does not leak into the next.
+  No options keeps the 2.0 behaviour. `once` systems do not re-run (SPEC
+  §7.1). Docs: `doc/api.md` doctest `agent-reset-options`.
+
+- `@domecs/core` `World.runSystems(names)` and `World.render()` (2.3, harness
+  spec §6.3, O-88). `runSystems` runs the named enabled `tick`/`fixed`
+  systems once, in run order, without advancing time, flushing events or
+  firing `tickStart`/`tickEnd`, and returns `{ ran, skipped }` (unknown,
+  disabled and `event`/`reactive`/`once` names are skipped); an attached
+  recorder notes an `out_of_tick_mutation` gap. `render` calls plugin
+  `onRender` only (heartbeat `TickInfo`) and advances renderer query windows,
+  so a host can repaint after a restore without re-firing `tickEnd`
+  subscribers. Docs: SPEC §4.0, `doc/api.md` doctest `run-systems-render`.
+- `@domecs/rules` event-triggered rules (2.3, harness spec §6.1, O-84):
+  `RuleDef.schedule: 'event'` with `on` (the trigger's name, resolved by the
+  new `InstallRulesOptions.resolveEvent`, default `world.lookupEvent`),
+  `self` and `other` bindings (expressions such as `event.target`); grammar
+  `event.f` (payload field) and the `other` entity. The rule runs per
+  delivered payload for the bound entity, broadcast over `query`, or once in
+  world scope. `RuleDefPath` gains `'on' | 'self' | 'other'`.
+- `@domecs/rules` rule effects (2.3, §6.1): `RuleDef.effects`
+  (`RuleEffectDef`: `emit`, `spawn`, `despawn`, `add`, `remove`), queued
+  only when the entity's actions succeeded and applied at the end of the
+  rule's run; `emit` validates with `validateEventPayload` and is delivered
+  next tick; `spawn` uses the new `InstallRulesOptions.prefabs` (also a
+  `compileRule` option, with `resolveEvent`). `RuleDefPath` gains
+  `{ effect: number; part: string }`. Docs: rules README "Event rules" /
+  "Effects", `doc/api.md` doctest `rules-event-effects`, SPEC Appendix A.
+- `@domecs/scene` contacts (2.3, harness spec §6.2, O-85):
+  `installContacts({ position, radius, pairs, stay?, schedule?, priority?,
+  cellSize?, name? })` is a plugin whose system (default `fixed`, priority
+  150) finds overlapping tagged colliders (`dist² <= (ra + rb)²`, fixed or
+  per-entity radius), diffs them against the snapshotted `ContactState`
+  resource and emits `Contact { a, b, phase }` (declared schema; `end`,
+  `begin`, opt-in `stay`, each sorted by `(a, b)`; delivered next tick) for
+  `on: 'Contact'` event rules. Types `ContactsOptions`, `ContactPayload`,
+  `ContactPhase`, `ContactStateValue`. Docs: scene README "Contacts",
+  `doc/api.md` doctest `scene-contacts`, SPEC §2.12. Bench workload
+  `contacts`.
+- `@domecs/scene` scenes (2.3, harness spec §7.3, O-13 partly):
+  `instantiateScene(world, data, { resolve, refFields? })` spawns a
+  `SceneData` (`{ name, entities: [{ key, components, parent? }] }`) in array
+  order, links parents by key with `setParent` and remaps `refFields` keys
+  to live ids; it returns `{ ids, problems }` and never throws for bad scene
+  data (unknown components, duplicate keys spawned as `key#2`, missing parent
+  keys, cycles and unknown ref keys are `SceneProblem`s with paths). Every
+  entity carries the new schema'd, persistent `SceneMember { scene, key }`.
+  `unloadScene(world, name)` despawns the scene's trees and returns the
+  count; `sceneEntities(world, name)` lists members in ascending id. Types
+  `SceneData`, `SceneEntityData`, `SceneProblem`, `InstantiateSceneOptions`,
+  `InstantiateSceneResult`. Docs: scene README "Scenes", `doc/api.md`
+  doctest `scene-goto-level`, SPEC §7.6.
+- `@domecs/rules`: `walkFieldRefs(ast, visit)` is now exported from the
+  package entry (it was only in `dist/ast.js`). Unchanged behaviour: it visits
+  the evaluated entity's own field reads with their positions; use
+  `walkComponentRefs` to also visit member reads, sets and `has` targets
+  (studio finding 2026-10-19; studio had mirrored the walk).
+- `@domecs/rules` walker name positions (orchestrator decision (f),
+  2026-10-19): the `walkComponentRefs` and `walkFieldRefs` visit callbacks
+  gain a last argument, `namePos`, the position of the visited name's own
+  token on every form (`C.f`, `self.C.f`, `other.C.f`, `e.C.f`, the set of
+  `first`/`nearest`/`count`/`exists`/`countWithin`, both names of
+  `sum|avg|minOf|maxOf(S, C.f)`, the `has` target), so a renaming tool
+  splices exactly. `pos` is unchanged (the node position). The parser
+  records the positions on the AST as optional `setPos` (`select`,
+  `aggregate`, `countWithin`) and `componentPos` (`member`, `has`,
+  `aggregate`); a hand-built node without them reports `pos` as `namePos`.
+
+### Changed
+
+- `@domecs/rules`: `event.f` and `other` now parse (they were "reserved
+  word" parse errors). Outside an event rule, and in
+  `compileWorldExpression`, they are compile errors at the same position,
+  so such a rule or expression is still rejected; only the message
+  changes. `EvalEnv` gains optional `eventField` and `other` hooks, and
+  `EvalEnv.self` accepts `undefined`.
+- `@domecs/core`: a successful `restore()` also empties the current
+  (already-delivered) event view, so `world.events` and the view
+  `runSystems` hands its systems are empty until the next flush; before,
+  they still held what the abandoned timeline delivered at its last tick
+  (E16 verify; SPEC §7.1 "Pending events").
+
+### Fixed
+
+- `@domecs/core`: an entity's component order no longer depends on history
+  (found by the 2.3 fork-equivalence suite, E18.1). Archetypes kept their
+  component names in the order the first entity happened to gain them, so a
+  world restored from `canonicalJson` text (sorted keys) and the live world
+  recorded a later despawn's removal marks in different orders, and their
+  strict hashes differed while an `OnRemoved` reader had not run. Archetypes
+  now keep the names sorted: despawn marks, `componentRemoved`,
+  `world.archetype()` and snapshot component keys follow name order. Golden
+  values and default hashes are unchanged; a strict hash
+  (`includeChanges: true`, act-log checkpoints) taken while such removal
+  marks are unread can differ from 2.2's for the same run, and
+  `JSON.stringify(snapshot())` text can change key order.
+
+## [2.2.0] — release candidate (2026-10-19; not yet published)
+
+All seven `@domecs/*` packages move to 2.2.0 together. Additive minor:
+behaviour language I (cross-entity rules, spatial index, world expressions,
+input in rules) plus act-log recording, replay and branches for the Studio
+harness. `^2.0.0` peer ranges still resolve; the packages' `@domecs/core`
+peer range packs as `^2.2.0`. Snapshots stay format v3. Release notes:
+[`doc/release-notes/v2.2.0.md`](doc/release-notes/v2.2.0.md).
+
+### Added
+
+- Fork-equivalence suite for 2.2 (`packages/domecs-rules/test/fork-equivalence.test.ts`):
+  a post-edit live world running chase rules (spatial, input, own streams,
+  `emit` and `action` acts) matched tick for tick over 150 steps by a fresh
+  build restored from its snapshot, by a fresh build replaying its act log,
+  and by `createBranch` + `runBranch` over the log.
+
+- `@domecs/core`: branches (G3, O-81, harness spec §7.2; SPEC §7.5).
+  `createBranch(setup, from, { fixedStep?, seed?, scale? })` builds a headless
+  world, runs `setup`, restores `from` and sets the scale, returning
+  `Result<{ world, setup }, BranchError>` (`restore_failed` with a serialized
+  cause, `once_systems` when the setup has enabled `once` systems and
+  `from.tick > 0`). `runBranch(world, { steps, dt?, log?, probes?,
+  sampleEvery?, keyframeEvery?, hashEvery?, until?, shouldStop? })` →
+  `Result<BranchRun, ReplayError>` (`ticks`, `stoppedBy`, `samples`,
+  `keyframes`, `hashes`, `faults`, strict `finalHash`): synchronous,
+  extendable, counts per call with the final step always sampled, act-log
+  frames applied at their ticks, a mutating probe flagged at the first sample.
+  Types `WorldSetup`, `BranchOptions`, `BranchError`, `RunBranchOptions`,
+  `BranchRun`. AGENTS.md "Branch and compare" recipe.
+
+- `@domecs/core`: act logs and replay (G4, O-80, harness spec §7.1; SPEC
+  §7.5). `createRecorder(world, { hashEvery? })` → `Recorder { active,
+  peek(), stop() }` records an `ActLog` (`format: 'domecs-actlog'`,
+  `version: 1`): the base (`startTick`, `fixedStep`, `startScale`, `resumeScale` for a
+  paused start, strict `baseHash`), one frame per full step `{ tick, dt, scale?, hookScale?,
+  acts?, startActs?, endActs?, input? }` (the caller's dt, `null` for `stepOnce`; the scale on
+  entry and a scale a `tickStart` hook set; input delta-encoded), external
+  emits by name with `via: 'emit' | 'action'` (plugin-hook emits included,
+  heartbeats too; emits from systems and `on` handlers are not recorded),
+  strict-hash checkpoints and gaps (`out_of_tick_mutation`,
+  `unserializable_payload`, `restore`). `replay(world, log, { base?,
+  toTick?, verify?, onFrame? })` → `Result<{ ticks, hash }, ReplayError>`
+  (`invalid_log`, `base_mismatch`, `unknown_event`, `rejected_payload`,
+  `diverged`); it never throws for a bad log. `encodeInput` /
+  `decodeInput` / `JsonInput` give `InputSnapshot` a JSON form. AGENTS.md
+  "Record and replay" recipe.
+
+- `@domecs/core`: `validateEventPayload(type, payload): string | null` is now
+  exported — the O-39 schema check `world.action()` / `bridge.act()` apply,
+  for hosts that pre-validate a command without emitting or stepping (studio
+  finding 2026-10-19; studio had kept a copy).
+
+- `@domecs/core`: `createSpatialGrid(cellSize)` — a pure, world-free
+  uniform grid over 2D points keyed by entity id (O-8, harness spec §5.1):
+  `set`/`delete`/`clear`/`position`/`size`, `within(x, y, r, accept?)`
+  (ascending id), `nearest(x, y, { maxDistance?, accept? })` (ties → lowest
+  id) and `pairs(r, accept?)` (`a < b`, sorted). Results equal a
+  brute-force scan and never depend on the cell size or insertion order;
+  non-finite positions are not indexed. SPEC §2.12.
+- `@domecs/scene`: `createSpatialHash(world, { component, x?, y?, cellSize })`
+  → `SpatialIndex` over one position component: `refresh()` (O(n),
+  ascending id; also once at creation), `within`/`nearest` with live tag
+  filters and `exclude`, `pairs(r, a, b)` (first element holds `a`), and
+  `dispose()`. Derived state: never snapshotted.
+- `bench`: `spatial` workload (refresh and `nearest` at 1000 entities).
+- `@domecs/core`: `dmath.atan2(y, x)`, `dmath.hypot(x, y)` and
+  `dmath.pow(x, y)` (O-75, harness spec §4.2, ED-18) — bit-reproducible on
+  every ECMA-262 engine. `atan2` (with its `atan` kernel) and `hypot` are
+  musl libm ports, `pow` a port of fdlibm 5.3 `e_pow.c` (no tables, no FMA).
+  `atan2`/`hypot` specials follow C99 Annex F; `pow`'s follow ECMAScript
+  `**` (`(±1) ** ±Infinity` and `1 ** NaN` are `NaN`). `pow` keeps fdlibm's
+  known weak region (`|1 - x| <= 2^-20`, `|y| > 2^31`: relative error up to
+  ~2^-43). Golden vectors in `test/golden/dmath2-vectors.json`.
+
+- `@domecs/rules`: cross-entity rules (G1, O-82, harness spec §5.2; SPEC
+  Appendix A). Selectors `self`, `first(S)`, `nearest(S[, d])`, `entity(n)`
+  with reads `e.Component.field` and `e.id`; `has([e,] C)`; aggregates
+  `count`, `exists`, `sum`, `avg`, `minOf`, `maxOf` (sets include the
+  evaluated entity); `countWithin(S, r[, e])`, `distanceTo(e)`; functions
+  `sqrt pow atan2 hypot sign round ceil lerp distance` (`pow`/`atan2`/
+  `hypot` via `dmath`); the identifier `tick`; `a ?? b` (b on "no value":
+  a missing field, an empty selector, a dead `entity(n)`, an empty
+  `avg`/`minOf`/`maxOf`). `RuleDef.without` (excluded components; errors on
+  `{ without: i }`), `InstallRulesOptions.spatial` (`{ component, x?, y?,
+  cellSize? }`, start-of-run grid from `createSpatialGrid`), `compileRule`'s
+  optional `{ spatial }` argument, `walkComponentRefs`, `SPECIAL_FORMS`,
+  types `EntityNode`, `AggregateOp`, `SpatialOption`, `CompileRuleOptions`.
+  Reads are live in ascending id (an entity sees lower ids' writes from the
+  same run); set aggregates that cannot change during a run are memoized.
+- `@domecs/rules`: `compileWorldExpression(source, resolve, { spatial? })`
+  → `WorldExpression` (G13, O-83, harness spec §5.3): the rules grammar with
+  no evaluated entity, for metrics and probes
+  (`countWithin(Enemy, 40, first(Player))`). Bare `Component.field`,
+  `self`, `has(C)`, centre-less `countWithin`, `distanceTo`, `nearest`, `dt`
+  and `random()` are compile errors at their position (`rule: '<expr>'`);
+  `time`/`tick` are `world.time.elapsed`/`world.time.tick`.
+  `evaluate(world)` returns `Result<number | string | boolean, RuleFault>`
+  and is read-only (no RNG draw, no change windows, no registration of a
+  component type no entity holds): the strict snapshot hash and
+  `describe().componentCounts` are unchanged. A non-finite number result
+  is an error value.
+- `@domecs/rules`: input in rules (G16, O-86, harness spec §5.4; SPEC
+  Appendix A). `key(n)` (held, `input.keys`), `pressed(n)` / `released(n)`
+  (edges, `input.keyDelta`), `mod(n)` (`'ctrl' | 'alt' | 'shift' | 'meta'`)
+  and `pointer.x|y|buttons|wheel` read the tick's `world.input`; the argument
+  is any string expression (`key(Bind.up)`). `pressed`, `released` and
+  `pointer.wheel` in a `fixed` rule are compile errors (edges and the wheel
+  last one render tick), and every input form is a compile error in
+  `compileWorldExpression`. `EvalEnv.input` (optional; rules wire it from
+  `ctx.input`), `SPECIAL_FORMS` gains `key`/`pressed`/`released`/`mod`,
+  types `InputOp`, `PointerField`, `ModifierName`. A malformed input
+  snapshot (an array for a `Set`, a missing part) is a `rule_eval_failed`
+  fault on the entity, not a throw from the step.
+- `scripts/determinism-golden.mjs`: fixtures `rules-chase` and
+  `rules-keep-distance` (built with `@domecs/rules`) and a
+  `dmath2Fingerprint` (`atan2`/`hypot`/`pow`); the 2.1 fixtures and
+  `dmathFingerprint` are unchanged. The script now also needs the built
+  `@domecs/rules` (`--engine` looks for `<dir>/@domecs/rules`), and
+  `pnpm test:golden` builds it.
+- `bench`: `rules` workload (self-only vs `nearest(Player)` vs memoized
+  `sum` rule at 1000 entities; spec §5.2 targets 3× and 1.2×: 1.7× and
+  0.95× measured).
+
+### Changed
+
+- `@domecs/rules` (behaviour change): `self`, `tick`, `other`, `event` and
+  `pointer` are reserved words — a component with one of these names can no
+  longer be referenced in an expression (a parse error, "reserved word"),
+  and `id` is reserved after an entity. `a??b` now lexes as `??` (it was a
+  syntax error). A missing self field still faults the entity as before
+  (it is now a "no value" error, still a `RuleEvalError`). Every component
+  name in an expression is resolved at compile time, including sets and
+  `has` targets.
+
+### Type-level changes
+
+- `@domecs/rules`: `FUNCTION_NAMES` gains nine names, so `FunctionName`
+  widens and `FUNCTION_ARITY` gains keys; `AstNode` gains `member`,
+  `entityId`, `has`, `aggregate`, `countWithin`, `distanceTo`, `nullish`
+  and (input, §5.4) `input` and `pointer` nodes; `EvalEnv` gains the
+  optional `input`; and `identifier.name` gains `'tick'`; `RuleDefPath` gains
+  `{ without: number }`. Exhaustive switches over `FunctionName`,
+  `AstNode['kind']` or `RuleDefPath` need a case or a default branch (the
+  rules README recommends a default branch).
+
+### Fixed
+
+- `@domecs/core`: `restore` keeps an empty store for every registered
+  component type, as the world had before the restore. A type no restored
+  entity held used to lose its store, so `describe().componentCounts`
+  dropped it until the next read of it (`has`, `getComponent`,
+  `listEntities`) brought it back as 0: a read changed `describe()`, which
+  read-only probes (rules world expressions, E11) must not do. Snapshots and
+  hashes are unchanged.
+- `@domecs/core`: `validateEventPayload` (and so `world.action()` /
+  `bridge.act()`) checked undeclared keys with `in`, so a payload key that is
+  only inherited from `Object.prototype` (`toString`, `constructor`,
+  `__proto__` from `JSON.parse`, …) was treated as declared and accepted; and
+  an absent declared field with such a name was read through the prototype
+  chain and rejected. Both now use own properties only.
+
+## [2.1.0] — release candidate (2026-10-19; not yet published)
+
+All seven `@domecs/*` packages move to 2.1.0 together. Additive minor: the
+determinism foundation and build identity for the Studio harness. `^2.0.0`
+peer ranges still resolve. Release notes:
+[`doc/release-notes/v2.1.0.md`](doc/release-notes/v2.1.0.md).
+
+### Added
+
+- `@domecs/core`: canonical snapshot hash (O-11). `canonicalJson(value)` —
+  `JSON.stringify` value semantics with object keys sorted by UTF-16 code
+  unit, `-0` kept as the literal `-0`, and a `TypeError` naming the path for
+  `NaN`/`±Infinity`, BigInt and cycles. `canonicalSnapshot(snap, options?)`,
+  `hashSnapshot(snap, options?)` (FNV-1a-64, 16 hex chars; `version`, `meta`
+  and `changes` excluded unless `includeMeta`/`includeChanges`),
+  `hashEntities(snap)`, `hashValue(value)`, `HASH_ALGORITHM` (`'fnv1a64'`),
+  type `CanonicalOptions`. SPEC §7.1 "Canonical form", §8.
+- Every package: `BUILD_ID: string` export (`'dev'` in source; stamped by
+  `scripts/pack-for-studio.mjs`, plain version when published).
+- `scripts/pack-for-studio.mjs` (`pnpm pack:studio`): builds, stamps
+  `BUILD_ID` and a `<version>+g<sha>[-dirty]` package version, packs the seven
+  packages as `domecs-<pkg>-<buildId>.tgz`, and writes `manifest.json`
+  (`version`, `buildId`, `gitSha`, `dirty`, `packedAt`, per-package `file`,
+  `integrity`, `buildId`). Never publishes.
+- `bench`: `hash` workload (1000-entity snapshot, strict hash); `dmath`
+  workload (`dmath.sin`/`cos` vs `Math.sin`/`cos`, informational ≤ 3×).
+- `@domecs/persist`: field-level diff (G9, O-31 diff half).
+  `diffSnapshots(prev, next, { fields: true })` adds `componentsAdded`,
+  `componentsRemoved`, `fieldChanges` and `resourceChanges` (dotted paths,
+  canonical order), with `epsilon`, `components` and `limit`/`truncated`
+  options; `firstDivergence(a, b)` returns the first difference (state, then
+  lowest entity id, then resources) or `null`. New types
+  `SnapshotDiffOptions`, `FieldChange`, `ResourceChange`, `Divergence`.
+- `@domecs/core`: `dmath` (G19, O-75) — bit-reproducible `sin` and `cos`
+  (a straight-line port of musl libm, generic C / non-FMA, < 1 ulp) and
+  `sqrt` (= `Math.sqrt`, already correctly rounded). Identical results on
+  every ECMA-262 engine, where `Math.sin`/`Math.cos` differ by up to 1 ulp
+  between V8 builds. Golden vectors in `test/golden/dmath-vectors.json`
+  (`scripts/dmath-golden.mjs`).
+- `@domecs/core`: `SystemDef.order` (G20, O-76) — a finite secondary sort
+  key (default 0). Systems in a mode run by (priority, order, registration
+  index); a non-finite `order` throws at `world.system()`.
+  `describe().systems[i]` now reports `priority` and `order`.
+- `@domecs/rules`: `installRules(world, defs, resolve, options?)` takes
+  `InstallRulesOptions` (G20, O-76). `{ order: 'stable', orderBase? }`
+  registers rule *i* of the de-duplicated defs with `order: orderBase + i`
+  (default base 1), so `update()` no longer moves rules behind equal-priority
+  systems and a live world after updates stays hash-equal to a fresh build
+  from the current defs restored from its snapshot. The default
+  `'registration'` keeps the 2.0 order. SPEC §3 documents the ordering
+  triple and the recommended priority bands.
+- `@domecs/core`: registry and name lookup (G10; O-30, O-78).
+  `world.register(...types)` eagerly registers component, event and resource
+  types so reflection lists them before first use; it is idempotent,
+  all-or-nothing, and returns `err({ kind: 'name_conflict', registry, name })`
+  (type `RegisterError`) instead of throwing. `lookupComponent`,
+  `lookupEvent` (`undefined` for an ambiguous name), `lookupResource`, and
+  `eventTypes()` (first-seen order). SPEC §2.3, §2.6.
+- `@domecs/core`: `AgentBridge.act(name, payload, opts?)` — name-based act
+  for JSON callers; an unknown or ambiguous name is rejected with no emit
+  and no tick.
+- `@domecs/core`: richer manifest. `describe().systems[i]` gains
+  `components` (sorted component names the query / reactsTo reference) and
+  `meta` (new `SystemDef.meta?: JsonValue`, cloned). `FieldSchema.description`,
+  `EventDefOptions.description` and `EventDescriptor.description` add free
+  text for humans and agents.
+- `@domecs/persist`: `ComponentFieldData.description` round-trips through
+  `serializeComponentType` / `registerComponentTypes`.
+- `@domecs/rules`: each rule's system carries `meta: { rule: name }`.
+- `@domecs/rules`: `RuleError.field?: RuleDefPath` (G12, O-79). Every error
+  from `compileRule` and `RulesHandle.update()` names the one part of the def
+  it is about: `'name'` (duplicate), `'schedule'`, `'priority'`,
+  `{ query: i }`, `'when'`, or `{ action: i, part: 'set' | 'expr' }`.
+  `position` keeps its meaning (offset within that part's string, or -1).
+  New type `RuleDefPath`; the union widens in later minors, so keep a
+  default branch when switching on it.
+- `@domecs/core`: pending events travel with opt-in snapshots (G21, O-90).
+  `snapshot({ pendingEvents: true })` records the undelivered events as
+  `WorldSnapshot.pendingEvents: [{ event, payload? }]` (new type
+  `SnapshotPendingEvent`), in bus order, as plain-data copies; a payload
+  that is not plain data throws `TypeError` naming the event and path. The
+  field is omitted when nothing is in flight. `restore()` resolves each name
+  with `lookupEvent` before any state change (unknown or ambiguous throws)
+  and replaces the queue with those events, so a fork taken between an emit
+  and its delivery delivers it too. `world.pendingEvents()` reads the queue
+  without consuming it. `canonicalSnapshot`/`hashSnapshot` include the field;
+  `@domecs/persist` `firstDivergence` reports it (`key: 'pendingEvents'`).
+  Default snapshots are unchanged (the option is off in 2.x). The field is
+  one of snapshot v3's optional fields (below).
+- `@domecs/core`: per-system RNG streams (G6, O-77). `SystemDef.rng?:
+  'shared' | 'own'` (default `'shared'`): an own system's `ctx.rand` is a
+  stream keyed by its cursor key and derived from the world's root seed with
+  the new `deriveStream(root, key)` export, so adding, removing or editing
+  one system no longer changes another own-stream system's draws. Streams
+  outlive their systems (re-registration resumes them) and travel in the
+  snapshot as `WorldSnapshot.rngStreams`, beside the root seed `rngRoot`;
+  `restore()` validates both before any effect, rewinds live generators in
+  place and re-derives the streams the snapshot lacks.
+  `describe().systems[i].rng` reports the mode. SPEC §2.8.
+- `@domecs/rules`: `RuleDef.rng` and `InstallRulesOptions.rng` (`'shared'`
+  default | `'own'`): rule `random()` draws its own stream, keyed
+  `rule:<name>`, and `update()` re-registration resumes it. `RuleDefPath`
+  gains `'rng'` (an unknown `RuleDef.rng` is a `RuleError`).
+- `@domecs/persist`: built-in `2 → 3` migration (pure version bump).
+- Dual-runtime determinism golden (spec §3.4): `scripts/determinism-golden.mjs`
+  steps four fixed headless worlds (`trig`, `random`, `own-streams`,
+  `bounce0`) 1000 fixed steps on the built `@domecs/core` and prints
+  `{ buildId, fixtures, dmathFingerprint }` with strict hashes; `--engine
+  <node_modules>` loads core from an install. `pnpm test:golden` (also a CI
+  step) compares it with `test/golden/determinism.json` and, when
+  `DOMECS_ALT_RUNTIME` is set (e.g. `env ELECTRON_RUN_AS_NODE=1 <electron>`),
+  requires identical output under that runtime.
+- `scripts/pack-for-studio.mjs` copies `determinism-golden.mjs` next to the
+  tarballs; `manifest.json` gains `golden: { file, integrity }`.
+- `@domecs/rules`: fork-equivalence suite (`test/fork-equivalence.test.ts`):
+  a live world edited mid-run equals a fresh build restored from its
+  `snapshot({ pendingEvents: true })` for 150 ticks (tick and fixed rules,
+  `composeTransforms` at priority 100, own and shared streams, spawns, `-0`,
+  events in flight). `@domecs/scene` is a new devDependency of
+  `@domecs/rules` (tests only).
+
+### Changed
+
+- **Behavior change (snapshot format): `SNAPSHOT_VERSION` is 3.** Every
+  snapshot a 2.1 world writes has `version: 3`, whether or not it uses own
+  streams or pending events, and carries `rngRoot` (`rngStreams` and
+  `pendingEvents` are omitted while empty). **2.0 engines reject 2.1 saves**
+  ("newer than this engine supports"); 2.0 saves still restore and load (v2
+  restores onto the world's `createWorld` root and re-derives own streams;
+  persist migrates 2 → 3 in memory, and `save()` writes v3).
+  `describe().snapshotVersion` is 3. `hashSnapshot` excludes `version`, but
+  `rngRoot` is state, so hashes of world-built snapshots change once.
+- **Behavior change (determinism checks):** "same state" now means equal
+  `hashSnapshot(snap, { includeChanges: true })`, not equal
+  `JSON.stringify(snapshot())` (AGENTS.md checklist, SPEC §8). Canonical JSON
+  keeps `-0`, so two snapshots that differ only by the sign of a zero now
+  compare unequal — they can have different futures (`1 / v`, `atan2`,
+  `Math.sign`). `@domecs/persist` `save()` still serializes with
+  `JSON.stringify`, which writes `-0` as `0`.
+- `@domecs/persist`: **behavior change (narrowing)** — `diffSnapshots`
+  compares component bags as data instead of by `JSON.stringify`, so an
+  entity whose components differ only in key order is no longer in
+  `changedEntities`; one whose field went from `0` to `-0` now is.
+- `@domecs/rules`: **behavior change (≤ 1 ulp)** — `sin()` and `cos()`
+  evaluate with `dmath` instead of `Math.sin`/`Math.cos` (O-75). A rule
+  using them may produce a result that differs from 2.0 by at most 1 ulp in
+  a given runtime, so an existing sim's hashes change once; in exchange the
+  results are now the same in Node, Electron and browsers. SPEC §8 already
+  disclaimed bit-identity for platform transcendentals.
 
 ## [2.0.0] — 2026-10-16
 

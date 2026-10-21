@@ -122,10 +122,19 @@ world.setInput(snapshot)
 world.stepOnce()
 ```
 
+## Input in rules
+
+`@domecs/rules` (2.2) reads this snapshot from data-defined rules:
+`key("KeyW")` (held, from `keys`), `pressed("Space")` / `released("Space")`
+(from `keyDelta`; `tick` rules only), `mod("shift")` and
+`pointer.x|y|buttons|wheel`. Key names are the `KeyboardEvent.code` values
+listed above. See the rules README, "Input".
+
 ## Related packages
 
 - `@domecs/core` — core ECS runtime.
 - `@domecs/dom` — retained-mode DOM renderer.
+- `@domecs/rules` — data-defined rules, which can read input (2.2).
 
 ## License
 

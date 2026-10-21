@@ -134,3 +134,112 @@ test('findLegacyDomecsImportSpecifiers flags old runtime imports only', () => {
 
   assert.deepEqual(matches, ['domecs', 'domecs-dom', 'domecs-input'])
 })
+
+// E1.1 / E13.1 / E18.1: the harness branch ships 2.3.0 in lockstep (2.1.0
+// before E13, 2.2.0 before E18). Every package shares one version, and that version still satisfies
+// the `^2.0.0` peer ranges apps and sibling packages declare (build metadata,
+// as pack-for-studio stamps it, is ignored by range checks).
+const RELEASE_VERSION = '2.3.0'
+
+function parseVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(v)
+  if (!m) throw new Error(`not a semver version: ${v}`)
+  return { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] ?? null }
+}
+
+function satisfiesCaret(range, version) {
+  const r = parseVersion(range.replace(/^\^/, ''))
+  const v = parseVersion(version)
+  if (v.pre !== null) return false
+  if (v.major !== r.major) return false
+  if (v.minor !== r.minor) return v.minor > r.minor
+  return v.patch >= r.patch
+}
+
+test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1, E13.1, E18.1)', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { workspaceRoot } = await import('../scripts/validate-release.mjs')
+  const dirs = fs
+    .readdirSync(path.join(workspaceRoot, 'packages'), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && fs.existsSync(path.join(workspaceRoot, 'packages', d.name, 'package.json')))
+    .map((d) => d.name)
+  assert.equal(dirs.length, 7)
+  const versions = new Map(
+    dirs.map((d) => [d, JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'packages', d, 'package.json'), 'utf8')).version]),
+  )
+  assert.deepEqual([...new Set(versions.values())], [RELEASE_VERSION], JSON.stringify(Object.fromEntries(versions)))
+  assert.ok(satisfiesCaret('^2.0.0', RELEASE_VERSION))
+  assert.ok(satisfiesCaret('^2.0.0', `${RELEASE_VERSION}+g1a2b3c4-dirty`))
+  assert.ok(!satisfiesCaret('^2.0.0', '3.0.0'))
+  assert.ok(!satisfiesCaret('^2.0.0', '2.3.0-pre.1'))
+  // workspace:^ peers publish as ^<version>: a 2.3 package installs only
+  // beside a 2.3 core (lockstep; studio pins one engine build).
+  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.1.0'))
+  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.2.0'))
+})
+
+test('every package peers on @domecs/core as workspace:^, so it packs as ^<release> and rejects an older core (E13.1)', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { workspaceRoot } = await import('../scripts/validate-release.mjs')
+  const pkgs = fs
+    .readdirSync(path.join(workspaceRoot, 'packages'), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && fs.existsSync(path.join(workspaceRoot, 'packages', d.name, 'package.json')))
+    .map((d) => JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'packages', d.name, 'package.json'), 'utf8')))
+    .filter((p) => p.name !== '@domecs/core')
+  assert.equal(pkgs.length, 6)
+  for (const p of pkgs) {
+    // `workspace:^` is what `pnpm pack` rewrites to `^<core version>`; a
+    // literal range here would let a 2.2 package install against a 2.1 core.
+    assert.equal(p.peerDependencies?.['@domecs/core'], 'workspace:^', p.name)
+    assert.equal(p.dependencies?.['@domecs/core'], undefined, p.name)
+  }
+  const published = `^${RELEASE_VERSION}`
+  assert.ok(satisfiesCaret(published, RELEASE_VERSION))
+  assert.ok(satisfiesCaret(published, `${RELEASE_VERSION}+g1a2b3c4`))
+  assert.ok(!satisfiesCaret(published, '2.1.0'))
+  assert.ok(!satisfiesCaret(published, '2.1.0+g5cb0290'))
+  assert.ok(!satisfiesCaret(published, '2.2.0+g4631095'))
+})
+
+test('publish:npm stamps BUILD_ID with the plain version between the build and the publish (PR #27 review)', async () => {
+  const fs = await import('node:fs')
+  const script = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts['publish:npm']
+  const build = script.indexOf(' build')
+  const stamp = script.indexOf('scripts/stamp-build-id.mjs')
+  const publish = script.indexOf(' publish ')
+  assert.ok(build !== -1 && stamp > build && publish > stamp, `publish:npm must build, stamp, then publish: ${script}`)
+})
+
+test('stampPublishBuildIds stamps every package with the shared version and restores byte for byte', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { PACKAGES } = await import('../scripts/pack-for-studio.mjs')
+  const { stampPublishBuildIds } = await import('../scripts/stamp-build-id.mjs')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'domecs-stamp-'))
+  try {
+    const dev = "/** doc */\nexport const BUILD_ID = 'dev';\n//# sourceMappingURL=build-id.js.map\n"
+    for (const p of PACKAGES) {
+      fs.mkdirSync(path.join(root, p.dir, 'dist'), { recursive: true })
+      fs.writeFileSync(path.join(root, p.dir, 'package.json'), JSON.stringify({ name: p.name, version: '9.8.7' }))
+      fs.writeFileSync(path.join(root, p.dir, 'dist', 'build-id.js'), dev)
+    }
+    const read = () => PACKAGES.map((p) => fs.readFileSync(path.join(root, p.dir, 'dist', 'build-id.js'), 'utf8'))
+    const { version, restore } = stampPublishBuildIds({ root })
+    assert.equal(version, '9.8.7')
+    for (const text of read()) assert.match(text, /export const BUILD_ID = "9\.8\.7";/)
+    // A second run over stamped files changes nothing.
+    stampPublishBuildIds({ root })
+    for (const text of read()) assert.match(text, /export const BUILD_ID = "9\.8\.7";/)
+    restore()
+    for (const text of read()) assert.equal(text, dev)
+
+    fs.writeFileSync(path.join(root, PACKAGES[3].dir, 'package.json'), JSON.stringify({ version: '9.8.6' }))
+    assert.throws(() => stampPublishBuildIds({ root }), /disagree on version/)
+    for (const text of read()) assert.equal(text, dev)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

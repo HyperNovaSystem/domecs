@@ -6,9 +6,10 @@ export type {
   AgentBridge,
   AgentBridgeOptions,
   AgentObservation,
+  AgentResetOptions,
 } from './agent.js'
-export { defineEvent } from './events.js'
-export { createRng, restoreRng, seedToState } from './rng.js'
+export { defineEvent, validateEventPayload } from './events.js'
+export { createRng, deriveStream, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'
 export {
   Has,
@@ -33,6 +34,7 @@ export type {
   ActionResolver,
   ActionOptions,
   ActionResult,
+  RegisterError,
 } from './world.js'
 export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js'
 export type { WorldManifest, PluginManifestEntry } from './manifest.js'
@@ -53,7 +55,19 @@ export type { Signal } from './signals.js'
 export { definePlugin } from './plugin.js'
 export type { Plugin, PluginSpec, PluginHandle, Capability, TickInfo } from './plugin.js'
 export { SNAPSHOT_VERSION } from './snapshot.js'
-export type { SnapshotOptions, WorldSnapshot } from './snapshot.js'
+export type { SnapshotOptions, SnapshotPendingEvent, WorldSnapshot } from './snapshot.js'
+export {
+  canonicalJson,
+  canonicalSnapshot,
+  hashSnapshot,
+  hashEntities,
+  hashValue,
+  HASH_ALGORITHM,
+} from './canonical.js'
+export type { CanonicalOptions } from './canonical.js'
+export { dmath } from './dmath.js'
+export { createSpatialGrid } from './spatial-grid.js'
+export type { SpatialGrid } from './spatial-grid.js'
 export type { ChangesSnapshot } from './change-log.js'
 export type { Rng, RngState } from './rng.js'
 export type { TimeState } from './time.js'
@@ -128,3 +142,19 @@ export {
   CONSOLIDATE_FAULTS_NAME,
   CONSOLIDATE_FAULTS_PRIORITY,
 } from './faulted.js'
+export { BUILD_ID } from './build-id.js'
+export { encodeInput, decodeInput } from './replay.js'
+export type { JsonInput } from './replay.js'
+export { createRecorder, replay } from './replay.js'
+export type {
+  ActLog,
+  ActLogFrame,
+  ActLogGapReason,
+  ActRecord,
+  Recorder,
+  RecorderOptions,
+  ReplayError,
+  ReplayOptions,
+} from './replay.js'
+export { createBranch, runBranch } from './branch.js'
+export type { BranchError, BranchOptions, BranchRun, RunBranchOptions, WorldSetup } from './branch.js'

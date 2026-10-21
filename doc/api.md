@@ -64,6 +64,7 @@ interface FieldSchema {
   readonly options?:  ReadonlyArray<string | number>  // enum widget
   readonly label?:    string
   readonly readonly?: boolean
+  readonly description?: string  // free text for humans/agents; persist round-trips it
 }
 interface ComponentSchema { readonly fields: Readonly<Record<string, FieldSchema>> }
 interface ComponentDescriptor {
@@ -129,6 +130,9 @@ interface ResourceOptions<T> {
   // Run by setResource and by a materialized default. Return true to accept,
   // or a string message to throw.
   validate?: (value: T) => true | string
+  // Render-only / derived state (camera, HUD cache): left out of snapshot()
+  // with its change marks; restore() keeps the live value (2.3, O-36).
+  transient?: boolean
 }
 
 interface ResourceType<T, Name extends string = string> {
@@ -152,6 +156,43 @@ world.markResourceChanged(Score)  // mark without replacing (in-place mutation)
 Reactive systems observe resource edges via `OnChangedResource(R)` in `reactsTo`
 (see Query builder below and SPEC §4 step 6). Resources are part of
 `snapshot()` / `restore()` (Snapshot below).
+
+**Transient resources (2.3, O-36).** `defineResource(name, { transient: true })`
+is for render-only or derived values a host rebuilds rather than saves (a
+camera, a HUD cache). `snapshot()` leaves the value out, and its change marks
+too, so moving the camera changes neither the default nor the strict hash, and
+`@domecs/persist` never writes it to a slot. `restore()` keeps the live value
+(a value a snapshot carries for it is ignored and not validated); a fresh
+world restored from a snapshot falls back to the default. Reads, writes,
+`validate` and `OnChangedResource` work as for any resource, and
+`describeResource(R).transient` reports the flag (SPEC §2.11).
+
+```ts doctest name=transient-resources
+import { strict as assert } from 'node:assert'
+import { createWorld, defineResource, hashSnapshot } from '@domecs/core'
+
+const Camera = defineResource<{ x: number; zoom: number }>('DtCamera', {
+  default: () => ({ x: 0, zoom: 1 }),
+  transient: true,
+})
+const Gold = defineResource<number>('DtGold', { default: 0 })
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+w.setResource(Gold, 10)
+w.stepOnce()
+const snap = w.snapshot()
+assert.deepEqual(snap.resources, { DtGold: 10 })          // no camera
+const strict = hashSnapshot(snap, { includeChanges: true })
+
+w.setResource(Camera, { x: 120, zoom: 2 })                // the user pans
+assert.equal(hashSnapshot(w.snapshot(), { includeChanges: true }), strict)
+
+w.setResource(Gold, 99)
+w.restore(snap)
+assert.equal(w.getResource(Gold), 10)                     // state restored
+assert.deepEqual(w.getResource(Camera), { x: 120, zoom: 2 }) // view kept
+assert.equal(w.describeResource(Camera).transient, true)
+```
 
 ### `World`
 
@@ -200,6 +241,16 @@ interface World {
   step(dt: number):  void      // see rules above
   stepOnce(): void             // one tick, delta = 0; fixed systems do not fire
   stepN(n: number, dt?: number): void
+
+  // O-88 (SPEC §4.0): part of a tick's work without a tick. runSystems runs
+  // the named enabled tick/fixed systems once, in run order (fixed phase,
+  // then tick); no time advance, no event flush, no hooks or signals. For
+  // derived/transient state only (an attached recorder notes a gap). Unknown,
+  // disabled and event/reactive/once names are reported in `skipped`.
+  runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] }
+  // Plugin onRender only ({ heartbeat: true }): no tickStart/tickEnd, no
+  // systems, time unchanged; renderer query windows advance (painted once).
+  render(): void
 
   // Turn-based action: emit an event and advance one tick.
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
@@ -318,37 +369,73 @@ interface World {
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
   // less ceremony at the call-site (F-10).
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  // The entity's component types sorted by name (2.3); despawn marks,
+  // componentRemoved and snapshot component keys use the same order.
   archetype(entity: Entity): ComponentType<unknown>[]
   // Reflect a component's name/transient/defaults/field-schema (#14). Works on
   // any ComponentType without prior registration; enumerate via componentTypes().
   describeComponent(type: ComponentType<unknown>): ComponentDescriptor
   resourceTypes(): ResourceType<unknown>[]
   describeResource<T>(type: ResourceType<T>): ResourceDescriptor
-  // An event's name and declared schema fields (fieldsSource 'schema' | 'none').
+  // An event's name, declared schema fields (fieldsSource 'schema' | 'none')
+  // and `description` when defineEvent was given one.
   describeEvent(type: EventType<unknown>): EventDescriptor
+  // Every known event type (registered, emitted, subscribed to, or named as a
+  // trigger), first-seen order. Fresh array each call.
+  eventTypes(): EventType<unknown>[]
   // The world manifest (agents: bridge.observe()). Schema: components,
-  // resources, events (EventDescriptors: every type emitted, subscribed to, or
-  // named as an event system's trigger — O-51), systems, plugins,
-  // capabilities, snapshotVersion. Live: entityCount, componentCounts,
-  // archetypes. Cheap enough to poll.
+  // resources, events (EventDescriptors: every type registered, emitted,
+  // subscribed to, or named as an event system's trigger — O-51), systems,
+  // plugins, capabilities, snapshotVersion. Live: entityCount,
+  // componentCounts, archetypes. Cheap enough to poll. See WorldManifest.
   describe(): WorldManifest
+
+  // registry and name lookup (O-30, O-78)
+  // Eagerly register types so componentTypes()/eventTypes()/resourceTypes(),
+  // describe() and lookup* list them before first use. Idempotent and
+  // all-or-nothing; a name already held by a *different* type of the same
+  // kind (or by another argument) → err name_conflict, nothing registered.
+  // Components, events and resources are separate namespaces. Touches nothing
+  // the snapshot carries (a resource default is not materialized). Throws
+  // TypeError only for a value that is not a defined type.
+  register(
+    ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+  ): Result<void, RegisterError>
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+  // undefined when unknown, or when two distinct known event types share the
+  // name (F-8 lets them coexist; the name is then ambiguous).
+  lookupEvent(name: string): EventType<unknown> | undefined
+  lookupResource(name: string): ResourceType<unknown> | undefined
 
   // snapshots
   // options.pruneEmptyEntities (default false): drop entities whose
   // serializable bag is empty once transient components are excluded —
   // transient-only and bare spawn() entities. Persist's
   // pruneTransientOnlyEntities() plugin applies this on the no-arg save() path.
+  // options.pendingEvents (default false): record the undelivered events, so
+  // a fork restored from it delivers them on its next tick (O-90). A pending
+  // payload that is not plain data, or a pending event whose name another
+  // known event type shares, throws TypeError naming the event.
   snapshot(options?: SnapshotOptions): WorldSnapshot
+  // The undelivered events in bus order (first emit of each type, then
+  // payload order). A fresh array; reading consumes nothing.
+  pendingEvents(): EmittedEvent[]
   // Trusted authored-snapshot restore. Rehydrates name-keyed component bags;
   // strict schema validation and unknown-component tooling are future work.
-  // The envelope shape (seed, tick, nextId, every entity record's id and
-  // components bag — O-41) and incoming values for *registered* resource
+  // The envelope shape (seed, rngRoot, rngStreams, tick, nextId, every
+  // entity record's id and components bag — O-41) and incoming values for *registered* resource
   // types (their validate hook, mirroring setResource) are checked BEFORE any
   // state is wiped; an invalid snapshot throws and leaves the world
   // untouched. Component values are not re-validated — the live path
   // validates only at Component.create(). world.rand is rewound in place, so
-  // captured references follow the restore (O-46). A snapshot whose version
+  // captured references follow the restore (O-46); so are own streams, after
+  // the map is replaced by snap.rngStreams and every registered own-stream
+  // system whose key is missing is re-derived from the restored root
+  // (snap.rngRoot, or this world's own for a v2 snapshot). A snapshot whose version
   // is newer than SNAPSHOT_VERSION throws (O-63); migrate older ones first.
+  // The pending event queue is abandoned — or, when snap.pendingEvents is
+  // present, replaced by it after every name resolves through lookupEvent
+  // (unknown or ambiguous → throws before any state change).
   restore(snap: WorldSnapshot): void
 
   // signals
@@ -370,6 +457,36 @@ interface World {
 }
 
 type Entity = number
+
+interface RegisterError {
+  readonly kind:     'name_conflict'
+  readonly registry: 'component' | 'event' | 'resource'
+  readonly name:     string
+}
+
+interface WorldManifest {
+  readonly components: ComponentDescriptor[]
+  readonly resources:  ResourceDescriptor[]
+  readonly events:     EventDescriptor[]
+  readonly systems: {
+    readonly name:       string
+    readonly schedule:   SystemSchedule
+    readonly enabled:    boolean
+    readonly priority:   number
+    readonly order:      number
+    readonly rng:        'shared' | 'own'   // SystemDef.rng (2.1)
+    // Sorted, de-duplicated component names every query / reactsTo leaf
+    // names (Not branches included; resource leaves excluded).
+    readonly components: string[]
+    readonly meta?:      JsonValue   // SystemDef.meta, cloned per call
+  }[]
+  readonly plugins:         PluginManifestEntry[]
+  readonly capabilities:    string[]
+  readonly snapshotVersion: number
+  readonly entityCount:     number
+  readonly componentCounts: Record<string, number>
+  readonly archetypes: { readonly components: string[]; readonly entityCount: number }[]
+}
 
 // Options for `World.startLoop`. The rAF driver is intentionally thin:
 // compute wall-clock dt, clamp it, pipe it to step(dt). Consumers that
@@ -436,12 +553,21 @@ function entry<T>(type: ComponentType<T>, value: T): ComponentEntry<T>
 interface SystemDef {
   query?:    QueryDef
   schedule?: 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
-  priority?: number
+  priority?: number                        // lower runs first; default 0
+  order?:    number                        // tie-break within a priority; default 0, finite (throws otherwise)
   rateHz?:   number                        // fixed only
   triggers?: EventType<unknown>[]          // event only
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
   state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)
+  meta?:     JsonValue                     // annotation for tools; cloned into describe().systems[i].meta
+                                           // (@domecs/rules sets { rule: name }); non-JSON
+                                           // (function, undefined, NaN, class instance, cycle)
+                                           // → world.system() throws TypeError
+  rng?:      'shared' | 'own'              // which stream ctx.rand is (SPEC §2.8, 2.1): 'shared' (default)
+                                           // = world.rand; 'own' = a stream keyed by the system's cursor
+                                           // key, derived from the world's root seed, kept across
+                                           // removal and snapshotted (rngStreams); else throws
 }
 
 type System = (ctx: SystemContext) => void
@@ -457,7 +583,7 @@ interface SystemContext {
   input:    InputSnapshot
   events:   EventView
   world:    WorldAPI
-  rand:     Rng
+  rand:     Rng                            // world.rand, or the system's own stream (rng: 'own')
   state:    unknown                        // system-local; read SystemDef.state
 }
 
@@ -504,6 +630,54 @@ interface Rng {
   seed():      readonly [number, number, number, number]
   fork(label: string): Rng     // deterministic subrng
 }
+```
+
+After `restore()` (a scrub, a branch selection) derived state such as
+`composeTransforms` output may be missing until the next tick, and a forced
+repaint through a heartbeat `step(0)` would re-fire every `tickStart`/`tickEnd`
+subscriber. `runSystems` primes the derived state and `render` repaints,
+neither moving `time.tick` (SPEC §4.0, O-88):
+
+```ts doctest name=run-systems-render
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, definePlugin, entry } from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('RsdPos', { defaults: { x: 0 } })
+const Screen = defineComponent<{ px: number }>('RsdScreen', { defaults: { px: 0 } })
+
+const w = createWorld({ headless: true })
+w.system('to-screen', { query: [Pos] }, (ctx) => {
+  for (const e of ctx.entities) ctx.world.addComponent(e.id, Screen, { px: e.RsdPos!.x * 10 })
+})
+let ran = 0
+w.system('gameplay', {}, () => void ran++)
+const painted: number[] = []
+w.use(definePlugin({
+  name: 'paint',
+  install: () => ({
+    onRender: () => {
+      for (const id of w.listEntities([Screen])) painted.push(w.getComponent(id, Screen)!.px)
+    },
+  }),
+}))
+let tickEnds = 0
+w.signals.tickEnd.subscribe(() => void tickEnds++)
+
+const id = w.spawn([entry(Pos, { x: 4 })])
+w.stepOnce()
+w.removeComponent(id, Screen) // derived state lost, e.g. not carried by a save
+
+const r = w.runSystems(['to-screen', 'no-such-system'])
+assert.deepEqual(r, { ran: ['to-screen'], skipped: ['no-such-system'] })
+assert.equal(w.getComponent(id, Screen)!.px, 40)
+assert.equal(ran, 1)            // only the named system ran
+assert.equal(w.time.tick, 1)    // tick identity unchanged
+
+painted.length = 0
+w.render()
+assert.deepEqual(painted, [40])
+assert.equal(tickEnds, 1)       // render fired no tickEnd
+assert.equal(w.time.tick, 1)
 ```
 
 ### Query builder
@@ -587,13 +761,40 @@ interface QueryHooks<Fields = Record<string, unknown>> {
 ### Events
 
 ```ts
-function defineEvent<T>(name: string): EventType<T>
+function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
+
+// The O-39 payload check world.action / bridge.act apply, without emitting or
+// stepping: null when valid (always null for a schema-less event), else a
+// reason fragment. A rejected action reports
+// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a
+// non-null, non-array object; own keys not declared are rejected (names only
+// inherited from Object.prototype, e.g. toString, count as undeclared);
+// declared keys (all optional) must match their kind / enum options;
+// 'unknown' accepts anything.
+function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null
+
+interface EventDefOptions {
+  // Payload field schema (component FieldSchema vocabulary). World.action /
+  // bridge.act validate payloads against it (O-39).
+  readonly schema?:      ComponentSchema
+  // Free text: what the command does. Surfaced by describeEvent/describe().
+  readonly description?: string
+}
+
+interface EventDescriptor {
+  readonly name:         string
+  readonly fields:       Readonly<Record<string, FieldSchema>>
+  readonly fieldsSource: 'schema' | 'none'
+  readonly description?: string
+}
 
 // `EventType<T>` is identity-keyed: the bus dispatches on a per-instance
 // symbol stored on the type object, not on `name`. Two `defineEvent('Same')`
 // calls produce distinct types whose payload buckets, subscribers, and views
 // never collide. `name` is an opaque label for diagnostics — duplicates are
-// permitted. (F-8.)
+// permitted (F-8), but a name two known types share is ambiguous to
+// world.lookupEvent / bridge.act(name, …). Keep agent-facing command names
+// unique; world.register(Cmd) asserts it.
 interface EventType<T> {
   readonly name: string
 }
@@ -602,6 +803,27 @@ interface EventView {
   of<T>(type: EventType<T>): readonly T[]
   emit<T>(type: EventType<T>, payload: T): void
 }
+```
+
+Pre-validate a command (a form, an editor, an agent harness) with the same
+check `action()` uses, so the two never drift:
+
+```ts doctest name=validate-event-payload
+import { strict as assert } from 'node:assert'
+import { createWorld, defineEvent, validateEventPayload } from '@domecs/core'
+
+const Move = defineEvent<{ dx: number; mode?: 'walk' | 'run' }>('Move', {
+  schema: { fields: { dx: { kind: 'number' }, mode: { kind: 'enum', options: ['walk', 'run'] } } },
+})
+
+assert.equal(validateEventPayload(Move, { dx: 2, mode: 'run' }), null)
+const why = validateEventPayload(Move, { dx: 2, dz: 1 })
+assert.match(why!, /unknown field "dz"/)
+
+const world = createWorld({ headless: true })
+const result = world.action(Move, { dx: 2, dz: 1 } as never)
+assert.equal(result.accepted, false)
+assert.equal(result.reason, `invalid payload for "Move": ${why}`)
 ```
 
 **Inter-entity references.** Components carrying foreign-entity ids
@@ -648,6 +870,55 @@ w.stepOnce() // tick 2: step-1 flush delivers Hit to the consumer
 assert.deepEqual(seen, [7])
 ```
 
+Events in flight between two ticks travel with a snapshot only when it is
+taken with `{ pendingEvents: true }` (O-90). Restore resolves each name with
+`world.lookupEvent`, so the restoring world must know the type —
+`register` it in setup (or subscribe, or name it in `triggers`). Payloads
+must be plain data and each pending type's name unique among the known
+event types; anything else throws `TypeError` at `snapshot()`.
+`world.pendingEvents()` shows the queue without consuming it:
+
+```ts doctest name=pending-events-fork
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, hashSnapshot, type World } from '@domecs/core'
+
+const Score = defineComponent<{ n: number }>('PeScore', { defaults: { n: 0 } })
+const Goal = defineEvent<{ points: number }>('PeGoal')
+
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.register(Goal) // a fork must know every event type that can be in flight
+  w.system('kick', {}, (ctx) => {
+    if (ctx.time.tick === 3) ctx.events.emit(Goal, { points: 2 })
+  })
+  w.system('score', { schedule: 'event', triggers: [Goal] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Score])) {
+      for (const g of ctx.events.of(Goal)) ctx.world.getComponent(id, Score)!.n += g.points
+      ctx.world.markChanged(id, Score)
+    }
+  })
+  return w
+}
+
+const live = build()
+live.spawn([entry(Score, { n: 0 })])
+live.stepOnce()
+live.stepOnce()
+live.stepOnce() // tick 3 emits Goal; it is delivered at tick 4
+assert.deepEqual(live.pendingEvents().map((e) => e.payload), [{ points: 2 }])
+
+const snap = live.snapshot({ pendingEvents: true })
+assert.deepEqual(snap.pendingEvents, [{ event: 'PeGoal', payload: { points: 2 } }])
+assert.equal(live.snapshot().pendingEvents, undefined) // default: not recorded
+
+const fork = build()
+fork.restore(snap)
+live.stepOnce()
+fork.stepOnce()
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork), strict(live)) // both delivered the Goal
+```
+
 ### Time
 
 ```ts
@@ -671,13 +942,23 @@ interface TimeState {
 ### Snapshot
 
 ```ts
-// SNAPSHOT_VERSION === 2. v2 added `resources` (SPEC §2.11); @domecs/persist
-// ships a built-in 1→2 migration so legacy v1 saves load transparently.
-const SNAPSHOT_VERSION = 2
+// SNAPSHOT_VERSION === 3. v2 added `resources` (SPEC §2.11); v3 (2.1) added
+// `rngRoot`, `rngStreams` and `pendingEvents`. Every 2.1 snapshot is v3 (2.0
+// engines reject it); restore() accepts any version <= 3. @domecs/persist
+// ships built-in 1→2 and 2→3 migrations so v1 and v2 saves load transparently.
+const SNAPSHOT_VERSION = 3
 
 interface WorldSnapshot {
   readonly version:  number
-  readonly seed:     readonly [number, number, number, number]
+  readonly seed:     readonly [number, number, number, number]   // shared stream (world.rand)
+  // The root seed own streams derive from (the createWorld seed); never
+  // advances. Written by every 2.1 snapshot; restore() adopts it (absent in
+  // a v2 snapshot → the world's own createWorld root). (v3)
+  readonly rngRoot?: RngState
+  // Every own stream the world has created, by key (rng: 'own' systems;
+  // entries outlive their systems). Omitted while there is none; an explicit
+  // undefined counts as absent (the reseed recipe). (v3)
+  readonly rngStreams?: Readonly<Record<string, RngState>> | undefined
   readonly tick:     number
   // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
   // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
@@ -697,15 +978,30 @@ interface WorldSnapshot {
   readonly nextId?: number
   // name → deep-cloned value. Omitted entirely when no resource has a value.
   // restore() clears live resources first, so an absent map falls back to
-  // resource defaults. (v2+)
+  // resource defaults. Transient resources are never written, and restore()
+  // keeps their live values (2.3, O-36). (v2+)
   readonly resources?: Record<string, unknown>
   // Change marks some system had not seen yet, in the order they were made,
   // and how many of them each such system had seen (O-42). restore()
   // re-issues them so those systems report them at their next run. Omitted
   // when every system has seen every mark.
   readonly changes?: ChangesSnapshot
+  // Undelivered events in bus order, as plain-data copies (O-90). Present
+  // only with snapshot({ pendingEvents: true }) and something in flight.
+  // `payload` is absent for an undefined payload (a void event).
+  readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>
   readonly meta?: Record<string, unknown>
 }
+
+interface SnapshotPendingEvent {
+  readonly event: string        // the event type's name (resolved with lookupEvent)
+  readonly payload?: JsonValue
+}
+
+// The initial state of own stream `key` under `root` (SPEC §2.8): FNV-1a-32 of
+// "domecs:stream:" + key, splitmix32 per root word, 8 warm-up draws. Pinned by
+// a golden test; part of the snapshot contract.
+function deriveStream(root: RngState, key: string): RngState
 
 interface ChangesSnapshot {
   readonly marks: ReadonlyArray<
@@ -719,7 +1015,321 @@ interface SnapshotOptions {
   // Drop entities whose serializable bag is empty once transient components
   // are excluded. Default false (every alive entity is recorded).
   readonly pruneEmptyEntities?: boolean
+  // Record undelivered events in `pendingEvents`. Default false (2.0
+  // behaviour: restore abandons the queue). Forks, keyframes and checkpoints
+  // opt in.
+  readonly pendingEvents?: boolean
 }
+```
+
+### Per-system RNG streams
+
+`world.rand` is one shared stream, so one random-drawing system changes
+every other system's draws. A system registered with `rng: 'own'` gets its
+own stream as `ctx.rand` (SPEC §2.8, O-77): keyed by its cursor key (rules:
+`rule:<name>`), derived from the world's root seed with `deriveStream`, kept
+when the system is removed (re-registering resumes it) and carried in the
+snapshot (`rngStreams`; `rngRoot` is in every snapshot). A restored world
+re-derives, from the restored root, the stream of every own-stream system the
+snapshot has no entry for. Reseeding a snapshot is data-only:
+`{ ...snap, seed: s, rngRoot: s, rngStreams: undefined }`.
+
+```ts doctest name=rng-own-streams
+import { strict as assert } from 'node:assert'
+import { createWorld, createRng, defineComponent, deriveStream, entry, seedToState, type World } from '@domecs/core'
+
+const Roll = defineComponent<{ v: number }>('RsRoll', { defaults: { v: 0 } })
+
+function build(withNoise: boolean): { w: World; id: number } {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const id = w.spawn([entry(Roll, { v: 0 })])
+  if (withNoise) w.system('noise', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
+  w.system('roll', { rng: 'own' }, (ctx) => {
+    w.getComponent(id, Roll)!.v = ctx.rand.uniform()
+    w.markChanged(id, Roll)
+  })
+  return { w, id }
+}
+
+const a = build(true)
+const b = build(false)
+for (let i = 0; i < 3; i++) {
+  a.w.stepOnce()
+  b.w.stepOnce()
+}
+// 'roll' draws the same values whether or not 'noise' exists
+assert.equal(a.w.getComponent(a.id, Roll)!.v, b.w.getComponent(b.id, Roll)!.v)
+const stream = createRng(deriveStream(seedToState([1, 2, 3, 4]), 'roll'))
+stream.uniform()
+stream.uniform()
+assert.equal(b.w.getComponent(b.id, Roll)!.v, stream.uniform())
+
+const snap = a.w.snapshot()
+assert.equal(snap.version, 3)
+assert.deepEqual(Object.keys(snap.rngStreams!), ['noise', 'roll'])
+assert.deepEqual(snap.rngRoot, seedToState([1, 2, 3, 4]))
+assert.equal(a.w.describe().systems.find((s) => s.name === 'roll')!.rng, 'own')
+```
+
+### Determinism tools
+
+Equality between worlds is by **canonical hash** (O-11; SPEC §7.1
+"Canonical form", §8). `JSON.stringify(snapshot())` is not an equality test:
+field order inside a value is whatever order code inserted the keys in, and
+it writes `-0` as `0`. (Since 2.3 an entity's components are listed by name,
+whatever order they were added in.)
+
+```ts
+/** Canonical JSON of plain data: sorted keys (UTF-16 code unit), JSON value
+ *  semantics, `-0` written as `-0`. NaN/±Infinity, BigInt and cycles throw
+ *  TypeError naming the path ("entities[3].components.Body.vx"). */
+function canonicalJson(value: unknown): string
+
+interface CanonicalOptions {
+  readonly includeChanges?: boolean  // add `changes` (strict restore-equivalence key)
+  readonly includeMeta?: boolean     // add `meta`
+}
+/** Canonical JSON of the simulation state: every top-level field except
+ *  `version`, `meta` and `changes` (unless the options add them). */
+function canonicalSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string
+/** FNV-1a-64 of canonicalSnapshot's UTF-8 bytes: 16 lowercase hex chars. */
+function hashSnapshot(snap: WorldSnapshot, options?: CanonicalOptions): string
+/** Entity id (ascending) → hash of that record's canonical `components`. */
+function hashEntities(snap: WorldSnapshot): Map<Entity, string>
+/** FNV-1a-64 of canonicalJson(value) — metric results, act logs, doc versions. */
+function hashValue(value: unknown): string
+const HASH_ALGORITHM: 'fnv1a64'
+```
+
+- **Strict vs default.** Every restore-equivalence check — fork vs live,
+  checkpoints, keyframe verification — uses
+  `hashSnapshot(snap, { includeChanges: true })`: `changes` decides what
+  change-gated systems do next. The default hash (no `changes`) is for cache
+  keys and UI.
+- **Keyframes.** Serialize with `canonicalJson`, not `JSON.stringify`, so a
+  `-0` survives the round trip; `JSON.parse(canonicalJson(snap))` restores
+  to a world that continues exactly like one restored from `snap`.
+  `@domecs/persist` `save()` still writes `JSON.stringify` (follow-up).
+- The hash is not cryptographic. All five functions are pure and identical
+  across runs and JS engines.
+
+```ts doctest name=determinism-hash
+import { strict as assert } from 'node:assert'
+import {
+  canonicalJson,
+  createWorld,
+  defineComponent,
+  entry,
+  hashEntities,
+  hashSnapshot,
+  type World,
+  type WorldSnapshot,
+} from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('DtPos', { defaults: { x: 0 } })
+const Vel = defineComponent<{ vx: number }>('DtVel', { defaults: { vx: 0 } })
+
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4], fixedStep: 1 / 60 })
+  w.system('move', { schedule: 'fixed', query: [Pos, Vel] }, ({ entities }) => {
+    for (const e of entities) {
+      const p = w.getComponent(e.id, Pos)!
+      const v = w.getComponent(e.id, Vel)!
+      p.x += v.vx
+      if (p.x > 5 || p.x < -5) v.vx = -v.vx
+      w.markChanged(e.id, Pos)
+    }
+  })
+  return w
+}
+
+// Same state, different component-add order: the hash is equal, and since
+// 2.3 the components are listed by name in both.
+const a = build()
+a.addComponent(a.spawn([entry(Pos, { x: 0 })]), Vel, { vx: 1 })
+const b = build()
+b.addComponent(b.spawn([entry(Vel, { vx: 1 })]), Pos, { x: 0 })
+assert.deepEqual(Object.keys(b.snapshot().entities[0]!.components), ['DtPos', 'DtVel'])
+assert.equal(hashSnapshot(a.snapshot()), hashSnapshot(b.snapshot()))
+// JSON.stringify writes -0 as 0; canonicalJson keeps it.
+assert.equal(JSON.stringify({ vx: -0 }), '{"vx":0}')
+assert.equal(canonicalJson({ vx: -0 }), '{"vx":-0}')
+
+// Fork from a canonical keyframe; compare strict hashes while both run.
+const keyframe = canonicalJson(a.snapshot())
+const fork = build()
+fork.restore(JSON.parse(keyframe) as WorldSnapshot)
+for (let i = 0; i < 120; i++) {
+  a.step(1 / 60)
+  fork.step(1 / 60)
+}
+const strict = { includeChanges: true }
+assert.equal(hashSnapshot(fork.snapshot(), strict), hashSnapshot(a.snapshot(), strict))
+
+// hashEntities points at the entity that diverged.
+const [id] = fork.listEntities([Pos])
+fork.getComponent(id!, Pos)!.x += 0.5
+fork.markChanged(id!, Pos)
+const live = hashEntities(a.snapshot())
+const forked = hashEntities(fork.snapshot())
+assert.deepEqual([...live.keys()].filter((e) => live.get(e) !== forked.get(e)), [id])
+
+// -0 survives canonicalJson; JSON.stringify drops the sign.
+assert.equal(canonicalJson({ vx: -0 }), '{"vx":-0}')
+assert.equal(JSON.stringify({ vx: -0 }), '{"vx":0}')
+```
+
+### Deterministic math
+
+`Math.sin` and `Math.cos` are implementation-approximated under ECMA-262, and
+engine builds disagree by up to 1 ulp (O-75; SPEC §8). `dmath` returns the
+same bits on every engine: `sin` and `cos` are a straight-line port of musl
+libm (generic C, non-FMA, < 1 ulp from the true result; ±0, ±∞, NaN and
+subnormals per C99 Annex F; huge arguments reduced exactly). `sqrt` is
+`Math.sqrt`, which IEEE-754 already makes correctly rounded. From 2.2,
+`atan2` and `hypot` are musl ports too (< 1 ulp; specials as C99 Annex F,
+which `Math.atan2` and two-argument `Math.hypot` share), and `pow` is a port
+of fdlibm `e_pow.c` whose special values are ECMAScript `**`'s:
+`(±1) ** ±Infinity` and `1 ** NaN` are `NaN` (C99 says 1). `pow` is < 1 ulp
+except where fdlibm itself is weak — `|1 - x| <= 2^-20` with `|y| > 2^31`,
+relative error up to about 2^-43 (the same bits as fdlibm's C, as Java's
+`StrictMath.pow`).
+
+```ts
+const dmath: Readonly<{
+  sin(x: number): number
+  cos(x: number): number
+  sqrt(x: number): number   // = Math.sqrt
+  atan2(y: number, x: number): number   // 2.2
+  hypot(x: number, y: number): number   // 2.2 (two arguments)
+  pow(x: number, y: number): number     // 2.2
+}>
+```
+
+- Authoritative systems call `dmath.sin`/`dmath.cos`, never `Math.sin`/
+  `Math.cos` (or any other platform transcendental). The arithmetic
+  operators, `Math.sqrt`, `Math.floor`, `Math.round`, `Math.abs`,
+  `Math.min` and `Math.max` are exact and need no wrapper.
+- `@domecs/rules` evaluates `sin()`/`cos()` with `dmath`, and from 2.2
+  `atan2()`/`hypot()`/`pow()`, so rule outputs are bit-reproducible with no
+  author action.
+- `tan`, `atan`, `exp` and `log` are added on demand.
+
+```ts doctest name=deterministic-math
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, dmath, entry, hashSnapshot } from '@domecs/core'
+
+const Orbit = defineComponent<{ angle: number; x: number; y: number }>('DmOrbit', {
+  defaults: { angle: 0, x: 0, y: 0 },
+})
+
+function run(): string {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4], fixedStep: 1 / 60 })
+  w.system('orbit', { schedule: 'fixed', query: [Orbit] }, ({ entities }) => {
+    for (const e of entities) {
+      const o = w.getComponent(e.id, Orbit)!
+      o.angle += 0.05
+      o.x = 10 * dmath.cos(o.angle) // not Math.cos: identical bits in Node, Electron, browsers
+      o.y = 10 * dmath.sin(o.angle)
+      w.markChanged(e.id, Orbit)
+    }
+  })
+  w.spawn([entry(Orbit, { angle: 0, x: 10, y: 0 })])
+  for (let i = 0; i < 600; i++) w.step(1 / 60)
+  return hashSnapshot(w.snapshot(), { includeChanges: true })
+}
+
+assert.equal(run(), run())
+assert.equal(dmath.sin(Math.PI / 2), 1)
+assert.equal(dmath.cos(Math.PI), -1)
+assert.ok(Object.is(dmath.sin(-0), -0))
+assert.equal(dmath.sqrt(2), Math.sqrt(2))
+assert.equal(dmath.atan2(1, 1), Math.PI / 4)
+assert.equal(dmath.hypot(3, 4), 5)
+assert.equal(dmath.pow(2, 10), 1024)
+assert.ok(Number.isNaN(dmath.pow(1, Infinity))) // as 1 ** Infinity
+```
+
+### Spatial grid
+
+`createSpatialGrid(cellSize)` is a pure, world-free uniform grid over 2D
+points keyed by entity id (2.2; O-8; SPEC §2.12). Results equal a
+brute-force scan and never depend on `cellSize`, insertion order or cell
+order: cell size is a performance setting only. The grid is derived state
+and never enters a snapshot. For an index bound to a world's position
+component, use `createSpatialHash` from `@domecs/scene`.
+
+```ts
+function createSpatialGrid(cellSize: number): SpatialGrid   // RangeError unless finite and > 0
+
+interface SpatialGrid {
+  readonly cellSize: number
+  readonly size: number
+  clear(): void
+  set(id: Entity, x: number, y: number): void   // insert or move; non-finite → not indexed (id removed)
+  delete(id: Entity): void
+  position(id: Entity): { readonly x: number; readonly y: number } | undefined
+  within(x: number, y: number, r: number, accept?: (id: Entity) => boolean): Entity[]   // distance² <= r², ascending id
+  nearest(x: number, y: number, options?: { maxDistance?: number; accept?: (id: Entity) => boolean }): Entity | undefined   // ties → lowest id
+  pairs(r: number, accept?: (a: Entity, b: Entity) => boolean): Array<[Entity, Entity]>   // a < b, sorted by (a, b)
+}
+```
+
+- Distance is `dx * dx + dy * dy` (`dx = px - x`) compared with `r * r`
+  (`maxDistance * maxDistance`), inclusive. A negative or NaN radius matches
+  nothing.
+- `accept` should be pure. `within` and `pairs` call it in output order on
+  the matches; `nearest` may call it in any order, any number of times.
+- `nearest` expands rings of cells and stops on a conservative bound, so
+  rounding can only make it visit more cells. A query far from every point
+  (or a radius much larger than the cell size) falls back to a scan.
+- Pick a cell size near the typical query radius; about one point per cell
+  is a good start.
+
+```ts doctest name=spatial-grid
+import { strict as assert } from 'node:assert'
+import { createSpatialGrid } from '@domecs/core'
+
+const points: Array<[number, number, number]> = [
+  [1, 0, 0],
+  [2, 3, 4],
+  [3, -3, 4],
+  [4, 1, 0],
+  [5, 100, 100],
+]
+const results = [0.5, 2, 64].map((cellSize) => {
+  const grid = createSpatialGrid(cellSize)
+  for (const [id, x, y] of points) grid.set(id, x, y)
+  grid.set(6, Number.NaN, 0) // not indexed
+  return JSON.stringify([
+    grid.size,
+    grid.within(0, 0, 5),                     // [1, 2, 3, 4]: distance 5 is inclusive
+    grid.within(0, 0, 5, (id) => id % 2 === 0), // [2, 4]
+    grid.nearest(0, 4),                       // 2 and 3 tie at distance 3 → lowest id
+    grid.nearest(0, 0, { accept: (id) => id !== 1 }),
+    grid.nearest(50, 50, { maxDistance: 10 }),
+    grid.pairs(5),
+  ])
+})
+// the cell size never changes a result
+assert.equal(new Set(results).size, 1)
+assert.equal(
+  results[0],
+  JSON.stringify([5, [1, 2, 3, 4], [2, 4], 2, 4, undefined, [[1, 2], [1, 3], [1, 4], [2, 4]]]),
+)
+```
+
+### Build identity
+
+Every package exports `BUILD_ID: string` (ED-15). It is `'dev'` in source and
+workspace builds; `scripts/pack-for-studio.mjs` stamps the packed
+`dist/build-id.js` with `'<version>+g<sha7>[-dirty]'`; `pnpm publish:npm`
+stamps the plain version (`scripts/stamp-build-id.mjs`), so a published build
+carries it. Hosts record it next to their runtime identity, so
+two packs of the same version stay distinguishable.
+
+```ts
+import { BUILD_ID } from '@domecs/core'   // also @domecs/dom, input, inspector, persist, rules, scene
 ```
 
 ### Plugin
@@ -859,12 +1469,20 @@ interface AgentObservation {
   readonly manifest:    WorldManifest   // = world.describe()
 }
 
+interface AgentResetOptions {
+  scale?: number                       // setScale(scale) after the restore (0 pauses)
+  input?: 'keep' | 'empty'             // 'empty': setInput(an empty input); default 'keep'
+}
+
 interface AgentBridge {
   readonly world: World                // escape hatch for setup/queries
-  reset(): void                        // restore baseline (see notes below)
+  reset(options?: AgentResetOptions): void // restore baseline (see notes below)
   captureBaseline(): void              // re-capture baseline from current state
   observe(): AgentObservation
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  // Name-based act for JSON callers (MCP, HTTP, act logs): resolves through
+  // world.lookupEvent, then exactly like act(type, …).
+  act(name: string, payload: unknown, opts?: ActionOptions): ActionResult
   step(dt?: number): void              // omit dt → stepOnce; positive dt → step(dt)
   snapshot(options?: SnapshotOptions): WorldSnapshot
 }
@@ -872,10 +1490,19 @@ interface AgentBridge {
 
 Notes:
 - `reset()` does **not** restore `time.scale` or input state (the snapshot
-  does not carry them); restore those explicitly at episode boundaries if
-  episodes touch either. Entity-id assignment is stable across `reset()`
+  does not carry them). Pass them at the episode boundary (2.3, O-89):
+  `reset({ scale: 1, input: 'empty' })` restores the baseline, then calls
+  `setScale(1)` (a paused episode resumes; `scale: 0` pauses) and replaces
+  `world.input` with an empty input (no keys held, no edges). Omitted
+  options leave scale and input as the last episode left them; a bad
+  `scale` (not finite, or < 0) or `input` throws `TypeError` before
+  anything is restored. Entity-id assignment is stable across `reset()`
   (the snapshot carries the id cursor, O-38) and pending events from the
-  abandoned episode are discarded by `restore()`.
+  abandoned episode are discarded by `restore()` (the baseline is a
+  default snapshot, which carries no pending events).
+- `once` systems do **not** re-run after `reset()`: they ran on the world's
+  first tick and an in-place restore leaves them as run (SPEC §7.1). Put
+  per-episode setup in the baseline, not in a `once` system.
 - `step(0)` / negative dt is the F-6 heartbeat (no systems run), not the
   same as `step()` — guard computed dt values that can round to 0.
 - `act()` runs one tick itself (it is `world.action()`); call `step()` only
@@ -889,6 +1516,406 @@ Notes:
   (unknown fields / wrong-typed fields / out-of-enum values →
   `{ accepted: false, reason }`, no tick consumed). Schema-less events are
   unvalidated — declare schemas on agent-facing commands (O-39).
+- `act(name, …)` resolves the name through `world.lookupEvent`. An unknown
+  name, or one two distinct known event types share, returns
+  `{ accepted: false, consumedTurn: false, reason, events: [] }` with no emit
+  and no tick. `world.register` the command events at setup so they resolve
+  before anything emits them.
+
+```ts doctest name=agent-reset-options
+import { strict as assert } from 'node:assert'
+import { createAgentBridge, createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('DrPos', { defaults: { x: 0 } })
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+world.system('walk', {}, ({ world: w, time }) => {
+  if (!w.input.keys.has('ArrowRight')) return
+  for (const id of w.listEntities([Pos])) {
+    w.getComponent(id, Pos)!.x += time.scale
+    w.markChanged(id, Pos)
+  }
+})
+world.spawn([entry(Pos, { x: 0 })])
+const bridge = createAgentBridge(world)
+
+const episode = (): string => {
+  bridge.reset({ scale: 1, input: 'empty' })   // same host state every time
+  world.setInput({ ...world.input, keys: new Set(['ArrowRight']) })
+  bridge.step()
+  return hashSnapshot(bridge.snapshot(), { includeChanges: true })
+}
+const first = episode()
+world.pause()                                   // episode 1 ends paused, key held
+assert.equal(episode(), first)
+assert.equal(world.time.scale, 1)
+```
+
+```ts doctest name=agent-act-by-name
+import { strict as assert } from 'node:assert'
+import { createAgentBridge, createWorld, defineComponent, defineEvent, entry } from '@domecs/core'
+
+const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
+const Damage = defineEvent<{ amount: number }>('Damage', {
+  description: 'Remove hit points from the player',
+  schema: { fields: { amount: { kind: 'number', description: 'HP to remove' } } },
+})
+
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const id = world.spawn([entry(Health, { hp: 10 })])
+world.system('damage', { schedule: 'event', triggers: [Damage], meta: { owner: 'combat' } }, (ctx) => {
+  for (const d of ctx.events.of(Damage)) {
+    ctx.world.getComponent(id, Health)!.hp -= d.amount
+    ctx.world.markChanged(id, Health)
+  }
+})
+assert.equal(world.register(Damage).ok, true)       // asserts the name is unique
+assert.equal(world.lookupEvent('Damage'), Damage)
+assert.deepEqual(world.eventTypes().map((t) => t.name), ['Damage'])
+assert.equal(world.describeEvent(Damage).description, 'Remove hit points from the player')
+const sys = world.describe().systems.find((s) => s.name === 'damage')!
+assert.deepEqual(sys.meta, { owner: 'combat' })
+assert.deepEqual(sys.components, [])
+
+const bridge = createAgentBridge(world)
+assert.equal(bridge.act('Damage', { amount: 3 }).accepted, true)
+assert.equal(world.getComponent(id, Health)!.hp, 7)
+// Schema rejection works the same through the name path (O-39).
+assert.equal(bridge.act('Damage', { amout: 3 }).accepted, false)
+// Unknown name: rejected, no tick.
+const tick = world.time.tick
+const miss = bridge.act('Damag', { amount: 3 })
+assert.equal(miss.accepted, false)
+assert.equal(miss.consumedTurn, false)
+assert.equal(world.time.tick, tick)
+// A second, distinct "Damage" type cannot register under the taken name.
+const r = world.register(defineEvent('Damage'))
+assert.deepEqual(r, { ok: false, error: { kind: 'name_conflict', registry: 'event', name: 'Damage' } })
+```
+
+### Act logs and replay
+
+A recorder writes down what entered a world from outside — commands, the dt
+and scale of every step, the input systems saw — so a fresh world built by the
+same setup and restored from the same base replays to the same strict hashes
+(harness spec §7.1, SPEC §7.5). The log is plain JSON; store it with
+`canonicalJson` so a `-0` in a payload keeps its sign.
+
+```ts
+function createRecorder(world: World, options?: { readonly hashEvery?: number }): Recorder
+function replay(world: World, log: ActLog, options?: ReplayOptions):
+  Result<{ readonly ticks: number; readonly hash: string }, ReplayError>
+function encodeInput(input: InputSnapshot): JsonInput   // Sets -> arrays, iteration order kept
+function decodeInput(json: JsonInput): InputSnapshot
+
+interface Recorder {
+  readonly active: boolean
+  peek(): ActLog                 // the log so far (a copy)
+  stop(): ActLog                 // stop recording; later calls return the same log
+}
+
+interface ActLog {
+  readonly format: 'domecs-actlog'
+  readonly version: 1
+  readonly startTick: number
+  readonly fixedStep: number
+  readonly startScale: number    // time.scale when recording started
+  readonly resumeScale?: number  // startScale 0 only: the scale resume() returned to
+  readonly baseHash: string      // strict hash (pendingEvents included) at start
+  readonly frames: readonly ActLogFrame[]
+  readonly checkpoints?: ReadonlyArray<{ tick: number; hash: string }>   // hashEvery
+  readonly gaps?: ReadonlyArray<{ tick: number; reason: ActLogGapReason }>
+}
+interface ActLogFrame {          // one stepOnce() or step(dt > 0); heartbeats are not frames
+  readonly tick: number          // time.tick before the step
+  readonly dt: number | null     // null = stepOnce()
+  readonly scale?: number        // entry scale, when it changed since the previous frame ended
+  readonly resumeScale?: number  // paused entry: resume() target the host set between steps
+  readonly flushScale?: number   // scale plugin onTickStart set, before the event flush
+  readonly flushResume?: number  // paused there: the resume() target plugin onTickStart set
+  readonly hookScale?: number    // scale a signals.tickStart subscriber set, for the systems
+  readonly hookResume?: number   // paused there: the resume() target the subscriber set
+  readonly acts?: readonly ActRecord[]       // emitted before the step's event flush
+  readonly startActs?: readonly ActRecord[]  // emitted by signals.tickStart subscribers this step
+  readonly endActs?: readonly ActRecord[]    // emitted after the systems (render, onTickEnd, tickEnd)
+  readonly input?: JsonInput     // what the event flush saw, when it changed (always on the first frame)
+  readonly hookInput?: JsonInput // input a signals.tickStart subscriber set, for the systems
+}
+interface ActRecord {
+  readonly event: string         // replay resolves it with world.lookupEvent
+  readonly payload?: JsonValue   // absent for an undefined payload
+  readonly via: 'emit' | 'action'  // only 'action' acts are schema-checked on replay
+}
+type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw'
+
+interface ReplayOptions {
+  readonly base?: WorldSnapshot  // restore first (take it with { pendingEvents: true })
+  readonly toTick?: number       // stop after the frame that ends at this tick
+  readonly verify?: boolean      // compare checkpoints (default true)
+  readonly onFrame?: (tick: number, world: World) => void
+}
+type ReplayError =
+  | { kind: 'invalid_log'; reason: string }
+  | { kind: 'base_mismatch'; expected: string; actual: string }
+  | { kind: 'unknown_event'; event: string; tick: number }
+  | { kind: 'rejected_payload'; event: string; tick: number; reason: string }
+  | { kind: 'diverged'; tick: number; expected: string; actual: string }
+```
+
+What is recorded:
+- **Acts:** every emit not made by a system or an `on` handler —
+  `world.emit`, `turn`, `action` (`via: 'action'`), and emits from plugin
+  hooks and signal subscribers, heartbeats included — in emit order: into
+  the next frame's `acts`, or, when made during a step after its event
+  flush, into that frame's `startActs` (`signals.tickStart`) or `endActs`
+  (render, `onTickEnd`, `signals.tickEnd`), which replay emits at the same
+  points. Emits from systems and handlers are reproduced by replay. Acts
+  emitted after the last step are not in the log.
+- **Frames:** per full step, the caller's dt (so wall-clock `step(dt)`
+  replays exactly), the scale on entry, a scale a `tickStart` hook set, and
+  `world.input` as the step's systems see it (after plugin `onTickStart` and
+  `signals.tickStart`), delta-encoded.
+- **Gaps:** a spawn/despawn/add/remove/`markChanged`/`setResource`/
+  `markResourceChanged` outside a full tick, a draw on `world.rand` between
+  steps, a payload that is not plain data, and `restore()`. Replay past a gap is unverified: the next
+  checkpoint reports `diverged`. Route every runtime change through a
+  command.
+
+Replay restores `base`, sets `startScale` (and, for a paused start, the
+scale `resume()` returns to), checks `baseHash`, then per frame
+resolves the acts (an unknown or ambiguous name → `unknown_event`, an
+`'action'` payload failing its schema → `rejected_payload`, both before any
+emit), sets scale and input, emits, and steps. A malformed log (including a
+checkpoint that follows no frame end), or one recorded at another
+`fixedStep`, is `invalid_log`; nothing throws for a bad
+log. The replay world must have the same setup minus every stimulus source
+(no input plugin, no hook or subscriber that emits, none that sets the scale
+at tick start: their effects are in the log) and no `once` system the source had already run.
+
+```ts doctest name=act-log-replay
+import { strict as assert } from 'node:assert'
+import {
+  createRecorder,
+  createWorld,
+  decodeInput,
+  defineComponent,
+  defineEvent,
+  entry,
+  hashSnapshot,
+  replay,
+  type ActLog,
+  type World,
+} from '@domecs/core'
+
+const Pos = defineComponent<{ x: number }>('ArPos', { defaults: { x: 0 } })
+const Push = defineEvent<{ dx: number }>('ArPush', { schema: { fields: { dx: { kind: 'number' } } } })
+
+// One setup for the recording world and every replay world.
+function build(): World {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.register(Push) // replay resolves acts by name
+  w.system('push', { schedule: 'event', triggers: [Push] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Pos])) {
+      for (const p of ctx.events.of(Push)) ctx.world.getComponent(id, Pos)!.x += p.dx
+      ctx.world.markChanged(id, Pos)
+    }
+  })
+  w.system('drift', { query: [Pos] }, (ctx) => {
+    for (const e of ctx.entities) {
+      e.ArPos!.x += ctx.time.scaledDelta + (ctx.input.keys.has('ArrowRight') ? 1 : 0)
+      ctx.world.markChanged(e.id, Pos)
+    }
+  })
+  return w
+}
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+const live = build()
+const id = live.spawn([entry(Pos, { x: 0 })])
+const base = live.snapshot({ pendingEvents: true })
+const rec = createRecorder(live, { hashEvery: 2 })
+live.action(Push, { dx: 5 })                            // recorded via 'action'
+live.step(0.016)                                        // a wall-clock dt is recorded as-is
+live.setInput(decodeInput({ keys: ['ArrowRight'] }))
+live.step(0.021)
+live.emit(Push, { dx: -2 })                             // recorded via 'emit'
+live.stepOnce()
+const log: ActLog = rec.stop()
+assert.equal(log.frames.length, 4)
+assert.deepEqual(log.frames[0]!.acts, [{ event: 'ArPush', payload: { dx: 5 }, via: 'action' }])
+assert.deepEqual(log.frames[2]!.input, { keys: ['ArrowRight'] })
+assert.equal(log.gaps, undefined)
+
+// The log is plain JSON: replay the parsed copy on a fresh world.
+const parsed = JSON.parse(JSON.stringify(log)) as ActLog
+const r = replay(build(), parsed, { base })
+if (!r.ok) throw new Error(r.error.kind)
+assert.equal(r.value.ticks, 4)
+assert.equal(r.value.hash, strict(live))
+
+// A direct write is a gap; replay past it reports where it diverged.
+const base2 = live.snapshot({ pendingEvents: true })
+const rec2 = createRecorder(live, { hashEvery: 1 })
+live.stepOnce()
+live.getComponent(id, Pos)!.x = 100
+live.markChanged(id, Pos)
+live.stepOnce()
+const log2 = rec2.stop()
+assert.deepEqual(log2.gaps, [{ tick: 5, reason: 'out_of_tick_mutation' }])
+const r2 = replay(build(), log2, { base: base2 })
+assert.equal(r2.ok, false)
+if (!r2.ok) assert.deepEqual([r2.error.kind, (r2.error as { tick: number }).tick], ['diverged', 6])
+
+assert.equal(replay(build(), { ...log, version: 2 } as unknown as ActLog).ok, false) // invalid_log, no throw
+```
+
+### Branches
+
+A branch is a fresh headless world, built by the source's setup and restored
+from one of its snapshots, that steps without touching the live world or its
+views (harness spec §7.2, SPEC §7.5). Systems are closures, so this is how a
+world is "cloned": run the same setup again.
+
+```ts
+type WorldSetup<T = void> = (world: World) => T   // registers types/systems/plugins; spawns nothing
+function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, options?: BranchOptions):
+  Result<{ readonly world: World; readonly setup: T }, BranchError>
+function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>
+
+interface BranchOptions {
+  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (snapshots carry it only with a backlog)
+  readonly seed?: number | RngState   // only matters for a v2 `from` (no rngRoot)
+  readonly scale?: number             // the source's time.scale (not snapshotted); default 1
+}
+type BranchError =
+  | { kind: 'restore_failed'; cause: SerializedError }   // restore threw (never thrown)
+  | { kind: 'once_systems'; names: readonly string[] }   // once systems due on the first step and from.tick > 0
+
+interface RunBranchOptions {
+  readonly steps: number
+  readonly dt?: number | null         // per step; null = stepOnce(); default time.fixedStep
+  readonly log?: ActLog               // frames applied at matching ticks (they override dt)
+  readonly probes?: Readonly<Record<string, (world: World) => JsonValue>>   // read-only
+  readonly sampleEvery?: number       // default 1 when probes are given
+  readonly keyframeEvery?: number     // snapshot({ pendingEvents: true }) every k steps
+  readonly hashEvery?: number         // strict hash every k steps
+  readonly until?: (world: World) => boolean   // checked after each step
+  readonly shouldStop?: () => boolean          // polled before each step
+}
+interface BranchRun {
+  readonly ticks: number              // steps taken by this call
+  readonly stoppedBy: 'steps' | 'until' | 'cancelled'
+  readonly samples: ReadonlyArray<{ tick: number; values: Readonly<Record<string, JsonValue>> }>
+  readonly keyframes: ReadonlyArray<{ tick: number; snapshot: WorldSnapshot }>
+  readonly hashes: ReadonlyArray<{ tick: number; hash: string }>
+  readonly faults: readonly SystemicFault[]    // signals.faultRaised during this call
+  readonly finalHash: string                   // strict
+}
+```
+
+`createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
+`setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. Pass the
+source's `time.fixedStep` and `time.scale`: a snapshot carries `fixedStep`
+only when it owes fixed steps, and never the scale. For a paused source pass
+the scale it resumes to and `pause()` the branch (`scale: 0` resumes to 1).
+A throw from
+`setup` is a bug and propagates; a throw from `restore` is `restore_failed`.
+If `setup` registers a `once` system that would run on the branch's first step
+and `from.tick > 0`, the branch would run it while the source already had, so
+it is `once_systems`. It is checked after the restore, so an `enabled` gate
+that reads snapshotted state (boot work marked done) is accepted. Take
+`from` with `snapshot({ pendingEvents: true })` and without snapshot-rewriting
+plugins, and register the same systems in the same order as the source:
+nothing can check that.
+
+`runBranch` steps the world it is given (call it again to extend a branch).
+Every count — `sampleEvery`, `keyframeEvery`, `hashEvery` — is of this call's
+steps, and probes are always sampled after the final step too, whatever
+stopped the run, so the horizon value is always there. A `log` frame whose
+`tick` is the current tick is applied with replay's frame code (its acts,
+input, scale and dt); other steps use `dt`. A branch that starts after the
+log's first frame (from a keyframe) first takes the input of the latest
+earlier frame; its scale is the one passed to `createBranch`. Log errors are `ReplayError`
+values. Probes must be read-only: at the first sample of each call a probe
+that changed the strict hash throws, naming it. The call is synchronous: run
+it in a worker and cancel with `shouldStop`.
+
+```ts doctest name=branch-and-compare
+import { strict as assert } from 'node:assert'
+import {
+  createBranch,
+  createWorld,
+  defineComponent,
+  defineEvent,
+  entry,
+  hashSnapshot,
+  runBranch,
+  type World,
+} from '@domecs/core'
+
+const Pop = defineComponent<{ n: number; rate: number }>('BcPop', { defaults: { n: 0, rate: 0 } })
+const Boost = defineEvent<{ by: number }>('BcBoost', { schema: { fields: { by: { kind: 'number' } } } })
+
+// The one setup the live world and every branch share. It spawns nothing.
+function setup(w: World): void {
+  w.register(Boost)
+  w.system('grow', { query: [Pop] }, (ctx) => {
+    for (const e of ctx.entities) {
+      e.BcPop!.n += e.BcPop!.rate * ctx.time.scaledDelta
+      ctx.world.markChanged(e.id, Pop)
+    }
+  })
+  w.system('boost', { schedule: 'event', triggers: [Boost] }, (ctx) => {
+    for (const id of ctx.world.listEntities([Pop])) {
+      for (const b of ctx.events.of(Boost)) ctx.world.getComponent(id, Pop)!.rate += b.by
+      ctx.world.markChanged(id, Pop)
+    }
+  })
+}
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+
+const live = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+setup(live)
+const id = live.spawn([entry(Pop, { n: 10, rate: 6 })])
+for (let i = 0; i < 30; i++) live.step(1 / 60)
+const from = live.snapshot({ pendingEvents: true })
+
+// Branch A carries on as is; branch B gets a boost at tick 40 from a log.
+const probes = { n: (w: World) => w.getComponent(w.listEntities([Pop])[0]!, Pop)!.n }
+const a = createBranch(setup, from)
+const b = createBranch(setup, from)
+if (!a.ok || !b.ok) throw new Error('branch failed')
+const runA = runBranch(a.value.world, { steps: 60, probes, sampleEvery: 25 })
+const runB = runBranch(b.value.world, {
+  steps: 60,
+  probes,
+  sampleEvery: 25,
+  log: {
+    format: 'domecs-actlog', version: 1, startTick: 30, fixedStep: 1 / 60, startScale: 1, baseHash: '',
+    frames: [{ tick: 40, dt: 1 / 60, acts: [{ event: 'BcBoost', payload: { by: 60 }, via: 'action' }] }],
+  },
+})
+if (!runA.ok || !runB.ok) throw new Error('run failed')
+// Samples after steps 25 and 50 of the call, and always after the last one.
+assert.deepEqual(runA.value.samples.map((s) => s.tick), [55, 80, 90])
+assert.ok((runB.value.samples[2]!.values.n as number) > (runA.value.samples[2]!.values.n as number))
+
+// Branches never touched the live world, and branch A is exactly its future.
+assert.equal(live.time.tick, 30)
+for (let i = 0; i < 60; i++) live.step(1 / 60)
+assert.equal(runA.value.finalHash, strict(live))
+assert.equal(live.getComponent(id, Pop)!.n, runA.value.samples[2]!.values.n)
+
+// Stop on a condition; the stopping tick is sampled.
+const c = createBranch(setup, from)
+if (!c.ok) throw new Error('branch failed')
+const runC = runBranch(c.value.world, { steps: 1000, probes, sampleEvery: 1000, until: (w) => w.time.tick === 42 })
+assert.ok(runC.ok && runC.value.stoppedBy === 'until' && runC.value.ticks === 12)
+assert.ok(runC.ok && runC.value.samples.length === 1 && runC.value.samples[0]!.tick === 42)
+
+// A once system would re-run in the branch: refused, not thrown.
+const d = createBranch((w) => { setup(w); w.system('boot', { schedule: 'once' }, () => {}) }, from)
+assert.deepEqual(d, { ok: false, error: { kind: 'once_systems', names: ['boot'] } })
+```
 
 ---
 
@@ -1129,8 +2156,9 @@ function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 ```
 
 **Snapshot history (undo/redo).** `createSnapshotHistory` is an in-memory
-undo/redo ring over `WorldSnapshot`s; `diffSnapshots` is an entity-level diff
-between two snapshots.
+undo/redo ring over `WorldSnapshot`s; `diffSnapshots` diffs two snapshots —
+entity-level by default, field-level with `{ fields: true }` — and
+`firstDivergence` finds the first difference in canonical order.
 
 ```ts
 function createSnapshotHistory(world: World, opts?: SnapshotHistoryOptions): SnapshotHistory
@@ -1156,13 +2184,80 @@ interface SnapshotHistory {
   load(json: string): Result<void, DomecsError>
 }
 
-function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot): SnapshotDiff
+function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot, options?: SnapshotDiffOptions): SnapshotDiff
+
+interface SnapshotDiffOptions {
+  readonly fields?: boolean                 // report components/fields/resources; default false
+  readonly components?: readonly string[]   // restrict field reporting to these components
+  readonly epsilon?: number                 // numbers within epsilon are equal; default 0 (exact, -0 ≠ 0)
+  readonly limit?: number                   // stop after this many field changes; default 10_000, Infinity = none
+}
 
 interface SnapshotDiff {
   readonly addedEntities:   readonly Entity[]
   readonly removedEntities: readonly Entity[]
-  readonly changedEntities: readonly Entity[]
+  readonly changedEntities: readonly Entity[]  // compared as data: key order ignored
+  // fields: true only ↓ (ascending entity id, sorted component name, sorted key)
+  readonly componentsAdded?:   ReadonlyArray<{ entity: Entity; component: string }>
+  readonly componentsRemoved?: ReadonlyArray<{ entity: Entity; component: string }>
+  readonly fieldChanges?:      readonly FieldChange[]
+  readonly resourceChanges?:   readonly ResourceChange[]  // a resource on one side only: path ""
+  readonly truncated?:         boolean                    // limit cut reporting short
 }
+
+interface FieldChange {
+  readonly entity: Entity
+  readonly component: string
+  readonly path: string                     // "x", "inv.items[2].qty", '["a-b"]'; "" = whole value
+  readonly before: JsonValue | undefined    // undefined = absent
+  readonly after:  JsonValue | undefined
+}
+interface ResourceChange { readonly resource: string; readonly path: string; readonly before: JsonValue | undefined; readonly after: JsonValue | undefined }
+
+/** First difference: state (seed, tick, scaledTime, nextId, rngRoot, rngStreams,
+ *  fixedBacklog, pendingEvents), then the lowest entity id, then resources. null when equal.
+ *  version, meta and changes are not compared. */
+function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null
+
+type Divergence =
+  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' | 'pendingEvents' }
+  | { where: 'entity'; entity: Entity; change: 'added' | 'removed' | FieldChange }
+  | { where: 'resource'; change: ResourceChange }
+```
+
+Arrays compare element-wise; a length change is reported as added (`before:
+undefined`) or removed (`after: undefined`) tail elements. `changedEntities`
+switched from `JSON.stringify` to data comparison in 2.1, so key-order-only
+differences are no longer reported (**behaviour change**, narrowing).
+
+```ts doctest name=diff-fields
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { diffSnapshots, firstDivergence } from '@domecs/persist'
+
+const Body = defineComponent<{ x: number; inv: number[] }>('DfBody', { defaults: { x: 0, inv: [] } })
+const w = createWorld({ headless: true })
+const a = w.spawn([entry(Body, { x: 1, inv: [1, 2] })])
+const b = w.spawn([entry(Body, { x: 2, inv: [] })])
+const before = w.snapshot()
+w.getComponent(b, Body)!.x = 5
+w.getComponent(b, Body)!.inv.push(9)
+w.markChanged(b, Body)
+const after = w.snapshot()
+
+const d = diffSnapshots(before, after, { fields: true })
+assert.deepEqual(d.changedEntities, [b])
+assert.deepEqual(d.fieldChanges, [
+  { entity: b, component: 'DfBody', path: 'inv[0]', before: undefined, after: 9 },
+  { entity: b, component: 'DfBody', path: 'x', before: 2, after: 5 },
+])
+assert.deepEqual(firstDivergence(before, after), {
+  where: 'entity',
+  entity: b,
+  change: { entity: b, component: 'DfBody', path: 'inv[0]', before: undefined, after: 9 },
+})
+assert.equal(firstDivergence(before, before), null)
+assert.ok(a < b)
 ```
 
 ---
@@ -1237,6 +2332,742 @@ interface InspectorSnapshot {
   readonly entityScoped: InspectorEntry[]
   readonly timeline:     TimelineEvent[]
 }
+```
+
+---
+
+## `@domecs/scene`
+
+Hierarchy (`Parent`, `setParent`, `childrenOf`, `ancestorsOf`, `rootsOf`,
+`despawnTree`, `installHierarchy`) and `composeTransforms` are documented in
+the package README. This section covers the spatial index, contacts and
+scenes.
+
+### Spatial index
+
+`createSpatialHash(world, options)` indexes one position component over the
+core grid (2.2; O-8; SPEC §2.12).
+
+```ts
+function createSpatialHash(world: World, options: SpatialHashOptions): SpatialIndex   // RangeError on a bad cellSize
+
+interface SpatialHashOptions {
+  readonly component: ComponentType<any>
+  readonly x?: string          // default 'x'
+  readonly y?: string          // default 'y'
+  readonly cellSize: number    // performance only; never changes results
+}
+
+interface SpatialIndex {
+  refresh(): void   // rebuild from the component's current values (O(n), ascending id)
+  within(x: number, y: number, r: number, filter?: readonly ComponentType<any>[]): Entity[]
+  nearest(x: number, y: number, options?: { maxDistance?: number; filter?: readonly ComponentType<any>[]; exclude?: Entity }): Entity | undefined
+  pairs(r: number, a: ComponentType<any>, b: ComponentType<any>): Array<[Entity, Entity]>
+  dispose(): void   // later calls throw
+}
+```
+
+- Positions are those read at the last `refresh()`; the index refreshes
+  once when created. Call `refresh()` once per step before querying, for
+  example at the start of the system that queries. A field that is not a
+  finite number is not indexed.
+- `filter` lists components the entity must **all** hold. It is read live
+  (`world.has`) at query time, so tag changes need no refresh.
+- `pairs(r, a, b)`: the first element holds `a`, the second `b`. For
+  `a !== b` every such ordered pair is listed (an entity with both tags can
+  appear on either side); for `a === b`, first < second. Sorted by
+  `(first, second)`.
+- Never snapshotted; building or querying an index leaves `hashSnapshot`
+  unchanged. After `restore()`, call `refresh()`.
+
+```ts doctest name=spatial-index
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { createSpatialHash } from '@domecs/scene'
+
+const Pos = defineComponent<{ x: number; y: number }>('SiPos', { defaults: { x: 0, y: 0 } })
+const Prey = defineComponent<{ alert: boolean }>('SiPrey', { defaults: { alert: false } })
+const Hunter = defineComponent<{ hunger: number }>('SiHunter', { defaults: { hunger: 0 } })
+
+const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const rabbit = world.spawn([entry(Pos, { x: 0, y: 0 }), entry(Prey, { alert: false })])
+const fox = world.spawn([entry(Pos, { x: 3, y: 4 }), entry(Hunter, { hunger: 5 })])
+const deer = world.spawn([entry(Pos, { x: 40, y: 0 }), entry(Prey, { alert: false })])
+
+const before = hashSnapshot(world.snapshot(), { includeChanges: true })
+const index = createSpatialHash(world, { component: Pos, cellSize: 8 })
+
+world.system('spot', { schedule: 'tick', query: [Hunter, Pos] }, ({ entities }) => {
+  index.refresh() // positions as of this step
+  for (const h of entities) {
+    const at = world.getComponent(h.id, Pos)!
+    const prey = index.nearest(at.x, at.y, { filter: [Prey], maxDistance: 10 })
+    if (prey === undefined) continue
+    world.getComponent(prey, Prey)!.alert = true
+    world.markChanged(prey, Prey)
+  }
+})
+
+assert.deepEqual(index.within(0, 0, 5), [rabbit, fox])
+assert.deepEqual(index.within(0, 0, 100, [Prey]), [rabbit, deer])
+assert.equal(index.nearest(0, 0, { exclude: rabbit }), fox)
+assert.deepEqual(index.pairs(5, Hunter, Prey), [[fox, rabbit]])
+assert.equal(hashSnapshot(world.snapshot(), { includeChanges: true }), before) // derived state
+
+world.stepOnce()
+assert.equal(world.getComponent(rabbit, Prey)!.alert, true)
+assert.equal(world.getComponent(deer, Prey)!.alert, false)
+
+// moves show after refresh()
+world.getComponent(deer, Pos)!.x = 2
+world.markChanged(deer, Pos)
+index.refresh()
+assert.deepEqual(index.within(0, 0, 5, [Prey]), [rabbit, deer])
+```
+
+### Contacts
+
+`installContacts(options)` emits `Contact` events when tagged colliders
+start, keep or stop overlapping (2.3; O-85; SPEC §2.12), for rules and event
+systems.
+
+```ts
+function installContacts(options: ContactsOptions): Plugin   // RangeError / TypeError on bad options
+
+interface ContactsOptions {
+  readonly position: { readonly component: ComponentType<any>; readonly x?: string; readonly y?: string }
+  readonly radius: number | { readonly component: ComponentType<any>; readonly field: string }
+  readonly pairs: ReadonlyArray<readonly [ComponentType<any>, ComponentType<any>]>   // non-empty
+  readonly stay?: boolean               // emit 'stay' each run while overlapping; default false
+  readonly schedule?: 'fixed' | 'tick'  // default 'fixed'
+  readonly priority?: number            // default 150 (contacts band)
+  readonly cellSize?: number            // default 2 × a fixed radius, else 64; performance only
+  readonly name?: string                // default 'domecs-scene:contacts'
+}
+
+const Contact: EventType<ContactPayload>            // schema { a: number, b: number, phase: enum }
+interface ContactPayload { readonly a: Entity; readonly b: Entity; readonly phase: ContactPhase }
+type ContactPhase = 'begin' | 'stay' | 'end'
+const ContactState: ResourceType<ContactStateValue, 'ContactState'>
+interface ContactStateValue { pairs: Array<[Entity, Entity]> }   // last run's pairs, sorted by (a, b)
+```
+
+- **Overlap:** `dx * dx + dy * dy <= (ra + rb) * (ra + rb)` between
+  colliders: entities with the position component, a finite position, a
+  radius (finite, ≥ 0; with a field, read live) and a tag of `pairs`.
+- **Pairs:** `a` holds the pair's first tag, `b` its second; same-tag pairs
+  have `a < b`; an entity holding both tags can appear on either side; a pair
+  found through two tag pairs counts once.
+- **Order:** each run diffs the sorted pairs against `ContactState` and emits
+  `end`, then `begin`, then (with `stay`) `stay`, each sorted by `(a, b)`.
+  Delivery is next tick (bus semantics). A despawned entity ends its pairs
+  once.
+- **Snapshots:** `ContactState` is an ordinary resource, so restore continues
+  `begin`/`end` exactly (live == fork); take forks with
+  `snapshot({ pendingEvents: true })` to keep contacts in flight. Results
+  never depend on `cellSize`.
+- `installContacts` registers `Contact` and `ContactState` (rules resolve
+  `on: 'Contact'` through `world.lookupEvent`); one contacts plugin per world
+  (a second `use` throws).
+
+```ts doctest name=scene-contacts
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { Contact, ContactState, installContacts } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('CoPos', { defaults: { x: 0, y: 0 } })
+const Vel = defineComponent<{ vx: number }>('CoVel', { defaults: { vx: 0 } })
+const Player = defineComponent<{ hp: number }>('CoPlayer', { defaults: { hp: 10 } })
+const Spike = defineComponent<{ dmg: number }>('CoSpike', { defaults: { dmg: 3 } })
+const types = [Pos, Vel, Player, Spike]
+
+function build() {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  world.system('move', { schedule: 'fixed', query: [Pos, Vel] }, ({ entities }) => {
+    for (const { id } of entities) {
+      world.getComponent(id, Pos)!.x += world.getComponent(id, Vel)!.vx
+      world.markChanged(id, Pos)
+    }
+  })
+  world.use(installContacts({ position: { component: Pos }, radius: 1, pairs: [[Player, Spike]] }))
+  const log: string[] = []
+  world.system('log', { schedule: 'event', triggers: [Contact] }, ({ events }) => {
+    for (const c of events.of(Contact)) log.push(`${c.phase} ${c.a}-${c.b}`)
+  })
+  const errors = installRules(world, [], (name) => types.find((t) => t.name === name)).update([{
+    name: 'spikeHurts', schedule: 'event', on: 'Contact', self: 'event.a', other: 'event.b',
+    query: ['CoPlayer'], when: "event.phase == 'begin'",
+    actions: [{ set: 'CoPlayer.hp', expr: 'CoPlayer.hp - other.CoSpike.dmg' }],
+  }])
+  assert.equal(errors.size, 0)
+  return { world, log }
+}
+
+const live = build()
+const hero = live.world.spawn([entry(Pos, { x: 0, y: 0 }), entry(Vel, { vx: 1 }), entry(Player, { hp: 10 })])
+const spike = live.world.spawn([entry(Pos, { x: 5, y: 0 }), entry(Spike, { dmg: 3 })])
+const step = (w: typeof live.world) => w.step(w.time.fixedStep) // contacts run on the fixed schedule
+
+for (let i = 0; i < 3; i++) step(live.world) // hero reaches x = 3: touching (3 + 2 = 5)
+assert.deepEqual(live.world.getResource(ContactState)!.pairs, [[hero, spike]])
+assert.deepEqual(live.log, []) // emitted this step, delivered next tick
+
+// Fork with the begin still in flight: it continues exactly like the live world.
+const fork = build()
+fork.world.restore(live.world.snapshot({ pendingEvents: true }))
+for (let i = 0; i < 6; i++) {
+  step(live.world)
+  step(fork.world)
+}
+assert.deepEqual(live.log, [`begin ${hero}-${spike}`, `end ${hero}-${spike}`])
+assert.deepEqual(fork.log, live.log)
+assert.equal(live.world.getComponent(hero, Player)!.hp, 7)
+const strict = (w: typeof live.world) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork.world), strict(live.world))
+```
+
+### Scenes
+
+`instantiateScene` spawns a scene given as plain data, mapping its authored
+keys to live ids; `unloadScene` removes it again (2.3; O-13 partly; SPEC
+§7.6). A "goto level" command is an event rule that records the request plus
+a host call after the step; there is no scene rule effect.
+
+```ts
+const SceneMember: ComponentType<{ scene: string; key: string }, 'SceneMember'>   // schema'd, persistent
+
+interface SceneEntityData {
+  readonly key: string                                     // unique in the scene
+  readonly components: Readonly<Record<string, Readonly<Record<string, unknown>>>>   // name → fields
+  readonly parent?: string | null                          // a key in the same scene
+}
+interface SceneData { readonly name: string; readonly entities: readonly SceneEntityData[] }
+interface SceneProblem { readonly path: string; readonly message: string }   // e.g. 'entities[2].parent'
+interface InstantiateSceneOptions {
+  readonly resolve: (name: string) => ComponentType<any> | undefined
+  readonly refFields?: ReadonlyArray<readonly [component: string, field: string]>   // key → live id
+}
+interface InstantiateSceneResult { readonly ids: ReadonlyMap<string, Entity>; readonly problems: readonly SceneProblem[] }
+
+function instantiateScene(world: World, data: SceneData, options: InstantiateSceneOptions): InstantiateSceneResult
+function unloadScene(world: World, name: string): number     // entities removed
+function sceneEntities(world: World, name: string): Entity[] // members, ascending id
+```
+
+- **Order:** spawn in array order (equal data on equal worlds → equal ids),
+  then `setParent` by key, then `refFields` (a string key in a listed field
+  becomes the live id and the component is marked changed; `null` and
+  numbers are left alone).
+- **Values:** each component is its defaults plus the given fields (a
+  plain-data copy, built with `create`), plus `SceneMember { scene, key }`.
+- **Problems, never throws** (only a bad `data`/`options` shape is a
+  `TypeError`): an unknown component, fields that are not an object or that
+  `validate` rejects (it runs before the `refFields` remap, so it sees the
+  authored key), a type whose name another type holds in the world,
+  `Parent` or `SceneMember` given as a component (links come only from
+  `parent` keys) → that component is skipped and the entity still spawns; a
+  duplicate key → the entity spawns as `key#2` (`#3`, …; a suffix never
+  takes a key authored elsewhere in the data, and keys in the data name the
+  first holder); a missing parent key, a self-parent or a cycle → the entity stays
+  a root; an unknown `refFields` key → the field is left unchanged.
+- **Unload:** `despawnTree` over the member roots (members whose parent is
+  not a member) in ascending id, so non-member descendants go too and
+  ancestors outside the scene stay. A scene name instantiated twice unloads
+  as one.
+- **Snapshots:** `SceneMember` and `Parent` are ordinary components, so
+  scenes survive snapshot/restore, saves and replay. Host-driven swaps
+  between steps are out-of-tick changes: an act-log recorder notes them as
+  gaps (SPEC §7.5).
+
+```ts doctest name=scene-goto-level
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, hashSnapshot, type World } from '@domecs/core'
+import { instantiateScene, sceneEntities, unloadScene, type SceneData } from '@domecs/scene'
+import { installRules } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('LvPos', { defaults: { x: 0, y: 0 } })
+const Chase = defineComponent<{ target: number | string | null }>('LvChase', { defaults: { target: null } })
+const Level = defineComponent<{ current: string; requested: string }>('LvLevel', {
+  defaults: { current: '', requested: '' },
+})
+const GotoScene = defineEvent<{ scene: string }>('LvGotoScene', {
+  schema: { fields: { scene: { kind: 'string', description: 'Scene to load' } } },
+})
+const types = [Pos, Chase, Level]
+const resolve = (name: string) => types.find((t) => t.name === name)
+
+const scenes: Record<string, SceneData> = {
+  town: {
+    name: 'town',
+    entities: [
+      { key: 'hero', components: { LvPos: { x: 1 } } },
+      { key: 'dog', components: { LvPos: {}, LvChase: { target: 'hero' } }, parent: 'hero' },
+    ],
+  },
+  cave: { name: 'cave', entities: [{ key: 'bat', components: { LvPos: { y: 3 }, Bogus: {} } }] },
+}
+
+function build(): World {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  assert.ok(world.register(GotoScene, ...types).ok) // restore resolves pending events by name
+  const errors = installRules(world, [], resolve).update([{
+    name: 'goto', schedule: 'event', on: 'LvGotoScene', priority: 1000, query: ['LvLevel'],
+    actions: [{ set: 'LvLevel.requested', expr: 'event.scene' }],
+  }])
+  assert.equal(errors.size, 0)
+  return world
+}
+
+/** The host, after each step: swap scenes when the rule recorded a request. */
+function swap(world: World): string[] {
+  const [level] = [...world.iterEntitiesWith(Level)]
+  const { current, requested } = level!.value
+  if (requested === current) return []
+  if (current) unloadScene(world, current)
+  const { problems } = instantiateScene(world, scenes[requested]!, { resolve, refFields: [['LvChase', 'target']] })
+  level!.value.current = requested
+  world.markChanged(level!.id, Level)
+  return problems.map((p) => `${p.path}: ${p.message}`)
+}
+
+const live = build()
+live.spawn([entry(Level, { current: '', requested: 'town' })])
+assert.deepEqual(swap(live), [])
+const [hero, dog] = sceneEntities(live, 'town')
+assert.deepEqual(live.getComponent(dog!, Chase), { target: hero }) // key remapped to the live id
+
+live.emit(GotoScene, { scene: 'cave' })
+// Fork with the command in flight: it continues exactly like the live world.
+const fork = build()
+fork.restore(live.snapshot({ pendingEvents: true }))
+const reports: string[][] = []
+for (const world of [live, fork]) {
+  world.stepOnce() // the rule records the request
+  reports.push(swap(world)) // the host swaps scenes
+}
+assert.deepEqual(reports[0], ['entities[0].components.Bogus: unknown component "Bogus"; skipped'])
+assert.deepEqual(sceneEntities(live, 'town'), [])
+assert.equal(sceneEntities(live, 'cave').length, 1)
+const strict = (w: World) => hashSnapshot(w.snapshot({ pendingEvents: true }), { includeChanges: true })
+assert.equal(strict(fork), strict(live))
+assert.equal(unloadScene(live, 'cave'), 1)
+```
+
+---
+
+## `@domecs/rules`
+
+Data-defined rules (`RuleDef`: `query`, `without`, `when`, `actions`, and
+from 2.3 `on`/`self`/`other` and `effects`) compiled and installed as
+systems named `rule:<name>`. The language is specified in SPEC Appendix A
+(tutorial: the package README); this section covers installation, ordering,
+the 2.2 cross-entity forms and the 2.3 event rules and effects.
+
+```ts
+function installRules(
+  world: World,
+  defs: RuleDef[],
+  resolve: (name: string) => ComponentType<any> | undefined,
+  options?: InstallRulesOptions,
+): RulesHandle   // throws on an unknown `order` or `rng`, or an `orderBase` that is not finite or exceeds ±2^51
+
+interface InstallRulesOptions {
+  // 'registration' (default, 2.0 behaviour): rules tie-break by registration
+  // index, so update() moves every rule after the equal-priority systems
+  // registered before it.
+  // 'stable': rule i of the de-duplicated defs registers with
+  // `order: orderBase + i`; its run position depends only on
+  // (priority, defs order). A def that fails to compile keeps its index.
+  readonly order?: 'registration' | 'stable'
+  readonly orderBase?: number   // first order key in 'stable' mode; default 1; |orderBase| <= 2^51
+  // Stream mode for every rule without its own RuleDef.rng (2.1). 'shared'
+  // (default): random() draws world.rand. 'own': each rule draws its own
+  // stream, keyed rule:<name> (SPEC §2.8), so editing one rule never changes
+  // another's draws, and update() re-registration resumes the stream.
+  readonly rng?: 'shared' | 'own'
+  // Position source for nearest / countWithin / distanceTo (2.2); required
+  // if any rule uses them. Throws unless { component, x?, y?, cellSize? }
+  // with non-empty names and a finite cellSize > 0 (default 32).
+  readonly spatial?: SpatialOption
+  // Event types by name for event rules' `on` and `emit` effects (2.3).
+  // Default world.lookupEvent: register() the events before update().
+  readonly resolveEvent?: (name: string) => EventType<unknown> | undefined
+  // Prefab bags by name for `spawn` effects (2.3): called when a rule
+  // compiles (unknown prefab: RuleError { effect: i, part: 'spawn' }) and
+  // once per spawn; entry values are plain-data cloned.
+  readonly prefabs?: (name: string) => ComponentBag | undefined
+}
+
+interface SpatialOption {
+  readonly component: string   // the position component
+  readonly x?: string          // default 'x'
+  readonly y?: string          // default 'y'
+  readonly cellSize?: number   // grid cell size: performance only, results never depend on it
+}
+
+// RuleDef gains (2.1): rng?: 'shared' | 'own' — overrides the install default
+// for that rule; any other value is a RuleError on field 'rng'.
+// RuleDef gains (2.2): without?: string[] — components that exclude an entity
+// (And(...Has(query), ...Not(Has(without)))); an unknown name is a RuleError
+// on field { without: i }.
+
+// RuleDef gains (2.3): schedule 'event'; on?: string (the trigger's name);
+// self?: string / other?: string (expressions giving entity ids, e.g.
+// 'event.target'); effects?: RuleEffectDef[].
+type RuleEffectDef =
+  | { emit: string; payload?: Record<string, string> }                  // field -> expr
+  | { spawn: string; at?: { x: string; y: string }; set?: Record<string, string> }  // 'Component.field' -> expr
+  | { despawn: 'self' | 'other' }
+  | { add: string; to?: 'self' | 'other'; set?: Record<string, string> } // field -> expr
+  | { remove: string; from?: 'self' | 'other' }
+
+// compileRule gains an optional third argument (2.2; resolveEvent and
+// prefabs in 2.3 — compileRule has no default resolver):
+function compileRule(def: RuleDef, resolve: (name: string) => ComponentType<any> | undefined,
+  options?: { spatial?: SpatialOption; resolveEvent?: (name: string) => EventType<unknown> | undefined;
+    prefabs?: (name: string) => ComponentBag | undefined }): { rule: CompiledRule; errors: [] } | { rule: null; errors: RuleError[] }
+
+interface RulesHandle {
+  update(defs: RuleDef[]): Map<string, RuleError[]>   // replace the rule set
+  uninstall(): void
+}
+
+interface RuleError {
+  rule: string
+  position: number        // offset within the part named by `field`, or -1
+  message: string
+  field?: RuleDefPath     // set on every error from compileRule / update() (2.1)
+}
+
+// Which part of a RuleDef an error is about. Later minors add members:
+// keep a default branch.
+type RuleDefPath =
+  | 'name' | 'schedule' | 'priority' | 'rng' | 'when'
+  | 'on' | 'self' | 'other'                           // 2.3
+  | { readonly query: number }
+  | { readonly without: number }                      // 2.2
+  | { readonly action: number; readonly part: 'set' | 'expr' }
+  | { readonly effect: number; readonly part: string } // 2.3: 'emit', 'payload.<f>', 'spawn', 'at', 'at.x', 'set.<key>', 'to', ...
+```
+
+**Ordering.** Systems run by (priority, `order`, registration index) — SPEC
+§3. In `'stable'` mode an equal-priority system left at the default `order`
+0 runs before every rule, and rules run in defs order however many times
+`update()` ran, so a live world and a fresh world built from the current
+defs and restored from the live snapshot stay hash-equal. Use one stable
+handle per world, or give each its own `orderBase` range. Keep rule
+priorities strictly between −100 (commands, input) and 100 (derived
+transforms such as `composeTransforms({ priority: 100 })`); the full band
+table is in SPEC §3.
+
+```ts doctest name=rules-stable-order
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { installRules, type RuleDef } from '@domecs/rules'
+
+const P = defineComponent<{ x: number }>('RoP', { defaults: { x: 0 } })
+const W = defineComponent<{ x: number }>('RoW', { defaults: { x: 0 } })
+const defs: RuleDef[] = [
+  { name: 'inc', schedule: 'tick', query: ['RoP'], actions: [{ set: 'RoP.x', expr: 'RoP.x + 1' }] },
+]
+
+function build(order: 'registration' | 'stable', update: boolean): string {
+  const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  w.spawn([entry(P, { x: 0 }), entry(W, { x: 0 })])
+  const rules = installRules(w, defs, (n) => (n === 'RoP' ? P : undefined), { order })
+  w.system('copy', { query: [P, W] }, ({ entities }) => {
+    for (const e of entities) {
+      w.getComponent(e.id, W)!.x = w.getComponent(e.id, P)!.x
+      w.markChanged(e.id, W)
+    }
+  })
+  if (update) rules.update(defs) // re-registers every rule
+  for (let i = 0; i < 5; i++) w.stepOnce()
+  return hashSnapshot(w.snapshot(), { includeChanges: true })
+}
+
+// 'registration': a no-op update() moves the rule after `copy`.
+assert.notEqual(build('registration', true), build('registration', false))
+// 'stable': position is a function of the defs, not of update() history.
+assert.equal(build('stable', true), build('stable', false))
+// order is validated at registration.
+assert.throws(() => createWorld({ headless: true }).system('s', { order: NaN }, () => {}), /order/)
+```
+
+**Cross-entity forms (2.2; SPEC Appendix A).** Selectors `self`,
+`first(S)`, `nearest(S[, d])`, `entity(n)` read another entity's fields
+(`first(Player).Pos.x`, `nearest(Coin).id`); `has([e,] C)`, `count(S)`,
+`exists(S)`, `sum`/`avg`/`minOf`/`maxOf(S, C.f)`, `countWithin(S, r[, e])`
+and `distanceTo(e)` work over sets (a set `S` is the holders of component
+`S`). `a ?? b` takes `b` when `a` has no value (a missing field, an empty
+selector, a dead `entity(n)`, an empty `avg`); type errors still fault.
+New functions: `sqrt pow atan2 hypot sign round ceil lerp distance` (`pow`,
+`atan2`, `hypot` via `dmath`), and the identifier `tick`. Reads are live and
+entities run in ascending id, so an entity sees the writes lower ids made in
+the same run. `self`, `tick`, `other`, `event` and `pointer` are reserved
+words, and `walkComponentRefs(ast, visit)` visits every component name
+(reads, sets, `has` targets) for tools that rename components.
+`walkFieldRefs(ast, visit)` visits only the evaluated entity's own field
+reads (`C.f`, `self.C.f`, also inside the forms' expression arguments).
+Both pass `pos`, the AST node position (the component token for `C.f`, the
+`self` token for `self.C.f`, the entity's start for `e.C.f`, the form's name
+for sets, aggregates and `has`), and, as their last argument (2.3),
+`namePos`: the visited name's own token on every form. A tool that renames
+by splicing writes the new name at `namePos`.
+
+```ts doctest name=rules-cross-entity
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry } from '@domecs/core'
+import { installRules, parseExpression, walkComponentRefs, walkFieldRefs, type RuleDef } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('XrPos', { defaults: { x: 0, y: 0 } })
+const Player = defineComponent<Record<string, never>>('XrPlayer', { defaults: {} })
+const Enemy = defineComponent<{ near: number }>('XrEnemy', { defaults: { near: 0 } })
+const types = new Map([Pos, Player, Enemy].map((t) => [t.name, t]))
+
+const defs: RuleDef[] = [
+  {
+    // Enemies close 10% of the gap to the player each tick and count the
+    // other enemies within 5 units.
+    name: 'chase', schedule: 'tick', query: ['XrEnemy', 'XrPos'], without: ['XrPlayer'],
+    actions: [
+      { set: 'XrPos.x', expr: 'XrPos.x + (first(XrPlayer).XrPos.x - XrPos.x) * 0.1 ?? XrPos.x' },
+      { set: 'XrEnemy.near', expr: 'countWithin(XrEnemy, 5)' },
+    ],
+  },
+]
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+const errors = installRules(w, [], (n) => types.get(n), { spatial: { component: 'XrPos' } }).update(defs)
+assert.equal(errors.size, 0)
+w.spawn([entry(Player, {}), entry(Pos, { x: 100, y: 0 })])
+const a = w.spawn([entry(Enemy, { near: 0 }), entry(Pos, { x: 0, y: 0 })])
+w.spawn([entry(Enemy, { near: 0 }), entry(Pos, { x: 3, y: 4 })])
+w.stepOnce()
+assert.equal(w.getComponent(a, Pos)!.x, 10)
+assert.equal(w.getComponent(a, Enemy)!.near, 1) // the other enemy, 5 away (inclusive)
+
+// Spatial forms need the spatial option: otherwise the rule does not compile.
+const bad = installRules(createWorld({ headless: true }), defs, (n) => types.get(n))
+assert.deepEqual(bad.update(defs).get('chase')![0]!.field, { action: 1, part: 'expr' })
+
+// Every component name, with its role:
+const parsed = parseExpression('first(XrPlayer).XrPos.x - XrPos.x')
+assert.ok('ast' in parsed)
+const seen: string[] = []
+walkComponentRefs(parsed.ast, (c, f, _pos, role) => seen.push(`${role}:${c}${f ? '.' + f : ''}`))
+assert.deepEqual(seen, ['set:XrPlayer', 'member:XrPos.x', 'self:XrPos.x'])
+
+// Only the evaluated entity's own reads, with their positions:
+const own: string[] = []
+walkFieldRefs(parsed.ast, (c, f, pos) => own.push(`${c}.${f}@${pos}`))
+assert.deepEqual(own, ['XrPos.x@26'])
+// `pos` is the node position (`self.C.f` reports the `self` token);
+// `namePos` is the component token itself.
+const selfRead = parseExpression('1 + self.XrPos.x')
+assert.ok('ast' in selfRead)
+const selfPos: Array<[number, number]> = []
+walkFieldRefs(selfRead.ast, (_c, _f, pos, namePos) => selfPos.push([pos, namePos]))
+assert.deepEqual(selfPos, [[4, 9]]) // 'self.XrPos.x' starts at 4; the component at 9
+
+// Rename by splicing at every name position, right to left:
+const src = 'has(first(XrPlayer), XrPos) + sum(XrEnemy, XrPos.x) + self.XrPos.y'
+const named = parseExpression(src)
+assert.ok('ast' in named)
+const at: number[] = []
+walkComponentRefs(named.ast, (c, _f, _pos, _role, namePos) => { if (c === 'XrPos') at.push(namePos) })
+let renamed = src
+for (const p of at.sort((x, y) => y - x)) renamed = renamed.slice(0, p) + 'XrPlace' + renamed.slice(p + 'XrPos'.length)
+assert.equal(renamed, 'has(first(XrPlayer), XrPlace) + sum(XrEnemy, XrPlace.x) + self.XrPlace.y')
+```
+
+**World expressions (2.2; §5.3).** `compileWorldExpression(source, resolve,
+options?)` → `{ expression: WorldExpression, errors: [] }` or
+`{ expression: null, errors: RuleError[] }` compiles an expression with no
+evaluated entity (a metric or probe). Bare `Component.field`, `self`,
+`has(C)`, `countWithin(S, r)` without a centre, `distanceTo`, `nearest`, `dt`
+and `random()` are compile errors at their position (`rule: '<expr>'`);
+read through `first(S)` / `entity(n)` instead. `time` is
+`world.time.elapsed`, `tick` is `world.time.tick`. `expression.evaluate(world)`
+returns `Result<number | string | boolean, RuleFault>`: it is read-only (no
+RNG draw, no change windows, no registration of a type no entity holds),
+so the strict snapshot hash and `describe().componentCounts` are unchanged,
+and a no-value read without `??` or a non-finite result (`0 / 0`) is
+`err({ kind: 'rule_eval_failed', rule: '<expr>', message })`.
+
+```ts doctest name=rules-world-expression
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, hashSnapshot } from '@domecs/core'
+import { compileWorldExpression } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('WeDocPos', { defaults: { x: 0, y: 0 } })
+const Player = defineComponent<Record<string, never>>('WeDocPlayer', { defaults: {} })
+const Enemy = defineComponent<{ hp: number }>('WeDocEnemy', { defaults: { hp: 1 } })
+const types = new Map([Pos, Player, Enemy].map((t) => [t.name, t]))
+const resolve = (n: string) => types.get(n)
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+w.spawn([entry(Player, {}), entry(Pos, { x: 0, y: 0 })])
+w.spawn([entry(Enemy, { hp: 3 }), entry(Pos, { x: 3, y: 4 })])
+w.spawn([entry(Enemy, { hp: 5 }), entry(Pos, { x: 30, y: 0 })])
+
+const near = compileWorldExpression('countWithin(WeDocEnemy, 10, first(WeDocPlayer))', resolve, {
+  spatial: { component: 'WeDocPos' },
+})
+assert.ok(near.expression)
+const before = hashSnapshot(w.snapshot({}), { includeChanges: true })
+assert.deepEqual(near.expression.evaluate(w), { ok: true, value: 1 })
+assert.equal(hashSnapshot(w.snapshot({}), { includeChanges: true }), before) // read-only
+
+const total = compileWorldExpression('sum(WeDocEnemy, WeDocEnemy.hp) + tick', resolve)
+assert.deepEqual(total.expression!.evaluate(w), { ok: true, value: 8 })
+
+// No value without ?? is an error value; ?? supplies a fallback.
+const missing = compileWorldExpression('first(WeDocEnemy).WeDocPos.z', resolve).expression!
+assert.equal(missing.evaluate(w).ok, false)
+const fallback = compileWorldExpression('first(WeDocEnemy).WeDocPos.z ?? -1', resolve).expression!
+assert.deepEqual(fallback.evaluate(w), { ok: true, value: -1 })
+
+// No evaluated entity, and no randomness: rejected with positions.
+const bad = compileWorldExpression('WeDocEnemy.hp + random()', resolve)
+assert.equal(bad.expression, null)
+assert.deepEqual(bad.errors.map((e) => e.position), [0, 16])
+```
+
+**Input in rules (2.2; §5.4).** Rules read the tick's `world.input`:
+`key(n)` (held, `keys`), `pressed(n)` / `released(n)` (edges, `keyDelta`),
+`mod(n)` (`'ctrl' | 'alt' | 'shift' | 'meta'`) and
+`pointer.x|y|buttons|wheel`. The argument is any string expression (`key(Bind.up)`).
+`pressed`, `released` and `pointer.wheel` in a `fixed` rule are compile
+errors (edges last one render tick), and every input form is a compile error
+in a world expression. Input is not part of the snapshot: install the same
+`setInput` snapshots before the same steps to reproduce a run.
+
+```ts doctest name=rules-input
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, entry, type InputSnapshot } from '@domecs/core'
+import { compileRule, compileWorldExpression, installRules, type RuleDef } from '@domecs/rules'
+
+const Ship = defineComponent<{ vx: number; shots: number }>('InDocShip', { defaults: { vx: 0, shots: 0 } })
+const resolve = (n: string) => (n === 'InDocShip' ? Ship : undefined)
+
+const input = (keys: string[], pressed: string[] = []): InputSnapshot => ({
+  keys: new Set(keys),
+  keyDelta: { pressed: new Set(pressed), released: new Set() },
+  mods: { ctrl: false, alt: false, shift: false, meta: false },
+  pointer: { x: 0, y: 0, buttons: 0, delta: { x: 0, y: 0 }, wheel: 0, entered: [] },
+  gamepads: [],
+  focus: { activeTag: '', consumesKeys: false },
+})
+
+const steer: RuleDef = {
+  name: 'steer', schedule: 'tick', query: ['InDocShip'],
+  actions: [
+    { set: 'InDocShip.vx', expr: '(key("ArrowRight") ? 1 : 0) - (key("ArrowLeft") ? 1 : 0)' },
+    { set: 'InDocShip.shots', expr: 'InDocShip.shots + (pressed("Space") ? 1 : 0)' },
+  ],
+}
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+assert.equal(installRules(w, [], resolve).update([steer]).size, 0)
+const ship = w.spawn([entry(Ship, { vx: 0, shots: 0 })])
+
+w.setInput(input(['ArrowRight', 'Space'], ['Space']))
+w.stepOnce()
+assert.deepEqual(w.getComponent(ship, Ship), { vx: 1, shots: 1 })
+w.setInput(input(['Space'])) // still held, no new edge
+w.stepOnce()
+assert.deepEqual(w.getComponent(ship, Ship), { vx: 0, shots: 1 })
+
+// Edges in a fixed rule, and input in a metric, are compile errors.
+const fixed = compileRule({ ...steer, schedule: 'fixed' }, resolve)
+assert.deepEqual(fixed.errors.map((e) => e.field), [{ action: 1, part: 'expr' }])
+assert.equal(compileWorldExpression('key("Space") ? 1 : 0', resolve).expression, null)
+```
+
+**Event rules and effects (2.3; §6.1).** `schedule: 'event'` with `on: '<event
+name>'` registers a core event system triggered by that event (so
+`describe()` lists it as a command). For each payload delivered this tick, in
+emission order: with `self: 'event.target'` the rule runs for that entity
+(dead, or not matching `query`/`without`: a silent no-op; no value or not an
+integer: a systemic `rule_eval_failed` fault, so write `event.target ?? -1`
+to skip silently); without `self` it runs for every `query` match in
+ascending id (broadcast), or once with no entity when `query` is empty
+(world scope, where `set` actions and evaluated-entity reads are compile
+errors). `event.f` reads the payload (a missing field is no value; with a
+schema, an undeclared field is a compile error); `other` is the entity the
+`other` binding gives (dead: no value). `effects` (`emit`, `spawn`,
+`despawn`, `add`, `remove`) are queued per entity only when `when` held and
+every action succeeded, evaluated then (they see the entity's staged
+writes), and applied at the end of the rule's run in queue order. An
+`emit` is validated with `validateEventPayload` when applied (invalid: a
+fault on the queuing entity, or a systemic one if that entity was despawned
+earlier in the apply) and delivered **next tick**; a despawn is
+deferred, so later entities in the run still read the entity; spawn ids
+follow apply order. Forks taken with `snapshot({ pendingEvents: true })`
+between an emit and its delivery deliver it too.
+
+```ts doctest name=rules-event-effects
+import { strict as assert } from 'node:assert'
+import { createWorld, defineComponent, defineEvent, entry, type ComponentBag } from '@domecs/core'
+import { compileRule, installRules, type RuleDef } from '@domecs/rules'
+
+const Pos = defineComponent<{ x: number; y: number }>('EfDocPos', { defaults: { x: 0, y: 0 } })
+const Hp = defineComponent<{ hp: number }>('EfDocHp', { defaults: { hp: 3 } })
+const Spark = defineComponent<{ from: number }>('EfDocSpark', { defaults: { from: -1 } })
+const types = new Map([Pos, Hp, Spark].map((t) => [t.name, t]))
+const resolve = (n: string) => types.get(n)
+
+// An agent-facing command declares a schema, so act()/action() validate it.
+const Hit = defineEvent<{ target: number; amount: number }>('EfDocHit', {
+  schema: { fields: { target: { kind: 'number' }, amount: { kind: 'number' } } },
+  description: 'Damage one entity',
+})
+const Died = defineEvent<{ who: number }>('EfDocDied', { schema: { fields: { who: { kind: 'number' } } } })
+
+const defs: RuleDef[] = [
+  { // The command hits only its target, and leaves a spark there.
+    name: 'hit', schedule: 'event', on: 'EfDocHit', self: 'event.target', query: ['EfDocHp'],
+    actions: [{ set: 'EfDocHp.hp', expr: 'EfDocHp.hp - event.amount' }],
+    effects: [{ spawn: 'spark', at: { x: 'EfDocPos.x', y: 'EfDocPos.y' }, set: { 'EfDocSpark.from': 'self.id' } }],
+  },
+  { // Polling: the dead announce it and go.
+    name: 'die', schedule: 'tick', query: ['EfDocHp'], when: 'EfDocHp.hp <= 0', actions: [],
+    effects: [{ emit: 'EfDocDied', payload: { who: 'self.id' } }, { despawn: 'self' }],
+  },
+  { // Broadcast: every spark of the dead entity goes too.
+    name: 'sweep', schedule: 'event', on: 'EfDocDied', query: ['EfDocSpark'],
+    when: 'EfDocSpark.from == event.who', actions: [], effects: [{ despawn: 'self' }],
+  },
+]
+const prefabs = (name: string): ComponentBag | undefined =>
+  name === 'spark' ? [entry(Spark, { from: -1 }), entry(Pos, { x: 0, y: 0 })] : undefined
+
+const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+assert.equal(w.register(Hit, Died).ok, true) // `on` / `emit` resolve through world.lookupEvent
+const rules = installRules(w, [], resolve, { prefabs, spatial: { component: 'EfDocPos' } })
+assert.equal(rules.update(defs).size, 0)
+const a = w.spawn([entry(Hp, { hp: 3 }), entry(Pos, { x: 5, y: 1 })])
+const b = w.spawn([entry(Hp, { hp: 3 }), entry(Pos, { x: 9, y: 9 })])
+
+assert.equal(w.action(Hit, { target: a, amount: 3 }).accepted, true)
+assert.equal(w.getComponent(a, Hp)!.hp, 0)
+assert.equal(w.getComponent(b, Hp)!.hp, 3) // only the target
+const [spark] = w.listEntities([Spark])
+assert.deepEqual(w.getComponent(spark!, Pos), { x: 5, y: 1 })
+assert.equal(w.getComponent(spark!, Spark)!.from, a)
+
+w.stepOnce() // `die` emits Died (delivered next tick) and despawns a
+assert.equal(w.isAlive(a), false)
+assert.deepEqual(w.pendingEvents().map((e) => e.payload), [{ who: a }])
+w.stepOnce() // `sweep` runs on the delivered Died
+assert.deepEqual(w.listEntities([Spark]), [])
+
+// A malformed command is rejected before it runs; rule errors name the part.
+assert.equal(w.action(Hit, { target: b, amont: 1 } as never).accepted, false)
+const bad = compileRule({ ...defs[0]!, effects: [{ spawn: 'rocket' }] }, resolve, {
+  prefabs, resolveEvent: (n) => w.lookupEvent(n),
+})
+assert.deepEqual(bad.errors.map((e) => e.field), [{ effect: 0, part: 'spawn' }])
 ```
 
 ---

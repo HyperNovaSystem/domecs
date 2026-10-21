@@ -1,7 +1,9 @@
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
 import { normalize, treeHas, type EntityView, type QueryDef, type QueryNode, type QueryResult } from './query.js'
+import type { JsonValue } from './result.js'
 import type { Rng } from './rng.js'
+import { cloneSerializable } from './snapshot.js'
 import type { TimeState } from './time.js'
 // Type-only import breaks the scheduler<->world value cycle (TYPE_EVAL §3.1).
 import type { World } from './world.js'
@@ -15,8 +17,35 @@ export type SystemSchedule = 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
 interface SystemDefBase<Fields = Record<string, unknown>, State = unknown> {
   query?: QueryDef
   priority?: number
+  /**
+   * Secondary sort key within a priority (default 0; finite). Run order in a
+   * mode is priority, then order, then registration index. Lets a library
+   * place its systems deterministically regardless of when they were
+   * (re)registered (SPEC §3; O-76).
+   */
+  order?: number
   enabled?: () => boolean
   state?: State
+  /**
+   * JSON-safe annotation surfaced (cloned) in `describe().systems[i].meta`
+   * for tools and agents — e.g. `@domecs/rules` sets `{ rule: name }`.
+   * Cloned at registration; the runtime never reads it. A value JSON cannot
+   * carry (function, `undefined`, non-finite number, class instance, cycle)
+   * makes `world.system()` throw `TypeError`.
+   */
+  meta?: JsonValue
+  /**
+   * Which generator `ctx.rand` is (§4.4; SPEC §2.8).
+   * 'shared' (default): `ctx.rand` is `world.rand`, so every system's draws
+   * depend on every other system's.
+   * 'own': `ctx.rand` is this system's stream, keyed by its cursor key (its
+   * name, or `name#k` on a clash) and derived from the world's root seed —
+   * independent of registration time and of every other system's draws. The
+   * stream outlives the system (re-registering under the key resumes it) and
+   * travels in the snapshot (`rngStreams`). Calling `world.rand` directly
+   * still draws the shared stream. Any other value throws at `world.system()`.
+   */
+  rng?: 'shared' | 'own'
   /**
    * Erased Fields phantom — keeps a structural slot for the inferred field
    * shape so callers can ascribe it explicitly when needed. The runtime
@@ -126,6 +155,18 @@ export interface CompiledSystem {
   pendingFn?: System
   schedule: SystemSchedule
   priority: number
+  /** Secondary sort key within a priority (default 0). */
+  order: number
+  /** Sorted names of the components its query / reactsTo reference (manifest). */
+  components: string[]
+  /** Clone of `def.meta` taken at registration (manifest). */
+  meta?: JsonValue
+  /** `def.rng ?? 'shared'` (manifest). */
+  rng: 'shared' | 'own'
+  /** For `rng: 'own'`: the stream key, fixed at registration (§4.4). */
+  rngKey?: string
+  /** For `rng: 'own'`: the stream `ctx.rand` is; the world's map holds it. */
+  ownRand?: Rng
   enabled: boolean
   state: unknown
   query?: QueryResult
@@ -174,7 +215,11 @@ export interface Scheduler {
 }
 
 function comparator(a: CompiledSystem, b: CompiledSystem): number {
-  return a.priority - b.priority || a.registrationIndex - b.registrationIndex
+  return (
+    a.priority - b.priority ||
+    a.order - b.order ||
+    a.registrationIndex - b.registrationIndex
+  )
 }
 
 const CHANGE_KINDS: ReadonlySet<QueryNode['kind']> = new Set([
@@ -190,11 +235,14 @@ const REMOVED_KIND: ReadonlySet<QueryNode['kind']> = new Set(['removed'])
  *   is the system's (O-42).
  * @param initialSeen the change-log stamp a newly registered system's
  *   window starts after.
+ * @param claimStream the own stream (§4.4) a system registering now under
+ *   `name` with `rng: 'own'` draws from, and its key.
  */
 export function createScheduler(
   makeQuery: (def: QueryDef, owner: CompiledSystem) => QueryResult,
   fixedStep: number,
   initialSeen: (name: string) => number,
+  claimStream: (name: string) => { key: string; rng: Rng },
 ): Scheduler {
   const systems: CompiledSystem[] = []
   // name -> live handle, so getHandle(name) hands back the SAME object whose
@@ -231,6 +279,32 @@ export function createScheduler(
     register(name, def, fn): SystemHandle {
       const schedule = def.schedule ?? 'tick'
       const priority = def.priority ?? 0
+      const order = def.order ?? 0
+      if (typeof order !== 'number' || !Number.isFinite(order)) {
+        throw new Error(
+          `domecs: system "${name}" order=${String(order)} must be a finite number (SPEC §3 ordering: priority, then order, then registration index).`,
+        )
+      }
+
+      if (def.meta !== undefined) {
+        // §4.5: meta is a JSON-safe annotation for the plain-data manifest.
+        // Refuse what JSON cannot carry before any state changes (like a
+        // non-finite order) rather than leak a function / NaN into
+        // describe() or overflow the stack cloning a cycle.
+        const problem = jsonProblem(def.meta, 'meta', [])
+        if (problem !== null) {
+          throw new TypeError(
+            `domecs: system "${name}" ${problem}; meta must be JSON-safe (null, boolean, finite number, string, array, plain object).`,
+          )
+        }
+      }
+
+      const rngMode = def.rng ?? 'shared'
+      if (rngMode !== 'shared' && rngMode !== 'own') {
+        throw new Error(
+          `domecs: system "${name}" rng=${JSON.stringify(rngMode)} must be 'shared' or 'own' (SPEC §2.8 per-system streams).`,
+        )
+      }
 
       if (def.schedule === 'reactive') {
         // defensive — unrepresentable in TS, retained for untyped JS callers
@@ -275,6 +349,10 @@ export function createScheduler(
         fn,
         schedule,
         priority,
+        order,
+        components: referencedComponentNames(nodes),
+        ...(def.meta !== undefined ? { meta: cloneSerializable(def.meta) } : {}),
+        rng: rngMode,
         enabled: true,
         state: def.state,
         fixedDivisor,
@@ -289,6 +367,13 @@ export function createScheduler(
       }
       if (def.query) compiled.query = makeQuery(def.query, compiled)
       if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo, compiled)
+      if (rngMode === 'own') {
+        // Claimed last, once nothing can throw, so a failed registration
+        // leaves no stream entry behind.
+        const { key, rng } = claimStream(name)
+        compiled.rngKey = key
+        compiled.ownRand = rng
+      }
 
       systems.push(compiled)
       addToMode(compiled)
@@ -347,5 +432,70 @@ export function createScheduler(
         delete s.pendingFn
       }
     },
+  }
+}
+
+/**
+ * Sorted, de-duplicated names of every component a query tree references —
+ * `Has`, `Where`, `OnAdded`, `OnRemoved`, `OnChanged` leaves, `Not` branches
+ * included (a `Not(Dead)` system still depends on `Dead`). Resource leaves
+ * are not components and are skipped. For `describe().systems` (§4.5).
+ */
+function referencedComponentNames(nodes: readonly QueryNode[]): string[] {
+  const out = new Set<string>()
+  const walk = (n: QueryNode): void => {
+    if (n.kind === 'and' || n.kind === 'or') n.children.forEach(walk)
+    else if (n.kind === 'not') walk(n.child)
+    else if (n.kind !== 'changedResource') out.add(n.type.name)
+  }
+  nodes.forEach(walk)
+  return Array.from(out).sort()
+}
+
+/**
+ * `null` when `value` is a JSON value (null, boolean, finite number, string,
+ * dense array, plain or null-prototype object, acyclic), otherwise a short
+ * description of the first offending location (`path`). `ancestors` holds the
+ * containers on the current branch, so a shared but acyclic reference passes.
+ */
+function jsonProblem(value: unknown, path: string, ancestors: object[]): string | null {
+  if (value === null) return null
+  switch (typeof value) {
+    case 'boolean':
+    case 'string':
+      return null
+    case 'number':
+      return Number.isFinite(value) ? null : `${path} is ${String(value)}`
+    case 'object':
+      break
+    case 'undefined':
+      return `${path} is undefined`
+    default:
+      return `${path} is a ${typeof value}`
+  }
+  const obj = value as object
+  if (ancestors.includes(obj)) return `${path} is a cyclic reference`
+  ancestors.push(obj)
+  try {
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const at = `${path}[${i}]`
+        if (!(i in obj)) return `${at} is a hole`
+        const p = jsonProblem(obj[i], at, ancestors)
+        if (p !== null) return p
+      }
+      return null
+    }
+    const proto = Object.getPrototypeOf(obj)
+    if (proto !== Object.prototype && proto !== null) {
+      return `${path} is not a plain object`
+    }
+    for (const key of Object.keys(obj)) {
+      const p = jsonProblem((obj as Record<string, unknown>)[key], `${path}.${key}`, ancestors)
+      if (p !== null) return p
+    }
+    return null
+  } finally {
+    ancestors.pop()
   }
 }

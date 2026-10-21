@@ -33,6 +33,8 @@ export interface ComponentFieldData {
   options?: (string | number)[]
   label?: string
   readonly?: boolean
+  /** Free-text meaning of the field (`FieldSchema.description`); round-trips, never dropped. */
+  description?: string
 }
 
 /** The persisted, document-embeddable form of a `ComponentType` + its `ComponentDescriptor`. */
@@ -68,6 +70,7 @@ export function serializeComponentType(
     if (field.options !== undefined) data.options = field.options.slice()
     if (field.label !== undefined) data.label = field.label
     if (field.readonly !== undefined) data.readonly = field.readonly
+    if (field.description !== undefined) data.description = field.description
     fields.push(data)
   }
 
@@ -95,7 +98,8 @@ export function serializeComponentType(
  *   that entry or field (O-63).
  * - A field named `__proto__`, or repeating an earlier field's name, is
  *   skipped; a `default` that does not fit the field's kind (or enum
- *   `options`) is dropped, keeping the field.
+ *   `options`), or a `description` that is not a string, is dropped,
+ *   keeping the field.
  */
 export function registerComponentTypes(
   data: ComponentTypeData[],
@@ -170,6 +174,11 @@ export function registerComponentTypes(
         ...(field.options !== undefined ? { options: field.options.slice() } : {}),
         ...(field.label !== undefined ? { label: field.label } : {}),
         ...(field.readonly !== undefined ? { readonly: field.readonly } : {}),
+        ...(typeof field.description === 'string' ? { description: field.description } : {}),
+      }
+      if (field.description !== undefined && typeof field.description !== 'string') {
+        // The field stays; only the description is dropped.
+        problems.push({ path: `${fieldPath}.description`, message: 'description must be a string' })
       }
       fields[field.name] = fieldSchema
       if (field.default !== undefined) {

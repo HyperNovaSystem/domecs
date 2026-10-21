@@ -177,8 +177,8 @@ describe('ChangedResource — live query (review #16)', () => {
 })
 
 describe('snapshot.resources — round-trip (review #16)', () => {
-  it('SNAPSHOT_VERSION is 2', () => {
-    expect(SNAPSHOT_VERSION).toBe(2)
+  it('SNAPSHOT_VERSION is 3 (v2 added resources; v3 rngRoot/rngStreams/pendingEvents)', () => {
+    expect(SNAPSHOT_VERSION).toBe(3)
   })
 
   it('snapshot captures set resources and restore rehydrates them', () => {
@@ -189,7 +189,7 @@ describe('snapshot.resources — round-trip (review #16)', () => {
     w.setResource(Phase, { name: 'combat' })
 
     const snap = w.snapshot()
-    expect(snap.version).toBe(2)
+    expect(snap.version).toBe(3)
     expect(snap.resources?.Score).toBe(42)
     expect(snap.resources?.Phase).toEqual({ name: 'combat' })
 

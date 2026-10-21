@@ -1,6 +1,6 @@
 {
   "name": "@domecs/rules",
-  "version": "2.0.0",
+  "version": "2.3.0",
   "description": "DOMECS rules: a small, safe, data-defined expression language and rule interpreter (M6).",
   "private": false,
   "license": "MIT",
@@ -42,6 +42,7 @@
   },
   "devDependencies": {
     "@domecs/core": "workspace:*",
+    "@domecs/scene": "workspace:*",
     "typescript": "^5.6.3",
     "vitest": "^2.1.9"
   }

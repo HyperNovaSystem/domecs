@@ -5,6 +5,8 @@ import {
   defineComponent,
   defineEvent,
   entry,
+  hashSnapshot,
+  type World,
 } from '../src/index.js'
 
 const Counter = defineComponent<{ n: number }>('AgentCounter', {
@@ -128,5 +130,208 @@ describe('createAgentBridge (WS-3)', () => {
     bridge.step() // first tick of the next episode
     expect(echoes).toBe(0)
     expect(world.getComponent(id, Counter)?.n).toBe(0)
+  })
+})
+
+// §4.5 (G10; O-78): name-based act resolves through world.lookupEvent.
+describe('AgentBridge.act(name, …)', () => {
+  const Hp = defineComponent<{ hp: number }>('ActHp', { defaults: { hp: 10 } })
+  const Damage = defineEvent<{ amount: number }>('Damage', {
+    schema: { fields: { amount: { kind: 'number' } } },
+  })
+  const Hurt = defineEvent<{ left: number }>('Hurt')
+
+  function setup(): { world: World; id: number } {
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    const id = world.spawn([entry(Hp, { hp: 10 })])
+    world.register(Damage, Hurt)
+    world.system('damage', { schedule: 'event', triggers: [Damage] }, ({ events, world: w }) => {
+      for (const d of events.of(Damage)) {
+        const c = w.getComponent(id, Hp)!
+        c.hp -= d.amount
+        w.markChanged(id, Hp)
+        events.emit(Hurt, { left: c.hp })
+      }
+    })
+    return { world, id }
+  }
+
+  it("act('Damage', …) behaves exactly like act(Damage, …)", () => {
+    const a = setup()
+    const b = setup()
+    const byType = createAgentBridge(a.world).act(Damage, { amount: 3 })
+    const byName = createAgentBridge(b.world).act('Damage', { amount: 3 })
+    expect(byName).toEqual(byType)
+    expect(byName.accepted).toBe(true)
+    expect(byName.events.map((e) => e.type)).toEqual([Hurt])
+    expect(b.world.getComponent(b.id, Hp)?.hp).toBe(7)
+    expect(hashSnapshot(b.world.snapshot(), { includeChanges: true })).toBe(
+      hashSnapshot(a.world.snapshot(), { includeChanges: true }),
+    )
+  })
+
+  it('applies schema rejection (O-39) through the name path', () => {
+    const a = setup()
+    const b = setup()
+    const byType = createAgentBridge(a.world).act(Damage, { amout: 3 } as never)
+    const byName = createAgentBridge(b.world).act('Damage', { amout: 3 })
+    expect(byName).toEqual(byType)
+    expect(byName.accepted).toBe(false)
+    expect(byName.reason).toMatch(/unknown field "amout"/)
+    expect(b.world.time.tick).toBe(0)
+  })
+
+  it('passes ActionOptions through', () => {
+    const { world } = setup()
+    const r = createAgentBridge(world).act('Damage', { amount: 1 }, { snapshot: true })
+    expect(r.snapshot).toBeDefined()
+  })
+
+  it('rejects an unknown name with no emit and no tick', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    const before = hashSnapshot(world.snapshot(), { includeChanges: true })
+    const r = bridge.act('Damag', { amount: 3 })
+    expect(r).toEqual({
+      accepted: false,
+      consumedTurn: false,
+      reason: expect.stringMatching(/unknown event "Damag"/),
+      events: [],
+    })
+    expect(world.time.tick).toBe(0)
+    expect(hashSnapshot(world.snapshot(), { includeChanges: true })).toBe(before)
+    bridge.step()
+    expect(world.getComponent(id, Hp)?.hp).toBe(10)
+  })
+
+  it('rejects an ambiguous name with no emit and no tick', () => {
+    const { world, id } = setup()
+    const Twin = defineEvent<{ amount: number }>('Damage')
+    world.on(Twin, () => {}) // a second known type named "Damage"
+    const bridge = createAgentBridge(world)
+    const r = bridge.act('Damage', { amount: 3 })
+    expect(r).toEqual({
+      accepted: false,
+      consumedTurn: false,
+      reason: expect.stringMatching(/ambiguous event name "Damage"/),
+      events: [],
+    })
+    expect(world.time.tick).toBe(0)
+    bridge.step()
+    expect(world.getComponent(id, Hp)?.hp).toBe(10)
+  })
+})
+
+// E17.2 (harness spec §6.4; O-89): reset({ scale, input }) — episode-boundary
+// hygiene for the host controls the snapshot does not carry.
+describe('AgentBridge.reset(options) (E17.2, O-89)', () => {
+  const Pos = defineComponent<{ x: number }>('ResetPos', { defaults: { x: 0 } })
+
+  function setup(): { world: World; id: number; boots: { n: number } } {
+    const world = createWorld({ headless: true, seed: [5, 6, 7, 8] })
+    const boots = { n: 0 }
+    world.system('boot', { schedule: 'once' }, () => {
+      boots.n++
+    })
+    // Moves right while ArrowRight is held; the step size follows time.scale.
+    world.system('walk', { schedule: 'tick' }, ({ world: w, time }) => {
+      if (!w.input.keys.has('ArrowRight')) return
+      for (const e of w.listEntities([Pos] as const)) {
+        w.getComponent(e, Pos)!.x += time.scale
+        w.markChanged(e, Pos)
+      }
+    })
+    const id = world.spawn([entry(Pos, { x: 0 })])
+    return { world, id, boots }
+  }
+
+  function holdRight(world: World): void {
+    const input = world.input
+    world.setInput({ ...input, keys: new Set(['ArrowRight']) })
+  }
+
+  it('reset({ scale, input: "empty" }) starts every episode from the same host state', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+
+    const episode = (): string => {
+      bridge.reset({ scale: 1, input: 'empty' })
+      expect(world.time.scale).toBe(1)
+      expect(world.input.keys.size).toBe(0)
+      bridge.step() // nothing held: no movement
+      expect(world.getComponent(id, Pos)?.x).toBe(0)
+      holdRight(world)
+      bridge.step()
+      return hashSnapshot(bridge.snapshot(), { includeChanges: true })
+    }
+
+    const first = episode()
+    // The first episode ends rescaled with ArrowRight still held …
+    world.setScale(3)
+    // … the second must not inherit either.
+    const second = episode()
+    expect(second).toBe(first)
+    expect(world.getComponent(id, Pos)?.x).toBe(1)
+
+    // An episode that ends paused resumes at the requested scale.
+    world.pause()
+    expect(episode()).toBe(first)
+  })
+
+  it('reset() with no options keeps scale and input (the 2.0 behaviour)', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    world.setScale(2)
+    holdRight(world)
+    bridge.reset()
+    expect(world.time.scale).toBe(2)
+    expect(world.input.keys.has('ArrowRight')).toBe(true)
+    bridge.reset({ input: 'keep' })
+    expect(world.input.keys.has('ArrowRight')).toBe(true)
+  })
+
+  it('reset({ scale: 0 }) pauses; a later scale resumes', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.reset({ scale: 0 })
+    expect(world.time.scale).toBe(0)
+    bridge.reset({ scale: 0.5 })
+    expect(world.time.scale).toBe(0.5)
+  })
+
+  it('reset({ scale: 0 }) keeps the resume target (setScale(0) semantics, documented)', () => {
+    const { world } = setup()
+    const bridge = createAgentBridge(world)
+    world.setScale(3)
+    bridge.reset({ scale: 0 })
+    expect(world.time.scale).toBe(0)
+    world.resume()
+    expect(world.time.scale).toBe(3)
+  })
+
+  it('rejects a bad scale or input option before restoring anything', () => {
+    const { world, id } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.captureBaseline()
+    world.getComponent(id, Pos)!.x = 42
+    world.markChanged(id, Pos)
+    expect(() => bridge.reset({ scale: -1 })).toThrow(/scale/)
+    expect(() => bridge.reset({ scale: Number.NaN })).toThrow(/scale/)
+    expect(() => bridge.reset({ input: 'clear' as never })).toThrow(TypeError)
+    expect(world.getComponent(id, Pos)?.x).toBe(42)
+  })
+
+  it('once systems do not re-run after reset()', () => {
+    const { world, boots } = setup()
+    const bridge = createAgentBridge(world)
+    bridge.step()
+    expect(boots.n).toBe(1)
+    bridge.captureBaseline()
+    bridge.reset({ scale: 1, input: 'empty' })
+    bridge.step()
+    bridge.reset()
+    bridge.step()
+    expect(boots.n).toBe(1)
   })
 })

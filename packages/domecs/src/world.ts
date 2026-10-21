@@ -1,10 +1,13 @@
-import { internal } from './component.js'
+import { internal, isComponentType } from './component.js'
+import { ACT_TAP, type ActTap, type ActTapListener, type ActVia } from './act-tap.js'
 import { createChangeLog, type MarkKind } from './change-log.js'
 import { createRafDriver } from './driver.js'
+import { isResourceType } from './resource.js'
 import { createResourceState } from './world-resources.js'
 import {
   applySnapshot,
   buildSnapshot,
+  resolvePendingEvents,
   validateSnapshot,
   type ArchetypeBucket,
   type CompiledQuery,
@@ -23,6 +26,7 @@ import {
   createEventBus,
   eventTag,
   internalEvent,
+  isEventType,
   validateEventPayload,
   type EmittedEvent,
   type EventBus,
@@ -38,10 +42,11 @@ import {
 import { byId, mergeSortedRuns, SortedIdSet } from './id-set.js'
 import { emptyInput, type InputSnapshot } from './input.js'
 import { createPluginRegistry, type Capability, type Plugin, type TickInfo } from './plugin.js'
-import { normalizeCause, toJsonValue, type Result } from './result.js'
-import { createRng, type Rng, type RngState } from './rng.js'
+import { err, normalizeCause, ok, toJsonValue, type Result } from './result.js'
+import { createRng, deriveStream, rewindRng, seedToState, type Rng, type RngState } from './rng.js'
 import {
   cloneSerializable,
+  setOwn,
   SNAPSHOT_VERSION,
   type SnapshotOptions,
   type WorldSnapshot,
@@ -116,6 +121,14 @@ const ARCH_YES: ArchMatch = 2
 // The manifest is a plain-data handoff: clone FieldSchema values so no
 // consumer holds references into the live component/event schema metadata
 // (mutating a manifest must never corrupt reflection world-wide).
+/** Short label for a bad {@link World.register} argument in its TypeError. */
+function describeValue(v: unknown): string {
+  if (v === null) return 'null'
+  if (typeof v !== 'object') return typeof v
+  const name = (v as { name?: unknown }).name
+  return typeof name === 'string' ? `an object named "${name}"` : 'an object'
+}
+
 function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
   const out: Record<string, FieldSchema> = {}
   for (const [key, value] of Object.entries(src)) out[key] = { ...value }
@@ -273,11 +286,55 @@ export interface World {
   /** Every resource type registered or touched in this world. */
   resourceTypes(): ResourceType<unknown>[]
   /**
+   * Every known event type — registered, emitted, subscribed to, or named as
+   * an event system's trigger — in first-seen order (parity with
+   * {@link componentTypes} / {@link resourceTypes}). A fresh array each call.
+   */
+  eventTypes(): EventType<unknown>[]
+  /**
+   * Eagerly register component, event and resource types so reflection
+   * (`componentTypes()`, `eventTypes()`, `resourceTypes()`, `describe()`) and
+   * the `lookup*` methods list them before first use (O-30, §4.5).
+   *
+   * Registering is idempotent and touches no state the snapshot carries: a
+   * resource's default is not materialized, no entity or event is created.
+   * Implicit discovery (spawn, emit, `on`, triggers, resource access) works as
+   * before; `register` is how to assert that a name is unique — an
+   * agent-facing command name must be.
+   *
+   * All-or-nothing: when any argument's name is already held by a different
+   * type of the same kind (or by another argument), nothing is registered and
+   * the first conflict is returned as `name_conflict`. Components, events and
+   * resources are separate namespaces. Throws `TypeError` for an argument that
+   * is not a type made by `defineComponent` / `defineEvent` / `defineResource`.
+   *
+   * (Resources are taken as `ResourceType<never>` so a `ResourceType<T>` of
+   * any `T` is accepted: its brand is contravariant in `T`.)
+   */
+  register(
+    ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+  ): Result<void, RegisterError>
+  /** The component type registered under `name` (eagerly or by first use), or `undefined`. */
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+  /**
+   * The known event type named `name`, or `undefined` when none is known, or
+   * when two distinct known event types share the name (F-8 lets them
+   * coexist; the name is then ambiguous).
+   */
+  lookupEvent(name: string): EventType<unknown> | undefined
+  /** The resource type registered under `name` (eagerly or by first use), or `undefined`. */
+  lookupResource(name: string): ResourceType<unknown> | undefined
+  /**
    * Iterate every live entity that currently holds component `type`, paired
    * with its value. Convenience over `world.query(Has(type))` + per-entity
    * `getComponent`; equivalent in semantics, cheaper at the call-site. F-10.
    */
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
+  /**
+   * The component types `entity` holds, sorted by name (2.3; before, in the
+   * order its archetype was first built). Despawn marks, `componentRemoved`
+   * and snapshot component keys follow the same order.
+   */
   archetype(entity: Entity): ComponentType<unknown>[]
   /**
    * Reflect a component's name, transient flag, default value, and field
@@ -347,9 +404,10 @@ export interface World {
   /**
    * Advance the world by `dt` seconds (real-time tick).
    * - `dt > 0` → normal real-time tick; time advances by `dt`.
-   * - `dt <= 0` → **heartbeat**: plugin hooks + render fire, but system
-   *   execution and change-detection buffer swap are skipped. Use for
-   *   lightweight UI repaints between turns (SPEC F-6).
+   * - `dt <= 0` → **heartbeat**: plugin hooks (`onTickStart`, `onRender`,
+   *   `onTickEnd`) and the `tickStart`/`tickEnd` signals fire, but system
+   *   execution and change-detection buffer swap are skipped (SPEC F-6). To
+   *   repaint without re-firing `tickStart`/`tickEnd`, use {@link render}.
    *
    * For the turn-based no-arg single advance, use {@link stepOnce}.
    */
@@ -366,6 +424,35 @@ export interface World {
    * `stepN(n, dt)` with a positive `dt`).
    */
   stepOnce(): void
+  /**
+   * Run the named enabled `tick`/`fixed` systems once now, in run order (the
+   * `fixed` phase, then `tick`; within each, priority, order, registration),
+   * without advancing time, flushing events, or firing tickStart/tickEnd
+   * (§6.3; O-88). Returns the names it ran (one entry per system run, so a
+   * name two systems share appears twice) and the names it skipped: unknown,
+   * disabled, or of another schedule (`event`, `reactive`, `once`).
+   *
+   * Use it only for **derived and transient** state the next tick recomputes
+   * anyway — e.g. priming `composeTransforms` output after `restore()`.
+   * `ctx.time` is the current time (`scaledDelta` is what the last tick left),
+   * `ctx.events` the current view; emits stay queued for the next tick.
+   * Tick systems run even while paused and a fixed `rateHz` divisor is not
+   * applied. A run is a normal run for change windows (O-42). Mutations are
+   * out of tick, so an attached act-log recorder notes an
+   * `out_of_tick_mutation` gap whenever a system runs. A throwing system
+   * propagates; the systems after it do not run. Throws `TypeError` unless
+   * `names` is an array of strings, and `Error` during a tick.
+   */
+  runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] }
+  /**
+   * Run plugin `onRender` hooks only, with heartbeat `TickInfo`
+   * (`{ heartbeat: true }`): no `tickStart`/`tickEnd` signals or plugin tick
+   * hooks, no systems, no change to `time` (§6.3; O-88). Advances renderer
+   * query windows as the heartbeat render does, so marks are painted once.
+   * Use it to redraw after a restore, scrub or branch selection without
+   * re-triggering `tickEnd` subscribers. Throws `Error` during a tick.
+   */
+  render(): void
   stepN(n: number, dt?: number): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
@@ -388,7 +475,26 @@ export interface World {
    */
   use<O>(plugin: Plugin<O>, options?: O): Result<() => void, DomecsError>
   capability<K extends string>(name: K): Capability<K>
+  /**
+   * The undelivered events — emitted this tick or between ticks, delivered
+   * at step 1 of the next tick — in bus order: by first emit of each type,
+   * then payload order within a type (§4.7). A fresh array each call; reading
+   * it consumes nothing. Lets a host report what an act produced without
+   * `action()`'s extra tick.
+   */
+  pendingEvents(): EmittedEvent[]
+  /**
+   * Serialize world state. With `{ pendingEvents: true }` the undelivered
+   * events travel too (§4.7), so a world restored from it delivers them on
+   * its next tick like the live one.
+   */
   snapshot(options?: SnapshotOptions): WorldSnapshot
+  /**
+   * Replace world state with `snap`. When `snap.pendingEvents` is present,
+   * each name resolves through {@link lookupEvent} before any state changes
+   * (unknown or ambiguous throws) and the queue becomes those events;
+   * otherwise the queue is abandoned (SPEC §7.1).
+   */
   restore(snap: WorldSnapshot): void
 }
 
@@ -491,6 +597,16 @@ export interface ActionResult {
 }
 
 
+/**
+ * Why {@link World.register} refused: `name` is already held, in `registry`,
+ * by a different type object (§4.5).
+ */
+export interface RegisterError {
+  readonly kind: 'name_conflict'
+  readonly registry: 'component' | 'event' | 'resource'
+  readonly name: string
+}
+
 export function createWorld(options: WorldOptions = {}): World {
   const seed = options.seed ?? 0
   const headless = options.headless === true
@@ -498,6 +614,15 @@ export function createWorld(options: WorldOptions = {}): World {
   const strictReturns = options.strictReturns === true
   const warnedSystems = new Set<number>()
   let rand = createRng(seed)
+  // §4.4: the root every own stream derives from — the createWorld seed,
+  // replaced by a restored snapshot's `rngRoot`; it never advances. A
+  // snapshot without one (v2) restores onto the createWorld root, so the
+  // outcome never depends on what the world restored before.
+  const createRoot: RngState = seedToState(seed)
+  let rngRoot: RngState = createRoot
+  // Every own stream this world has created, by stream key. An entry
+  // outlives its system: a re-registration under the key resumes it.
+  let streams = new Map<string, Rng>()
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
   let preResumeScale = 1
@@ -512,6 +637,26 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
+
+  // §7.1 (G4; O-80): the act-log tap (act-tap.ts). Listeners hear external
+  // emits, frame boundaries, out-of-tick mutations and restores.
+  const tapListeners = new Set<ActTapListener>()
+  // > 0 while a system or an `on` handler runs: replay reproduces their
+  // emits, so they are not external.
+  let reproducing = 0
+  // True only during a full (non-heartbeat) tick: a mutation outside one is
+  // a direct write a replay cannot reproduce.
+  let inFullTick = false
+  let emitVia: ActVia = 'emit'
+  // `tapListeners.size > 0`, kept as a plain boolean: the mutation hot paths
+  // (`markChanged` runs per entity per tick) test it before calling out, so
+  // a world with no recorder pays one field read (E13 bench: soak p50).
+  let tapAttached = false
+
+  function tapMutated(): void {
+    if (inFullTick) return
+    for (const l of tapListeners) l.mutated()
+  }
 
   // The event bus is decoupled from fault plumbing; it reports a throwing
   // direct on() subscriber back through this sink. Core owns the DomecsError
@@ -530,6 +675,9 @@ export function createWorld(options: WorldOptions = {}): World {
       recoverable: true,
     })
     sigFaultRaised.emit({ source: eventName, tick: time.tick, entry })
+  }, (type, payload) => {
+    if (tapListeners.size === 0 || reproducing > 0) return
+    for (const l of tapListeners) l.emitted(type, payload, emitVia)
   })
 
   const signals: WorldSignals = {
@@ -681,6 +829,23 @@ export function createWorld(options: WorldOptions = {}): World {
     setRand: (r) => {
       rand = r
     },
+    getRngRoot: () => rngRoot,
+    getStreams: () => streams,
+    getStreamOwners: () => {
+      let owners: Record<string, string> | undefined
+      for (const [sys, cursor] of cursorKeys()) {
+        if (sys.rngKey === undefined || sys.rngKey === cursor) continue
+        owners ??= {}
+        setOwn(owners, cursor, sys.rngKey)
+      }
+      return owners
+    },
+    ownStreamCursorKeys: () => {
+      const out: string[] = []
+      for (const [sys, cursor] of cursorKeys()) if (sys.rngKey !== undefined) out.push(cursor)
+      return out
+    },
+    restoreStreams: (root, rec, owners) => restoreStreams(root, rec, owners),
     getNextId: () => nextId,
     setNextId: (id) => {
       nextId = id
@@ -701,18 +866,22 @@ export function createWorld(options: WorldOptions = {}): World {
     const key = archetypeKeyFor(types)
     let bucket = archetypes.get(key)
     if (bucket) return bucket
-    bucket = { key, types, entities: new SortedIdSet(), addEdges: new Map(), removeEdges: new Map() }
+    // E18.1: the bucket keeps its names sorted, never in the order the first
+    // entity happened to gain them. Despawn marks, componentRemoved,
+    // archetype() and snapshot keys follow this order, so a world restored
+    // from canonicalJson text (sorted keys) records what the live one does.
+    bucket = {
+      key,
+      types: new Set(Array.from(types).sort()),
+      entities: new SortedIdSet(),
+      addEdges: new Map(),
+      removeEdges: new Map(),
+    }
     archetypes.set(key, bucket)
     for (const q of queries) evaluateQueryAgainstArchetype(q, bucket)
     return bucket
   }
 
-  /**
-   * The bucket an entity in `from` lands in when component `name` is added
-   * (or removed): followed through the transition edge, built once per
-   * (bucket, name, direction) instead of copying, sorting and stringifying
-   * the type set on every add/remove (WS-5 A1).
-   */
   function despawnInner(entity: Entity): void {
     const arch = entityArchetype.get(entity)
     if (arch) {
@@ -743,9 +912,16 @@ export function createWorld(options: WorldOptions = {}): World {
     alive.delete(entity)
     viewCache.delete(entity)
     sigEntityDespawned.emit(entity)
+    if (tapAttached) tapMutated()
     wakeDriver()
   }
 
+  /**
+   * The bucket an entity in `from` lands in when component `name` is added
+   * (or removed): followed through the transition edge, built once per
+   * (bucket, name, direction) instead of copying, sorting and stringifying
+   * the type set on every add/remove (WS-5 A1).
+   */
   function transition(from: ArchetypeBucket, name: string, adding: boolean): ArchetypeBucket {
     const edges = adding ? from.addEdges : from.removeEdges
     let to = edges.get(name)
@@ -989,6 +1165,79 @@ export function createWorld(options: WorldOptions = {}): World {
     return out
   }
 
+  /**
+   * §4.4: the own stream of a system registering now under `name`. Its key
+   * is the lowest of `name`, `name#1`, `name#2`, … that no live own-stream
+   * system holds — the cursor key (`name`, or `name#k` on a clash) whenever
+   * no earlier same-named system was removed — so no two live systems share
+   * a generator, and removing and re-registering a system while a
+   * same-named one stays live (two rules handles sharing a rule name, each
+   * `update()`) resumes the key it left. An existing entry is resumed;
+   * otherwise the stream is derived from the root.
+   */
+  function claimStream(name: string): { key: string; rng: Rng } {
+    const held = new Set<string>()
+    for (const sys of scheduler.all()) {
+      if (sys.rngKey !== undefined) held.add(sys.rngKey)
+    }
+    let key = name
+    for (let k = 1; held.has(key); k++) key = `${name}#${k}`
+    let rng = streams.get(key)
+    if (rng === undefined) {
+      rng = createRng(deriveStream(rngRoot, key))
+      streams.set(key, rng)
+    }
+    return { key, rng }
+  }
+
+  /**
+   * §4.4 restore: adopt the snapshot's root (absent: the createWorld root), replace the
+   * stream map with its streams (absent: empty), then re-derive from the
+   * root the stream of every registered own system whose key is missing.
+   * Live generators are rewound in place (O-46), so captured `ctx.rand`
+   * handles follow. Called after validation, so nothing here throws.
+   */
+  function restoreStreams(
+    root: RngState | undefined,
+    rec: Readonly<Record<string, RngState>> | undefined,
+    owners: Readonly<Record<string, string>> | undefined,
+  ): void {
+    rngRoot = root !== undefined ? seedToState(root) : createRoot
+    const prev = streams
+    const next = new Map<string, Rng>()
+    const held = new Map<string, Rng>()
+    // The snapshot says which stream each live system holds: its cursor
+    // key's, unless `owners` names another (a v2 or streamless snapshot names
+    // none). This world's own key history (which keys were free when each
+    // system registered, an earlier restore's owners) does not decide it, so
+    // a fresh identical world restoring the same snapshot draws the same.
+    const keys = cursorKeys()
+    for (const sys of scheduler.all()) {
+      if (sys.rngKey === undefined || sys.ownRand === undefined) continue
+      const cursor = keys.get(sys)!
+      sys.rngKey = owners !== undefined && Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
+      held.set(sys.rngKey, sys.ownRand)
+    }
+    // A generator a live system now holds under another key is not reused
+    // for its old key.
+    const live = new Set(held.values())
+    if (rec !== undefined) {
+      for (const key of Object.keys(rec)) {
+        const state = rec[key]!
+        const old = prev.get(key)
+        const rng = held.get(key) ?? (old !== undefined && !live.has(old) ? old : undefined)
+        if (rng !== undefined && rewindRng(rng, state)) next.set(key, rng)
+        else next.set(key, createRng(state))
+      }
+    }
+    for (const [key, rng] of held) {
+      if (next.has(key)) continue
+      rewindRng(rng, deriveStream(rngRoot, key))
+      next.set(key, rng)
+    }
+    streams = next
+  }
+
   /** The key a system registered now under `name` gets (see cursorKeys). */
   function nextCursorKey(name: string): string {
     let k = 0
@@ -1160,9 +1409,11 @@ export function createWorld(options: WorldOptions = {}): World {
     // and seenThrough moves past it when the run ends.
     s.runStart = changes.seq
     s.running = true
+    reproducing++
     try {
       runSystemBody(s, view)
     } finally {
+      reproducing--
       s.running = false
       s.seenThrough = changes.seq
     }
@@ -1178,7 +1429,7 @@ export function createWorld(options: WorldOptions = {}): World {
       input,
       events: view,
       world,
-      rand,
+      rand: s.ownRand ?? rand,
       state: s.state,
     }
     // `System` is declared as `() => void`; we shape-check for a returned
@@ -1302,6 +1553,11 @@ export function createWorld(options: WorldOptions = {}): World {
       return
     }
     const d = dt ?? 0
+    // §7.1: the scale on entry is the one this step's dt is scaled by,
+    // before any tickStart hook can change it.
+    if (tapListeners.size > 0) {
+      for (const l of tapListeners) l.frameEntered(time.tick, dt === undefined ? null : dt, time.scale)
+    }
 
     scheduler.applyPendingReplacements()
 
@@ -1330,74 +1586,93 @@ export function createWorld(options: WorldOptions = {}): World {
     time.tick += 1
 
     inTick = true
+    inFullTick = true
+    let completed = false
     try {
       // SPEC §9.4 — plugin onTickStart fires at step 0.
       plugins.callTickStart(world, FULL_TICK)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.frameStarted()
 
       // SPEC §4 step 1 — flush event buffer from last tick into readable view.
-      const eventView = bus.flush()
+      // Direct `on` handlers run inside the flush (their emits are reproduced).
+      reproducing++
+      let eventView: EventView
+      try {
+        eventView = bus.flush()
+      } finally {
+        reproducing--
+      }
       if (sigTickStart.size > 0) sigTickStart.emit(time)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.hooksDone()
 
       // SPEC §4 step 2 — input collection (stub in headless).
 
-      // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-      // F-3: drive from cumulative unquantized seconds; ms-rounding drift
-      // in per-tick scaledDelta does not entangle the scheduler.
-      if (time.scale !== 0) {
-        const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
-        while (clock.fixedStepsFired < expected) {
-          clock.fixedStepsFired += 1
-          clock.fixedStepCounter += 1
-          for (const s of scheduler.systemsByMode('fixed')) {
+      // Steps 3–6 are reproduced by a replay: emits made here, including
+      // from `enabled` gates and reactive `Where` predicates evaluated
+      // between systems, are not external acts.
+      reproducing++
+      try {
+        // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
+        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
+        // in per-tick scaledDelta does not entangle the scheduler.
+        if (time.scale !== 0) {
+          const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
+          while (clock.fixedStepsFired < expected) {
+            clock.fixedStepsFired += 1
+            clock.fixedStepCounter += 1
+            for (const s of scheduler.systemsByMode('fixed')) {
+              if (!isEnabled(s)) continue
+              if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
+              runSystem(s, eventView)
+            }
+          }
+        }
+        // Kept current even when a tickStart hook paused the world after time
+        // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
+        // and the accumulator reports them.
+        time.fixedAccumulator =
+          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
+
+        // SPEC §3 — `once` systems fire on first tick of world.
+        for (const s of scheduler.systemsByMode('once')) {
+          if (s.ranOnce || !isEnabled(s)) continue
+          runSystem(s, eventView)
+          s.ranOnce = true
+        }
+
+        // SPEC §4 step 4 — tick systems.
+        if (time.scale !== 0) {
+          for (const s of scheduler.systemsByMode('tick')) {
             if (!isEnabled(s)) continue
-            if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
             runSystem(s, eventView)
           }
         }
-      }
-      // Kept current even when a tickStart hook paused the world after time
-      // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
-      // and the accumulator reports them.
-      time.fixedAccumulator =
-        clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
 
-      // SPEC §3 — `once` systems fire on first tick of world.
-      for (const s of scheduler.systemsByMode('once')) {
-        if (s.ranOnce || !isEnabled(s)) continue
-        runSystem(s, eventView)
-        s.ranOnce = true
-      }
-
-      // SPEC §4 step 4 — tick systems.
-      if (time.scale !== 0) {
-        for (const s of scheduler.systemsByMode('tick')) {
+        // SPEC §4 step 5 — event systems for events in this tick's view.
+        for (const s of scheduler.systemsByMode('event')) {
           if (!isEnabled(s)) continue
+          if (!eventMatches(s, eventView)) continue
           runSystem(s, eventView)
         }
-      }
 
-      // SPEC §4 step 5 — event systems for events in this tick's view.
-      for (const s of scheduler.systemsByMode('event')) {
-        if (!isEnabled(s)) continue
-        if (!eventMatches(s, eventView)) continue
-        runSystem(s, eventView)
-      }
-
-      // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
-      for (const s of scheduler.systemsByMode('reactive')) {
-        if (!isEnabled(s) || !s.reactsTo) continue
-        // #16: a reactsTo with no structural entity dependency (no Has leaf)
-        // still fires when one of its ChangedResource targets changed —
-        // supports world-level resource reactions in entity-empty worlds
-        // where the structural member count is zero. Entity-scoped reactsTo
-        // (any Has leaf) is governed by `size` only.
-        if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) {
-          runSystem(s, eventView)
-        } else {
-          // O-42: checked and empty counts as a run — the window is spent,
-          // so a stale mark cannot fire it later when structure changes.
-          s.seenThrough = changes.seq
+        // SPEC §4 step 6 — reactive systems; one coalesced call if reactsTo has entities.
+        for (const s of scheduler.systemsByMode('reactive')) {
+          if (!isEnabled(s) || !s.reactsTo) continue
+          // #16: a reactsTo with no structural entity dependency (no Has leaf)
+          // still fires when one of its ChangedResource targets changed —
+          // supports world-level resource reactions in entity-empty worlds
+          // where the structural member count is zero. Entity-scoped reactsTo
+          // (any Has leaf) is governed by `size` only.
+          if (s.reactsTo.size > 0 || reactiveResourceFallback(s)) {
+            runSystem(s, eventView)
+          } else {
+            // O-42: checked and empty counts as a run — the window is spent,
+            // so a stale mark cannot fire it later when structure changes.
+            s.seenThrough = changes.seq
+          }
         }
+      } finally {
+        reproducing--
       }
 
       // SPEC §4 step 7 — renderer diff/commit handled by dom plugin (not core).
@@ -1406,8 +1681,12 @@ export function createWorld(options: WorldOptions = {}): World {
       // SPEC §9.4 — plugin onTickEnd fires at step 8.
       plugins.callTickEnd(world, FULL_TICK)
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+      completed = true
     } finally {
       inTick = false
+      inFullTick = false
+      // A step that throws ends no frame: an attached recorder drops it.
+      if (!completed && tapListeners.size > 0) for (const l of tapListeners) l.frameAborted()
       // SPEC §4 step 8 (O-42): close the tick for change windows. Also when
       // the tick threw (O-53): a query read before the throw has seen what
       // it read, so a renderer whose callback threw is not handed the same
@@ -1417,6 +1696,7 @@ export function createWorld(options: WorldOptions = {}): World {
     lastTickEndSeq = changes.seq
     pendingCursors.clear()
     changes.pruneRemoved(removalHorizon())
+    if (tapListeners.size > 0) for (const l of tapListeners) l.frameEnded()
   }
 
   /**
@@ -1664,6 +1944,11 @@ export function createWorld(options: WorldOptions = {}): World {
       wakeDriver()
     },
     spawn(components?: ComponentBag): Entity {
+      // A restored cursor can sit at the top of the safe range: past it,
+      // ids collide (2^53 + 1 === 2^53), so refuse rather than reuse one.
+      if (!Number.isSafeInteger(nextId)) {
+        throw new RangeError('domecs: spawn: entity ids are exhausted (the next id would exceed Number.MAX_SAFE_INTEGER)')
+      }
       const id = nextId++
       alive.add(id)
       structEpoch++
@@ -1690,6 +1975,7 @@ export function createWorld(options: WorldOptions = {}): World {
         }
       }
       sigEntitySpawned.emit(id)
+      if (tapAttached) tapMutated()
       wakeDriver()
       return id
     },
@@ -1731,6 +2017,7 @@ export function createWorld(options: WorldOptions = {}): World {
       record('added', type.name, entity)
       moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, true))
       sigComponentAdded.emit({ entity, type: type as ComponentType<unknown> })
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1743,6 +2030,7 @@ export function createWorld(options: WorldOptions = {}): World {
       s.delete(entity)
       record('removed', type.name, entity)
       moveEntity(entity, transition(entityArchetype.get(entity)!, type.name, false))
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1755,7 +2043,10 @@ export function createWorld(options: WorldOptions = {}): World {
       const store = storeFor(type)
       // A mark on a component the entity lacks can never match OnChanged;
       // recording it would only leave a stamp nothing removes (O-42).
-      if (store.has(entity)) record('changed', type.name, entity)
+      if (store.has(entity)) {
+        record('changed', type.name, entity)
+        if (tapAttached) tapMutated()
+      }
       wakeDriver()
     },
 
@@ -1765,11 +2056,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     setResource<T>(type: ResourceType<T>, value: T): void {
       resourceState.set(type, value)
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
     markResourceChanged<T>(type: ResourceType<T>): void {
       resourceState.markChanged(type)
+      if (tapAttached) tapMutated()
       wakeDriver()
     },
 
@@ -1779,6 +2072,58 @@ export function createWorld(options: WorldOptions = {}): World {
 
     resourceTypes(): ResourceType<unknown>[] {
       return resourceState.types()
+    },
+
+    eventTypes(): EventType<unknown>[] {
+      return bus.knownTypes()
+    },
+
+    register(
+      ...types: ReadonlyArray<ComponentType<unknown> | EventType<unknown> | ResourceType<never>>
+    ): Result<void, RegisterError> {
+      // Validate the whole call first so a conflict registers nothing.
+      const components = new Map<string, ComponentType<unknown>>()
+      const events = new Map<string, EventType<unknown>>()
+      const resources = new Map<string, ResourceType<unknown>>()
+      const conflict = (registry: RegisterError['registry'], name: string) =>
+        err<RegisterError>({ kind: 'name_conflict', registry, name })
+      for (const t of types) {
+        if (isComponentType(t)) {
+          const held = components.get(t.name) ?? typeRegistry.get(t.name)
+          if (held !== undefined && held !== t) return conflict('component', t.name)
+          components.set(t.name, t)
+        } else if (isResourceType(t)) {
+          const held = resources.get(t.name) ?? resourceState.lookup(t.name)
+          if (held !== undefined && held !== t) return conflict('resource', t.name)
+          resources.set(t.name, t as ResourceType<unknown>)
+        } else if (isEventType(t)) {
+          const held = events.get(t.name)
+          if ((held !== undefined && held !== t) || bus.nameTakenByOther(t)) {
+            return conflict('event', t.name)
+          }
+          events.set(t.name, t)
+        } else {
+          throw new TypeError(
+            `domecs: register() expects types made by defineComponent, defineEvent or defineResource; got ${describeValue(t)}`,
+          )
+        }
+      }
+      for (const t of components.values()) storeFor(t)
+      for (const t of events.values()) bus.note(t)
+      for (const t of resources.values()) resourceState.register(t as ResourceType<unknown>)
+      return ok(undefined)
+    },
+
+    lookupComponent(name: string): ComponentType<unknown> | undefined {
+      return typeRegistry.get(name)
+    },
+
+    lookupEvent(name: string): EventType<unknown> | undefined {
+      return bus.lookup(name)
+    },
+
+    lookupResource(name: string): ResourceType<unknown> | undefined {
+      return resourceState.lookup(name)
     },
 
     *iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }> {
@@ -1831,10 +2176,17 @@ export function createWorld(options: WorldOptions = {}): World {
 
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
+      const description =
+        meta.__description !== undefined ? { description: meta.__description } : {}
       if (meta.__schema) {
-        return { name: type.name, fields: cloneFields(meta.__schema.fields), fieldsSource: 'schema' }
+        return {
+          name: type.name,
+          fields: cloneFields(meta.__schema.fields),
+          fieldsSource: 'schema',
+          ...description,
+        }
       }
-      return { name: type.name, fields: {}, fieldsSource: 'none' }
+      return { name: type.name, fields: {}, fieldsSource: 'none', ...description }
     },
 
     describeResource<T>(type: ResourceType<T>): ResourceDescriptor {
@@ -1852,6 +2204,11 @@ export function createWorld(options: WorldOptions = {}): World {
           name: s.name,
           schedule: s.schedule,
           enabled: s.enabled,
+          priority: s.priority,
+          order: s.order,
+          rng: s.rng,
+          components: s.components.slice(),
+          ...(s.meta !== undefined ? { meta: cloneSerializable(s.meta) } : {}),
         })),
       )
 
@@ -2018,6 +2375,72 @@ export function createWorld(options: WorldOptions = {}): World {
       runTick(undefined)
     },
 
+    runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] } {
+      if (!Array.isArray(names) || names.some((n) => typeof n !== 'string')) {
+        throw new TypeError('domecs: runSystems(names) needs an array of system names (strings)')
+      }
+      if (inTick) {
+        throw new Error('domecs: runSystems must be called outside a tick (not from a system, hook or handler)')
+      }
+      const wanted = new Set(names)
+      // Snapshot both phases first (copy-on-write arrays, O-43): systems a
+      // run registers are not run by this call.
+      const candidates = [
+        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name)),
+        ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
+      ]
+      const ran: string[] = []
+      const ranNames = new Set<string>()
+      if (candidates.length > 0) {
+        const view = bus.view()
+        let noted = false
+        inTick = true
+        try {
+          for (const s of candidates) {
+            if (!isEnabled(s)) continue
+            // §6.3: out of tick, whatever the system writes (or reads from
+            // world.rand); a replay cannot reproduce it.
+            if (!noted) {
+              noted = true
+              tapMutated()
+            }
+            runSystem(s, view)
+            ran.push(s.name)
+            ranNames.add(s.name)
+          }
+        } finally {
+          inTick = false
+          // O-48 as after a restore: an idle loop repaints what ran (also
+          // when a system threw) with a heartbeat frame. A wake would make
+          // that frame a step and move tick identity, which priming must not.
+          if (ran.length > 0 || noted) driver.repaint()
+        }
+      }
+      const skipped: string[] = []
+      const listed = new Set<string>()
+      for (const n of names) {
+        if (ranNames.has(n) || listed.has(n)) continue
+        listed.add(n)
+        skipped.push(n)
+      }
+      return { ran, skipped }
+    },
+
+    render(): void {
+      if (inTick) {
+        throw new Error('domecs: render must be called outside a tick (not from a system, hook or handler)')
+      }
+      inTick = true
+      try {
+        plugins.callRender(world, HEARTBEAT)
+      } finally {
+        inTick = false
+        // As the heartbeat render (O-42): a renderer has read what it
+        // painted, even if a hook threw (O-53).
+        advanceQueryWindows()
+      }
+    },
+
     stepN(n: number, dt?: number): void {
       for (let i = 0; i < n; i++) dt === undefined ? world.stepOnce() : world.step(dt)
     },
@@ -2064,7 +2487,12 @@ export function createWorld(options: WorldOptions = {}): World {
       // — they are now buffered as "pending" for next tick, so bus.pendingEvents
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
-      bus.emit(type, payload)
+      emitVia = 'action'
+      try {
+        bus.emit(type, payload)
+      } finally {
+        emitVia = 'emit'
+      }
       const heartbeat = opts.dt !== undefined && opts.dt <= 0
       opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
       // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
@@ -2114,8 +2542,17 @@ export function createWorld(options: WorldOptions = {}): World {
       return plugins.capability(name)
     },
 
+    pendingEvents(): EmittedEvent[] {
+      return bus.pendingEvents()
+    },
+
     snapshot(options?: SnapshotOptions): WorldSnapshot {
-      let snap = buildSnapshot(stateCtx, options?.pruneEmptyEntities === true)
+      let snap = buildSnapshot(
+        stateCtx,
+        options?.pruneEmptyEntities === true,
+        options?.pendingEvents === true ? bus.pendingEvents() : undefined,
+        (name) => bus.lookup(name),
+      )
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
           snap = entry.handle.onSnapshot(snap) as WorldSnapshot
@@ -2130,9 +2567,11 @@ export function createWorld(options: WorldOptions = {}): World {
       // restore, making identical episodes diverge (SPEC §7.1). They are set
       // aside before the plugin chain, so anything a plugin emits during
       // onRestore survives.
+      if (tapListeners.size > 0) for (const l of tapListeners) l.restoreBegan()
       const abandoned = bus.takePending()
       let s = snap
       let clock: SnapshotClock
+      let restored: EmittedEvent[] | undefined
       try {
         for (const entry of plugins.list()) {
           if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
@@ -2142,8 +2581,11 @@ export function createWorld(options: WorldOptions = {}): World {
         // throwing hook — puts the pending events back and throws before
         // world state is touched (O-40).
         clock = validateSnapshot(stateCtx, s)
+        // §4.7: resolve in-flight event names before any effect.
+        restored = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes())
       } catch (cause) {
         bus.putBackPending(abandoned)
+        if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(false)
         throw cause
       }
       // Every store Map and archetype bucket is replaced; query hooks fire
@@ -2157,6 +2599,13 @@ export function createWorld(options: WorldOptions = {}): World {
         structuralDepth--
         structEpoch++
       }
+      // The flushed view belongs to the abandoned timeline too (O-88): a
+      // restored world reads what a fresh one restored from `s` reads.
+      bus.clearCurrent()
+      // The snapshot's queue replaces the abandoned one; anything an
+      // onRestore hook emitted stays queued after it.
+      if (restored !== undefined) bus.prependPending(restored)
+      if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(true)
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()
@@ -2167,8 +2616,41 @@ export function createWorld(options: WorldOptions = {}): World {
     (def, owner) => createQuery(def, owner),
     fixedStep,
     (name) => pendingCursors.get(nextCursorKey(name)) ?? lastTickEndSeq,
+    (name) => claimStream(name),
   )
   plugins = createPluginRegistry(world)
+
+  const tap: ActTap = {
+    attach(listener) {
+      tapListeners.add(listener)
+      tapAttached = true
+      return () => {
+        tapListeners.delete(listener)
+        tapAttached = tapListeners.size > 0
+      }
+    },
+    get inTick() {
+      return inTick
+    },
+    get resumeScale() {
+      return preResumeScale
+    },
+    onceDue() {
+      const names: string[] = []
+      for (const s of scheduler.systemsByMode('once')) {
+        if (s.ranOnce || s.removed || !s.enabled) continue
+        let gatedOff = false
+        try {
+          gatedOff = s.def.enabled !== undefined && s.def.enabled() === false
+        } catch {
+          // The step would throw from this gate too: not proven idle.
+        }
+        if (!gatedOff) names.push(s.name)
+      }
+      return names
+    },
+  }
+  Object.defineProperty(world, ACT_TAP, { value: tap })
 
   // Register the built-in end-of-tick fault consolidator (BETTER_ERRORS
   // Phase 1). Collapses redundant entries by (source, kind, component)

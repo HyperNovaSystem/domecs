@@ -82,6 +82,20 @@ at install time, and let a host app (like Studio) prime post-`restore()`
 state on demand, without the caller having to reason about tick/history side
 effects just to warm up one value.
 
+**Resolved in 2.3 (O-88, engine milestone E16):** `World.runSystems(names)`
+runs the named enabled `tick`/`fixed` systems once, in run order, without
+advancing `time.tick`, flushing events or firing `tickStart`/`tickEnd`, and
+returns `{ ran, skipped }` — after `restore()`,
+`world.runSystems(['domecs-scene:compose-transforms:Local>World_'])`
+populates `World_` with the tick unchanged and no other system run (SPEC
+§4.0; test in `packages/domecs-scene/test/compose-transforms.test.ts`). It is
+for derived/transient state only: an attached act-log recorder notes an
+`out_of_tick_mutation` gap, and on worlds compared by hash it must be called
+on all or none (it adds change marks). Studio's authoritative worlds do not
+use it (harness spec §6.3: studio snapshots `WorldTransform` and computes
+frame positions with the pure compose function); renderer-side stage worlds
+can.
+
 ## 2026-07-25 — `RuleError` has no field-level tag, so a per-field UI must re-derive attribution itself
 
 `compileRule` (`packages/domecs-rules/src/rules.ts`) aggregates every defect
@@ -117,6 +131,11 @@ part: 'set' | 'expr' }` alongside the existing `position`/`message` — so a
 caller can route each error to the right widget directly instead of
 re-deriving that mapping with its own parallel (and necessarily
 simplified/duplicated) validation pass.
+
+**Resolved in 2.1 (O-79, engine milestone E6):** every `RuleError` from
+`compileRule` and `RulesHandle.update()` now carries `field: RuleDefPath`
+(`'name' | 'schedule' | 'priority' | 'when' | { query: i } | { action: i;
+part: 'set' | 'expr' }`), with `position` relative to that part's string.
 
 ## 2026-07-25 — `@domecs/dom`'s `mountDOM` has no caller-invoked "patch now" entry point, and a heartbeat step used to fake one re-fires `tickEnd`
 
@@ -163,3 +182,166 @@ skipped") but doesn't say "signals" the way the internal `runTick` F-6
 comment does — worth naming `tickEnd`/`tickStart` explicitly there too, so a
 consumer discovers this specific hazard from the public signature alone
 rather than needing to read `runTick`'s implementation.
+
+**Resolved in 2.3 (O-88, engine milestone E16):** `World.render()` calls
+plugin `onRender` only, with heartbeat `TickInfo` (`{ heartbeat: true }`): no
+`onTickStart`/`onTickEnd` hooks, no `tickStart`/`tickEnd` signals, no
+systems, `time` unchanged, and renderer query windows advance as after a
+heartbeat (marks are painted once). A host that redraws from
+`signals.tickEnd` can force a `mountDOM` repaint with it without
+re-entering its own handler. It throws when called during a tick or
+heartbeat (so a `tickEnd` subscriber cannot recurse into it). The public
+`World.step(dt)` JSDoc now names the hooks and the `tickStart`/`tickEnd`
+signals a heartbeat fires and points to `render()`; SPEC §4.0 documents
+`render()` beside the heartbeat.
+
+## 2026-10-19 — `validateEventPayload` is not exported from `@domecs/core`
+
+`world.action()` / `bridge.act()` reject a malformed payload for an event
+declared with a `schema` (O-39) through `validateEventPayload`
+(`packages/domecs/src/events.ts`). The function was `export`ed from its
+module but not re-exported from the package entry point
+(`packages/domecs/src/index.ts`), so a consumer of the published package
+could not call it. Studio needs the same check to validate a command before
+sending it (editor forms, the AI harness's act tool) and kept its own copy of
+the validator, which can drift from the engine's rules (unknown fields,
+`kind` checks, enum `options`) without any test noticing.
+
+**Resolution (engine, 2026-10-19, `feat(core): export validateEventPayload
+(studio finding)`):** `@domecs/core` exports
+`validateEventPayload(type: EventType<unknown>, payload: unknown): string | null`
+under that name (the name the harness spec already uses in §5 for rule
+`emit` validation). `null` means valid (always `null` for a schema-less
+event); otherwise it returns the reason fragment that `action()` reports as
+`invalid payload for "<name>": <fragment>`. Documented in `doc/api.md`
+(Events, doctest `validate-event-payload`); API surface updated; test
+`packages/domecs/test/validate-event-payload.test.ts` pins the export and its
+agreement with `world.action()`. Studio can drop its copy once it pins an
+engine build that includes this commit. The 2.2.0 release-candidate tarballs (E13,
+`vendor/domecs/domecs-*-2.2.0+g<sha>.tgz` beside the 2.1.0 set) include it;
+the 2.1.0+g5cb0290 tarballs studio pins today do not.
+
+**Verify pass (engine, 2026-10-19, `fix(E-fix): validateEventPayload checks
+own keys only`):** the unknown-field check used `key in fields`, so a key
+inherited from `Object.prototype` (`toString`, `constructor`, `__proto__` as
+`JSON.parse` produces it) passed as "declared" and `action()` accepted the
+payload. That matters now that studio validates LLM-built act payloads with
+it. Conversely an absent declared field named like a prototype member was read
+through the chain and rejected. Both checks now use own properties; tests in
+`validate-event-payload.test.ts`. If studio's copy mirrors the old `in`
+check, it has the same hole until it switches to the export.
+
+**Not changed here:** studio's docs still say engine "milestones E1–E18"
+(already noted in the harness spec's revision-3 verification notes). That
+text lives in the studio repo; the follow-up (E1–E21) belongs there.
+
+## 2026-10-19 — `walkFieldRefs` is not exported from `@domecs/rules`
+
+Forwarded from studio's H4 notes (`../studio/FINDINGS.md`, H4.1–H4.3: "the
+engine repo is read-only for this run"). `walkFieldRefs` lives in
+`packages/domecs-rules/src/ast.ts` and is emitted in `dist/ast.js`, but the
+package entry (`src/index.ts`) did not re-export it and `exports` has no
+subpath, so a consumer of the published package could not import it. Studio's
+component-rename rewriting needs the positions of the evaluated entity's own
+field reads to splice new names into expressions, and mirrored the walk over
+`parseExpression`'s AST instead, which can drift from the engine's walker as
+the grammar grows. The 2.2 plan exported `walkComponentRefs` only.
+
+**Resolution (engine, 2026-10-19, `feat(rules): export walkFieldRefs (studio
+finding)`):** `@domecs/rules` exports
+`walkFieldRefs(node: AstNode, visit: (component, field, pos) => void): void`
+from its package entry, unchanged (the harness spec §5.2: "`walkFieldRefs`
+keeps its current behaviour: it visits self fields only"). It visits
+`C.f` and `self.C.f`, including inside the 2.2 forms' expression arguments
+(`nearest(S, Range.r)`, `entity(Target.id)`, `??` operands), in source order
+with each read's position; it never visits other entities' fields, sets or
+`has` targets. Documented in `doc/api.md` (Rules, cross-entity forms; doctest
+`rules-cross-entity`) and the rules README; API surface updated; test
+`packages/domecs-rules/test/parser.test.ts` ("the package entry exports
+walkFieldRefs…") pins the export.
+
+**For studio:** once expressions use the 2.2 forms, a component rename must
+also rewrite member reads (`first(P).C.f`), sets and `has` targets, so it
+should visit names with `walkComponentRefs` (every role) plus `without[]`,
+as the harness spec §5.2 "Studio" line says; `walkFieldRefs` alone is only
+complete for self-only (2.1-style) expressions. **Positions are AST node
+positions, not name tokens** (E-fix2 verify): only `C.f` reports the
+component token; `self.C.f` reports `self`, `e.C.f` the start of the entity
+(`first(`, `entity(`, …), and sets, aggregates and `has` the form's name. A
+rename must not splice the new name at `pos` directly. **Update (E-fix3,
+orchestrator decision (f), 2026-10-19):** both walkers now pass a last
+argument, `namePos`, the visited name's own token on every form (`C.f`,
+`self.C.f`, `other.C.f`, `e.C.f`, selector and aggregate sets, both names of
+`sum|avg|minOf|maxOf(S, C.f)`, `has` targets); splice the new name at
+`namePos` (right to left). `pos` is unchanged. Tests: `parser.test.ts`
+"walker name positions (decision f)"; doctest `rules-cross-entity` renames by
+splicing. This ships in the 2.3.0 release-candidate tarballs packed at the
+E-fix3 HEAD; the earlier `2.3.0+g06745fe` tarballs predate it. Studio can drop its mirror once
+it pins an engine build that includes this commit; the 2.2.0 release-candidate
+tarballs already in `../studio/vendor/domecs/` (`2.2.0+g4631095`) predate it
+and do not export it. The 2.3.0 release-candidate tarballs (E18,
+`vendor/domecs/domecs-*-2.3.0+g<sha>.tgz` beside the 2.1.0 and 2.2.0 sets)
+export it.
+
+## 2026-10-19 — Rules AST nodes carry only a start position, and `childNodes` is not exported
+
+Forwarded from studio's H7.1 notes (`../studio/FINDINGS.md`, "H7.1 sentences
+and behaviour cards": "To forward to `../domecs/doc/FINDINGS_studio.md`").
+Studio's behaviour cards render each rule expression as a sentence and let a
+user edit one literal or open the Source view with one node's text selected,
+so they need each node's source extent. `parseExpression` gives every node a
+`pos` (its start; a binary node's `pos` is its operator) and nothing for the
+end. Studio therefore re-lexes the source with the rules lexer's lexemes and
+matches parentheses to compute spans (`literalSpan`, `nodeSpan` in
+`packages/core/src/sentences.ts`), which can drift from the parser as the
+grammar grows. `childNodes(node)` (`packages/domecs-rules/src/ast.ts`), which
+the engine's own walkers use to visit a node's children, is declared in the
+emitted `ast.d.ts` (and `doc/api-surface/rules.d.ts`) but not re-exported
+from the package entry, so studio's span code switches over node kinds itself.
+
+**Wanted (additive, not scheduled):** an `end` offset on every AST node (or a
+`span` helper that returns `[start, end)` for a node), and `childNodes` in the
+`@domecs/rules` exports. Either would remove studio's span code; neither
+changes evaluation or hashes. **Status:** open; no engine milestone takes it
+(E1–E21 are done). The walkers' `namePos` (decision (f), E-fix3) already
+covers the rename case, so this is only for sentence spans.
+
+## 2026-10-19 — Security review: untrusted-input APIs (fixed: id exhaustion, migrate versions; open: payload numbers)
+
+Studio's security review probed the engine APIs that take untrusted input:
+project folders opened from elsewhere hold keyframes and runs that are
+restored, and agents and external MCP tokens send act payloads and rule
+sources.
+
+- **Held up:** the rules compiler is an interpreter (no `eval`/`Function`);
+  field, query and event names `__proto__`/`constructor`/`prototype` are
+  refused (`FORBIDDEN_FIELDS`), reads are own-property only, emit payloads
+  with those keys are refused; expressions are capped (`MAX_EXPRESSION_DEPTH`
+  128, `MAX_EXPRESSION_LENGTH` 16384), so 5000 nested parentheses or 100k
+  unary minus signs are parse errors, not stack overflows.
+  `validateEventPayload` checks own keys only (a JSON `__proto__` key is an
+  unknown field). `world.restore` validates the envelope before wiping;
+  `__proto__` component, resource, stream and mark names pollute nothing;
+  200k entities restore in about a second.
+- **Fixed — entity ids past `Number.MAX_SAFE_INTEGER` (low).** A snapshot
+  with `nextId: 2^53 - 1` (or an entity at that id) restored, and the next
+  spawns handed out `2^53` twice (`2^53 + 1 === 2^53`): two live entities
+  with one id. `spawn` now throws a `RangeError` ("entity ids are exhausted")
+  instead. Test: `kernel-hardening.test.ts` "entity ids stay safe integers".
+- **Fixed — `migrate()` and non-integer versions (low).** `migrate` compared
+  `snap.version` without checking it: `NaN` returned `ok` unchanged, `"1"`
+  reported the step `1 → 11`, `1.5` looked for a `1.5 → 2.5` step. A version
+  that is not a non-negative safe integer is now `migration_failed` ("snapshot
+  version must be a non-negative integer"), with `from: -1` when it is not a
+  finite number. (`load` already required a number; `NaN`, `1.5` and `-1`
+  passed it.) Test: `domecs-persist/test/migrate.test.ts`. The JSDoc and the
+  API surface are unchanged.
+- **Open — `validateEventPayload` number and object kinds (info).** A
+  `number` field accepts `NaN` and `±Infinity`, and an `object` field accepts
+  an array. JSON cannot carry the non-finite numbers, so nothing reaching
+  studio over HTTP or MCP can send them, and rule effects already refuse
+  non-finite writes; in-process callers can. Not changed: tightening it would
+  refuse payloads that pass today.
+
+These two fixes are in the engine source on `feat/harness-engine-gaps`; the
+vendored 2.3.0 tarballs in `../studio/vendor/domecs/` predate them.

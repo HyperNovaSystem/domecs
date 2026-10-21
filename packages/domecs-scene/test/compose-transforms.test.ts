@@ -105,4 +105,29 @@ describe('composeTransforms', () => {
     expect(world.getComponent(mid, WorldPos)).toEqual({ x: 2, y: 0 })
     expect(world.getComponent(leaf, WorldPos)).toEqual({ x: 3, y: 0 })
   })
+
+  // §6.3 (G15; O-88) test 1: prime derived state after a restore without a tick.
+  it('after restore, world.runSystems([name]) populates World_ with tick unchanged', () => {
+    const source = createWorld({ headless: true })
+    const root = source.spawn([entry(LocalPos, { x: 10, y: 0 })])
+    const child = source.spawn([entry(LocalPos, { x: 1, y: 2 })])
+    expect(setParent(source, child, root)).toEqual({ ok: true })
+    source.stepN(3)
+    const snap = source.snapshot()
+
+    const world = createWorld({ headless: true })
+    world.register(LocalPos)
+    world.use(composeTransforms(LocalPos, WorldPos, additive))
+    let other = 0
+    world.system('motion', { schedule: 'tick' }, () => void other++)
+    world.restore(snap)
+    expect(world.getComponent(child, WorldPos)).toBeUndefined()
+
+    const name = 'domecs-scene:compose-transforms:LocalPos>WorldPos'
+    expect(world.runSystems([name])).toEqual({ ran: [name], skipped: [] })
+    expect(world.time.tick).toBe(3)
+    expect(other).toBe(0)
+    expect(world.getComponent(root, WorldPos)).toEqual({ x: 10, y: 0 })
+    expect(world.getComponent(child, WorldPos)).toEqual({ x: 11, y: 2 })
+  })
 })

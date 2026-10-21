@@ -96,6 +96,19 @@ describe('@domecs/persist — migrate', () => {
     if (r.ok) expect(r.value.version).toBe(2)
   })
 
+  it('BUILTIN_MIGRATIONS carries a 2->3 step that only bumps the version (§4.4, ED-2)', () => {
+    const step = BUILTIN_MIGRATIONS.get(2)
+    expect(step).toBeDefined()
+    const v2 = snap(2, { nextId: 7, resources: { Score: 1 } })
+    const r = step!(v2)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toEqual({ ...v2, version: 3 })
+    // a v1 snapshot climbs both built-in steps
+    const chain = migrate(snap(1), 3, BUILTIN_MIGRATIONS)
+    expect(chain.ok).toBe(true)
+    if (chain.ok) expect(chain.value.version).toBe(3)
+  })
+
   it('errors out when the snapshot is newer than the supported target', () => {
     const r = migrate(snap(5), 3, new Map())
     expect(r.ok).toBe(false)
@@ -105,6 +118,20 @@ describe('@domecs/persist — migrate', () => {
       expect(r.error.reason).toMatch(/newer than supported target/)
     }
   })
+})
+
+describe('migrate: a version that is not a non-negative integer (security review 2026-10-19)', () => {
+  // Stored bytes are untrusted: NaN slipped through as ok, and "1" produced the step "1 → 11".
+  for (const bad of [Number.NaN, '1', 1.5, -1, null, Infinity] as unknown[]) {
+    it(`refuses ${String(bad)} (${typeof bad}) as migration_failed`, () => {
+      const r = migrate({ ...snap(1), version: bad as number }, 3, BUILTIN_MIGRATIONS)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error.kind).toBe('migration_failed')
+        expect(r.error.reason).toMatch(/version must be a non-negative integer/)
+      }
+    })
+  }
 })
 
 describe('withBuiltinMigrations (O-73)', () => {

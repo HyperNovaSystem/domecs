@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stampPublishBuildIds } from './stamp-build-id.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packs = [
@@ -62,22 +63,29 @@ if (fromRegistry) {
 } else {
   console.error('[cold-install] build packages…')
   run('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: root })
-  // Every package is pointed at its local tarball, so the peer dependency on
-  // @domecs/core resolves to the packed core rather than the registry's.
-  for (const p of packs) {
-    const pkgDir = path.join(root, p.dir)
-    console.error(`[cold-install] pnpm pack ${p.name}…`)
-    // pnpm pack rewrites workspace: ranges and applies publishConfig → dist.
-    // Discover the tarball on disk instead of parsing stdout — paths containing
-    // spaces (the Windows temp-dir default) would truncate a token-based match.
-    const before = new Set(fs.readdirSync(stage).filter((f) => f.endsWith('.tgz')))
-    run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
-    const created = fs.readdirSync(stage).filter((f) => f.endsWith('.tgz') && !before.has(f))
-    if (created.length !== 1) {
-      throw new Error(`expected exactly one new tarball for ${p.name}, saw: ${created.join(', ') || '(none)'}`)
+  // Stamped as `pnpm publish:npm` stamps it, so the probe sees the BUILD_ID
+  // npm would ship; the workspace dist goes back to 'dev' after packing.
+  const stamp = stampPublishBuildIds({ root })
+  try {
+    // Every package is pointed at its local tarball, so the peer dependency on
+    // @domecs/core resolves to the packed core rather than the registry's.
+    for (const p of packs) {
+      const pkgDir = path.join(root, p.dir)
+      console.error(`[cold-install] pnpm pack ${p.name}…`)
+      // pnpm pack rewrites workspace: ranges and applies publishConfig → dist.
+      // Discover the tarball on disk instead of parsing stdout — paths containing
+      // spaces (the Windows temp-dir default) would truncate a token-based match.
+      const before = new Set(fs.readdirSync(stage).filter((f) => f.endsWith('.tgz')))
+      run('pnpm', ['pack', '--pack-destination', stage], { cwd: pkgDir })
+      const created = fs.readdirSync(stage).filter((f) => f.endsWith('.tgz') && !before.has(f))
+      if (created.length !== 1) {
+        throw new Error(`expected exactly one new tarball for ${p.name}, saw: ${created.join(', ') || '(none)'}`)
+      }
+      dependencies[p.name] = `file:${path.join(stage, created[0])}`
+      console.error(`[cold-install]   → ${created[0]}`)
     }
-    dependencies[p.name] = `file:${path.join(stage, created[0])}`
-    console.error(`[cold-install]   → ${created[0]}`)
+  } finally {
+    stamp.restore()
   }
 }
 
@@ -132,7 +140,11 @@ w2.step(1 / 60)
 if (w2.getComponent(child, C).n !== 4) throw new Error('rules')
 rules.uninstall()
 
-console.log(JSON.stringify({ ok: true, tick: obs.tick, entityCount: obs.entityCount }))
+// Namespace imports: a release before 2.1 has no BUILD_ID export.
+const buildIds = {}
+for (const name of ${JSON.stringify(packs.map((p) => p.name))}) buildIds[name] = (await import(name)).BUILD_ID ?? null
+
+console.log(JSON.stringify({ ok: true, tick: obs.tick, entityCount: obs.entityCount, buildIds }))
 `
 
 const probePath = path.join(stage, 'probe.mjs')
@@ -147,6 +159,17 @@ try {
   throw err
 }
 console.log(result.trim())
+// A published build reports its plain version (ED-15); a packed one must too,
+// or `pnpm publish:npm` would ship 'dev'. Registry releases before 2.1 have none.
+const expectedId = fromRegistry ? registryVersion : JSON.parse(fs.readFileSync(path.join(root, 'packages/domecs/package.json'), 'utf8')).version
+const { buildIds } = JSON.parse(result.trim().split('\n').pop())
+for (const [name, id] of Object.entries(buildIds)) {
+  if (fromRegistry && id === null) continue
+  if (id !== expectedId) {
+    console.error(`[cold-install] FAILED — ${name} BUILD_ID is ${JSON.stringify(id)}, expected ${JSON.stringify(expectedId)}; stage: ${stage}`)
+    process.exit(1)
+  }
+}
 console.error('[cold-install] OK')
 
 try {

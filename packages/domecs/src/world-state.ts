@@ -1,9 +1,13 @@
 import { internal } from './component.js'
 import type { ChangeCursor, ChangeLog } from './change-log.js'
-import { restoreRng, rewindRng, type Rng } from './rng.js'
+import { restoreRng, rewindRng, type Rng, type RngState } from './rng.js'
+import type { EmittedEvent, EventType } from './events.js'
+import type { JsonValue } from './result.js'
 import {
   cloneSerializable,
+  setOwn,
   SNAPSHOT_VERSION,
+  type SnapshotPendingEvent,
   type WorldSnapshot,
 } from './snapshot.js'
 import { fixedStepsDue, type TimeState } from './time.js'
@@ -101,12 +105,38 @@ export interface WorldStateCtx {
   // Reassignable factory closure vars, threaded as accessors.
   getRand(): Rng
   setRand(r: Rng): void
+  /** The root own streams derive from (§4.4). */
+  getRngRoot(): RngState
+  /** Every own stream the world has created, by key (§4.4). */
+  getStreams(): ReadonlyMap<string, Rng>
+  /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
+  getStreamOwners(): Record<string, string> | undefined
+  /** The cursor keys of the live own-stream systems. */
+  ownStreamCursorKeys(): string[]
+  /** Adopt a validated snapshot's root and streams (§4.4). */
+  restoreStreams(
+    root: RngState | undefined,
+    streams: Readonly<Record<string, RngState>> | undefined,
+    owners: Readonly<Record<string, string>> | undefined,
+  ): void
   getNextId(): Entity
   setNextId(id: Entity): void
   setEmptyArch(arch: ArchetypeBucket): void
 }
 
-export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSnapshot {
+/**
+ * Build the snapshot envelope. `pending` is the bus's undelivered events when
+ * the caller asked for `{ pendingEvents: true }` (§4.7), else `undefined`;
+ * the field is written only when at least one event is in flight, so the
+ * option does not change the hash of a world with an empty queue (restoring
+ * an absent field and an empty one both leave the queue empty).
+ */
+export function buildSnapshot(
+  ctx: WorldStateCtx,
+  pruneEmpty: boolean,
+  pending?: readonly EmittedEvent[],
+  lookup?: (name: string) => EventType<unknown> | undefined,
+): WorldSnapshot {
   const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
   const sortedAlive = Array.from(ctx.alive).sort((a, b) => a - b)
   for (const id of sortedAlive) {
@@ -133,10 +163,22 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
   const fixedBacklog =
     fixedStepsDue(ctx.clock.totalScaledSeconds, ctx.time.fixedStep) - ctx.clock.fixedStepsFired
   // O-42: marks a system has not seen yet, so restore can re-issue them.
-  const changes = ctx.changes.encode(ctx.changeCursors())
+  // Transient resources' marks are left out with their values (O-36).
+  const changes = ctx.changes.encode(ctx.changeCursors(), ctx.resources.isTransient)
+  // §4.4: every own stream's state, by key; omitted while there is none.
+  let rngStreams: Record<string, RngState> | undefined
+  for (const [key, rng] of ctx.getStreams()) {
+    rngStreams ??= {}
+    setOwn(rngStreams, key, rng.seed())
+  }
+  const rngOwners = ctx.getStreamOwners()
+  const root = ctx.getRngRoot()
   return {
     version: SNAPSHOT_VERSION,
     seed: ctx.getRand().seed(),
+    rngRoot: [root[0], root[1], root[2], root[3]],
+    ...(rngStreams !== undefined ? { rngStreams } : {}),
+    ...(rngOwners !== undefined ? { rngOwners } : {}),
     tick: ctx.time.tick,
     scaledTime: ctx.clock.totalScaledSeconds,
     ...(fixedBacklog > 0 ? { fixedBacklog, fixedStep: ctx.time.fixedStep } : {}),
@@ -144,7 +186,179 @@ export function buildSnapshot(ctx: WorldStateCtx, pruneEmpty: boolean): WorldSna
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
     ...(changes !== undefined ? { changes } : {}),
+    ...(pending !== undefined && pending.length > 0
+      ? { pendingEvents: encodePendingEvents(pending, lookup) }
+      : {}),
   }
+}
+
+// ── Pending events (§4.7, O-90) ─────────────────────────────────────────
+
+/**
+ * Plain-data copies of the undelivered events, in bus order. A payload
+ * that is not plain data throws `TypeError` naming the event and the path.
+ *
+ * Plain data: `null`, booleans, strings, finite numbers (`-0` kept), arrays
+ * and objects whose prototype is `Object.prototype` or `null`. An
+ * `undefined` object property is omitted (JSON semantics); an `undefined`
+ * payload omits `payload` (a void event). Anything else — `undefined` in an
+ * array, a non-finite number, BigInt, symbol, function, class instance
+ * (`Date`, `Map`, …) or a cycle — is refused rather than coerced, since a
+ * coerced payload would restore as a different value.
+ *
+ * `lookup` is the snapshotting world's name lookup (`bus.lookup`). The record
+ * is by name, so an event whose name does not resolve back to its own type —
+ * two distinct known types share it — throws `TypeError` too: restore would
+ * refuse it as ambiguous, or re-queue it as the twin in a world that knows
+ * only the other type.
+ */
+export function encodePendingEvents(
+  events: readonly EmittedEvent[],
+  lookup?: (name: string) => EventType<unknown> | undefined,
+): SnapshotPendingEvent[] {
+  return events.map((e, i) => {
+    if (lookup !== undefined && lookup(e.type.name) !== e.type) {
+      throw new TypeError(
+        `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) cannot be recorded ` +
+          `by name: distinct known event types share the name "${e.type.name}"; give each event type ` +
+          `a unique name`,
+      )
+    }
+    if (e.payload === undefined) return { event: e.type.name }
+    try {
+      return { event: e.type.name, payload: plainCopy(e.payload, []) }
+    } catch (fault) {
+      if (fault instanceof PlainFault) {
+        throw new TypeError(
+          `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) has a payload ` +
+            `that is not plain data at payload${fault.path.reverse().join('')}: ${fault.what}`,
+        )
+      }
+      throw fault
+    }
+  })
+}
+
+/**
+ * A plain-data copy of `value` under the rules {@link encodePendingEvents}
+ * applies (finite numbers with `-0` kept, plain objects and arrays, no
+ * cycles; an `undefined` object property is omitted). Anything else throws
+ * `TypeError` naming `label` and the path. Used by the act-log recorder
+ * (§7.1) for act payloads.
+ */
+export function plainDataCopy(value: unknown, label: string): JsonValue {
+  try {
+    return plainCopy(value, [])
+  } catch (fault) {
+    if (fault instanceof PlainFault) {
+      throw new TypeError(`${label}${fault.path.reverse().join('')} is not plain data: ${fault.what}`)
+    }
+    throw fault
+  }
+}
+
+class PlainFault {
+  readonly path: string[] = []
+  constructor(readonly what: string) {}
+}
+
+const PATH_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+function plainCopy(v: unknown, ancestors: object[]): JsonValue {
+  switch (typeof v) {
+    case 'string':
+    case 'boolean':
+      return v
+    case 'number':
+      if (!Number.isFinite(v)) throw new PlainFault(`non-finite number ${String(v)}`)
+      return v
+    case 'undefined':
+      throw new PlainFault('undefined')
+    case 'bigint':
+      throw new PlainFault('a BigInt')
+    case 'symbol':
+      throw new PlainFault('a symbol')
+    case 'function':
+      throw new PlainFault('a function')
+  }
+  if (v === null) return null
+  const obj = v as object
+  if (ancestors.includes(obj)) throw new PlainFault('a cycle')
+  ancestors.push(obj)
+  try {
+    if (Array.isArray(obj)) {
+      const out: JsonValue[] = new Array<JsonValue>(obj.length)
+      for (let i = 0; i < obj.length; i++) {
+        try {
+          out[i] = plainCopy(obj[i], ancestors)
+        } catch (fault) {
+          if (fault instanceof PlainFault) fault.path.push(`[${i}]`)
+          throw fault
+        }
+      }
+      return out
+    }
+    const proto = Object.getPrototypeOf(obj) as object | null
+    if (proto !== Object.prototype && proto !== null) {
+      const name = (obj.constructor as { name?: unknown } | undefined)?.name
+      throw new PlainFault(typeof name === 'string' && name !== '' ? `a ${name} instance` : 'a class instance')
+    }
+    const out: Record<string, JsonValue> = {}
+    for (const k of Object.keys(obj)) {
+      const child = (obj as Record<string, unknown>)[k]
+      if (child === undefined) continue
+      try {
+        setOwn(out, k, plainCopy(child, ancestors))
+      } catch (fault) {
+        if (fault instanceof PlainFault) {
+          fault.path.push(PATH_IDENT.test(k) ? `.${k}` : `[${JSON.stringify(k)}]`)
+        }
+        throw fault
+      }
+    }
+    return out
+  } finally {
+    ancestors.pop()
+  }
+}
+
+/**
+ * Check a snapshot's `pendingEvents` field and resolve each name through
+ * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
+ * malformed field, an unknown name or an ambiguous one throws. Returns the
+ * events to queue, with payloads copied under {@link plainDataCopy}'s rules
+ * (what a snapshot records), so the queue never aliases the snapshot and a
+ * non-plain payload throws `TypeError`; `undefined` when the field is absent.
+ */
+export function resolvePendingEvents(
+  s: WorldSnapshot,
+  lookup: (name: string) => EventType<unknown> | undefined,
+  known: () => readonly EventType<unknown>[],
+): EmittedEvent[] | undefined {
+  const field: unknown = (s as { pendingEvents?: unknown }).pendingEvents
+  if (field === undefined) return undefined
+  if (!Array.isArray(field)) throw invalid('pendingEvents', 'an array', field)
+  return field.map((rec: unknown, i): EmittedEvent => {
+    if (!isRecord(rec)) throw invalid(`pendingEvents[${i}]`, 'an object', rec)
+    const name = rec.event
+    if (typeof name !== 'string') throw invalid(`pendingEvents[${i}].event`, 'a string', name)
+    const type = lookup(name)
+    if (type === undefined) {
+      const sharing = known().filter((t) => t.name === name).length
+      throw new Error(
+        sharing > 1
+          ? `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is ambiguous: ` +
+              `${sharing} distinct known event types share the name`
+          : `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is not a known event type ` +
+              `in this world; register it with world.register(...) before restoring`,
+      )
+    }
+    const payload =
+      rec.payload === undefined
+        ? undefined
+        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": pendingEvents[${i}].payload`)
+    return { type, payload }
+  })
 }
 
 /**
@@ -166,6 +380,11 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   )
   ctx.alive.clear()
   ctx.stores.clear()
+  // Every registered type keeps a (possibly empty) store, as it has before a
+  // restore: otherwise a type no restored entity holds would lose its store
+  // here and get it back on the next read of it, so a read would change
+  // describe().componentCounts.
+  for (const name of ctx.typeRegistry.keys()) ctx.stores.set(name, new Map())
   ctx.storesReplaced()
   ctx.archetypes.clear()
   ctx.entityArchetype.clear()
@@ -185,6 +404,8 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
   // PRNG state + tick + clock. The generator is rewound in place so a
   // captured `world.rand` handle follows the restore (O-46).
   if (!rewindRng(ctx.getRand(), s.seed)) ctx.setRand(restoreRng(s.seed))
+  // §4.4: own streams — the snapshot's root and map, missing keys re-derived.
+  ctx.restoreStreams(s.rngRoot, s.rngStreams, s.rngOwners)
   ctx.time.tick = s.tick
   ctx.time.delta = 0
   ctx.time.scaledDelta = 0
@@ -254,6 +475,17 @@ export interface SnapshotClock {
  */
 export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): SnapshotClock {
   validateEnvelope(s)
+  // §4.4: with rngOwners, no two of this world's live own-stream systems may
+  // end up on one stream.
+  if (s.rngOwners !== undefined) {
+    const owners = s.rngOwners
+    const live = new Set<string>()
+    for (const cursor of ctx.ownStreamCursorKeys()) {
+      const target = Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
+      if (live.has(target)) throw invalid('rngOwners', `one stream per live own system (two would share "${target}")`, owners)
+      live.add(target)
+    }
+  }
   // Resource values are validated for every *registered* resource type,
   // mirroring the setResource() contract; names with no registered type
   // pass through (the name-keyed lazy contract). Component values are
@@ -303,6 +535,10 @@ function isNonNegativeInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
+function isRngState(v: unknown): boolean {
+  return Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && Number.isFinite(n))
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -332,6 +568,37 @@ function validateEnvelope(s: WorldSnapshot): void {
     !seed.every((n) => typeof n === 'number' && Number.isFinite(n))
   ) {
     throw invalid('seed', 'an array of 4 finite numbers', seed)
+  }
+  // §4.4 (v3): present-but-invalid — including null — is rejected.
+  if (s.rngRoot !== undefined && !isRngState(s.rngRoot)) {
+    throw invalid('rngRoot', 'an array of 4 finite numbers', s.rngRoot)
+  }
+  if (s.rngStreams !== undefined) {
+    const streams: unknown = s.rngStreams
+    if (!isRecord(streams)) throw invalid('rngStreams', 'an object', streams)
+    for (const key of Object.keys(streams)) {
+      if (!isRngState(streams[key])) {
+        throw invalid(`rngStreams[${JSON.stringify(key)}]`, 'an array of 4 finite numbers', streams[key])
+      }
+    }
+  }
+  if (s.rngOwners !== undefined) {
+    const owners: unknown = s.rngOwners
+    if (!isRecord(owners)) throw invalid('rngOwners', 'an object', owners)
+    // Each names a stream the snapshot carries, and no two live systems end
+    // up on one stream (a shared generator would drop one from later
+    // snapshots).
+    const streams = s.rngStreams as Record<string, unknown> | undefined
+    const targets = new Set<string>()
+    for (const key of Object.keys(owners)) {
+      const target = owners[key]
+      if (typeof target !== 'string') throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a string', target)
+      if (streams === undefined || !Object.hasOwn(streams, target)) {
+        throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a key of rngStreams', target)
+      }
+      if (targets.has(target)) throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a stream no other owner names', target)
+      targets.add(target)
+    }
   }
   if (!isNonNegativeInt(s.tick)) throw invalid('tick', 'an integer >= 0', s.tick)
   if (s.nextId !== undefined && !isNonNegativeInt(s.nextId)) {

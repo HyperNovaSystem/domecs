@@ -5,6 +5,7 @@
  * share one loop: observe → act → step → snapshot, with reset for episodes.
  */
 import type { EventType } from './events.js'
+import { emptyInput } from './input.js'
 import type { WorldManifest } from './manifest.js'
 import type { SnapshotOptions, WorldSnapshot } from './snapshot.js'
 import type { ActionOptions, ActionResult, World } from './world.js'
@@ -17,6 +18,28 @@ export interface AgentBridgeOptions {
    * has already performed).
    */
   baseline?: WorldSnapshot
+}
+
+/**
+ * Options for {@link AgentBridge.reset}: the host controls a snapshot does
+ * not carry, applied after the baseline is restored (O-89).
+ */
+export interface AgentResetOptions {
+  /**
+   * `world.setScale(scale)` after the restore: `0` pauses, a positive scale
+   * resumes at it. Omitted: the world keeps its current scale. Must be a
+   * finite number ≥ 0 (checked before anything is restored). `0` has
+   * `setScale(0)` semantics: the resume target stays the last positive
+   * scale, so a later `world.resume()` runs at the previous episode's
+   * speed; pass a positive scale to choose the next episode's speed.
+   */
+  scale?: number
+  /**
+   * `'empty'` replaces `world.input` with an empty input (no keys held, no
+   * key edges, pointer at the origin, no gamepads); `'keep'` (the default)
+   * leaves it as the last episode left it.
+   */
+  input?: 'keep' | 'empty'
 }
 
 /**
@@ -43,15 +66,21 @@ export interface AgentBridge {
    *
    * Not restored (the snapshot does not carry them): `time.scale` and
    * input state. An episode that ends paused/rescaled or with stale
-   * `setInput` data carries that into the next episode — restore them
-   * explicitly at episode boundaries if your episodes touch either.
+   * `setInput` data carries that into the next episode unless `options`
+   * resets them: `reset({ scale: 1, input: 'empty' })` restores the
+   * baseline, then sets the scale and empties the input (O-89). An invalid
+   * option throws before anything is restored.
+   *
+   * `once` systems do not re-run: they ran on the world's first tick and
+   * the snapshot does not record that, so a restore leaves them as run
+   * (SPEC §7.1). Put per-episode setup in the baseline instead.
    *
    * Entity-id assignment is stable across `reset()`: the snapshot carries
    * the id cursor (O-38), so ids assigned after a restore match ids the
    * live world would have assigned. Pending events are discarded by
    * `restore()`, so an abandoned episode's events never fire into the next.
    */
-  reset(): void
+  reset(options?: AgentResetOptions): void
   /** Replace the baseline with a snapshot of the current world state. */
   captureBaseline(): void
   /** Observe tick/scale/entity counts plus {@link World.describe}. */
@@ -62,9 +91,22 @@ export interface AgentBridge {
    * {@link AgentBridge.step}; that spends two ticks per turn. With
    * `opts.dt <= 0` no tick runs and the command stays pending (see
    * {@link World.action}). `type` must be the token `defineEvent()`
-   * returned — a name string is rejected.
+   * returned — a look-alike object is rejected; pass a name string to the
+   * overload below instead.
    */
   act<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  /**
+   * Name-based command boundary for JSON callers (MCP tools, HTTP, act
+   * logs): resolves `name` through {@link World.lookupEvent}, then behaves
+   * exactly like `act(type, …)`, schema validation included (O-39).
+   *
+   * An unknown name, or one shared by two distinct known event types, is
+   * rejected with `{ accepted: false, consumedTurn: false, reason, events: [] }`
+   * — no emit, no tick. An event becomes known when it is registered,
+   * emitted, subscribed to or named as a trigger; `world.register` it (and
+   * keep agent-facing command names unique) so it resolves before first use.
+   */
+  act(name: string, payload: unknown, opts?: ActionOptions): ActionResult
   /**
    * Advance simulation. Omit `dt` for turn-based {@link World.stepOnce};
    * pass a positive `dt` for {@link World.step} (required for `fixed`
@@ -87,7 +129,7 @@ export interface AgentBridge {
  * hygiene — every episode then starts from the identical restored state):
  * ```ts
  * const bridge = createAgentBridge(world)
- * bridge.reset()
+ * bridge.reset({ scale: 1, input: 'empty' })
  * const obs = bridge.observe()
  * const result = bridge.act(Cmd, { ... }) // runs one tick; { dt: 1/60 } for fixed
  * // bridge.step() — only to advance with no command (step(1/60) for fixed)
@@ -103,8 +145,22 @@ export function createAgentBridge(
   return {
     world,
 
-    reset(): void {
+    reset(options?: AgentResetOptions): void {
+      const scale = options?.scale
+      const input = options?.input ?? 'keep'
+      if (scale !== undefined && (typeof scale !== 'number' || !Number.isFinite(scale) || scale < 0)) {
+        throw new TypeError(
+          `domecs: AgentBridge.reset scale must be a finite number >= 0; got ${String(scale)}`,
+        )
+      }
+      if (input !== 'keep' && input !== 'empty') {
+        throw new TypeError(
+          `domecs: AgentBridge.reset input must be 'keep' or 'empty'; got ${String(input)}`,
+        )
+      }
       world.restore(baseline)
+      if (scale !== undefined) world.setScale(scale)
+      if (input === 'empty') world.setInput(emptyInput())
     },
 
     captureBaseline(): void {
@@ -121,7 +177,24 @@ export function createAgentBridge(
       }
     },
 
-    act<T>(type: EventType<T>, payload: T, actionOpts?: ActionOptions): ActionResult {
+    act(
+      typeOrName: EventType<unknown> | string,
+      payload: unknown,
+      actionOpts?: ActionOptions,
+    ): ActionResult {
+      if (typeof typeOrName !== 'string') return world.action(typeOrName, payload, actionOpts)
+      const type = world.lookupEvent(typeOrName)
+      if (type === undefined) {
+        const known = world.eventTypes().some((t) => t.name === typeOrName)
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: known
+            ? `ambiguous event name "${typeOrName}": two distinct known event types share it`
+            : `unknown event "${typeOrName}" (register it with world.register, or check the name against world.eventTypes())`,
+          events: [],
+        }
+      }
       return world.action(type, payload, actionOpts)
     },
 

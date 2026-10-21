@@ -23,7 +23,7 @@ export class LexError extends Error {
   }
 }
 
-const MULTI_CHAR_PUNCT = ['<=', '>=', '==', '!=', '&&', '||']
+const MULTI_CHAR_PUNCT = ['<=', '>=', '==', '!=', '&&', '||', '??']
 const SINGLE_CHAR_PUNCT = new Set(['+', '-', '*', '/', '%', '<', '>', '!', '?', ':', '(', ')', ',', '.'])
 
 function isDigit(ch: string): boolean {

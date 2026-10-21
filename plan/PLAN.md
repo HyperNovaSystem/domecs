@@ -105,7 +105,7 @@ bet. No date-driven milestones — the order is the only ordering.
 - [ ] Multi-machine stability pass (re-run compare on second host / CI).
 - [x] Memory metrics: allocation per tick and GC count/time for every
   measured loop, the DOM mount/update/remove split, and Long Animation
-  Frame counts in the browser bench (O-76, 2026-10-20).
+  Frame counts in the browser bench (O-93, 2026-10-20).
 - [x] README product claims stay gated — no unearned win language.
 
 Workloads:
@@ -216,14 +216,14 @@ Phase 1 (committed):
 
 - [x] Honest bench: build first, the like-for-like soak, projection measured
   in a real browser, allocation/heap metrics, and the frozen verdict
-  protocol (O-76). Baseline: soak 1.10× Koota, windowed 1.43×, browser
+  protocol (O-93). Baseline: soak 1.10× Koota, windowed 1.43×, browser
   frame 1.13×. Multi-machine runs are still open.
 - [x] Port the prototype's overhead cuts to `src`. Query caching is for
-  structural queries only (O-77: soak with a reader 0.81× its A0 time,
+  structural queries only (O-94: soak with a reader 0.81× its A0 time,
   allocation 833 → 88 KB/tick; windowed 0.72×).
 - [ ] First-hour traps:
   - [x] `action()` rejects non-event tokens, and the docs stop pairing every
-    `act()` with `step()` (O-75, PR #20);
+    `act()` with `step()` (O-92, PR #20);
   - [x] Studio Save keeps live edits (Studio FINDINGS 2026-10-20, studio
     PR #3);
   - [ ] `reset()` scale/input, O-30, and explicit bans on nondeterministic

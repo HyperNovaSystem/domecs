@@ -21,9 +21,14 @@ export type MigrationMap = ReadonlyMap<number, Migration>
  * - `1 → 2`: resources were added to `WorldSnapshot` at v2. A v1
  *   snapshot simply lacks them, so the step is a pure version bump —
  *   `world.restore` treats the absent `resources` as an empty set.
+ * - `2 → 3` (2.1): v3 added the optional `rngRoot`, `rngStreams` and
+ *   `pendingEvents` fields. A v2 snapshot lacks them, so the step is a pure
+ *   version bump — restore uses the world's createWorld root, re-derives every own
+ *   stream and abandons the event queue, as for a v2 snapshot.
  */
 export const BUILTIN_MIGRATIONS: MigrationMap = new Map<number, Migration>([
   [1, (snap) => ok({ ...snap, version: 2 })],
+  [2, (snap) => ok({ ...snap, version: 3 })],
 ])
 
 /**
@@ -57,6 +62,20 @@ export function migrate(
   targetVersion: number,
   migrations: MigrationMap,
 ): Result<WorldSnapshot, MigrationFailedError> {
+  // Stored bytes are untrusted: a non-integer version (NaN, "1", null) must
+  // not compare its way through the loop below (security review 2026-10-19).
+  // It is refused up front; `from` is the version when finite, else -1.
+  const v: unknown = snap.version
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
+    return err({
+      kind: 'migration_failed',
+      from: typeof v === 'number' && Number.isFinite(v) ? v : -1,
+      to: targetVersion,
+      reason: `snapshot version must be a non-negative integer, got ${typeof v === 'string' ? JSON.stringify(v) : String(v)}`,
+      recoverable: false,
+      retryable: false,
+    })
+  }
   if (snap.version > targetVersion) {
     return err({
       kind: 'migration_failed',

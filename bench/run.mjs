@@ -35,7 +35,7 @@
  * Usage:
  *   pnpm bench                      # builds @domecs/core, then runs all
  *   node --expose-gc bench/run.mjs  # assumes a fresh build
- *   node bench/run.mjs --workload soak|telemetry|snapshot|windowed|baseline|compare|all
+ *   node bench/run.mjs --workload soak|telemetry|snapshot|hash|dmath|spatial|contacts|rules|windowed|baseline|compare|all
  *   node bench/run.mjs --entities 20000 --ticks 200 --warmup 50
  *   node bench/run.mjs --workload compare --trials 9   # compare trials (default 7)
  *   node bench/run.mjs --write   # also write bench/results.json
@@ -45,6 +45,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { register } from 'node:module'
 import { runKootaSoak, runKootaWindowed } from './baselines/koota.mjs'
 import { runSignalsSoak, runSignalsWindowed } from './baselines/signals.mjs'
 import { bootstrapMedianCI, measureTicks, median, percentiles } from './measure.mjs'
@@ -66,7 +67,7 @@ if (!process.argv.includes('--allow-stale')) {
     process.exit(1)
   }
 }
-const { createWorld, defineComponent, entry, OnChanged } = await import(
+const { createWorld, defineComponent, entry, OnChanged, hashSnapshot, canonicalSnapshot, dmath } = await import(
   pathToFileURL(distEntry).href
 )
 
@@ -102,6 +103,9 @@ const Telemetry = defineComponent('BenchTelemetry', {
 const Row = defineComponent('BenchRow', {
   defaults: { rank: 0, label: '' },
 })
+const HashLabel = defineComponent('BenchHashLabel', {
+  defaults: { name: '', hp: 0, tags: [] },
+})
 
 const results = []
 function record(row) {
@@ -125,6 +129,26 @@ if (workload === 'all' || workload === 'telemetry') {
 }
 if (workload === 'all' || workload === 'snapshot') {
   record(runSnapshot({ entityCount: Math.min(entityCount, 5_000), repeats: 20 }))
+}
+if (workload === 'all' || workload === 'hash') {
+  // Fixed at 1000 entities: the spec §4.1 cost target (≤ 2 ms, informational)
+  // is stated for a 1000-entity snapshot.
+  record(runHash({ entityCount: 1_000, repeats: 50 }))
+}
+if (workload === 'all' || workload === 'dmath') {
+  record(runDmath({ calls: 1_000_000, repeats: 15 }))
+}
+if (workload === 'all' || workload === 'spatial') {
+  // Fixed at 1000 entities: the spec §5.1 cost targets are stated there.
+  record(await runSpatial({ entityCount: 1_000, repeats: 200, queries: 100_000 }))
+}
+if (workload === 'all' || workload === 'contacts') {
+  // Fixed at 1000 entities × 2 tag pairs: the spec §6.2 cost target.
+  record(await runContacts({ entityCount: 1_000, ticks: 300 }))
+}
+if (workload === 'all' || workload === 'rules') {
+  // Fixed at 1000 entities: the spec §5.2 cost targets are stated there.
+  record(await runRules({ entityCount: 1_000, ticks: 300 }))
 }
 if (workload === 'all' || workload === 'windowed') {
   record(
@@ -184,10 +208,22 @@ const summary = {
 console.log(JSON.stringify(summary, null, 2))
 for (const r of results) {
   console.error(
-    `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities} ticks=${r.ticks ?? '-'} ` +
+    `[${r.workload}${r.phase ? ':' + r.phase : ''}] n=${r.entities ?? r.calls} ticks=${r.ticks ?? '-'} ` +
       `p50=${fmtMs(r.p50Ms)} p95=${fmtMs(r.p95Ms)}` +
       (r.snapshotBytes != null ? ` snapBytes=${r.snapshotBytes}` : '') +
+      (r.canonicalBytes != null ? ` canonicalBytes=${r.canonicalBytes}` : '') +
+      (r.targetP50Ms != null ? ` target=${fmtMs(r.targetP50Ms)} withinTarget=${r.withinTarget}` : '') +
       (r.deterministic != null ? ` deterministic=${r.deterministic}` : '') +
+      (r.nearestUsAvg != null
+        ? ` refreshP50=${fmtMs(r.refreshP50Ms)} (target ${fmtMs(r.refreshTargetMs)}) nearestAvg=${r.nearestUsAvg.toFixed(3)}us (target ${r.nearestTargetUs}us) withinTarget=${r.withinTarget}`
+        : '') +
+      (r.contactEvents != null ? ` contactEvents=${r.contactEvents}` : '') +
+      (r.nearestRatio != null
+        ? ` nearestRatio=${r.nearestRatio.toFixed(2)} (target ${r.nearestTargetRatio}) sumMemoRatio=${r.sumMemoRatio.toFixed(2)} (target ${r.sumTargetRatio}) withinTarget=${r.withinTarget}`
+        : '') +
+      (r.targetRatio != null
+        ? ` sinRatio=${r.sin.ratio.toFixed(2)} cosRatio=${r.cos.ratio.toFixed(2)} targetRatio=${r.targetRatio} withinTarget=${r.withinTarget}`
+        : '') +
       (r.domUpdates != null ? ` domUpdates=${r.domUpdates}` : '') +
       (r.changesDelivered != null ? ` changes=${r.changesDelivered}` : '') +
       (r.allocBytesPerTick != null ? ` alloc=${r.allocBytesPerTick}B/tick gc=${r.gcCount}/${r.gcMs}ms` : '') +
@@ -380,6 +416,394 @@ function runSnapshot({ entityCount, repeats }) {
     p95Ms: p95,
     snapshotBytes: bytes,
     deterministic,
+  }
+}
+
+/**
+ * O-11 / spec §4.1: `hashSnapshot` (canonical JSON + FNV-1a-64) over a
+ * 1000-entity snapshot of roughly the size the spec's target names
+ * (~131 KB). Target p50 ≤ 2 ms on the reference host; informational, not a
+ * gate. Reports the strict (`includeChanges`) hash time, which forks and
+ * keyframes use, and checks the hash is stable across repeats.
+ */
+function runHash({ entityCount, repeats }) {
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  registerSnapshotSystems(world)
+  for (let i = 0; i < entityCount; i++) {
+    world.spawn([
+      entry(Position, { x: i * 0.5, y: -i * 1.25 }),
+      entry(Velocity, { dx: (i % 7) - 3.5, dy: -0 }),
+      entry(HashLabel, { name: `unit-${i}`, hp: 100 - (i % 50), tags: ['mobile', i % 2 ? 'red' : 'blue'] }),
+    ])
+  }
+  for (let i = 0; i < 10; i++) world.step(1 / 60)
+  const snap = world.snapshot()
+  const bytes = JSON.stringify(snap).length
+  const canonicalBytes = canonicalSnapshot(snap, { includeChanges: true }).length
+
+  for (let i = 0; i < 5; i++) hashSnapshot(snap, { includeChanges: true })
+  const samples = []
+  let first = null
+  let stable = true
+  for (let i = 0; i < repeats; i++) {
+    const t0 = performance.now()
+    const h = hashSnapshot(snap, { includeChanges: true })
+    samples.push(performance.now() - t0)
+    if (first === null) first = h
+    else if (h !== first) stable = false
+  }
+  const { p50, p95 } = percentiles(samples)
+  const targetP50Ms = 2
+  return {
+    workload: 'hash',
+    engine: 'domecs',
+    entities: entityCount,
+    repeats,
+    p50Ms: p50,
+    p95Ms: p95,
+    snapshotBytes: bytes,
+    canonicalBytes,
+    targetP50Ms,
+    withinTarget: p50 <= targetP50Ms,
+    deterministic: stable,
+  }
+}
+
+/**
+ * O-75 / spec §4.2 test 5: `dmath.sin` / `dmath.cos` (musl port) vs the
+ * engine's `Math.sin` / `Math.cos` over the same inputs: 80% in the
+ * everyday range [-4π, 4π], 20% in [-1e5, 1e5] (multi-step reduction).
+ * Target: dmath within 3× of Math (informational, not a gate). Each sample
+ * times `calls` calls; the checksum keeps the JIT from dropping the loop.
+ */
+function runDmath({ calls, repeats }) {
+  const xs = new Float64Array(calls)
+  let s = 0x9e3779b9
+  for (let i = 0; i < calls; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    const u = s / 0x100000000
+    xs[i] = i % 5 === 0 ? (u * 2 - 1) * 1e5 : (u * 2 - 1) * 4 * Math.PI
+  }
+  const time = (fn) => {
+    let sum = 0
+    for (let i = 0; i < calls; i++) sum += fn(xs[i])
+    const samples = []
+    for (let r = 0; r < repeats; r++) {
+      const t0 = performance.now()
+      for (let i = 0; i < calls; i++) sum += fn(xs[i])
+      samples.push(performance.now() - t0)
+    }
+    return { ...percentiles(samples), sum }
+  }
+  const rows = {}
+  for (const name of ['sin', 'cos']) {
+    // interleave so neither side gets a warmer JIT or quieter host
+    const d1 = time(dmath[name])
+    const m1 = time(Math[name])
+    const d2 = time(dmath[name])
+    const m2 = time(Math[name])
+    const dP50 = Math.min(d1.p50, d2.p50)
+    const mP50 = Math.min(m1.p50, m2.p50)
+    rows[name] = {
+      dmathP50Ms: dP50,
+      dmathP95Ms: Math.min(d1.p95, d2.p95),
+      dmathNsPerCall: (dP50 * 1e6) / calls,
+      mathNsPerCall: (mP50 * 1e6) / calls,
+      ratio: dP50 / mP50,
+      checksum: d1.sum + m1.sum,
+    }
+  }
+  const targetRatio = 3
+  return {
+    workload: 'dmath',
+    engine: 'domecs',
+    calls,
+    repeats,
+    // p50/p95: ms per `calls` dmath.sin calls (the summary line needs both)
+    p50Ms: rows.sin.dmathP50Ms,
+    p95Ms: rows.sin.dmathP95Ms,
+    sin: rows.sin,
+    cos: rows.cos,
+    targetRatio,
+    withinTarget: rows.sin.ratio <= targetRatio && rows.cos.ratio <= targetRatio,
+  }
+}
+
+/**
+ * Load `@domecs/scene` from its built dist. Its dist imports the bare
+ * specifier `@domecs/core`, which in the workspace resolves to TypeScript
+ * source; a resolve hook points it at the same core dist this file uses.
+ */
+// `var`: workloads run from top-level code above this line (no TDZ).
+var coreHookRegistered = false
+
+/** Import a sibling package's dist with its `@domecs/core` import mapped to the core dist. */
+async function importWithCore(pkgDir, name) {
+  const pkgEntry = join(root, `packages/${pkgDir}/dist/index.js`)
+  if (!existsSync(pkgEntry)) {
+    console.error(`[bench] packages/${pkgDir}/dist not found. Build it first:  pnpm --filter ${name} build`)
+    process.exit(1)
+  }
+  if (!coreHookRegistered) {
+    const coreUrl = pathToFileURL(distEntry).href
+    const hook =
+      'export async function resolve(specifier, context, next) {' +
+      `  if (specifier === '@domecs/core') return { url: ${JSON.stringify(coreUrl)}, shortCircuit: true };` +
+      '  return next(specifier, context) }'
+    register('data:text/javascript,' + encodeURIComponent(hook))
+    coreHookRegistered = true
+  }
+  return import(pathToFileURL(pkgEntry).href)
+}
+
+function importSceneDist() {
+  return importWithCore('domecs-scene', '@domecs/scene')
+}
+
+/**
+ * Spec §5.2 cost targets (informational, not a gate), 1000 entities: a rule
+ * using `nearest(Player)` costs ≤ 3× a self-only rule, and a memoized
+ * `sum(Enemy, Health.hp)` ≤ 1.2×. Each variant runs alone in its own world
+ * (one tick rule over every entity); a sample is one `stepOnce()`. The
+ * nearest variant includes building the per-run grid.
+ */
+async function runRules({ entityCount, ticks }) {
+  const { installRules } = await importWithCore('domecs-rules', '@domecs/rules')
+  const RPos = defineComponent('BenchRulePos', { defaults: { x: 0, y: 0 } })
+  const ROut = defineComponent('BenchRuleOut', { defaults: { a: 0 } })
+  const RHp = defineComponent('BenchRuleHp', { defaults: { hp: 0 } })
+  const REnemy = defineComponent('BenchRuleEnemy', { defaults: {} })
+  const RPlayer = defineComponent('BenchRulePlayer', { defaults: {} })
+  const types = new Map([RPos, ROut, RHp, REnemy, RPlayer].map((t) => [t.name, t]))
+  // Every variant writes a changed value each tick, so all pay the same
+  // commit and markChanged cost; only the read differs.
+  const variants = {
+    self: 'BenchRuleOut.a + BenchRulePos.x * 0.5',
+    nearest: 'BenchRuleOut.a + (nearest(BenchRulePlayer).id ?? 0)',
+    sumMemo: 'BenchRuleOut.a + sum(BenchRuleEnemy, BenchRuleHp.hp)',
+  }
+  const timeVariant = (expr) => {
+    const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    for (let i = 0; i < entityCount; i++) {
+      const bag = [
+        entry(RPos, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) }),
+        entry(ROut, { a: 0 }),
+        entry(RHp, { hp: i % 13 }),
+      ]
+      if (i % 4 === 0) bag.push(entry(REnemy, {}))
+      if (i === entityCount >> 1) bag.push(entry(RPlayer, {}))
+      world.spawn(bag)
+    }
+    installRules(
+      world,
+      [{ name: 'bench', schedule: 'tick', query: ['BenchRuleOut', 'BenchRulePos'], actions: [{ set: 'BenchRuleOut.a', expr }] }],
+      (n) => types.get(n),
+      { spatial: { component: 'BenchRulePos', cellSize: 32 } },
+    )
+    for (let k = 0; k < warmupTicks; k++) world.stepOnce()
+    const samples = []
+    for (let k = 0; k < ticks; k++) {
+      const t0 = performance.now()
+      world.stepOnce()
+      samples.push(performance.now() - t0)
+    }
+    return percentiles(samples)
+  }
+  // Interleave three rounds so host drift hits every variant alike.
+  const p50 = { self: [], nearest: [], sumMemo: [] }
+  for (let round = 0; round < 3; round++) {
+    for (const [name, expr] of Object.entries(variants)) p50[name].push(timeVariant(expr).p50)
+  }
+  const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+  const self = median(p50.self)
+  const nearest = median(p50.nearest)
+  const sumMemo = median(p50.sumMemo)
+  const nearestTargetRatio = 3
+  const sumTargetRatio = 1.2
+  return {
+    workload: 'rules',
+    engine: 'domecs',
+    entities: entityCount,
+    ticks,
+    p50Ms: self,
+    p95Ms: Math.max(self, nearest, sumMemo),
+    selfP50Ms: self,
+    nearestP50Ms: nearest,
+    sumMemoP50Ms: sumMemo,
+    nearestRatio: nearest / self,
+    sumMemoRatio: sumMemo / self,
+    nearestTargetRatio,
+    sumTargetRatio,
+    withinTarget: nearest / self <= nearestTargetRatio && sumMemo / self <= sumTargetRatio,
+  }
+}
+
+/**
+ * O-8 / spec §5.1: `@domecs/scene` `createSpatialHash` over 1000 entities
+ * spread uniformly over a 1000 × 1000 field, cell size 32 (about one entity
+ * per cell). Targets (informational, not a gate): `refresh()` ≤ 0.1 ms p50
+ * and `nearest` ≤ 2 µs on average. Each refresh sample first moves every
+ * entity a little (outside the timing) so some cross cells, as in a running
+ * sim. `nearest` is timed over `queries` uniform query points per sample.
+ * The row also checks that results agree with a second index at another
+ * cell size (`deterministic`).
+ */
+async function runSpatial({ entityCount, repeats, queries }) {
+  const { createSpatialHash } = await importSceneDist()
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const ids = []
+  for (let i = 0; i < entityCount; i++) {
+    ids.push(
+      world.spawn([entry(Position, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) })]),
+    )
+  }
+  const index = createSpatialHash(world, { component: Position, cellSize: 32 })
+  const move = (k) => {
+    for (let i = 0; i < ids.length; i++) {
+      const p = world.getComponent(ids[i], Position)
+      p.x += ((i * 7 + k) % 5) - 2
+      p.y += ((i * 3 + k) % 5) - 2
+    }
+  }
+  for (let k = 0; k < warmupTicks; k++) {
+    move(k)
+    index.refresh()
+  }
+  const refreshSamples = []
+  for (let k = 0; k < repeats; k++) {
+    move(k)
+    const t0 = performance.now()
+    index.refresh()
+    refreshSamples.push(performance.now() - t0)
+  }
+
+  const qx = new Float64Array(queries)
+  const qy = new Float64Array(queries)
+  let s = 0x2545f491
+  for (let i = 0; i < queries; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    qx[i] = (s / 0x100000000) * 1000
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    qy[i] = (s / 0x100000000) * 1000
+  }
+  let checksum = 0
+  for (let i = 0; i < queries; i++) checksum += index.nearest(qx[i], qy[i]) ?? 0
+  const nearestSamples = []
+  for (let r = 0; r < 5; r++) {
+    const t0 = performance.now()
+    for (let i = 0; i < queries; i++) checksum += index.nearest(qx[i], qy[i]) ?? 0
+    nearestSamples.push(performance.now() - t0)
+  }
+
+  // Cell size is a performance setting only: a second index must agree.
+  const other = createSpatialHash(world, { component: Position, cellSize: 7 })
+  let agree = true
+  for (let i = 0; i < 2_000 && agree; i++) {
+    if (index.nearest(qx[i], qy[i]) !== other.nearest(qx[i], qy[i])) agree = false
+    else if (i % 50 === 0 && JSON.stringify(index.within(qx[i], qy[i], 40)) !== JSON.stringify(other.within(qx[i], qy[i], 40)))
+      agree = false
+  }
+  if (JSON.stringify(index.pairs(10, Position, Position)) !== JSON.stringify(other.pairs(10, Position, Position))) agree = false
+
+  const refresh = percentiles(refreshSamples)
+  const nearestUsAvg = (percentiles(nearestSamples).p50 * 1000) / queries
+  const refreshTargetMs = 0.1
+  const nearestTargetUs = 2
+  return {
+    workload: 'spatial',
+    engine: 'domecs',
+    entities: entityCount,
+    repeats,
+    queries,
+    cellSize: 32,
+    p50Ms: refresh.p50,
+    p95Ms: refresh.p95,
+    refreshP50Ms: refresh.p50,
+    refreshP95Ms: refresh.p95,
+    refreshTargetMs,
+    nearestUsAvg,
+    nearestTargetUs,
+    withinTarget: refresh.p50 <= refreshTargetMs && nearestUsAvg <= nearestTargetUs,
+    deterministic: agree,
+    checksum,
+  }
+}
+
+/**
+ * Spec §6.2 cost target (informational, not a gate): one run of the contacts
+ * system at 1000 entities × 2 tag pairs ≤ 0.5 ms. Entities move each fixed
+ * step over a 1000 × 1000 field with radii from a component (2..6); a sample
+ * is the contacts system alone, timed by systems at priority 149 and 151.
+ */
+async function runContacts({ entityCount, ticks }) {
+  const { installContacts, Contact } = await importSceneDist()
+  const CPos = defineComponent('BenchContactPos', { defaults: { x: 0, y: 0 } })
+  const CBody = defineComponent('BenchContactBody', { defaults: { r: 1 } })
+  const CPlayer = defineComponent('BenchContactPlayer', { defaults: { p: 1 } })
+  const CEnemy = defineComponent('BenchContactEnemy', { defaults: { e: 1 } })
+  const CPickup = defineComponent('BenchContactPickup', { defaults: { k: 1 } })
+  const world = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+  const ids = []
+  for (let i = 0; i < entityCount; i++) {
+    const tag = i % 10 === 0 ? CPlayer : i % 2 === 0 ? CEnemy : CPickup
+    ids.push(
+      world.spawn([
+        entry(CPos, { x: world.rand.uniformRange(0, 1000), y: world.rand.uniformRange(0, 1000) }),
+        entry(CBody, { r: world.rand.uniformRange(2, 6) }),
+        entry(tag, {}),
+      ]),
+    )
+  }
+  world.system('bench:contacts:move', { schedule: 'fixed', priority: 0 }, () => {
+    const k = world.time.tick
+    for (let i = 0; i < ids.length; i++) {
+      const p = world.getComponent(ids[i], CPos)
+      p.x += ((i * 7 + k) % 5) - 2
+      p.y += ((i * 3 + k) % 5) - 2
+    }
+  })
+  let t0 = 0
+  const samples = []
+  world.system('bench:contacts:t0', { schedule: 'fixed', priority: 149 }, () => {
+    t0 = performance.now()
+  })
+  world.system('bench:contacts:t1', { schedule: 'fixed', priority: 151 }, () => {
+    samples.push(performance.now() - t0)
+  })
+  world.use(
+    installContacts({
+      position: { component: CPos },
+      radius: { component: CBody, field: 'r' },
+      pairs: [
+        [CPlayer, CEnemy],
+        [CPlayer, CPickup],
+      ],
+      stay: true,
+      cellSize: 16,
+    }),
+  )
+  let contactEvents = 0
+  world.system('bench:contacts:count', { schedule: 'event', triggers: [Contact] }, (ctx) => {
+    contactEvents += ctx.events.of(Contact).length
+  })
+  for (let k = 0; k < warmupTicks; k++) world.step(fixedStep)
+  samples.length = 0
+  contactEvents = 0
+  for (let k = 0; k < ticks; k++) world.step(fixedStep)
+  const { p50, p95 } = percentiles(samples)
+  const targetP50Ms = 0.5
+  return {
+    workload: 'contacts',
+    engine: 'domecs',
+    entities: entityCount,
+    ticks,
+    pairs: 2,
+    p50Ms: p50,
+    p95Ms: p95,
+    contactsP50Ms: p50,
+    contactEvents,
+    targetP50Ms,
+    withinTarget: p50 <= targetP50Ms,
   }
 }
 

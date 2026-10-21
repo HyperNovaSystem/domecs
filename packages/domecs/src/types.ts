@@ -42,7 +42,7 @@ export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'u
 /**
  * Per-field reflection metadata. `kind` is required; the rest are optional
  * widget hints (numeric range/step, enum `options`, display `label`,
- * `readonly`). Field names are plain strings, not keyed to `T` — this is a
+ * `readonly`) and a free-text `description`. Field names are plain strings, not keyed to `T` — this is a
  * runtime descriptor consumed by tooling, not a type-level constraint.
  */
 export interface FieldSchema {
@@ -53,6 +53,11 @@ export interface FieldSchema {
   readonly options?: ReadonlyArray<string | number>
   readonly label?: string
   readonly readonly?: boolean
+  /**
+   * Free-text meaning of the field for humans and agents (units, range
+   * semantics, what 0 means). Reflection only; never validated against.
+   */
+  readonly description?: string
 }
 
 /** A component's field schema: a map of field name → {@link FieldSchema}. */
@@ -86,6 +91,8 @@ export interface ResourceDescriptor {
   readonly name: string
   readonly hasValue: boolean
   readonly hasDefault: boolean
+  /** Declared with `defineResource(name, { transient: true })`: not snapshotted. */
+  readonly transient: boolean
 }
 
 /**
@@ -118,6 +125,15 @@ export interface ResourceOptions<T> {
   default?: T | (() => T)
   /** Reject invalid values on `setResource` / lazy default; return `true` or a message. */
   validate?: (value: T) => true | string
+  /**
+   * Render-only or derived state (a camera, a HUD cache) that is rebuilt
+   * rather than saved (O-36). `snapshot()` leaves the value — and its change
+   * marks — out, so it never changes `hashSnapshot`; `restore()` keeps the
+   * live value (a snapshot value for it is ignored), and a fresh world
+   * restored from a snapshot falls back to the default. Reads, writes,
+   * validation and `OnChangedResource` are unchanged. Default `false`.
+   */
+  transient?: boolean
 }
 
 /**

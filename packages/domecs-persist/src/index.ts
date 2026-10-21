@@ -22,9 +22,14 @@ export { createLocalStorageStorage, createMemoryStorage, type Storage } from './
 export {
   createSnapshotHistory,
   diffSnapshots,
+  firstDivergence,
   type SnapshotHistory,
   type SnapshotHistoryOptions,
   type SnapshotDiff,
+  type SnapshotDiffOptions,
+  type FieldChange,
+  type ResourceChange,
+  type Divergence,
 } from './history.js'
 export {
   registerComponentTypes,
@@ -33,3 +38,4 @@ export {
   type ComponentTypeData,
   type SchemaProblem,
 } from './schema.js'
+export { BUILD_ID } from './build-id.js'

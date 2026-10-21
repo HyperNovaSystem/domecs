@@ -27,11 +27,18 @@ export interface EventDefOptions {
    * same way it renders a component.
    */
   readonly schema?: ComponentSchema
+  /**
+   * Free-text meaning of the event (what the command does, when it is
+   * emitted) for humans and agents. Surfaced by `describeEvent` and
+   * `describe().events`; reflection only.
+   */
+  readonly description?: string
 }
 
 /** Internal view of an {@link EventType} carrying its optional payload schema. */
 export interface InternalEventType<T> extends EventType<T> {
   readonly __schema?: ComponentSchema
+  readonly __description?: string
 }
 
 export function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T> {
@@ -39,22 +46,41 @@ export function defineEvent<T>(name: string, options?: EventDefOptions): EventTy
     name,
     [eventTag]: Symbol(name),
     ...(options?.schema ? { __schema: options.schema } : {}),
+    ...(options?.description !== undefined ? { __description: options.description } : {}),
   } as InternalEventType<T>
+}
+
+/** Whether `value` is an {@link EventType} (carries the `eventTag` brand). */
+export function isEventType(value: unknown): value is EventType<unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as Partial<EventType<unknown>>)[eventTag] === 'symbol'
+  )
 }
 
 export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
   return type as InternalEventType<T>
 }
 
+const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key)
+
 /**
  * O-39: shallow payload validation against an event's declared schema, used
- * by `world.action()` so the typed command boundary rejects malformed
- * commands instead of accepting them as no-ops. Only applies when the event
- * was defined with `{ schema }` — schema-less events stay unvalidated.
+ * by `world.action()` / `bridge.act()` so the typed command boundary rejects
+ * malformed commands instead of accepting them as no-ops. Only applies when
+ * the event was defined with `{ schema }` — schema-less events stay
+ * unvalidated (always `null`).
+ *
+ * Public so hosts (editors, agent harnesses) can pre-validate a payload with
+ * exactly the check `action()` applies, without emitting or stepping. For a
+ * rejected payload, `action()` reports
+ * `invalid payload for "<event name>": <this fragment>`.
  *
  * Rules (FieldSchema carries no required-marker, so absence is optional):
- * - payload must be a plain object
- * - keys not declared in the schema are rejected (catches typo'd fields)
+ * - payload must be a non-null, non-array object
+ * - own keys not declared in the schema are rejected (catches typo'd
+ *   fields; names inherited from `Object.prototype` count as undeclared)
  * - declared keys, when present, must match their `kind` (`enum` must be a
  *   member of `options`); `unknown` accepts anything
  *
@@ -68,13 +94,16 @@ export function validateEventPayload(type: EventType<unknown>, payload: unknown)
   }
   const fields = schema.fields
   for (const key of Object.keys(payload)) {
-    if (!(key in fields)) {
+    // Own keys only: `key in fields` would treat `toString`, `constructor`,
+    // `__proto__` (inherited from Object.prototype) as declared.
+    if (!hasOwn(fields, key)) {
       const declared = Object.keys(fields).join(', ') || '(none)'
       return `unknown field "${key}" — declared fields: ${declared}`
     }
   }
   for (const [key, spec] of Object.entries(fields)) {
-    const v = (payload as Record<string, unknown>)[key]
+    // Absent ⇒ optional; never read a declared name through the prototype chain.
+    const v = hasOwn(payload, key) ? (payload as Record<string, unknown>)[key] : undefined
     if (v === undefined) continue
     switch (spec.kind) {
       case 'number':
@@ -107,6 +136,8 @@ export interface EventDescriptor {
   readonly name: string
   readonly fields: Readonly<Record<string, FieldSchema>>
   readonly fieldsSource: 'schema' | 'none'
+  /** The `description` given to `defineEvent`; absent when none was. */
+  readonly description?: string
 }
 
 export interface EventView {
@@ -148,6 +179,13 @@ export interface EventBus {
   /** Record `type` as known without emitting or subscribing (O-51). */
   note(type: EventType<unknown>): void
   /**
+   * The known event type named `name`, or `undefined` when none is known or
+   * when two distinct known types share the name (§4.5).
+   */
+  lookup(name: string): EventType<unknown> | undefined
+  /** Whether a known event type other than `type` already holds `type.name`. */
+  nameTakenByOther(type: EventType<unknown>): boolean
+  /**
    * Set all pending (undelivered) events aside and start an empty queue,
    * returning the set-aside events. Called by `world.restore()`: events
    * queued before a restore belong to the abandoned timeline and must not
@@ -157,11 +195,25 @@ export interface EventBus {
    */
   takePending(): PendingEvents
   /**
+   * Empty the current (already-flushed) view. Called by a successful
+   * `world.restore()`: the view holds what the abandoned timeline delivered
+   * and no snapshot carries it, so a restored world reads the same (empty)
+   * view as a fresh world restored from the same snapshot (§6.3, O-88:
+   * `world.events` and `runSystems`' `ctx.events` before the next flush).
+   */
+  clearCurrent(): void
+  /**
    * Make `taken` the pending queue again, dropping anything emitted since
    * {@link takePending}. `world.restore()` calls it when the restore throws,
    * so a failed restore leaves the pending events as they were.
    */
   putBackPending(taken: PendingEvents): void
+  /**
+   * Queue `events` ahead of whatever is pending, in their order (§4.7):
+   * `world.restore()` replaces the restoring world's queue with a snapshot's
+   * `pendingEvents`, keeping after them anything an `onRestore` hook emitted.
+   */
+  prependPending(events: readonly EmittedEvent[]): void
 }
 
 /** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
@@ -176,7 +228,15 @@ export type PendingEvents = Map<symbol, unknown[]>
  */
 export type HandlerFaultSink = (eventName: string, cause: unknown) => void
 
-export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
+/**
+ * Optional observer of every emit (`bus.emit` and a view's `emit`), called
+ * after the event is queued. Not called for events re-queued by
+ * {@link EventBus.prependPending}. The world uses it for the act-log tap
+ * (§7.1).
+ */
+export type EmitObserver = (type: EventType<unknown>, payload: unknown) => void
+
+export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitObserver): EventBus {
   // Keyed by the per-type `eventTag` symbol — identity-based, not name-based.
   let pending = new Map<symbol, unknown[]>()
   let current = new Map<symbol, unknown[]>()
@@ -185,6 +245,30 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
   // the pending/current maps only carry the symbol. Populated on first emit of
   // each type and never cleared (bounded by the number of distinct types).
   const typeByTag = new Map<symbol, EventType<unknown>>()
+  // Name index over typeByTag (§4.5): the type known under each name, or
+  // `null` once two distinct types share it (F-8 lets them coexist; the name
+  // is then ambiguous). Like typeByTag, never cleared.
+  const byName = new Map<string, EventType<unknown> | null>()
+
+  /** Record `type` as known (first-seen order) and index its name. */
+  function know(type: EventType<unknown>): void {
+    const key = type[eventTag]
+    if (typeByTag.has(key)) return
+    typeByTag.set(key, type)
+    byName.set(type.name, byName.has(type.name) ? null : type)
+  }
+
+  /** Append `payload` to the pending queue for `type`. */
+  function enqueue(type: EventType<unknown>, payload: unknown): void {
+    const key = type[eventTag]
+    know(type)
+    let a = pending.get(key)
+    if (!a) {
+      a = []
+      pending.set(key, a)
+    }
+    a.push(payload)
+  }
 
   const makeView = (src: Map<symbol, unknown[]>): EventView => ({
     of<T>(type: EventType<T>): readonly T[] {
@@ -192,31 +276,19 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
       return (arr ?? []) as readonly T[]
     },
     emit<T>(type: EventType<T>, payload: T): void {
-      const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
-      let a = pending.get(key)
-      if (!a) {
-        a = []
-        pending.set(key, a)
-      }
-      a.push(payload)
+      enqueue(type as EventType<unknown>, payload)
+      onEmit?.(type as EventType<unknown>, payload)
     },
   })
 
   return {
     emit<T>(type: EventType<T>, payload: T): void {
-      const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
-      let a = pending.get(key)
-      if (!a) {
-        a = []
-        pending.set(key, a)
-      }
-      a.push(payload)
+      enqueue(type as EventType<unknown>, payload)
+      onEmit?.(type as EventType<unknown>, payload)
     },
     on<T>(type: EventType<T>, fn: (e: T) => void): () => void {
       const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type as EventType<unknown>)
+      know(type as EventType<unknown>)
       let s = subs.get(key)
       if (!s) {
         s = new Set()
@@ -270,16 +342,35 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink): EventBus {
       return Array.from(typeByTag.values())
     },
     note(type: EventType<unknown>): void {
-      const key = type[eventTag]
-      if (!typeByTag.has(key)) typeByTag.set(key, type)
+      know(type)
+    },
+    lookup(name: string): EventType<unknown> | undefined {
+      return byName.get(name) ?? undefined
+    },
+    nameTakenByOther(type: EventType<unknown>): boolean {
+      const held = byName.get(type.name)
+      return held !== undefined && held !== type
     },
     takePending(): PendingEvents {
       const taken = pending
       pending = new Map()
       return taken
     },
+    clearCurrent(): void {
+      current = new Map()
+    },
     putBackPending(taken: PendingEvents): void {
       pending = taken
+    },
+    prependPending(events: readonly EmittedEvent[]): void {
+      const after = pending
+      pending = new Map()
+      for (const { type, payload } of events) enqueue(type, payload)
+      for (const [key, arr] of after) {
+        const a = pending.get(key)
+        if (a) a.push(...arr)
+        else pending.set(key, arr)
+      }
     },
   }
 }

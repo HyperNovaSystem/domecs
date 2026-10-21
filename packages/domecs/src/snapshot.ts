@@ -1,10 +1,14 @@
 import type { ChangesSnapshot } from './change-log.js'
+import type { JsonValue } from './result.js'
+import type { RngState } from './rng.js'
 import type { Entity } from './types.js'
 
-// v2 added the optional `resources` field. The persist layer's
-// built-in 1->2 migration upgrades older saves (a v1 snapshot simply has no
-// resources).
-export const SNAPSHOT_VERSION = 2
+// v2 added the optional `resources` field; v3 (2.1) the optional `rngRoot`,
+// `rngStreams` (§4.4) and `pendingEvents` (§4.7) fields. Every snapshot a 2.1
+// world writes is v3. The persist layer's built-in 1->2 and 2->3 migrations
+// upgrade older saves (each is a pure version bump: an older snapshot simply
+// lacks the newer optional fields). `restore()` accepts any version <= 3.
+export const SNAPSHOT_VERSION = 3
 
 /** Options for `world.snapshot()`. */
 export interface SnapshotOptions {
@@ -16,11 +20,63 @@ export interface SnapshotOptions {
    * `pruneTransientOnlyEntities()` applies it to the no-arg `save()` path.
    */
   readonly pruneEmptyEntities?: boolean
+  /**
+   * Record the undelivered events in the snapshot's `pendingEvents` field
+   * (§4.7, ED-16). Default `false`: the field is absent and restore abandons
+   * the restoring world's queue, as in 2.0. Every fork, keyframe or
+   * checkpoint whose future must match the live world's should pass `true`.
+   * Throws `TypeError` naming the event when a pending payload is not plain
+   * data, or when another known event type shares a pending event's name
+   * (the record is by name, so it could not restore as the same type).
+   */
+  readonly pendingEvents?: boolean
+}
+
+/**
+ * One undelivered event in {@link WorldSnapshot.pendingEvents}: the event
+ * type's name and a plain-data copy of its payload. `payload` is absent when
+ * the payload was `undefined` (a `defineEvent<void>` event).
+ */
+export interface SnapshotPendingEvent {
+  readonly event: string
+  readonly payload?: JsonValue
 }
 
 export interface WorldSnapshot {
   readonly version: number
+  /** State of the shared stream (`world.rand`) at snapshot time. */
   readonly seed: readonly [number, number, number, number]
+  /**
+   * The world's root seed state — the `createWorld` seed — from which every
+   * `rng: 'own'` stream derives (§4.4, v3). It never advances. Written by
+   * every 2.1 snapshot. Restore adopts it, so systems registered after the
+   * restore derive the streams the source world would; absent (a v2
+   * snapshot), the restoring world uses its own `createWorld` root, not one
+   * adopted from an earlier restore.
+   */
+  readonly rngRoot?: RngState
+  /**
+   * Current state of every own stream this world has created, by stream key
+   * (the owning system's cursor key: its name, or `name#k` on a clash), v3.
+   * Entries outlive their systems (a removed system's entry is kept, so a
+   * re-registered system resumes it). Omitted while the world has never
+   * created an own stream. Restore replaces the world's map with it and
+   * re-derives, from the restored root, the stream of every registered own
+   * system whose key is missing. An explicit `undefined` counts as absent,
+   * so the reseed recipe `{ ...snap, seed: s, rngRoot: s, rngStreams:
+   * undefined }` type-checks under `exactOptionalPropertyTypes`.
+   */
+  readonly rngStreams?: Readonly<Record<string, RngState>> | undefined
+  /**
+   * §4.4: which stream each live own-stream system holds, by cursor key,
+   * for the systems whose stream key is not their cursor key (a survivor of
+   * same-named systems whose first was removed holds `name#1` while its
+   * cursor key is `name`). Omitted when every system holds its cursor key.
+   * Restore gives each live own system the stream this names (else its
+   * cursor key's), so a world built with only the current systems draws as
+   * the source does.
+   */
+  readonly rngOwners?: Readonly<Record<string, string>> | undefined
   readonly tick: number
   /**
    * Cumulative unquantized scaled time in seconds — the drift-free total
@@ -71,6 +127,16 @@ export interface WorldSnapshot {
    * Omitted when every system has seen every mark.
    */
   readonly changes?: ChangesSnapshot
+  /**
+   * Undelivered events, in bus order (by first emit of each type, then
+   * payload order within a type). Present only when snapshotted with
+   * `{ pendingEvents: true }` and at least one event was in flight (§4.7).
+   * Restore resolves each name with `world.lookupEvent` before touching any
+   * state — an unknown or ambiguous name throws — then replaces the
+   * restoring world's queue with these events. Absent, restore abandons the
+   * queue (2.0 behaviour).
+   */
+  readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>
   readonly meta?: Record<string, unknown>
 }
 
@@ -79,7 +145,20 @@ export function cloneSerializable<T>(value: T): T {
   if (Array.isArray(value)) return value.map((v) => cloneSerializable(v)) as unknown as T
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(value as object)) {
-    out[k] = cloneSerializable((value as Record<string, unknown>)[k])
+    setOwn(out, k, cloneSerializable((value as Record<string, unknown>)[k]))
   }
   return out as T
+}
+
+/**
+ * `out[k] = v` as an own data property. Plain assignment of `"__proto__"`
+ * (an own key `JSON.parse` creates) would set `out`'s prototype instead and
+ * drop the data from the copy and from its canonical hash.
+ */
+export function setOwn(out: Record<string, unknown>, k: string, v: unknown): void {
+  if (k === '__proto__') {
+    Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true })
+  } else {
+    out[k] = v
+  }
 }
