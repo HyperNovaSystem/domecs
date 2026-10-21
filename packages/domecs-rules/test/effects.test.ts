@@ -369,6 +369,22 @@ describe('E14.2 despawn, add, remove', () => {
     expect(faultsOf(w, a)).toEqual([expect.stringMatching(/add "FxTag".*another component type.*"FxTag"/)])
   })
 
+  it('add of an existing component runs its validate before writing', () => {
+    const Capped = defineComponent<{ n: number }>('FxCapped', {
+      defaults: { n: 0 },
+      validate: (v) => v.n <= 5 || 'n must be <= 5',
+    })
+    const w = world()
+    const errors = installRules(w, [], (n) => (n === 'FxCapped' ? Capped : resolve(n)), OPTIONS).update([
+      { name: 'cap', schedule: 'tick', query: ['FxHp'], actions: [], effects: [{ add: 'FxCapped', set: { 'FxCapped.n': 'FxHp.hp * 5' } }] },
+    ])
+    expect([...errors]).toEqual([])
+    const a = w.spawn([entry(Hp, { hp: 2 }), entry(Capped, { n: 1 })])
+    w.stepOnce()
+    expect(w.getComponent(a, Capped)).toEqual({ n: 1 })
+    expect(faultsOf(w, a)).toEqual([expect.stringMatching(/add "FxCapped".*n must be <= 5/)])
+  })
+
   it('add of an existing component marks it changed only through set', () => {
     const w = world()
     install(w, [{ name: 'r', schedule: 'tick', query: ['FxHp'], actions: [], effects: [{ add: 'FxTag', set: { n: '4' } }] }])

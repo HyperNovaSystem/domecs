@@ -505,6 +505,16 @@ export function applyEffects(
             fault(effect.source, `${what}: ${problem}`)
             break
           }
+          // The written value must pass the component's validate, as a new
+          // one does (create runs it), before the live value changes.
+          const candidate: Record<string, unknown> = { ...current }
+          for (const [field, value] of effect.writes) candidate[field] = value
+          try {
+            effect.type.create(candidate)
+          } catch (e) {
+            fault(effect.source, `${what}: ${e instanceof Error ? e.message : String(e)}`)
+            break
+          }
           let changed = false
           for (const [field, value] of effect.writes) {
             if (Object.is(current[field], value)) continue

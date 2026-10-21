@@ -90,6 +90,9 @@ All notable changes to DOMECS are documented here. The format is based on
   `rule_eval_failed` fault that skips that effect. Before, the throw escaped:
   it aborted `update()` after the rule's old registration was removed, or
   ended the tick part-way through the queued effects.
+- `@domecs/rules`: an `add` effect on a component the entity already has
+  runs the component's `validate` on the written value first; a rejected
+  value is a `rule_eval_failed` fault and the component is unchanged.
 - `@domecs/core`: act logs. When a full step throws, the recorder drops that
   step's frame and records a new `step_threw` gap. Before, the half-built
   frame stayed in the log and the next step's emits were attached to it.
