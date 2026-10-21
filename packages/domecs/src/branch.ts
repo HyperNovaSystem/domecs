@@ -97,6 +97,9 @@ function snapshotFixedStep(from: WorldSnapshot): number | undefined {
 }
 
 
+/** Where each world's last runBranch call ended, to tell a continuation from a new start. */
+const runEnds = new WeakMap<World, { readonly tick: number; readonly input: unknown }>()
+
 /** Options for {@link runBranch}. */
 export interface RunBranchOptions {
   /** How many steps to take at most (a non-negative integer). */
@@ -111,7 +114,9 @@ export interface RunBranchOptions {
    * compared (that is `replay`'s job). Before the first step, the input of
    * the latest frame earlier than `world.time.tick` is set (input is
    * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
-   * or keyframe starts with the source's input. The scale is not carried:
+   * or keyframe starts with the source's input; a call that continues the
+   * previous call on this world (same tick, input unchanged since) keeps the
+   * input the branch's systems left. The scale is not carried:
    * pass the source's scale at that tick to {@link createBranch}.
    */
   readonly log?: ActLog
@@ -200,7 +205,11 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
     // Input is delta-encoded and not in a snapshot: a branch that starts
     // after the log's first frame (from a keyframe or a mid-log snapshot)
     // takes the input the latest earlier frame left, as the source had it: a
-    // tickStart subscriber's replacement (hookInput) when there was one.
+    // tickStart subscriber's replacement (hookInput) when there was one. A
+    // call that continues the previous one on this world (same tick, same
+    // input object) keeps the input its systems left.
+    const previous = runEnds.get(world)
+    const continuing = previous !== undefined && previous.tick === world.time.tick && previous.input === world.input
     let carried: JsonInput | undefined
     let carriedTick = -1
     for (const f of frames.values()) {
@@ -210,7 +219,7 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
       carried = last
       carriedTick = f.tick
     }
-    if (carried !== undefined) world.setInput(decodeInput(carried))
+    if (carried !== undefined && !continuing) world.setInput(decodeInput(carried))
   }
 
   const samples: Array<{ tick: number; values: Record<string, JsonValue> }> = []
@@ -278,5 +287,6 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
     return ok({ ticks: n, stoppedBy, samples, keyframes, hashes, faults, finalHash: actLogHash(world) })
   } finally {
     unsubscribe()
+    runEnds.set(world, { tick: world.time.tick, input: world.input })
   }
 }

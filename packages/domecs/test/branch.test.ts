@@ -472,6 +472,48 @@ describe('runBranch (§7.2)', () => {
     expect(out2.finalHash).toBe(strict(live2))
   })
 
+  it('a second runBranch call with the same log keeps the input the branch\'s systems set', () => {
+    const Keys = defineComponent<{ n: number }>('BrContKeys', { defaults: { n: 0 } })
+    const held = (keys: string[]) => ({
+      keys: new Set(keys),
+      keyDelta: { pressed: new Set<string>(), released: new Set<string>() },
+      mods: { ctrl: false, alt: false, shift: false, meta: false },
+      pointer: { x: 0, y: 0, buttons: 0, delta: { x: 0, y: 0 }, wheel: 0, entered: [] },
+      gamepads: [],
+      focus: { activeTag: '', consumesKeys: false },
+    })
+    const keysSetup = (w: World): void => {
+      setup(w)
+      w.register(Keys)
+      w.system('presser', {}, (ctx) => {
+        if (ctx.time.tick === 42) w.setInput(held(['KeyB']))
+      })
+      w.system('keys', { query: [Keys] }, (ctx) => {
+        for (const e of ctx.entities) {
+          if (ctx.input.keys.has('KeyB')) e.BrContKeys!.n += 1
+          w.markChanged(e.id, Keys)
+        }
+      })
+    }
+    const live = createWorld({ headless: true, seed: [9, 8, 7, 6] })
+    keysSetup(live)
+    live.spawn([entry(Keys, { n: 0 })])
+    steps(live, 30)
+    const rec = createRecorder(live)
+    live.setInput(held(['KeyA']))
+    steps(live, 10)
+    const mid = live.snapshot({ pendingEvents: true })
+    steps(live, 2)
+    const log = rec.stop()
+    const one = createBranch(keysSetup, mid)
+    const two = createBranch(keysSetup, mid)
+    if (!one.ok || !two.ok) throw new Error('branch failed')
+    run(one.value.world, { steps: 10, log })
+    run(two.value.world, { steps: 5, log })
+    run(two.value.world, { steps: 5, log })
+    expect(strict(two.value.world)).toBe(strict(one.value.world))
+  })
+
   it('a branch from mid-log carries input a tickStart subscriber set (hookInput)', () => {
     const Keys = defineComponent<{ n: number }>('BrHookKeys', { defaults: { n: 0 } })
     const keysSetup = (w: World): void => {

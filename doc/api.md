@@ -1645,7 +1645,7 @@ interface ActRecord {
   readonly payload?: JsonValue   // absent for an undefined payload
   readonly via: 'emit' | 'action'  // only 'action' acts are schema-checked on replay
 }
-type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore'
+type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw'
 
 interface ReplayOptions {
   readonly base?: WorldSnapshot  // restore first (take it with { pendingEvents: true })

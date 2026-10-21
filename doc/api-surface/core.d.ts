@@ -22,6 +22,8 @@ export interface ActTapListener {
     hooksDone(): void;
     /** The full tick completed. */
     frameEnded(): void;
+    /** The full tick threw after `frameEntered`: no `frameEnded` follows. */
+    frameAborted(): void;
     /** Spawn/despawn/add/remove/`markChanged`/`setResource`/`markResourceChanged` outside a full tick. */
     mutated(): void;
     /** `restore()` began (before plugin `onRestore` hooks). */
@@ -259,7 +261,9 @@ export interface RunBranchOptions {
      * compared (that is `replay`'s job). Before the first step, the input of
      * the latest frame earlier than `world.time.tick` is set (input is
      * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
-     * or keyframe starts with the source's input. The scale is not carried:
+     * or keyframe starts with the source's input; a call that continues the
+     * previous call on this world (same tick, input unchanged since) keeps the
+     * input the branch's systems left. The scale is not carried:
      * pass the source's scale at that tick to {@link createBranch}.
      */
     readonly log?: ActLog;
@@ -1547,7 +1551,7 @@ export interface ActLogFrame {
     readonly hookInput?: JsonInput;
 }
 /** Why a log stops describing the world at a tick (replay past it is unverified). */
-export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore';
+export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw';
 /** A recorded session (§7.1): a new artifact with its own `format` and `version`. */
 export interface ActLog {
     readonly format: 'domecs-actlog';

@@ -26,6 +26,8 @@ export interface ActTapListener {
   hooksDone(): void
   /** The full tick completed. */
   frameEnded(): void
+  /** The full tick threw after `frameEntered`: no `frameEnded` follows. */
+  frameAborted(): void
   /** Spawn/despawn/add/remove/`markChanged`/`setResource`/`markResourceChanged` outside a full tick. */
   mutated(): void
   /** `restore()` began (before plugin `onRestore` hooks). */

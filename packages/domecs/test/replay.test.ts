@@ -1072,6 +1072,23 @@ describe('emits the step reproduces', () => {
     expect(replay(setup(), log, { base })).toEqual({ ok: true, value: { ticks: 2, hash: strict(live) } })
   })
 
+  it('a step that throws leaves no half frame behind and is a step_threw gap', () => {
+    const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
+    let boom = false
+    w.use(definePlugin({ name: 'pinger', install: () => ({ onTickStart(world, info) { if (!info.heartbeat) world.emit(Echo, { from: `t${world.time.tick}` }) } }) }))
+    w.use(definePlugin({ name: 'boom', install: () => ({ onTickEnd() { if (boom) { boom = false; throw new Error('boom') } } }) }))
+    const rec = createRecorder(w)
+    w.stepOnce()
+    boom = true
+    expect(() => w.stepOnce()).toThrow('boom')
+    w.stepOnce()
+    const log = rec.stop()
+    expect(log.frames.map((f) => f.tick)).toEqual([0, 2])
+    expect(log.gaps).toEqual([{ tick: 1, reason: 'step_threw' }])
+    expect(log.frames[1]!.acts).toEqual([{ event: 'RpEcho', payload: { from: 't3' }, via: 'emit' }])
+    expect(log.frames[1]!.endActs).toBeUndefined()
+  })
+
   it('stop() notices a draw on world.rand after the last step', () => {
     const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
     const rec = createRecorder(w, { hashEvery: 1 })

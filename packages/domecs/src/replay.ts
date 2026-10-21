@@ -213,7 +213,7 @@ export interface ActLogFrame {
 }
 
 /** Why a log stops describing the world at a tick (replay past it is unverified). */
-export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore'
+export type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw'
 
 /** A recorded session (§7.1): a new artifact with its own `format` and `version`. */
 export interface ActLog {
@@ -490,6 +490,20 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
         }
       }
     },
+    frameAborted() {
+      // The step threw part-way: what it did is not in the log. Its draft
+      // (pushed at frameStarted) goes, so later emits do not join it.
+      const f = running ?? opening
+      if (running !== null && frames[frames.length - 1] === running) frames.pop()
+      if (f !== null) gap('step_threw', f.tick)
+      opening = null
+      running = null
+      inputSeen = null
+      afterHooks = false
+      modelScale = world.time.scale
+      modelResume = tap.resumeScale
+      lastRand = String(world.rand.seed())
+    },
     mutated() {
       gap('out_of_tick_mutation')
     },
@@ -585,7 +599,7 @@ export interface ReplayOptions {
   readonly onFrame?: (tick: number, world: World) => void
 }
 
-const GAP_REASONS: readonly ActLogGapReason[] = ['out_of_tick_mutation', 'unserializable_payload', 'restore']
+const GAP_REASONS: readonly ActLogGapReason[] = ['out_of_tick_mutation', 'unserializable_payload', 'restore', 'step_threw']
 
 type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -767,6 +781,7 @@ function onFrameStarted(fn: () => void): ActTapListener {
     frameStarted: fn,
     hooksDone: none,
     frameEnded: none,
+    frameAborted: none,
     mutated: none,
     restoreBegan: none,
     restoreEnded: none,

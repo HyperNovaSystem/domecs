@@ -86,6 +86,12 @@ All notable changes to DOMECS are documented here. The format is based on
   by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
 - `@domecs/rules`: `compileWorldExpression` reports a resolver that throws as
   a compile error at the name, as its contract says, instead of throwing.
+- `@domecs/core`: act logs. When a full step throws, the recorder drops that
+  step's frame and records a new `step_threw` gap. Before, the half-built
+  frame stayed in the log and the next step's emits were attached to it.
+  `runBranch` called again on the same branch with the same log keeps the
+  input the branch's systems left, instead of re-applying the log's, so
+  two `steps: 1` calls equal one `steps: 2` call. (O-80, O-81)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

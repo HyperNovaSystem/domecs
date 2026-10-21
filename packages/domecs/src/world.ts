@@ -1558,6 +1558,7 @@ export function createWorld(options: WorldOptions = {}): World {
 
     inTick = true
     inFullTick = true
+    let completed = false
     try {
       // SPEC §9.4 — plugin onTickStart fires at step 0.
       plugins.callTickStart(world, FULL_TICK)
@@ -1651,9 +1652,12 @@ export function createWorld(options: WorldOptions = {}): World {
       // SPEC §9.4 — plugin onTickEnd fires at step 8.
       plugins.callTickEnd(world, FULL_TICK)
       if (sigTickEnd.size > 0) sigTickEnd.emit(time)
+      completed = true
     } finally {
       inTick = false
       inFullTick = false
+      // A step that throws ends no frame: an attached recorder drops it.
+      if (!completed && tapListeners.size > 0) for (const l of tapListeners) l.frameAborted()
       // SPEC §4 step 8 (O-42): close the tick for change windows. Also when
       // the tick threw (O-53): a query read before the throw has seen what
       // it read, so a renderer whose callback threw is not handed the same
