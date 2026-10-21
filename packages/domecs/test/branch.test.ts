@@ -512,6 +512,14 @@ describe('runBranch (§7.2)', () => {
     run(two.value.world, { steps: 5, log })
     run(two.value.world, { steps: 5, log })
     expect(strict(two.value.world)).toBe(strict(one.value.world))
+
+    // Another log at the same point is a new start: its input is carried.
+    const other = createBranch(keysSetup, mid)
+    if (!other.ok) throw new Error('branch failed')
+    const logB = { ...log, frames: log.frames.map((f) => (f.tick === 30 ? { ...f, input: { keys: ['KeyB'] } } : f)) }
+    run(other.value.world, { steps: 0, log })
+    run(other.value.world, { steps: 0, log: logB })
+    expect([...other.value.world.input.keys]).toEqual(['KeyB'])
   })
 
   it('a branch from mid-log carries input a tickStart subscriber set (hookInput)', () => {

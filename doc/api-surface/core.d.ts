@@ -262,8 +262,8 @@ export interface RunBranchOptions {
      * the latest frame earlier than `world.time.tick` is set (input is
      * delta-encoded and not snapshotted), so a branch from a mid-log snapshot
      * or keyframe starts with the source's input; a call that continues the
-     * previous call on this world (same tick, input unchanged since) keeps the
-     * input the branch's systems left. The scale is not carried:
+     * previous call on this world (same log object, same tick, input unchanged
+     * since) keeps the input the branch's systems left. The scale is not carried:
      * pass the source's scale at that tick to {@link createBranch}.
      */
     readonly log?: ActLog;
