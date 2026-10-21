@@ -840,6 +840,11 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       return owners
     },
+    ownStreamCursorKeys: () => {
+      const out: string[] = []
+      for (const [sys, cursor] of cursorKeys()) if (sys.rngKey !== undefined) out.push(cursor)
+      return out
+    },
     restoreStreams: (root, rec, owners) => restoreStreams(root, rec, owners),
     getNextId: () => nextId,
     setNextId: (id) => {

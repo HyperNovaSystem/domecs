@@ -2535,6 +2535,8 @@ export interface WorldStateCtx {
     getStreams(): ReadonlyMap<string, Rng>;
     /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
     getStreamOwners(): Record<string, string> | undefined;
+    /** The cursor keys of the live own-stream systems. */
+    ownStreamCursorKeys(): string[];
     /** Adopt a validated snapshot's root and streams (§4.4). */
     restoreStreams(root: RngState | undefined, streams: Readonly<Record<string, RngState>> | undefined, owners: Readonly<Record<string, string>> | undefined): void;
     getNextId(): Entity;

@@ -106,7 +106,9 @@ All notable changes to DOMECS are documented here. The format is based on
   and restore re-keys each live own-stream system from it. Before, the
   survivor of two same-named systems whose first was removed drew from the
   removed one's stream after a restore into a world with only the current
-  systems. `@domecs/persist`'s `firstDivergence` compares the field. (O-77)
+  systems. `@domecs/persist`'s `firstDivergence` compares the field.
+  `restore()` validates `rngOwners`: each target is a key of `rngStreams`,
+  names one owner, and no two live own systems end up on one stream. (O-77)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

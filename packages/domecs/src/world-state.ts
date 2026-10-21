@@ -111,6 +111,8 @@ export interface WorldStateCtx {
   getStreams(): ReadonlyMap<string, Rng>
   /** Cursor key → stream key for live own systems whose stream key differs; `undefined` when none. */
   getStreamOwners(): Record<string, string> | undefined
+  /** The cursor keys of the live own-stream systems. */
+  ownStreamCursorKeys(): string[]
   /** Adopt a validated snapshot's root and streams (§4.4). */
   restoreStreams(
     root: RngState | undefined,
@@ -473,6 +475,17 @@ export interface SnapshotClock {
  */
 export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): SnapshotClock {
   validateEnvelope(s)
+  // §4.4: with rngOwners, no two of this world's live own-stream systems may
+  // end up on one stream.
+  if (s.rngOwners !== undefined) {
+    const owners = s.rngOwners
+    const live = new Set<string>()
+    for (const cursor of ctx.ownStreamCursorKeys()) {
+      const target = Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
+      if (live.has(target)) throw invalid('rngOwners', `one stream per live own system (two would share "${target}")`, owners)
+      live.add(target)
+    }
+  }
   // Resource values are validated for every *registered* resource type,
   // mirroring the setResource() contract; names with no registered type
   // pass through (the name-keyed lazy contract). Component values are
@@ -572,8 +585,19 @@ function validateEnvelope(s: WorldSnapshot): void {
   if (s.rngOwners !== undefined) {
     const owners: unknown = s.rngOwners
     if (!isRecord(owners)) throw invalid('rngOwners', 'an object', owners)
+    // Each names a stream the snapshot carries, and no two live systems end
+    // up on one stream (a shared generator would drop one from later
+    // snapshots).
+    const streams = s.rngStreams as Record<string, unknown> | undefined
+    const targets = new Set<string>()
     for (const key of Object.keys(owners)) {
-      if (typeof owners[key] !== 'string') throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a string', owners[key])
+      const target = owners[key]
+      if (typeof target !== 'string') throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a string', target)
+      if (streams === undefined || !Object.hasOwn(streams, target)) {
+        throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a key of rngStreams', target)
+      }
+      if (targets.has(target)) throw invalid(`rngOwners[${JSON.stringify(key)}]`, 'a stream no other owner names', target)
+      targets.add(target)
     }
   }
   if (!isNonNegativeInt(s.tick)) throw invalid('tick', 'an integer >= 0', s.tick)

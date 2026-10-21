@@ -140,6 +140,12 @@ describe('§4.4 per-system RNG streams', () => {
     }
     expect(logOf(fresh, b)).toEqual(logOf(live, b))
     expect(hashSnapshot(fresh.snapshot())).toBe(hashSnapshot(live.snapshot()))
+    // Owners that would put two live systems on one stream are refused.
+    const two = createWorld({ headless: true, seed: 9 })
+    drawer(two, 's', 'own', a)
+    drawer(two, 's', 'own', b)
+    const twoSnap = two.snapshot()
+    expect(() => two.restore({ ...twoSnap, rngOwners: { 's#1': 's' } })).toThrow(/invalid snapshot rngOwners.*share "s"/)
     // A survivor that holds its cursor key writes no owner map.
     const plain = createWorld({ headless: true, seed: 9 })
     drawer(plain, 's', 'own', plain.spawn([entry(Draws, { log: [] })]))
@@ -305,9 +311,15 @@ describe('§4.4 per-system RNG streams', () => {
       { ...good, rngStreams: { v: [1, 2, 3] } },
       { ...good, rngStreams: { v: [1, 2, 3, Infinity] } },
       { ...good, rngStreams: { v: { 0: 1, 1: 2, 2: 3, 3: 4 } } },
+      { ...good, rngOwners: [] },
+      { ...good, rngOwners: { v: 3 } },
+      // Owners name streams the snapshot carries, one system each.
+      { ...good, rngOwners: { v: 'v#1' } },
+      { ...good, rngStreams: undefined, rngOwners: { v: 'v' } },
+      { ...good, rngStreams: { ...good.rngStreams, 'v#1': good.rngStreams!.v }, rngOwners: { v: 'v#1', 'v#1': 'v#1' } },
     ]
     for (const s of bad) {
-      expect(() => w.restore(s as WorldSnapshot)).toThrow(/invalid snapshot rng(Root|Streams)/)
+      expect(() => w.restore(s as WorldSnapshot)).toThrow(/invalid snapshot rng(Root|Streams|Owners)/)
       expect(hashSnapshot(w.snapshot(), { includeChanges: true })).toBe(beforeHash)
       expect(w.snapshot().rngStreams).toEqual(beforeStreams)
     }
