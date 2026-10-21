@@ -2560,8 +2560,9 @@ export declare function plainDataCopy(value: unknown, label: string): JsonValue;
  * Check a snapshot's `pendingEvents` field and resolve each name through
  * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
  * malformed field, an unknown name or an ambiguous one throws. Returns the
- * events to queue, with payloads cloned so the queue never aliases the
- * snapshot; `undefined` when the field is absent.
+ * events to queue, with payloads copied under {@link plainDataCopy}'s rules
+ * (what a snapshot records), so the queue never aliases the snapshot and a
+ * non-plain payload throws `TypeError`; `undefined` when the field is absent.
  */
 export declare function resolvePendingEvents(s: WorldSnapshot, lookup: (name: string) => EventType<unknown> | undefined, known: () => readonly EventType<unknown>[]): EmittedEvent[] | undefined;
 /**

@@ -90,7 +90,13 @@ export function compileWorldExpression(
   const resolveName = (name: string, pos: number, context: string): ComponentType<any> | undefined => {
     const known = types.get(name)
     if (known) return known
-    const type = resolve(name)
+    let type: ComponentType<any> | undefined
+    try {
+      type = resolve(name)
+    } catch (e) {
+      fail(pos, `Resolving component "${name}" ${context} failed: ${e instanceof Error ? e.message : String(e)}`)
+      return undefined
+    }
     if (!type) {
       fail(pos, `Unknown component "${name}" ${context}`)
       return undefined

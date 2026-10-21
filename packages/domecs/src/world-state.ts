@@ -316,8 +316,9 @@ function plainCopy(v: unknown, ancestors: object[]): JsonValue {
  * Check a snapshot's `pendingEvents` field and resolve each name through
  * `lookup` (`world.lookupEvent`), touching no state (O-41 pattern): a
  * malformed field, an unknown name or an ambiguous one throws. Returns the
- * events to queue, with payloads cloned so the queue never aliases the
- * snapshot; `undefined` when the field is absent.
+ * events to queue, with payloads copied under {@link plainDataCopy}'s rules
+ * (what a snapshot records), so the queue never aliases the snapshot and a
+ * non-plain payload throws `TypeError`; `undefined` when the field is absent.
  */
 export function resolvePendingEvents(
   s: WorldSnapshot,
@@ -342,7 +343,11 @@ export function resolvePendingEvents(
               `in this world; register it with world.register(...) before restoring`,
       )
     }
-    return { type, payload: cloneSerializable(rec.payload) }
+    const payload =
+      rec.payload === undefined
+        ? undefined
+        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": pendingEvents[${i}].payload`)
+    return { type, payload }
   })
 }
 

@@ -189,6 +189,20 @@ describe('pending events in snapshots (§4.7)', () => {
     }
   })
 
+  it('restore refuses a pending payload that is not plain data, before any state change', () => {
+    const live = liveAtTick5()
+    const snap = live.snapshot({ pendingEvents: true })
+    expect(snap.pendingEvents?.length).toBeGreaterThan(0)
+    const target = fresh()
+    const before = strict(target)
+    for (const payload of [{ n: new Date(0) }, { n: Number.NaN }, new Map()]) {
+      const bad = { ...snap, pendingEvents: [{ event: 'PePing', payload }] }
+      expect(() => target.restore(bad as unknown as WorldSnapshot)).toThrow(TypeError)
+      expect(() => target.restore(bad as unknown as WorldSnapshot)).toThrow(/pendingEvents\[0\]\.payload/)
+      expect(strict(target)).toBe(before)
+    }
+  })
+
   it('test 4: a non-plain payload throws TypeError only when the option is set', () => {
     const Stamp = defineEvent<{ at: unknown }>('PeStamp')
     const cases: Array<[unknown, RegExp]> = [

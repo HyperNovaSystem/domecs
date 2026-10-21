@@ -80,6 +80,12 @@ All notable changes to DOMECS are documented here. The format is based on
   or an `add` effect of such a type, faults the entity (`rule_eval_failed`)
   and changes nothing. Before, it threw out of the tick, and a spawn left a
   bare entity behind. (O-84, 2.3 release candidate)
+- `@domecs/core`: `restore()` refuses a snapshot whose pending-event payload
+  is not plain data (a `Date`, `NaN`, a `Map`) with a `TypeError` before any
+  state changes, under the rules `snapshot({ pendingEvents: true })` records
+  by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
+- `@domecs/rules`: `compileWorldExpression` reports a resolver that throws as
+  a compile error at the name, as its contract says, instead of throwing.
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

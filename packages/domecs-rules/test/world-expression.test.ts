@@ -35,6 +35,16 @@ function world(): World {
   return createWorld({ headless: true, seed: [1, 2, 3, 4] })
 }
 
+describe('a resolver that throws', () => {
+  it('is a compile error at the name, never a throw', () => {
+    const r = compileWorldExpression('count(WxAny)', () => {
+      throw new Error('catalog offline')
+    })
+    expect(r.expression).toBeNull()
+    expect(r.errors).toEqual([expect.objectContaining({ message: expect.stringMatching(/WxAny.*catalog offline/) })])
+  })
+})
+
 function compile(source: string, options: Parameters<typeof compileWorldExpression>[2] = SPATIAL): WorldExpression {
   const r = compileWorldExpression(source, resolve, options)
   if (r.expression === null) throw new Error(`compile failed: ${JSON.stringify(r.errors)}`)
