@@ -140,6 +140,16 @@ describe('§4.4 per-system RNG streams', () => {
     }
     expect(logOf(fresh, b)).toEqual(logOf(live, b))
     expect(hashSnapshot(fresh.snapshot())).toBe(hashSnapshot(live.snapshot()))
+    // A later v2 (streamless) restore puts the survivor back on its cursor
+    // key's stream, as a fresh identical world restoring it would.
+    const v2 = { ...snap, version: 2, rngRoot: undefined, rngStreams: undefined, rngOwners: undefined } as unknown as WorldSnapshot
+    const again = createWorld({ headless: true, seed: 9 })
+    drawer(again, 's', 'own', b)
+    fresh.restore(v2)
+    again.restore(v2)
+    fresh.stepOnce()
+    again.stepOnce()
+    expect(logOf(fresh, b)).toEqual(logOf(again, b))
     // Owners that would put two live systems on one stream are refused.
     const two = createWorld({ headless: true, seed: 9 })
     drawer(two, 's', 'own', a)

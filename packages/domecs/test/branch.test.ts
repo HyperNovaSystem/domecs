@@ -522,6 +522,17 @@ describe('runBranch (§7.2)', () => {
     expect([...other.value.world.input.keys]).toEqual(['KeyB'])
   })
 
+  it('a probe that changes input or scale throws at the first sample, like one that changes state', () => {
+    for (const [label, probe] of [
+      ['setInput', (w: World) => { w.setInput({ ...w.input, keys: new Set(['KeyZ']) }); return 0 }],
+      ['setScale', (w: World) => { w.setScale(2); return 0 }],
+      ['pause', (w: World) => { w.pause(); return 0 }],
+    ] as const) {
+      const w = branch(source().snapshot({ pendingEvents: true }))
+      expect(() => runBranch(w, { steps: 1, probes: { p: probe } }), label).toThrow(/probe "p" changed the world/)
+    }
+  })
+
   it('a branch from mid-log carries input a tickStart subscriber set (hookInput)', () => {
     const Keys = defineComponent<{ n: number }>('BrHookKeys', { defaults: { n: 0 } })
     const keysSetup = (w: World): void => {

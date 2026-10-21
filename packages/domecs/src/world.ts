@@ -1206,17 +1206,16 @@ export function createWorld(options: WorldOptions = {}): World {
     const prev = streams
     const next = new Map<string, Rng>()
     const held = new Map<string, Rng>()
-    // A snapshot with streams says which stream each live system holds: its
-    // cursor key's, unless `owners` names another. This world's own key
-    // history (which keys were free when each system registered) does not
-    // decide it.
-    const keys = rec !== undefined ? cursorKeys() : undefined
+    // The snapshot says which stream each live system holds: its cursor
+    // key's, unless `owners` names another (a v2 or streamless snapshot names
+    // none). This world's own key history (which keys were free when each
+    // system registered, an earlier restore's owners) does not decide it, so
+    // a fresh identical world restoring the same snapshot draws the same.
+    const keys = cursorKeys()
     for (const sys of scheduler.all()) {
       if (sys.rngKey === undefined || sys.ownRand === undefined) continue
-      if (keys !== undefined) {
-        const cursor = keys.get(sys)!
-        sys.rngKey = owners !== undefined && Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
-      }
+      const cursor = keys.get(sys)!
+      sys.rngKey = owners !== undefined && Object.hasOwn(owners, cursor) ? owners[cursor]! : cursor
       held.set(sys.rngKey, sys.ownRand)
     }
     // A generator a live system now holds under another key is not reused

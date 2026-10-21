@@ -108,7 +108,14 @@ All notable changes to DOMECS are documented here. The format is based on
   removed one's stream after a restore into a world with only the current
   systems. `@domecs/persist`'s `firstDivergence` compares the field.
   `restore()` validates `rngOwners`: each target is a key of `rngStreams`,
-  names one owner, and no two live own systems end up on one stream. (O-77)
+  names one owner, and no two live own systems end up on one stream. Every
+  restore puts each live own system on the stream the snapshot names (its
+  cursor key's for a v2 or streamless one), so an earlier restore's owners
+  do not carry over. (O-77)
+- `@domecs/core`: `runBranch`'s first-sample probe check also compares
+  `world.input`, `time.scale` and the resume target, which the strict hash
+  leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
+  `resume` throws. (O-81)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

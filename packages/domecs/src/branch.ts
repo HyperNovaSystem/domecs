@@ -229,20 +229,27 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   const faults: SystemicFault[] = []
   let checked = false
 
+  // Input, scale and the resume target are not in a snapshot: a probe that
+  // changes them is caught by comparing them, not the hash.
+  const tap = actTapOf(world)
+  const controls = (): readonly unknown[] => [world.input, world.time.scale, tap?.resumeScale]
   const sample = (): void => {
     const values: Record<string, JsonValue> = {}
     let before = checked ? '' : actLogHash(world)
+    let beforeControls = checked ? [] : controls()
     for (const [name, probe] of probes) {
       // An own data property, so a probe named "__proto__" is a key, not the prototype.
       setOwn(values, name, plainDataCopy(probe(world), `probe "${name}"`))
       if (!checked) {
         const after = actLogHash(world)
-        if (after !== before) {
+        const afterControls = controls()
+        if (after !== before || afterControls.some((v, i) => !Object.is(v, beforeControls[i]))) {
           throw new Error(
-            `domecs: runBranch probe "${name}" changed the world (its strict hash differs before and after the probe); probes must be read-only`,
+            `domecs: runBranch probe "${name}" changed the world (its strict hash, input, scale or resume target differs before and after the probe); probes must be read-only`,
           )
         }
         before = after
+        beforeControls = afterControls
       }
     }
     checked = true
