@@ -99,7 +99,8 @@ All notable changes to DOMECS are documented here. The format is based on
   `runBranch` called again on the same branch with the same log keeps the
   input the branch's systems left, instead of re-applying the log's, so
   two `steps: 1` calls equal one `steps: 2` call; a call with another log
-  is a new start. `Recorder.stop()` throws when called during a tick.
+  is a new start. `Recorder.stop()` and `peek()` throw when called during a
+  tick.
   (O-80, O-81)
 - `@domecs/core`: snapshots record `rngOwners` (cursor key → stream key)
   for live own-stream systems that do not hold their cursor key's stream,

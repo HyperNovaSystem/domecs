@@ -1100,8 +1100,17 @@ describe('emits the step reproduces', () => {
         thrown = e
       }
     })
+    let peeked: unknown
+    w.system('peeker', {}, () => {
+      try {
+        rec.peek()
+      } catch (e) {
+        peeked = e
+      }
+    })
     w.stepOnce()
     expect(String(thrown)).toMatch(/outside a tick/)
+    expect(String(peeked)).toMatch(/outside a tick/)
     expect(rec.active).toBe(true)
     expect(rec.stop().frames.map((f) => f.tick)).toEqual([0])
   })

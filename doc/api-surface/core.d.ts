@@ -1591,7 +1591,7 @@ export interface RecorderOptions {
 export interface Recorder {
     /** `false` once {@link stop} was called. */
     readonly active: boolean;
-    /** The log so far (a copy). */
+    /** The log so far (a copy). Throws `Error` during a tick, as {@link stop} does. */
     peek(): ActLog;
     /**
      * Stop recording and return the log. Later calls return the same log (a

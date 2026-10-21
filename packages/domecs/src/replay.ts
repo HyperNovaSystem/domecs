@@ -250,7 +250,7 @@ export interface RecorderOptions {
 export interface Recorder {
   /** `false` once {@link stop} was called. */
   readonly active: boolean
-  /** The log so far (a copy). */
+  /** The log so far (a copy). Throws `Error` during a tick, as {@link stop} does. */
   peek(): ActLog
   /**
    * Stop recording and return the log. Later calls return the same log (a
@@ -564,7 +564,10 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       return active
     },
     peek() {
-      return finalLog !== null ? cloneSerializable(finalLog) : build()
+      if (finalLog !== null) return cloneSerializable(finalLog)
+      // Mid-tick the running frame is a draft that may still gain acts or be dropped.
+      if (tap.inTick) throw new Error('domecs: Recorder.peek must be called outside a tick (not from a system, hook or handler)')
+      return build()
     },
     stop() {
       if (finalLog === null) {
