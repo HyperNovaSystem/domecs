@@ -249,6 +249,31 @@ describe('E14.2 spawn', () => {
     ])
   })
 
+  it('a prefabs callback that throws is a compile error at install and a fault at apply time', () => {
+    const throwing = (): ComponentBag | undefined => {
+      throw new Error('catalog offline')
+    }
+    expect([...installRules(world(), [], resolve, { ...OPTIONS, prefabs: throwing }).update([{ ...SHOOT, effects: [{ spawn: 'bullet' }] }])]).toEqual([
+      ['shoot', [expect.objectContaining({ message: expect.stringMatching(/prefab "bullet".*catalog offline/) })]],
+    ])
+    let applyTime = false
+    const w = world()
+    install(w, [{ ...SHOOT, effects: [{ spawn: 'bullet' }, { emit: 'FxPing', payload: { n: '9' } }] }], {
+      ...OPTIONS,
+      prefabs: (name) => (applyTime ? throwing() : prefabs(name)),
+    })
+    const shooter = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    const before = w.listEntities([]).length
+    const pings: number[] = []
+    w.on(Ping, (p) => pings.push(p.n ?? -1))
+    applyTime = true
+    w.action(Fire, { from: shooter, speed: 1 })
+    w.stepOnce()
+    expect(w.listEntities([]).length).toBe(before)
+    expect(faultsOf(w, shooter)).toEqual([expect.stringMatching(/spawn "bullet".*catalog offline/)])
+    expect(pings).toEqual([9]) // the later effect still applied
+  })
+
   it('a prefab with a conflicting component type faults the spawner and spawns nothing', () => {
     const Impostor = defineComponent<{ x: number; y: number }>('FxPos', { defaults: { x: 0, y: 0 } })
     let applyTime = false

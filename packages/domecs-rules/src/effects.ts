@@ -188,8 +188,15 @@ export function compileEffects(
         const eventName = name('emit')
         let type: EventType<unknown> | undefined
         if (eventName !== undefined) {
-          type = ctx.resolveEvent?.(eventName)
-          if (!type) {
+          let threw: string | undefined
+          try {
+            type = ctx.resolveEvent?.(eventName)
+          } catch (e) {
+            threw = e instanceof Error ? e.message : String(e)
+          }
+          if (threw !== undefined) {
+            ctx.fail(at('emit'), -1, `Resolving event "${eventName}" failed: ${threw}`)
+          } else if (!type) {
             ctx.fail(at('emit'), -1, ctx.resolveEvent
               ? `Unknown event "${eventName}"`
               : `Unknown event "${eventName}" (no resolveEvent was given; installRules uses world.lookupEvent)`)
@@ -229,9 +236,21 @@ export function compileEffects(
           if (!ctx.prefabs) {
             ctx.fail(at('spawn'), -1, `spawn "${prefab}" needs the prefabs option (installRules options.prefabs)`)
             ok = false
-          } else if (ctx.prefabs(prefab) === undefined) {
-            ctx.fail(at('spawn'), -1, `Unknown prefab "${prefab}"`)
-            ok = false
+          } else {
+            let bag: ComponentBag | undefined
+            let threw: string | undefined
+            try {
+              bag = ctx.prefabs(prefab)
+            } catch (e) {
+              threw = e instanceof Error ? e.message : String(e)
+            }
+            if (threw !== undefined) {
+              ctx.fail(at('spawn'), -1, `Resolving prefab "${prefab}" failed: ${threw}`)
+              ok = false
+            } else if (bag === undefined) {
+              ctx.fail(at('spawn'), -1, `Unknown prefab "${prefab}"`)
+              ok = false
+            }
           }
         } else ok = false
         let place: Extract<EffectPlan, { kind: 'spawn' }>['at']
@@ -412,7 +431,13 @@ export function applyEffects(
       }
       case 'spawn': {
         const what = `spawn "${effect.prefab}"`
-        const bag = prefabs?.(effect.prefab)
+        let bag: ComponentBag | undefined
+        try {
+          bag = prefabs?.(effect.prefab)
+        } catch (e) {
+          fault(effect.source, `${what}: resolving the prefab failed: ${e instanceof Error ? e.message : String(e)}`)
+          break
+        }
         if (bag === undefined) {
           fault(effect.source, `${what}: unknown prefab`)
           break

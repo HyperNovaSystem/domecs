@@ -675,6 +675,16 @@ describe('E14.1 event rules', () => {
       expect(errorsOf({ on: 'Nope' })).toEqual([
         { rule: 'move', position: -1, message: expect.stringMatching(/Unknown event "Nope"/), field: 'on' },
       ])
+      // A resolver that throws is a compile error, not a throw.
+      const throwing = (): never => {
+        throw new Error('catalog offline')
+      }
+      expect(compileRule(moveRule, resolveEv, { resolveEvent: throwing }).errors).toEqual([
+        { rule: 'move', position: -1, message: expect.stringMatching(/EvMove.*catalog offline/), field: 'on' },
+      ])
+      expect(compileRule(moveRule, throwing, opts).errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: expect.stringMatching(/catalog offline/) })]),
+      )
       // Without a resolver nothing resolves.
       expect(compileRule(moveRule, resolveEv).errors).toEqual([
         { rule: 'move', position: -1, message: expect.stringMatching(/Unknown event "EvMove"/), field: 'on' },

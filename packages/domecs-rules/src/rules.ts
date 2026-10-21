@@ -262,8 +262,15 @@ export function compileRule(
     } else if (typeof def.on !== 'string' || def.on.length === 0) {
       fail('on', -1, `"on" must be an event name, got ${JSON.stringify(def.on)}`)
     } else {
-      eventType = options.resolveEvent?.(def.on)
-      if (!eventType) {
+      let threw: string | undefined
+      try {
+        eventType = options.resolveEvent?.(def.on)
+      } catch (e) {
+        threw = e instanceof Error ? e.message : String(e)
+      }
+      if (threw !== undefined) {
+        fail('on', -1, `Resolving event "${def.on}" failed: ${threw}`)
+      } else if (!eventType) {
         fail('on', -1, options.resolveEvent
           ? `Unknown event "${def.on}"`
           : `Unknown event "${def.on}" (no resolveEvent was given; installRules uses world.lookupEvent)`)
@@ -290,7 +297,13 @@ export function compileRule(
   ): ComponentType<any> | undefined {
     const cached = componentsByName.get(name)
     if (cached) return cached
-    const resolved = resolve(name)
+    let resolved: ComponentType<any> | undefined
+    try {
+      resolved = resolve(name)
+    } catch (e) {
+      fail(field, pos, `Resolving component "${name}" ${context} failed: ${e instanceof Error ? e.message : String(e)}`)
+      return undefined
+    }
     if (!resolved) {
       fail(field, pos, `Unknown component "${name}" ${context}`)
       return undefined

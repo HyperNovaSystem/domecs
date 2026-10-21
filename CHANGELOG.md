@@ -84,8 +84,12 @@ All notable changes to DOMECS are documented here. The format is based on
   is not plain data (a `Date`, `NaN`, a `Map`) with a `TypeError` before any
   state changes, under the rules `snapshot({ pendingEvents: true })` records
   by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
-- `@domecs/rules`: `compileWorldExpression` reports a resolver that throws as
-  a compile error at the name, as its contract says, instead of throwing.
+- `@domecs/rules`: a component or event resolver or a `prefabs` callback that
+  throws is a compile error (`compileRule`, `compileWorldExpression`,
+  `RulesHandle.update`) or, when a `spawn` effect is applied, a
+  `rule_eval_failed` fault that skips that effect. Before, the throw escaped:
+  it aborted `update()` after the rule's old registration was removed, or
+  ended the tick part-way through the queued effects.
 - `@domecs/core`: act logs. When a full step throws, the recorder drops that
   step's frame and records a new `step_threw` gap. Before, the half-built
   frame stayed in the log and the next step's emits were attached to it.
