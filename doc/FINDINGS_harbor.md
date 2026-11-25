@@ -239,6 +239,12 @@ for (let i = 1; i <= 400_000; i++) w.step(1 / 60)
 | 1/20 | 399,999 steps | #13,146 |
 | 1/16, 1/64 | 400,000 steps | never |
 
+This is the accumulator that closed F-3 (commit `c255abc`, ~2% drift at
+1/60 from millisecond rounding). It is right over the sixty steps that F-3's
+regression test runs (`scheduler.test.ts`, "fires exactly N times per N
+seconds at fixedStep=1/60"), and wrong from tick 22,785 on: a longer loop in
+that test would have caught it.
+
 At 60 Hz, tick 22,785 is six minutes in. The skipped step is made up on a
 later tick (one tick runs two), so nothing is lost for good, but
 `step(world.time.fixedStep)` — the idiom AGENTS.md and the API docs give for
