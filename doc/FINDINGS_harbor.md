@@ -34,7 +34,7 @@ At a glance:
 | H-5 | core | defect | `bridge.act` says `accepted: true` for a command the handler refused |
 | H-6 | core | defect | event schemas cannot require a field or reject NaN |
 | H-16 | core | defect | `step(fixedStep)` × N runs N − 1 fixed steps (default 1/60 included) |
-| H-7 | dom | gap | views cannot redraw on a resource |
+| H-7 | dom | gap | views cannot redraw on a resource; nothing for panels drawn from strings (lost clicks) |
 | H-8 | dom | gap | no nested mounting; no way to get an entity's element |
 | H-9 | dom, input | gap | no route from a DOM event to an entity |
 | H-10 | dom | gap | change gate is world-wide; no ordered lists |
@@ -278,6 +278,20 @@ steps of 1/15).
 [Focus] }`, redrawing every mounted node of the view when a listed resource
 is marked. A view over no entity at all (`defineView({ slot, resource: R })`)
 would let HUD read-outs be views of resources directly.
+
+The rest of Harbor's interface — the tabbed side panel and the pipeline
+strip — sums up many entities at once, so it is not a view at all: it is
+rendered to a string a few times a second and written into the page. Doing
+that with `innerHTML` went wrong in ways that only show with a hand on the
+mouse. The button under the pointer was replaced between press and release,
+so the click never fired: 3 of 12 human-speed clicks (120 ms press) were
+lost at 64×. A focused button lost the focus on every repaint, so the panel
+could not be worked from the keyboard while the clock ran. Harbor now patches
+the DOM in place and holds off while a button is held down (`paint` and
+`watchPresses` in `src/ui/dom.ts`, about 100 lines): 0 of 200 lost. Any app
+that draws a panel from a string will hit this. `@domecs/dom` could ship that
+helper, or a view of a derived value (`defineView({ slot, render: (world) =>
+string })`) that patches rather than replaces.
 
 ### H-8 · Views mount flat; nothing can be mounted inside another entity's element
 
