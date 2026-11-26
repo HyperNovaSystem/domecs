@@ -78,6 +78,21 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/core`: commands with verdicts (H-5, P-1). `defineCommand(name,
+  { schema, description, handle, fixed?, priority?, rng? })` makes an event
+  type that carries its handler; `world.register(Cmd)` installs it once as
+  the event system `command:<name>` (priority −100). The handler runs once
+  per command and returns `refuse(reason)`, or `accept()` / nothing.
+  `world.action()` and `bridge.act()` return the handler's verdict for that
+  command — before, they said `accepted: true` for a command the handler
+  refused unless the caller passed a resolver, so every app wrote a
+  `Rejected` event and a resolver per call site. A resolver still decides
+  when given, and sees the handler's verdict. A throwing handler refuses its
+  command and raises `event_handler_threw`; an unregistered command is
+  refused before any tick; a `fixed: true` command is handled in the next
+  fixed step. `describe().events[i].command` marks commands. Act logs record
+  each command's verdict (`ActRecord.verdict`), and replay and `runBranch`
+  stop with `verdict_mismatch` at an act whose handler answers otherwise.
 - `@domecs/core`: fixed event systems, `{ schedule: 'event', fixed: true }`
   (H-17). They run inside the fixed schedule, ordered with the `fixed`
   systems: each fixed step delivers the events emitted since the previous

@@ -514,11 +514,13 @@ interface StartOptions {
 interface EmittedEvent { readonly type: EventType<unknown>; readonly payload: unknown }
 type ActionEvent = EmittedEvent
 
-// Game policy: derive the verdict from the tick's events + world. Omit to
-// default to { accepted: true, consumedTurn: true }.
+// Game policy: derive the verdict from the tick's events + world. Omitted,
+// a command (defineCommand) gets its handler's verdict and a plain event
+// { accepted: true, consumedTurn: true }.
 type ActionResolver = (ctx: {
   events: readonly ActionEvent[]
   world:  World
+  verdict?: ActionVerdict | undefined   // a command's handler verdict; undefined = it did not run
 }) => ActionVerdict
 
 interface ActionVerdict {
@@ -820,7 +822,36 @@ interface EventDescriptor {
   readonly fields:       Readonly<Record<string, FieldSchema>>
   readonly fieldsSource: 'schema' | 'none'
   readonly description?: string
+  readonly command?:     true    // made by defineCommand: its handler answers action()
 }
+
+// Commands (P-1, H-5): an event type that carries the handler that carries it
+// out. world.register(Cmd) installs the handler once per world as the event
+// system `command:<name>` (priority -100; with fixed: true, a fixed event
+// system). It runs once per command delivered, in order; world.action(Cmd, p)
+// and bridge.act return the verdict for *that* command (consumedTurn defaults
+// to accepted). An unregistered command is refused before any tick; a fixed
+// command after a tick that ran no fixed step is reported as not yet handled
+// (accepted: false) and stays queued. A throwing handler refuses its command
+// and raises event_handler_threw.
+function defineCommand<T>(name: string, def: CommandDef<T>): CommandType<T>
+interface CommandDef<T> {
+  readonly description?: string
+  readonly schema?:      ComponentSchema   // enforced by action() (O-39, H-6)
+  readonly handle: (ctx: CommandContext, payload: T) => CommandVerdict | void   // void = accepted
+  readonly fixed?:       boolean           // handle in the next fixed step (H-17); act with { dt }
+  readonly priority?:    number            // default -100
+  readonly rng?:         'shared' | 'own'
+}
+interface CommandContext {                 // a system's context without entities / state
+  readonly time: Readonly<TimeState>; readonly input: InputSnapshot
+  readonly events: EventView; readonly world: World; readonly rand: Rng
+}
+type CommandVerdict = { readonly accepted: true } | { readonly accepted: false; readonly reason: string }
+function accept(): CommandVerdict
+function refuse(reason: string): CommandVerdict   // non-empty reason, else TypeError
+function isCommandType(value: unknown): value is CommandType<unknown>
+interface CommandType<T> extends EventType<T> {}
 
 // `EventType<T>` is identity-keyed: the bus dispatches on a per-instance
 // symbol stored on the type object, not on `name`. Two `defineEvent('Same')`
@@ -1695,6 +1726,9 @@ interface ActRecord {
   readonly event: string         // replay resolves it with world.lookupEvent
   readonly payload?: JsonValue   // absent for an undefined payload
   readonly via: 'emit' | 'action'  // only 'action' acts are schema-checked on replay
+  // A command sent with action(): its handler's verdict in the act's tick (P-1).
+  // Replay requires the same verdict there (verdict_mismatch otherwise).
+  readonly verdict?: { readonly accepted: boolean; readonly reason?: string }
 }
 type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw'
 
@@ -1710,6 +1744,9 @@ type ReplayError =
   | { kind: 'unknown_event'; event: string; tick: number }
   | { kind: 'rejected_payload'; event: string; tick: number; reason: string }
   | { kind: 'diverged'; tick: number; expected: string; actual: string }
+  // A recorded command verdict differs on replay; actual null = the handler did not run.
+  | { kind: 'verdict_mismatch'; event: string; tick: number
+      expected: { accepted: boolean; reason?: string }; actual: { accepted: boolean; reason?: string } | null }
 ```
 
 What is recorded:

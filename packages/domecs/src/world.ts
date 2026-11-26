@@ -64,6 +64,7 @@ import {
 import type { WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, fixedAlpha, fixedStepDue, type TimeState } from './time.js'
+import { commandTag, isCommandType, type CommandContext, type CommandType, type CommandVerdict } from './commands.js'
 import type {
   ComponentBag,
   ComponentDescriptor,
@@ -131,9 +132,18 @@ function describeValue(v: unknown): string {
 
 function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
   const out: Record<string, FieldSchema> = {}
-  for (const [key, value] of Object.entries(src)) out[key] = { ...value }
+  for (const [key, value] of Object.entries(src)) {
+    out[key] = {
+      ...value,
+      ...(value.options !== undefined ? { options: [...value.options] } : {}),
+      ...(value.with !== undefined ? { with: [...value.with] } : {}),
+    }
+  }
   return out
 }
+
+/** A command handler's default priority: the commands band of SPEC §3 (P-1). */
+const COMMAND_PRIORITY = -100
 
 // null when `value` carries defineEvent()'s identity symbol; otherwise a short
 // description of what action() was handed instead, for its rejection reason.
@@ -580,6 +590,11 @@ export interface ActionVerdict {
 export type ActionResolver = (ctx: {
   events: readonly ActionEvent[]
   world: World
+  /**
+   * For a command (`defineCommand`): its handler's verdict; `undefined`
+   * when the handler did not run in this tick. Absent for a plain event.
+   */
+  verdict?: ActionVerdict | undefined
 }) => ActionVerdict
 
 export interface ActionOptions {
@@ -698,6 +713,19 @@ export function createWorld(options: WorldOptions = {}): World {
 
   // H-17: registered fixed event systems; the bus collects for them while > 0.
   let fixedEventSystems = 0
+  // P-1: the commands whose handlers this world has installed (world.register).
+  const installedCommands = new Set<EventType<unknown>>()
+  // P-1: the command world.action() is waiting on: where in its delivery it
+  // will be (the deliveries are recorded as the tick takes them) and what
+  // its handler said. One at a time: action() cannot run inside a tick.
+  let awaited: {
+    readonly type: EventType<unknown>
+    readonly tickIndex: number
+    readonly fixedIndex: number
+    tickView?: EventView
+    fixedView?: EventView
+    verdict?: CommandVerdict
+  } | null = null
   const NO_EVENTS: EventView = { of: () => [], emit: (type, payload) => bus.emit(type, payload) }
 
   const signals: WorldSignals = {
@@ -1424,6 +1452,62 @@ export function createWorld(options: WorldOptions = {}): World {
     driver.wake()
   }
 
+  /**
+   * P-1: install `type`'s handler as the event system `command:<name>`. It
+   * runs the handler once per command in its delivery, in order, and keeps
+   * the verdict of the one `action()` is waiting on.
+   */
+  function installCommand(type: CommandType<unknown>): void {
+    installedCommands.add(type)
+    const def = type[commandTag]
+    const fixed = def.fixed === true
+    world.system(
+      `command:${type.name}`,
+      {
+        schedule: 'event',
+        triggers: [type],
+        priority: def.priority ?? COMMAND_PRIORITY,
+        ...(fixed ? { fixed: true } : {}),
+        ...(def.rng !== undefined ? { rng: def.rng } : {}),
+        meta: { command: type.name },
+      },
+      (ctx) => {
+        const payloads = ctx.events.of(type)
+        const w = awaited
+        const mine =
+          w !== null && w.type === type && ctx.events === (fixed ? w.fixedView : w.tickView)
+            ? fixed ? w.fixedIndex : w.tickIndex
+            : -1
+        const cctx: CommandContext = { time: ctx.time, input: ctx.input, events: ctx.events, world: ctx.world, rand: ctx.rand }
+        for (let i = 0; i < payloads.length; i++) {
+          const verdict = handleCommand(type, cctx, payloads[i])
+          if (i === mine) w!.verdict = verdict
+        }
+      },
+    )
+  }
+
+  /** One command through its handler: a throw or a malformed return refuses it. */
+  function handleCommand(type: CommandType<unknown>, ctx: CommandContext, payload: unknown): CommandVerdict {
+    let r: unknown
+    try {
+      r = type[commandTag].handle(ctx, payload)
+    } catch (cause) {
+      const error: DomecsError = { kind: 'event_handler_threw', event: type.name, cause: normalizeCause(cause), retryable: true }
+      sigFaultRaised.emit({ source: type.name, tick: time.tick, entry: buildFaultEntry(type.name, { error, recoverable: true }) })
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return { accepted: false, reason: `command "${type.name}" handler threw: ${message}` }
+    }
+    if (r === undefined) return { accepted: true }
+    const v = r as { accepted?: unknown; reason?: unknown }
+    if (v !== null && typeof v === 'object' && v.accepted === true) return r as CommandVerdict
+    if (v !== null && typeof v === 'object' && v.accepted === false && typeof v.reason === 'string') return r as CommandVerdict
+    return {
+      accepted: false,
+      reason: `command "${type.name}" handler returned ${describeValue(r)}, not accept() or refuse(reason)`,
+    }
+  }
+
   /** @param clockSeen the `ctx.time` the system sees: the frame's, or a fixed step's (H-3). */
   function runSystem(s: CompiledSystem, view: EventView, clockSeen: Readonly<TimeState> = time): void {
     // O-42: this run's change window is (seenThrough, runStart]. Whatever is
@@ -1626,6 +1710,7 @@ export function createWorld(options: WorldOptions = {}): World {
       } finally {
         reproducing--
       }
+      if (awaited !== null && awaited.tickView === undefined) awaited.tickView = eventView
       if (sigTickStart.size > 0) sigTickStart.emit(time)
       if (tapListeners.size > 0) for (const l of tapListeners) l.hooksDone()
 
@@ -1649,6 +1734,7 @@ export function createWorld(options: WorldOptions = {}): World {
             // H-17: what fixed event systems see this sub-step — every event
             // emitted since the previous one's delivery was taken.
             const delivery = fixedEventSystems > 0 ? bus.takeFixed() : NO_EVENTS
+            if (awaited !== null && awaited.fixedView === undefined && fixedEventSystems > 0) awaited.fixedView = delivery
             // A frame of n steps may leave a hair under zero: no time is owed.
             time.fixedAccumulator = Math.max(0, time.fixedAccumulator - h)
             clock.fixedStepsFired += 1
@@ -2155,6 +2241,10 @@ export function createWorld(options: WorldOptions = {}): World {
       for (const t of components.values()) storeFor(t)
       for (const t of events.values()) bus.note(t)
       for (const t of resources.values()) resourceState.register(t as ResourceType<unknown>)
+      // P-1: a command's handler is installed once per world, on registration.
+      for (const t of events.values()) {
+        if (isCommandType(t) && !installedCommands.has(t)) installCommand(t)
+      }
       return ok(undefined)
     },
 
@@ -2220,8 +2310,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
-      const description =
-        meta.__description !== undefined ? { description: meta.__description } : {}
+      const description = {
+        ...(meta.__description !== undefined ? { description: meta.__description } : {}),
+        ...(isCommandType(type) ? { command: true as const } : {}),
+      }
       if (meta.__schema) {
         return {
           name: type.name,
@@ -2512,6 +2604,16 @@ export function createWorld(options: WorldOptions = {}): World {
           events: [],
         }
       }
+      // P-1: a command is answered by its handler, which this world must have.
+      const command = isCommandType(type)
+      if (command && !installedCommands.has(type)) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `command "${type.name}" is not registered in this world: world.register(${type.name}) installs its handler`,
+          events: [],
+        }
+      }
       // O-39: when the event declares a schema, the command boundary rejects
       // malformed payloads outright — no emit, no tick, no consumed turn —
       // instead of accepting a command whose handler will silently no-op or
@@ -2532,29 +2634,52 @@ export function createWorld(options: WorldOptions = {}): World {
       // — they are now buffered as "pending" for next tick, so bus.pendingEvents
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
-      emitVia = 'action'
-      try {
-        bus.emit(type, payload)
-      } finally {
-        emitVia = 'emit'
+      let said: CommandVerdict | undefined
+      if (command) {
+        // Where this command lands in the deliveries: after those queued now.
+        const at = bus.pendingCount(type)
+        awaited = { type, tickIndex: at.tick, fixedIndex: at.fixed }
       }
       const heartbeat = opts.dt !== undefined && opts.dt <= 0
-      opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
+      try {
+        emitVia = 'action'
+        try {
+          bus.emit(type, payload)
+        } finally {
+          emitVia = 'emit'
+        }
+        opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
+      } finally {
+        said = awaited?.verdict
+        awaited = null
+      }
+      // P-1: an attached recorder keeps the verdict with the act.
+      if (said !== undefined && tapListeners.size > 0) for (const l of tapListeners) l.answered(said)
       // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
       // is still pending — not consumed, not processed — so it must not be
       // reported as a downstream event, the resolver has no tick to
       // adjudicate, and the command cannot have been accepted. The action
       // stays buffered and flushes on the next real tick.
       const events = heartbeat ? [] : bus.pendingEvents()
-      const verdict = heartbeat
+      const handlerVerdict: ActionVerdict | undefined =
+        said === undefined ? undefined : said.accepted ? { accepted: true } : { accepted: false, reason: said.reason }
+      const verdict: ActionVerdict = heartbeat
         ? {
             accepted: false,
             consumedTurn: false,
             reason: 'heartbeat (dt <= 0): action not processed; it remains pending for the next tick',
           }
         : opts.resolve
-          ? opts.resolve({ events, world })
-          : { accepted: true, consumedTurn: true }
+          ? opts.resolve(command ? { events, world, verdict: handlerVerdict } : { events, world })
+          : !command
+            ? { accepted: true, consumedTurn: true }
+            : handlerVerdict ?? {
+                accepted: false,
+                consumedTurn: false,
+                reason: (type as CommandType<unknown>)[commandTag].fixed === true
+                  ? `command "${type.name}" is handled in the fixed schedule and this tick ran no fixed step; it stays queued for the next one (pass { dt } to step one)`
+                  : `command "${type.name}" was not handled: its handler system command:${type.name} is disabled or removed`,
+              }
       const consumedTurn = verdict.consumedTurn ?? verdict.accepted
       const result: ActionResult = {
         accepted: verdict.accepted,
@@ -2690,6 +2815,17 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     get resumeScale() {
       return preResumeScale
+    },
+    expectAnswer(type) {
+      const at = bus.pendingCount(type)
+      const mine = { type, tickIndex: at.tick, fixedIndex: at.fixed } as NonNullable<typeof awaited>
+      awaited = mine
+      return {
+        read() {
+          if (awaited === mine) awaited = null
+          return mine.verdict
+        },
+      }
     },
     onceDue() {
       const names: string[] = []

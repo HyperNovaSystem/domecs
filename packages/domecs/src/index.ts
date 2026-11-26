@@ -9,6 +9,8 @@ export type {
   AgentResetOptions,
 } from './agent.js'
 export { defineEvent, eventSchema, validateEventPayload } from './events.js'
+export { accept, defineCommand, isCommandType, refuse } from './commands.js'
+export type { CommandContext, CommandDef, CommandType, CommandVerdict } from './commands.js'
 export type { PayloadCheckOptions, PayloadWorld } from './events.js'
 export { createRng, deriveStream, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'

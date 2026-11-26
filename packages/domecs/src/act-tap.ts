@@ -1,6 +1,7 @@
 // §7.1 (G4; O-80): the world-internal tap an act-log recorder listens on.
 // A symbol-keyed hook on the world object (like the component `internal()`
 // pattern), not a public signal: only `createRecorder` uses it.
+import type { CommandVerdict } from './commands.js'
 import type { EventType } from './events.js'
 
 /** How an external emit entered the world (§7.1 `ActRecord.via`). */
@@ -34,6 +35,12 @@ export interface ActTapListener {
   restoreBegan(): void
   /** `restore()` finished: `ok` false when it threw and left the world as it was. */
   restoreEnded(ok: boolean): void
+  /**
+   * The command the last `world.action()` emitted was answered by its
+   * handler, in that action's tick (P-1). Called after the tick, once per
+   * answered action; not called when the handler did not run.
+   */
+  answered(verdict: CommandVerdict): void
 }
 
 export interface ActTap {
@@ -49,6 +56,13 @@ export interface ActTap {
    * `false`. A gate that throws counts as due.
    */
   onceDue(): string[]
+  /**
+   * Await the verdict of the next `type` command emitted, as `world.action()`
+   * does (P-1): call it just before emitting the command, step, then `read()`
+   * the verdict (`undefined` when its handler did not run) — which also stops
+   * awaiting. For replay, which emits recorded acts itself.
+   */
+  expectAnswer(type: EventType<unknown>): { read(): CommandVerdict | undefined }
 }
 
 export const ACT_TAP: unique symbol = Symbol('domecs.actTap')

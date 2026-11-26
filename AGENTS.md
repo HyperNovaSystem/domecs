@@ -65,6 +65,8 @@ agent.reset({ scale: 1, input: 'empty' })
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
+// For a command made with defineCommand (below), accepted/reason are its
+// handler's verdict; for a plain event they come from opts.resolve.
 // act() emits AND runs one tick (pass { dt: 1/60 } for fixed schedules).
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
 // agent.step()                      // only to advance with no command;
@@ -211,6 +213,33 @@ only its own entity; other entities react by reading it (`first(S).C.f`) in
 their own rules. `self`, `tick`, `other`, `event`, `pointer` are reserved
 words. Contract: SPEC Appendix A; tutorial:
 the `@domecs/rules` README.
+
+### Commands with verdicts
+An agent's "did my command work?" is answered by the command's handler:
+
+```ts
+import { defineCommand, refuse } from '@domecs/core'
+
+const BuyCrane = defineCommand<{ berth: number }>('BuyCrane', {
+  description: 'Buy a crane for a berth that has room on its rails: $90,000.',
+  schema: { fields: { berth: { kind: 'entity', required: true, with: ['Berth'] } } },
+  handle(ctx, { berth }) {
+    const cash = ctx.world.getResource(Cash)!
+    if (cash < 90_000) return refuse(`Not enough cash: $90,000 needed, $${cash} held.`)
+    // … spend, spawn, ctx.events.emit(CraneBought, { berth })
+  },
+})
+world.register(BuyCrane)                          // installs the handler, once
+bridge.act('BuyCrane', { berth: 7 })              // { accepted: false, reason: 'Not enough cash: …' }
+```
+
+`register` installs the handler as the event system `command:BuyCrane`
+(priority −100). `action()` / `bridge.act()` return the handler's verdict for
+that command; refusals spend no turn. Pass `fixed: true` for a command to a
+fixed-step simulation: it is handled in the next fixed step, so act with
+`{ dt: world.time.fixedStep }`. `describe().events[i].command` marks commands,
+and act logs keep each verdict, so replay reports a diverging refusal at the
+act.
 
 ### Commands as event rules
 Declare the command with a `schema` and `world.register` it, then handle it

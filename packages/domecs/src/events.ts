@@ -205,6 +205,12 @@ export interface EventDescriptor {
   readonly fieldsSource: 'schema' | 'none'
   /** The `description` given to `defineEvent`; absent when none was. */
   readonly description?: string
+  /**
+   * A command (`defineCommand`, P-1): something to ask the world to do,
+   * whose handler's verdict `action()` returns — as against a notification
+   * of something that happened. Absent for plain events.
+   */
+  readonly command?: true
 }
 
 export interface EventView {
@@ -229,6 +235,8 @@ export interface EventBus {
   view(): EventView
   /** Whether any events are queued for the next tick. */
   hasPending(): boolean
+  /** How many events of `type` are queued for the next tick, and for the next fixed step (P-1). */
+  pendingCount(type: EventType<unknown>): { readonly tick: number; readonly fixed: number }
   /**
    * Snapshot the currently-pending emissions as `{ type, payload }` pairs in
    * deterministic order: by first-emit of each type, then payload order within
@@ -446,6 +454,10 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
     },
     hasPending(): boolean {
       return pending.size > 0
+    },
+    pendingCount(type: EventType<unknown>): { tick: number; fixed: number } {
+      const key = type[eventTag]
+      return { tick: pending.get(key)?.length ?? 0, fixed: fixedInbox.get(key)?.length ?? 0 }
     },
     pendingEvents(): EmittedEvent[] {
       return listed(pending)

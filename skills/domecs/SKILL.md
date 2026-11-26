@@ -161,6 +161,9 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   `pointer.x|y|buttons|wheel` read the tick's `world.input` (`KeyboardEvent.code` names); drive
   headless runs with `world.setInput(snapshot)` before each step and record those snapshots to
   replay. Not allowed in world expressions
+- **Commands with verdicts:** `defineCommand<T>(name, { schema, description, handle(ctx, p) { return refuse('why') } })`,
+  `world.register(Cmd)` (installs the handler); `act()` returns the handler's verdict;
+  `fixed: true` for a fixed-step sim (act with `{ dt }`)
 - **Commands as event rules:** `{ schedule: 'event', on: 'Move', self: 'event.target',
   query: ['Pos'], actions: [{ set: 'Pos.x', expr: 'Pos.x + event.dx' }] }` runs per delivered
   payload for that entity (dead/unmatched: no-op); without `self` it broadcasts over `query`, or
