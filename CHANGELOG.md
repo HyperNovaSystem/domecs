@@ -187,6 +187,15 @@ each such change is listed under **Breaking**.
   a save before its body is decoded; `peek(storage, slot)` returns the header
   (`codec`, `snapshotVersion`, `savedAt`, `appVersion`, `meta`, `length`)
   without decoding the save, for a save menu.
+- `@domecs/rules`: `RuleDef.rateHz` and `phase` for fixed rules, and `fixed`
+  for event rules (H-13, H-17). A standing order checked once a second no
+  longer polls every step, and a rule that emits a command handled by a
+  fixed event rule (or a fixed command) is carried out in the next step at
+  any frame rate, so the latch and the "auto" flag Harbor needed are gone. A
+  rate the world's fixed step does not divide is a `RuleError` on
+  `'rateHz'`, not a throw. (An emit `once` / `cooldown`, also suggested, is
+  not added: with the fixed handler running before the rule's next step it
+  is not needed, and a cooldown would put rule state outside the snapshot.)
 - `@domecs/core`: `world.signals.restored` (H-15), emitted after every
   successful `restore()` — `load()`, `AgentBridge.reset()`, a branch, a
   history scrub — once the snapshot is applied, outside any tick and before

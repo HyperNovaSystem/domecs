@@ -1156,6 +1156,10 @@ Headless mode (§3) makes system tests fast and framework-free.
 
 A rule (`RuleDef`) runs as a system named `rule:<name>` over the entities
 holding every `query` component and (2.2) none of the `without` components.
+A fixed rule may take `rateHz` and `phase`, mapped to the system's (§3; a
+rate the world's fixed step does not divide is a `RuleError` on `'rateHz'`
+from `update()`), and an event rule `fixed: true`, which makes it a fixed
+event system (§4.1 step 3; H-13, H-17).
 For each entity, in ascending id, it evaluates `when` and then every action
 expression, and commits the action writes atomically (§2.8 for streams,
 §3 for ordering). The package README is the tutorial; this appendix is the

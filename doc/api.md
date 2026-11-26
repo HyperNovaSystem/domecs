@@ -2907,6 +2907,11 @@ interface SpatialOption {
 // RuleDef gains (2.3): schedule 'event'; on?: string (the trigger's name);
 // self?: string / other?: string (expressions giving entity ids, e.g.
 // 'event.target'); effects?: RuleEffectDef[].
+// RuleDef gains (H-13): rateHz?: number and phase?: number on fixed rules
+// (run every d-th fixed step, d = baseHz / rateHz, shifted by phase; dt is the
+// period; a rate the world's step does not divide is a RuleError on 'rateHz'
+// from update()); fixed?: boolean on event rules (handle the event in the
+// next fixed step, H-17 — a sim written as rules stays frame-rate independent).
 type RuleEffectDef =
   | { emit: string; payload?: Record<string, string> }                  // field -> expr
   | { spawn: string; at?: { x: string; y: string }; set?: Record<string, string> }  // 'Component.field' -> expr

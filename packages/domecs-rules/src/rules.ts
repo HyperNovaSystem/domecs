@@ -82,6 +82,27 @@ export interface RuleDef {
    */
   priority?: number
   /**
+   * Fixed rules (H-13): run at this rate instead of every fixed step — a
+   * whole divisor of the world's `1 / fixedStep`, like a fixed system's
+   * `rateHz`. A standing order checked once a second costs a sixteenth of
+   * one checked every step at 16 Hz, and retries at that pace. The rule's
+   * `dt` is then its period. A rate the world's step does not divide is a
+   * {@link RuleError} on `'rateHz'` from `update()`.
+   */
+  rateHz?: number
+  /**
+   * Fixed rules with a `rateHz` (H-14): run `phase` steps earlier in each
+   * period (0 to `d − 1`), to spread rules of one rate over the period.
+   */
+  phase?: number
+  /**
+   * Event rules (H-17): run in the fixed schedule, so an event a fixed rule
+   * (or fixed system) emits in one step is handled in the next, whatever the
+   * frame rate — a simulation written as rules stays frame-rate
+   * independent. See core's `{ schedule: 'event', fixed: true }`.
+   */
+  fixed?: boolean
+  /**
    * Which stream the rule's `random()` draws (§4.4; SPEC §2.8). Overrides
    * {@link InstallRulesOptions.rng} for this rule. `'own'`: the rule's own
    * stream, keyed `rule:<name>` and derived from the world's root seed, so
@@ -118,6 +139,10 @@ export type RuleDefPath =
   | 'schedule'
   | 'priority'
   | 'rng'
+  // H-13: a fixed rule's rate and phase; an event rule's fixed flag.
+  | 'rateHz'
+  | 'phase'
+  | 'fixed'
   | 'when'
   // 2.3 (§6.1): event rules.
   | 'on'
@@ -252,6 +277,28 @@ export function compileRule(
 
   if (def.schedule !== 'tick' && def.schedule !== 'fixed' && def.schedule !== 'event') {
     fail('schedule', -1, `Unknown schedule ${JSON.stringify(def.schedule)} (expected "tick", "fixed" or "event")`)
+  }
+  // H-13: the rate of a fixed rule; whether it divides the world's step is checked at install.
+  if (def.rateHz !== undefined) {
+    if (def.schedule !== 'fixed') {
+      fail('rateHz', -1, `"rateHz" is only for fixed rules (this one is ${JSON.stringify(def.schedule)})`)
+    } else if (typeof def.rateHz !== 'number' || !Number.isFinite(def.rateHz) || def.rateHz <= 0) {
+      fail('rateHz', -1, `"rateHz" must be a positive finite number, got ${JSON.stringify(def.rateHz)}`)
+    }
+  }
+  if (def.phase !== undefined) {
+    if (def.schedule !== 'fixed') {
+      fail('phase', -1, `"phase" is only for fixed rules (this one is ${JSON.stringify(def.schedule)})`)
+    } else if (!Number.isInteger(def.phase) || def.phase < 0) {
+      fail('phase', -1, `"phase" must be an integer >= 0, got ${JSON.stringify(def.phase)}`)
+    }
+  }
+  if (def.fixed !== undefined) {
+    if (def.schedule !== 'event') {
+      fail('fixed', -1, `"fixed" is only for event rules (this one is ${JSON.stringify(def.schedule)}); a fixed polling rule is schedule "fixed"`)
+    } else if (typeof def.fixed !== 'boolean') {
+      fail('fixed', -1, `"fixed" must be a boolean, got ${JSON.stringify(def.fixed)}`)
+    }
   }
   // §6.1: event rules name their trigger; polling rules have no payload.
   const isEvent = def.schedule === 'event'
@@ -748,8 +795,22 @@ function registerRuleSystem(
   // §6.1: an event rule is a core event system triggered by its event (so
   // describe() lists the event); a world-scope one has no query.
   const systemDef: SystemDef = isEvent
-    ? { schedule: 'event', triggers: [eventType!], ...(worldScope ? {} : { query }), ...common }
-    : { schedule: def.schedule as 'tick' | 'fixed', query, ...common }
+    ? {
+        schedule: 'event',
+        triggers: [eventType!],
+        ...(worldScope ? {} : { query }),
+        ...(def.fixed === true ? { fixed: true } : {}),
+        ...common,
+      }
+    : def.schedule === 'fixed'
+      ? {
+          schedule: 'fixed',
+          query,
+          ...(def.rateHz !== undefined ? { rateHz: def.rateHz } : {}),
+          ...(def.phase !== undefined ? { phase: def.phase } : {}),
+          ...common,
+        }
+      : { schedule: 'tick', query, ...common }
   const matches = (id: number): boolean => {
     for (const t of queryTypes) if (!world.has(id, t)) return false
     for (const t of withoutTypes) if (world.has(id, t)) return false
@@ -1054,6 +1115,35 @@ export interface RulesHandle {
 /** Largest |orderBase| for which every key orderBase + i stays exact. */
 const MAX_ORDER_BASE = 2 ** 51
 
+/**
+ * H-13: why a fixed rule's `rateHz` / `phase` cannot run at `fixedStep`, as
+ * core's fixed-rate rule states it (SPEC §3): the divisor `baseHz / rateHz`
+ * must be a whole number, the phase below it.
+ */
+function rateProblem(def: RuleDef, fixedStep: number): RuleError | null {
+  if (def.schedule !== 'fixed' || (def.rateHz === undefined && def.phase === undefined)) return null
+  const baseHz = 1 / fixedStep
+  const ratio = baseHz / (def.rateHz ?? baseHz)
+  const divisor = Math.round(ratio)
+  if (divisor < 1 || Math.abs(ratio - divisor) > 1e-9) {
+    return {
+      rule: def.name,
+      position: -1,
+      field: 'rateHz',
+      message: `"rateHz" ${String(def.rateHz)} is not a whole divisor of the world's ${baseHz} Hz fixed step (fixedStep ${fixedStep})`,
+    }
+  }
+  if ((def.phase ?? 0) >= divisor) {
+    return {
+      rule: def.name,
+      position: -1,
+      field: 'phase',
+      message: `"phase" ${String(def.phase)} must be below the rule's divisor ${divisor} (it runs every ${divisor} fixed steps)`,
+    }
+  }
+  return null
+}
+
 /** Options for {@link installRules}. */
 export interface InstallRulesOptions {
   /**
@@ -1195,6 +1285,12 @@ export function installRules(
       const compiled = compileRule(def, resolve, compileOptions)
       if (compiled.rule === null) {
         errorsByName.set(def.name, compiled.errors)
+        continue
+      }
+      // H-13: a rate this world's fixed step cannot divide is an error, not a throw.
+      const rateError = rateProblem(def, world.time.fixedStep)
+      if (rateError !== null) {
+        errorsByName.set(def.name, [rateError])
         continue
       }
 
