@@ -192,13 +192,13 @@ describe('§4.4 per-system RNG streams', () => {
     expect(snap.rngStreams).toEqual({ quiet: deriveStream(seedToState(5), 'quiet') })
   })
 
-  it('always v3: no own stream → version 3 with rngRoot, without rngStreams', () => {
-    expect(SNAPSHOT_VERSION).toBe(3)
+  it('always v4: no own stream → version 4 with rngRoot, without rngStreams', () => {
+    expect(SNAPSHOT_VERSION).toBe(4)
     const w = createWorld({ headless: true, seed: 77 })
     w.system('plain', {}, (ctx) => void ctx.rand.uniform())
     w.stepOnce()
     const snap = w.snapshot()
-    expect(snap.version).toBe(3)
+    expect(snap.version).toBe(4)
     expect(snap.rngRoot).toEqual(seedToState(77))
     expect(snap).not.toHaveProperty('rngStreams')
     // the root never advances, the shared seed does
@@ -206,9 +206,9 @@ describe('§4.4 per-system RNG streams', () => {
     w.system('emitter', {}, (ctx) => ctx.events.emit(Ping, { n: 1 }))
     w.stepOnce()
     const withPending = w.snapshot({ pendingEvents: true })
-    expect(withPending.version).toBe(3)
+    expect(withPending.version).toBe(4)
     expect(withPending.pendingEvents).toEqual([{ event: 'RsPing', payload: { n: 1 } }])
-    expect(w.describe().snapshotVersion).toBe(3)
+    expect(w.describe().snapshotVersion).toBe(4)
   })
 
   it('4: JSON round trip keeps rngRoot and rngStreams; restore continues the streams', () => {
@@ -269,7 +269,7 @@ describe('§4.4 per-system RNG streams', () => {
     for (let i = 0; i < 2; i++) dst.stepOnce()
     dst.restore(v2)
     const after = dst.snapshot()
-    expect(after.version).toBe(3)
+    expect(after.version).toBe(4)
     expect(after.rngRoot).toEqual(seedToState(22))
     expect(after.rngStreams).toEqual({ k: deriveStream(seedToState(22), 'k') })
     const before = logOf(dst, da)

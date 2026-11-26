@@ -200,7 +200,7 @@ describe('fork equivalence (spec §9, 2.1)', () => {
   it('the scenario is not vacuous at the fork point', () => {
     const live = liveRun(3)
     const snap = live.w.snapshot({ pendingEvents: true })
-    expect(snap.version).toBe(3)
+    expect(snap.version).toBe(4)
     expect(snap.pendingEvents?.some((p) => p.event === 'FePing')).toBe(true) // events in flight
     const steps = snap.scaledTime! / live.w.time.fixedStep
     expect(steps - Math.floor(steps)).toBeGreaterThan(0.1) // a partial fixed step accumulated

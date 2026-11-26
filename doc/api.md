@@ -555,7 +555,10 @@ interface SystemDef {
   schedule?: 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
   priority?: number                        // lower runs first; default 0
   order?:    number                        // tie-break within a priority; default 0, finite (throws otherwise)
-  rateHz?:   number                        // fixed only
+  rateHz?:   number                        // fixed only; a whole divisor of 1 / fixedStep
+  phase?:    number                        // fixed only, 0 … d − 1 (d = baseHz / rateHz): run on the
+                                           // steps where (fixedTick + phase) % d === 0; default 0 runs
+                                           // on steps d, 2d, … Spread sub-rate systems with it (H-14)
   triggers?: EventType<unknown>[]          // event only
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
@@ -579,7 +582,7 @@ interface SystemContext {
   // takes precedence). Empty
   // when neither is declared.
   entities: EntityView[]
-  time:     TimeState
+  time:     TimeState                      // the frame's clock; in a fixed system, the step's (H-3)
   input:    InputSnapshot
   events:   EventView
   world:    WorldAPI
@@ -930,23 +933,34 @@ interface TimeState {
                              // engine's unquantized cumulative scaled-time
                              // total (drift-free). See SPEC §2.7.
   scale:            number   // 0 = paused
-  fixedStep:        number   // seconds per fixed tick; the fixed-step driver
-                             // advances against the unquantized cumulative
-                             // total, so an N-Hz system fires exactly N
-                             // times per N*fixedStep seconds at any
-                             // fixedStep — including 1/60.
-  fixedAccumulator: number   // remainder of unquantized scaled time
+  fixedStep:        number   // seconds per fixed step; steps are counted off
+                             // the unquantized time owed (H-16), so
+                             // step(fixedStep) runs exactly one fixed step
+                             // and step(n * fixedStep) exactly n, however long
+                             // the world has run, at any fixedStep — 1/60 too.
+  fixedAccumulator: number   // unquantized scaled seconds owed, not yet run
+  fixedTick:        number   // fixed steps run since the world started
+  alpha:            number   // fixedAccumulator / fixedStep in [0, 1]
 }
 ```
+
+Inside a `fixed` system `ctx.time` is the step's clock, not the frame's (H-3):
+`fixedTick` is the step's 1-based index, `elapsed` is `fixedTick * fixedStep`,
+and `delta` / `scaledDelta` are the system's step (`fixedStep`, times the
+divisor for a `rateHz` system). Integrate with `ctx.time.scaledDelta` and count
+deadlines in `fixedTick`; both are the same at any time scale or frame rate.
+Views draw fixed-step state between steps with `world.time.alpha`.
 
 ### Snapshot
 
 ```ts
-// SNAPSHOT_VERSION === 3. v2 added `resources` (SPEC §2.11); v3 (2.1) added
-// `rngRoot`, `rngStreams` and `pendingEvents`. Every 2.1 snapshot is v3 (2.0
-// engines reject it); restore() accepts any version <= 3. @domecs/persist
-// ships built-in 1→2 and 2→3 migrations so v1 and v2 saves load transparently.
-const SNAPSHOT_VERSION = 3
+// SNAPSHOT_VERSION === 4. v2 added `resources` (SPEC §2.11); v3 (2.1) added
+// `rngRoot`, `rngStreams` and `pendingEvents`; v4 the fixed clock (`fixedTick`,
+// `fixedAccumulator`, and `fixedStep` always; H-16). Every snapshot this build
+// writes is v4 (older engines reject it); restore() accepts any version <= 4.
+// @domecs/persist ships built-in 1→2, 2→3 and 3→4 migrations so older saves
+// load transparently.
+const SNAPSHOT_VERSION = 4
 
 interface WorldSnapshot {
   readonly version:  number
@@ -960,16 +974,22 @@ interface WorldSnapshot {
   // undefined counts as absent (the reseed recipe). (v3)
   readonly rngStreams?: Readonly<Record<string, RngState>> | undefined
   readonly tick:     number
-  // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
-  // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
-  // the live cadence (O-40). Absent in older snapshots → clock starts at 0.
+  // Cumulative unquantized scaled seconds; restore() resumes time.elapsed from
+  // it (O-40). Absent in older snapshots → clock starts at 0.
   readonly scaledTime?: number
-  // Fixed steps due but not yet run (a tickStart hook paused after time
-  // advanced); omitted when 0. restore() keeps them owed (O-40).
-  readonly fixedBacklog?: number
-  // The fixedStep the backlog is counted in; present with it. A world
-  // restored with another fixedStep re-counts the owed time in its own steps.
+  // The fixed clock (v4, H-16): steps run and the scaled time owed to the
+  // fixed schedule (more than one step when a tickStart hook paused after
+  // time advanced). restore() resumes both exactly, so fixed and rateHz
+  // systems keep the live cadence. Written together by every v4 snapshot.
+  readonly fixedTick?: number
+  readonly fixedAccumulator?: number
+  // The step the fixed clock is counted in (always written since v4). A world
+  // restored with another fixedStep re-counts the steps and owed time in its
+  // own steps; createBranch defaults its fixedStep to this.
   readonly fixedStep?: number
+  // Pre-v4 only: fixed steps due but not run. restore() derives a v3
+  // snapshot's step count from scaledTime less this; v4 never writes it.
+  readonly fixedBacklog?: number
   readonly entities: ReadonlyArray<{
     id:         Entity
     components: Record<string, unknown>
@@ -2110,7 +2130,7 @@ function createLocalStorageStorage(prefix?: string): Storage
 
 **Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
 serializes to JSON, and writes to `slot`. `load` reads `slot`, parses it,
-migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 2)
+migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 4)
 before calling `world.restore`.
 
 ```ts
@@ -2125,7 +2145,7 @@ interface SaveOptions {
 }
 
 interface LoadOptions {
-  targetVersion?: number    // default SNAPSHOT_VERSION (2)
+  targetVersion?: number    // default SNAPSHOT_VERSION (4)
   // Caller migration chain, overlaid on BUILTIN_MIGRATIONS (caller keys win).
   // Default = just the built-ins, so a legacy v1 save upgrades transparently.
   migrations?: MigrationMap
@@ -2214,13 +2234,14 @@ interface FieldChange {
 }
 interface ResourceChange { readonly resource: string; readonly path: string; readonly before: JsonValue | undefined; readonly after: JsonValue | undefined }
 
-/** First difference: state (seed, tick, scaledTime, nextId, rngRoot, rngStreams,
- *  fixedBacklog, pendingEvents), then the lowest entity id, then resources. null when equal.
+/** First difference: state (seed, tick, scaledTime, fixedTick, fixedAccumulator,
+ *  fixedStep, nextId, rngRoot, rngStreams, rngOwners, fixedBacklog, pendingEvents),
+ *  then the lowest entity id, then resources. null when equal.
  *  version, meta and changes are not compared. */
 function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null
 
 type Divergence =
-  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' | 'pendingEvents' }
+  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'fixedTick' | 'fixedAccumulator' | 'fixedStep' | 'nextId' | 'rngRoot' | 'rngStreams' | 'rngOwners' | 'fixedBacklog' | 'pendingEvents' }
   | { where: 'entity'; entity: Entity; change: 'added' | 'removed' | FieldChange }
   | { where: 'resource'; change: ResourceChange }
 ```

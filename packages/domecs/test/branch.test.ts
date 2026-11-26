@@ -89,7 +89,8 @@ describe('createBranch (§7.2)', () => {
     const live = source()
     steps(live, 3)
     const snap = live.snapshot({ pendingEvents: true })
-    expect(snap.fixedStep).toBeUndefined()
+    // H-16: every v4 snapshot carries its fixed step.
+    expect(snap.fixedStep).toBe(1 / 60)
     const plain = createBranch(setup, snap)
     expect(plain.ok && plain.value.world.time.fixedStep).toBe(1 / 60)
     const opt = createBranch(setup, snap, { fixedStep: 1 / 30 })
@@ -97,6 +98,9 @@ describe('createBranch (§7.2)', () => {
     const withStep: WorldSnapshot = { ...snap, fixedStep: 1 / 120 }
     const fromSnap = createBranch(setup, withStep)
     expect(fromSnap.ok && fromSnap.value.world.time.fixedStep).toBe(1 / 120)
+    const { fixedStep: _step, ...stepless } = snap
+    const fallback = createBranch(setup, stepless)
+    expect(fallback.ok && fallback.value.world.time.fixedStep).toBe(1 / 60)
   })
 
   it('seed is the root for own streams when `from` has no rngRoot (a v2 snapshot)', () => {
@@ -181,21 +185,25 @@ describe('createBranch (§7.2)', () => {
     expect(createBranch(gated, snap, { scale: 2 }).ok).toBe(true)
   })
 
-  it('a snapshot without a fixed backlog carries no fixedStep: a source at 1/30 needs the option', () => {
+  it('a v4 snapshot carries its fixedStep: a branch of a source at 1/30 needs no option (H-16)', () => {
     const live = createWorld({ headless: true, fixedStep: 1 / 30, seed: [9, 8, 7, 6] })
     setup(live)
     live.spawn([entry(Body, { x: 5, v: -1 }), entry(Stats, { t: 0, hits: 0, r: 0, fixed: 0 })])
     steps(live, 6)
     const snap = live.snapshot({ pendingEvents: true })
-    expect(snap.fixedStep).toBeUndefined()
+    expect(snap.fixedStep).toBe(1 / 30)
     steps(live, 12)
+    // A snapshot without the field (written before v4 with no backlog) still needs it.
+    const { fixedStep: _step, ...stepless } = snap
     const plain = createBranch(setup, snap)
-    const given = createBranch(setup, snap, { fixedStep: live.time.fixedStep })
-    if (!plain.ok || !given.ok) throw new Error('branch failed')
-    expect(plain.value.world.time.fixedStep).toBe(1 / 60)
-    steps(plain.value.world, 12)
-    steps(given.value.world, 12)
-    expect(strict(plain.value.world)).not.toBe(strict(live))
+    const bare = createBranch(setup, stepless)
+    const given = createBranch(setup, stepless, { fixedStep: live.time.fixedStep })
+    if (!plain.ok || !bare.ok || !given.ok) throw new Error('branch failed')
+    expect(plain.value.world.time.fixedStep).toBe(1 / 30)
+    expect(bare.value.world.time.fixedStep).toBe(1 / 60)
+    for (const b of [plain, bare, given]) steps(b.value.world, 12)
+    expect(strict(plain.value.world)).toBe(strict(live))
+    expect(strict(bare.value.world)).not.toBe(strict(live))
     expect(strict(given.value.world)).toBe(strict(live))
   })
 

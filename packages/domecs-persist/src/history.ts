@@ -244,6 +244,9 @@ export type Divergence =
         | 'seed'
         | 'tick'
         | 'scaledTime'
+        | 'fixedTick'
+        | 'fixedAccumulator'
+        | 'fixedStep'
         | 'nextId'
         | 'rngRoot'
         | 'rngStreams'
@@ -491,6 +494,9 @@ const STATE_KEYS = [
   'seed',
   'tick',
   'scaledTime',
+  'fixedTick',
+  'fixedAccumulator',
+  'fixedStep',
   'nextId',
   'rngRoot',
   'rngStreams',
@@ -501,8 +507,9 @@ const STATE_KEYS = [
 
 /**
  * The first difference between two snapshots, in canonical order: the
- * top-level state fields (`seed`, `tick`, `scaledTime`, `nextId`,
- * `rngRoot`, `rngStreams`, `rngOwners`, `fixedBacklog` with its `fixedStep`, then the
+ * top-level state fields (`seed`, `tick`, `scaledTime`, the fixed clock
+ * `fixedTick`, `fixedAccumulator` and `fixedStep`, `nextId`, `rngRoot`,
+ * `rngStreams`, `rngOwners`, a pre-v4 `fixedBacklog`, then the
  * in-flight `pendingEvents` as a whole, §4.7), then
  * the lowest entity id that differs (added, removed, or its first field
  * change by sorted component name and key; a component present on one side
@@ -514,11 +521,7 @@ export function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence 
   const ra = a as unknown as Record<string, unknown>
   const rb = b as unknown as Record<string, unknown>
   for (const key of STATE_KEYS) {
-    const same =
-      key === 'fixedBacklog'
-        ? dataEqual(ra.fixedBacklog, rb.fixedBacklog, 0) && dataEqual(ra.fixedStep, rb.fixedStep, 0)
-        : dataEqual(ra[key], rb[key], 0)
-    if (!same) return { where: 'state', key }
+    if (!dataEqual(ra[key], rb[key], 0)) return { where: 'state', key }
   }
 
   const ea = new Map<Entity, Record<string, unknown>>()

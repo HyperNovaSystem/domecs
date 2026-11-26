@@ -6,6 +6,60 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+Fixes for the findings from rebuilding Harbor Authority
+([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below). Some change
+behaviour that was wrong or underspecified, so the next release is a major;
+each such change is listed under **Breaking**.
+
+### Breaking
+
+- `@domecs/core`: inside a `fixed` system, `ctx.time` is the clock of the
+  step being run, not the frame's (H-3). `delta` and `scaledDelta` are the
+  system's step (`fixedStep`, times the divisor for a `rateHz` system),
+  `elapsed` is `fixedTick × fixedStep`, and the new `fixedTick` is the
+  step's 1-based index; `tick` and `scale` stay the frame's. Before, every
+  sub-step of a frame saw the frame's values, so a fixed system that
+  integrated with `ctx.time.scaledDelta` moved `substeps ×` too far (16× per
+  frame at 64×). Code that read `ctx.time.fixedStep` for this keeps working.
+  `@domecs/rules` fixed rules now take `dt` and `time` from that clock, so a
+  fixed rule's `time` is the fixed clock.
+- `@domecs/core`: snapshots are format v4 (`SNAPSHOT_VERSION` 4). They carry
+  the fixed clock itself — `fixedTick`, `fixedAccumulator` and, always,
+  `fixedStep` — and never `fixedBacklog` (H-16). v3 and older snapshots
+  restore as before (the clock is derived from `scaledTime` and
+  `fixedBacklog`), and `@domecs/persist` gains the `3 → 4` built-in
+  migration. 2.x engines refuse v4 snapshots. Strict and default hashes of
+  every snapshot change, because the envelope gained fields.
+
+### Fixed
+
+- `@domecs/core`: `step(fixedStep)` runs exactly one fixed step, however long
+  the world has run, at any `fixedStep` (H-16). The step count was
+  `floor(total / fixedStep + 1e-9)` over a scaled-time total accumulated in
+  floating point; for any step that is not a binary fraction the total's
+  error outgrew the tolerance, and from tick 22,785 of `step(1/60)` (the
+  default step; #13,146 at 1/20) some ticks ran no fixed step and a later
+  one ran two. Steps are now counted off the time owed, which stays below
+  about one step, so a frame of `n` steps (`step(n × fixedStep)`) runs `n`
+  and worlds stepped the same time in different chunk sizes have run the
+  same steps. F-3's test now runs 30,000 ticks at nine step sizes.
+
+### Added
+
+- `@domecs/core`: `time.fixedTick`, the fixed steps run since the world
+  started, and `time.alpha`, how far the clock is into the next step
+  (`fixedAccumulator / fixedStep`, clamped to 0–1) for views that draw
+  fixed-step state between steps (H-3).
+- `@domecs/core`: `phase` on `fixed` systems with a `rateHz` (H-14): the
+  system runs on the steps where `(fixedTick + phase) % d === 0`, so the
+  sub-rate systems of one rate can be spread over their period instead of
+  all running on the same step. Default 0 keeps today's steps (`d`, `2d`,
+  …: a sub-rate system first runs after one full period); `d − 1` runs it on
+  the first step. Out-of-range or non-integer phases are rejected at
+  registration.
+- `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
+  which every v4 snapshot carries.
+
 ### Performance
 
 - `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).

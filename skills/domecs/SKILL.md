@@ -117,8 +117,8 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   `log = rec.stop()` (plain JSON); `replay(build(), log, { base })` → `Result<{ ticks, hash }>`.
   Direct writes / `spawn` / `setResource` outside a tick are gaps (replay diverges);
   replay world = same setup minus input plugin and emitting hooks; `register` command events
-- **Branch and compare:** `createBranch(setup, live.snapshot({ pendingEvents: true }), { fixedStep, scale })`
-  (the source's `time.fixedStep` / `time.scale`: neither is reliably in the snapshot)
+- **Branch and compare:** `createBranch(setup, live.snapshot({ pendingEvents: true }), { scale })`
+  (the source's `time.scale`: it is not in the snapshot; `fixedStep` is, and is the default)
   → `Result<{ world, setup }>` (`restore_failed` / `once_systems`, never thrown); then
   `runBranch(world, { steps, probes, sampleEvery, log?, until?, shouldStop? })` → `{ ticks,
   stoppedBy, samples, keyframes, hashes, faults, finalHash }`; counts are per call, the last

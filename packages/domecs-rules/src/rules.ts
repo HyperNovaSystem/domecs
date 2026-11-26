@@ -760,10 +760,11 @@ function registerRuleSystem(
     `rule:${def.name}`,
     systemDef,
     (ctx) => {
-      // Fixed-rate rules fire once per fixed-step tick, independent of the
-      // frame's wall dt — dt is that fixed step. Tick-rate rules use the
-      // (scale-adjusted, ms-quantized) per-frame delta.
-      const dt = def.schedule === 'fixed' ? ctx.time.fixedStep : ctx.time.scaledDelta
+      // A fixed rule's ctx.time is its step's clock (core H-3): dt is the
+      // step it runs every (the fixed step, × the divisor at a lower
+      // rateHz) and time is the fixed clock. A tick rule uses the frame's
+      // scale-adjusted, ms-quantized delta.
+      const dt = ctx.time.scaledDelta
       const time = ctx.time.elapsed
 
       // O-68 (R4): a rule that cannot run on an entity (a missing field, a

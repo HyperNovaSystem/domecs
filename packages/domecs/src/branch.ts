@@ -22,9 +22,9 @@ export type WorldSetup<T = void> = (world: World) => T
 /** Options for {@link createBranch}. */
 export interface BranchOptions {
   /**
-   * Default `from.fixedStep ?? 1/60`. A snapshot carries `fixedStep` only
-   * with a fixed backlog, so pass the source's `time.fixedStep` whenever it
-   * is not 1/60.
+   * Default `from.fixedStep ?? 1/60`. Every v4 snapshot carries the source's
+   * `fixedStep` (H-16); pass it for an older snapshot taken from a world
+   * whose step was not 1/60.
    */
   readonly fixedStep?: number
   /** The `createWorld` seed; only matters for a v2 `from` (no `rngRoot`). */
@@ -59,8 +59,8 @@ export type BranchError =
  *
  * Take `from` with `snapshot({ pendingEvents: true })` and without
  * snapshot-rewriting plugins (redaction), or the branch starts from a
- * different state than the source had. Pass the source's `fixedStep` and
- * `scale`: neither is in a snapshot (`fixedStep` only with a backlog).
+ * different state than the source had. Pass the source's `scale`: it is not
+ * in a snapshot. `fixedStep` is (since v4), and is the default.
  */
 export function createBranch<T = void>(
   setup: WorldSetup<T>,

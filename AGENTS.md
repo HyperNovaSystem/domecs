@@ -82,7 +82,10 @@ agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
 2. **`spawn` shallow-copies.** Capture the entity id; read live state with
    `world.getComponent(id, C)`. Do not keep the bag you passed to `spawn`.
 3. **`stepOnce` never fires `fixed` systems.** Use `step(world.time.fixedStep)`
-   (or `bridge.step(dt)`) for fixed-schedule sims and tests.
+   (or `bridge.step(dt)`) for fixed-schedule sims and tests: it runs exactly
+   one fixed step. Inside a `fixed` system, `ctx.time` is the step's clock:
+   integrate with `ctx.time.scaledDelta`, count deadlines in
+   `ctx.time.fixedTick`.
 4. **`keyDelta` is one render tick.** Edge-triggered keys belong on `tick`
    systems (or use held `keys`). Do not sample `keyDelta` from `fixed`.
 5. **Paused (`scale === 0`) freezes `tick` and `fixed`.** Put pause/resume
@@ -265,9 +268,9 @@ Compare branches (or a branch with the live world) by `finalHash` / `hashes`
 `once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
 gate boot work on snapshotted state so it is not re-run (the gate is read
 after the restore), or leave it out of the branch setup.
-Neither `fixedStep` (only with a fixed backlog) nor scale is in the snapshot:
-pass the source's `time.fixedStep` and `time.scale` (for a paused source, its
-resume scale, then `pause()` the branch). A probe that
+The snapshot carries the source's `fixedStep` (the branch's default) but not
+its scale: pass the source's `time.scale` (for a paused source, its resume
+scale, then `pause()` the branch). A probe that
 changes the world throws at the first sample.
 
 ### Render state

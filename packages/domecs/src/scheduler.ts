@@ -63,13 +63,29 @@ export interface TickSystemDef<
   schedule?: 'tick'
 }
 
-/** Fixed-rate system; `rateHz` must be a whole-number divisor of the world's base rate. */
+/**
+ * Fixed-rate system; `rateHz` must be a whole-number divisor of the world's
+ * base rate (`1 / fixedStep`). A system at a divisor `d = baseHz / rateHz`
+ * runs on every `d`-th fixed step: steps `d`, `2d`, … — so it first runs
+ * after one full period, not on the first step. `ctx.time` is the step's
+ * clock (H-3): `scaledDelta` is the system's period, `d × fixedStep`.
+ */
 export interface FixedSystemDef<
   Fields = Record<string, unknown>,
   State = unknown,
 > extends SystemDefBase<Fields, State> {
   schedule: 'fixed'
   rateHz?: number
+  /**
+   * Shifts a `rateHz` system's steps earlier by `phase` (an integer from 0
+   * to `d − 1`; default 0): it runs on the steps where `(fixedTick + phase)
+   * % d === 0`, i.e. `d − phase`, `2d − phase`, … Give the sub-rate systems
+   * of one rate different phases to spread their cost over the period
+   * instead of running them all on the same step (H-14). `phase: d − 1`
+   * runs a system on the first step. Deterministic, and part of the
+   * system's definition, not of the snapshot.
+   */
+  phase?: number
 }
 
 /** Event-driven system; runs when any of `triggers` fired this tick. */
@@ -173,6 +189,8 @@ export interface CompiledSystem {
   reactsTo?: QueryResult
   /** for fixed: divisor = baseHz / rateHz */
   fixedDivisor: number
+  /** for fixed: `def.phase ?? 0`; runs when `(step + fixedPhase) % fixedDivisor === 0` (H-14) */
+  fixedPhase: number
   /** for once: has it already run? */
   ranOnce: boolean
   /** Monotonic tie-break for equal priorities; never reused (O-43). */
@@ -323,6 +341,7 @@ export function createScheduler(
       }
 
       let fixedDivisor = 1
+      let fixedPhase = 0
       if (def.schedule === 'fixed') {
         const baseHz = 1 / fixedStep
         const rateHz = def.rateHz ?? baseHz
@@ -336,6 +355,13 @@ export function createScheduler(
           )
         }
         fixedDivisor = rounded
+        const phase: unknown = def.phase ?? 0
+        if (!Number.isInteger(phase) || (phase as number) < 0 || (phase as number) >= fixedDivisor) {
+          throw new Error(
+            `domecs: system "${name}" phase=${String(phase)} must be an integer from 0 to ${fixedDivisor - 1} (its rateHz=${rateHz} runs every ${fixedDivisor} fixed steps). SPEC §3 fixed-rate rule.`,
+          )
+        }
+        fixedPhase = phase as number
       }
 
       const id = nextId++
@@ -356,6 +382,7 @@ export function createScheduler(
         enabled: true,
         state: def.state,
         fixedDivisor,
+        fixedPhase,
         ranOnce: false,
         registrationIndex: id,
         removed: false,

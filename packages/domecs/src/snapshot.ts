@@ -4,11 +4,14 @@ import type { RngState } from './rng.js'
 import type { Entity } from './types.js'
 
 // v2 added the optional `resources` field; v3 (2.1) the optional `rngRoot`,
-// `rngStreams` (§4.4) and `pendingEvents` (§4.7) fields. Every snapshot a 2.1
-// world writes is v3. The persist layer's built-in 1->2 and 2->3 migrations
-// upgrade older saves (each is a pure version bump: an older snapshot simply
-// lacks the newer optional fields). `restore()` accepts any version <= 3.
-export const SNAPSHOT_VERSION = 3
+// `rngStreams` (§4.4) and `pendingEvents` (§4.7) fields; v4 the fixed
+// clock, `fixedTick` and `fixedAccumulator`, with `fixedStep` always
+// written (H-16). Every snapshot this build writes is v4. The persist
+// layer's built-in 1->2, 2->3 and 3->4 migrations upgrade older saves (each
+// is a pure version bump: an older snapshot simply lacks the newer optional
+// fields, and restore derives the fixed clock from `scaledTime` as those
+// builds did). `restore()` accepts any version <= 4.
+export const SNAPSHOT_VERSION = 4
 
 /** Options for `world.snapshot()`. */
 export interface SnapshotOptions {
@@ -79,26 +82,40 @@ export interface WorldSnapshot {
   readonly rngOwners?: Readonly<Record<string, string>> | undefined
   readonly tick: number
   /**
-   * Cumulative unquantized scaled time in seconds — the drift-free total
-   * that drives the fixed-step scheduler (SPEC §2.7). Restore resumes it and
-   * re-derives `time.elapsed`, the fixed-step count, and the accumulator from
-   * it, so a restored world's `fixed` systems keep the live world's cadence
+   * Cumulative unquantized scaled time in seconds, from which `time.elapsed`
+   * and `scaledDelta` are derived (SPEC §2.7, F-3). Restore resumes it
    * (O-40). Optional: snapshots from older builds lack it, and restore starts
    * the clock at zero.
    */
   readonly scaledTime?: number
   /**
-   * Fixed steps due under `scaledTime` that had not run yet (O-40). Omitted
-   * when 0 — the normal case after a completed tick. Positive when a
-   * `tickStart` hook paused the world after time advanced (the live world
-   * runs them on resume), or when the snapshot was taken inside the
-   * fixed-step loop. Restore keeps them owed.
+   * Fixed steps run since the world started: `time.fixedTick` (v4, H-16).
+   * Written by every v4 snapshot, with {@link fixedAccumulator}; restore
+   * resumes both exactly, so a restored world's `fixed` and `rateHz` systems
+   * keep the live world's cadence. Absent (v3 and older), restore derives
+   * the count from `scaledTime` and `fixedBacklog`, as those builds did.
+   */
+  readonly fixedTick?: number
+  /**
+   * Scaled seconds owed to the fixed schedule and not yet run:
+   * `time.fixedAccumulator` (v4, H-16). Below one step after a completed
+   * tick; more when a `tickStart` hook paused the world after time advanced
+   * (the live world runs the owed steps on resume) or when the snapshot was
+   * taken inside the fixed-step loop. Present exactly when `fixedTick` is.
+   */
+  readonly fixedAccumulator?: number
+  /**
+   * Pre-v4 only (O-40): fixed steps due under `scaledTime` that had not run
+   * yet. A v4 snapshot carries the owed time in `fixedAccumulator` instead
+   * and never writes this field; restore refuses it next to `fixedTick`.
    */
   readonly fixedBacklog?: number
   /**
-   * The `fixedStep` that `fixedBacklog` is counted in; present with it. A
-   * world restored with another `fixedStep` re-counts the owed time in its
-   * own steps instead of owing the same number of differently sized ones.
+   * The `fixedStep` the fixed clock is counted in — the source world's
+   * `time.fixedStep`. Every v4 snapshot writes it (a v3 snapshot only with a
+   * `fixedBacklog`). A world restored with another `fixedStep` re-counts the
+   * steps and the owed time in its own steps, and `createBranch` defaults its
+   * `fixedStep` to this.
    */
   readonly fixedStep?: number
   readonly entities: ReadonlyArray<{

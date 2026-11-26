@@ -63,7 +63,7 @@ import {
 } from './scheduler.js'
 import type { WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
-import { createTime, fixedStepsDue, type TimeState } from './time.js'
+import { createTime, fixedAlpha, fixedStepDue, type TimeState } from './time.js'
 import type {
   ComponentBag,
   ComponentDescriptor,
@@ -625,6 +625,8 @@ export function createWorld(options: WorldOptions = {}): World {
   let streams = new Map<string, Rng>()
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
+  // H-3: the clock a fixed system sees, set for each step it runs in.
+  const fixedTime = createTime(fixedStep)
   let preResumeScale = 1
   let input: InputSnapshot = emptyInput()
 
@@ -1403,7 +1405,8 @@ export function createWorld(options: WorldOptions = {}): World {
     driver.wake()
   }
 
-  function runSystem(s: CompiledSystem, view: EventView): void {
+  /** @param clockSeen the `ctx.time` the system sees: the frame's, or a fixed step's (H-3). */
+  function runSystem(s: CompiledSystem, view: EventView, clockSeen: Readonly<TimeState> = time): void {
     // O-42: this run's change window is (seenThrough, runStart]. Whatever is
     // marked while it runs — its own writes included — is after the window,
     // and seenThrough moves past it when the run ends.
@@ -1411,7 +1414,7 @@ export function createWorld(options: WorldOptions = {}): World {
     s.running = true
     reproducing++
     try {
-      runSystemBody(s, view)
+      runSystemBody(s, view, clockSeen)
     } finally {
       reproducing--
       s.running = false
@@ -1419,13 +1422,13 @@ export function createWorld(options: WorldOptions = {}): World {
     }
   }
 
-  function runSystemBody(s: CompiledSystem, view: EventView): void {
+  function runSystemBody(s: CompiledSystem, view: EventView, clockSeen: Readonly<TimeState>): void {
     const ctx: SystemContext = {
       // Explicit `query` wins; otherwise a reactive system's `reactsTo` delta
       // is delivered as ctx.entities (SPEC: reactive systems see the query
       // delta). Falls back to [] for systems with neither.
       entities: s.query ? s.query.entities : s.reactsTo ? s.reactsTo.entities : [],
-      time,
+      time: clockSeen,
       input,
       events: view,
       world,
@@ -1569,6 +1572,8 @@ export function createWorld(options: WorldOptions = {}): World {
     // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
     // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
     clock.totalScaledSeconds += scaledDt
+    // H-16: the fixed steps are counted from what is owed, not the total.
+    time.fixedAccumulator += scaledDt
     const newQuantizedMs = Math.round(clock.totalScaledSeconds * 1000)
     // F-6: when the caller passed a positive dt, floor per-tick
     // quantized dt at 1 ms so sub-ms wall-clock frames never expose
@@ -1613,25 +1618,36 @@ export function createWorld(options: WorldOptions = {}): World {
       reproducing++
       try {
         // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
-        // in per-tick scaledDelta does not entangle the scheduler.
+        // H-16: steps are counted off the unquantized scaled time not yet
+        // run, which stays below about one step, so the rounding error is
+        // that of one step, never that of the world's age: `step(fixedStep)`
+        // runs exactly one fixed step however long the world has run. When a
+        // tickStart hook paused the world after time advanced, the time stays
+        // owed in the accumulator (O-40) and runs on resume.
         if (time.scale !== 0) {
-          const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
-          while (clock.fixedStepsFired < expected) {
+          const h = time.fixedStep
+          while (fixedStepDue(time.fixedAccumulator, h)) {
+            // A frame of n steps may leave a hair under zero: no time is owed.
+            time.fixedAccumulator = Math.max(0, time.fixedAccumulator - h)
             clock.fixedStepsFired += 1
             clock.fixedStepCounter += 1
+            time.fixedTick = clock.fixedStepsFired
+            // H-3: a fixed system sees the step's clock, not the frame's.
+            fixedTime.tick = time.tick
+            fixedTime.scale = time.scale
+            fixedTime.fixedTick = clock.fixedStepsFired
+            fixedTime.elapsed = clock.fixedStepsFired * h
+            fixedTime.fixedAccumulator = time.fixedAccumulator
+            fixedTime.alpha = 0
             for (const s of scheduler.systemsByMode('fixed')) {
               if (!isEnabled(s)) continue
-              if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
-              runSystem(s, eventView)
+              if ((clock.fixedStepCounter + s.fixedPhase) % s.fixedDivisor !== 0) continue
+              fixedTime.delta = fixedTime.scaledDelta = h * s.fixedDivisor
+              runSystem(s, eventView, fixedTime)
             }
           }
         }
-        // Kept current even when a tickStart hook paused the world after time
-        // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
-        // and the accumulator reports them.
-        time.fixedAccumulator =
-          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
+        time.alpha = fixedAlpha(time.fixedAccumulator, time.fixedStep)
 
         // SPEC §3 — `once` systems fire on first tick of world.
         for (const s of scheduler.systemsByMode('once')) {
