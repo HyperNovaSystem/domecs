@@ -204,3 +204,35 @@ describe('commands in act logs (P-1)', () => {
     })
   })
 })
+
+// PR #30 review (Codex): an unrelated emit during the action's tick (a
+// tickEnd subscriber's) cleared the record waiting for the verdict, so the
+// log lost it and replay could not report a diverging refusal.
+describe('a command verdict survives other emits in its tick', () => {
+  it('records it with a tickEnd subscriber emitting, and replay still checks it', async () => {
+    const { createRecorder, replay } = await import('../src/replay.js')
+    const Note = defineEvent<{ n: number }>('CmNote', { schema: { fields: { n: { kind: 'number' } } } })
+    const gate = (open: boolean) =>
+      defineCommand<{ n: number }>('CmGate', {
+        schema: { fields: { n: { kind: 'number', required: true } } },
+        handle: () => (open ? accept() : refuse('The gate is closed.')),
+      })
+    const live = createWorld({ headless: true })
+    live.register(gate(false), Note)
+    const base = live.snapshot({ pendingEvents: true })
+    const rec = createRecorder(live)
+    const off = live.signals.tickEnd.subscribe(() => live.emit(Note, { n: 1 }))
+    const r = live.action(live.lookupEvent('CmGate') as never, { n: 1 })
+    off()
+    const log = rec.stop()
+    expect(r.accepted).toBe(false)
+    const acts = log.frames.flatMap((f) => [...(f.acts ?? []), ...(f.endActs ?? [])])
+    expect(acts.find((a) => a.event === 'CmGate')?.verdict).toEqual({ accepted: false, reason: 'The gate is closed.' })
+    expect(acts.some((a) => a.event === 'CmNote')).toBe(true)
+
+    const fork = createWorld({ headless: true })
+    fork.register(gate(true), Note)
+    const out = replay(fork, log, { base, verify: false })
+    expect(!out.ok && out.error.kind).toBe('verdict_mismatch')
+  })
+})

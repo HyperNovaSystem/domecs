@@ -435,7 +435,10 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       let into: ActRecord[] = pending
       const f = running
       if (f !== null) into = afterHooks ? (f.endActs ??= []) : (f.startActs ??= [])
-      lastAction = null
+      // P-1: an action's emit is the record its verdict will land on — or
+      // none, when it could not be recorded. Other emits (a tickStart or
+      // tickEnd subscriber's, inside the action's tick) leave it waiting.
+      if (via === 'action') lastAction = null
       let record: { event: string; payload?: JsonValue; via: 'emit' | 'action'; verdict?: NonNullable<ActRecord['verdict']> }
       if (payload === undefined) {
         record = { event: type.name, via }
