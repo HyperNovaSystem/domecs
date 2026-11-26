@@ -264,7 +264,9 @@ if (run.ok) console.log(run.value.stoppedBy, run.value.samples, run.value.finalH
 ```
 
 Compare branches (or a branch with the live world) by `finalHash` / `hashes`
-(strict) and by probe samples. Call `runBranch` again to extend a branch.
+(strict) and by probe samples. Call `runBranch` again to extend a branch; on a
+large world pass `finalHash: false` to the calls that only advance it (a strict
+hash snapshots the whole world).
 `once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
 gate boot work on snapshotted state so it is not re-run (the gate is read
 after the restore), or leave it out of the branch setup.

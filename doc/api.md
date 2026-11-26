@@ -1802,7 +1802,7 @@ function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, optio
 function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>
 
 interface BranchOptions {
-  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (snapshots carry it only with a backlog)
+  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (every v4 snapshot carries it)
   readonly seed?: number | RngState   // only matters for a v2 `from` (no rngRoot)
   readonly scale?: number             // the source's time.scale (not snapshotted); default 1
 }
@@ -1820,6 +1820,11 @@ interface RunBranchOptions {
   readonly hashEvery?: number         // strict hash every k steps
   readonly until?: (world: World) => boolean   // checked after each step
   readonly shouldStop?: () => boolean          // polled before each step
+  readonly finalHash?: boolean        // default true; false → BranchRun.finalHash null, no hash taken
+  // When to prove probes read-only (hash before/after): 'once' (default) = each
+  // probe function the first time this world samples it; true = every probe at
+  // the first sample of every call (2.x); false = never. Else TypeError (H-18).
+  readonly checkProbes?: boolean | 'once'
 }
 interface BranchRun {
   readonly ticks: number              // steps taken by this call
@@ -1828,9 +1833,15 @@ interface BranchRun {
   readonly keyframes: ReadonlyArray<{ tick: number; snapshot: WorldSnapshot }>
   readonly hashes: ReadonlyArray<{ tick: number; hash: string }>
   readonly faults: readonly SystemicFault[]    // signals.faultRaised during this call
-  readonly finalHash: string                   // strict
+  readonly finalHash: string | null            // strict; null with finalHash: false
 }
 ```
+
+A strict hash snapshots the whole world, so on a large one it dominates a
+short call. To extend a branch a few steps at a time (spreading a forecast
+over frames, or cancelling it), pass `finalHash: false` and hash when needed;
+with the default `checkProbes: 'once'`, probes already proven on the branch
+are not re-hashed (H-18).
 
 `createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
 `setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. Pass the

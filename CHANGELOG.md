@@ -30,6 +30,9 @@ each such change is listed under **Breaking**.
   `fixedBacklog`), and `@domecs/persist` gains the `3 → 4` built-in
   migration. 2.x engines refuse v4 snapshots. Strict and default hashes of
   every snapshot change, because the envelope gained fields.
+- `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
+  with the new `finalHash: false`), and by default `runBranch` proves each
+  probe read-only once per branch instead of at every call.
 
 ### Fixed
 
@@ -69,6 +72,14 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/core`: `runBranch` options `finalHash` and `checkProbes` (H-18).
+  `finalHash: false` takes no hash at the end of the call (`BranchRun.finalHash`
+  is then `null`). Probes are proven read-only once per branch by default
+  (`checkProbes: 'once'`: each probe function the first time the world
+  samples it); `true` keeps the 2.x check at every call, `false` skips it.
+  Every strict hash snapshots the whole world — 221 ms per one-step call at
+  22,000 entities, 729 ms with two probes — so extending a branch a few
+  steps at a time was impractical.
 
 ### Performance
 
