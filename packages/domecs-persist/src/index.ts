@@ -3,13 +3,21 @@
  * See doc/BETTER_ERRORS.md Phase 2 for the discipline this enforces.
  */
 export {
+  decodeSave,
+  encodeSave,
   load,
   loadIfPresent,
+  peek,
+  prepareSave,
   pruneTransientOnlyEntities,
   save,
+  type DecodeOptions,
   type LoadOptions,
+  type SaveHeader,
   type SaveOptions,
+  type SaveReport,
 } from './persist.js'
+export { columnarCodec, jsonCodec, type SnapshotCodec } from './codecs.js'
 export {
   migrate,
   BUILTIN_MIGRATIONS,

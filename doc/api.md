@@ -1191,7 +1191,7 @@ const HASH_ALGORITHM: 'fnv1a64'
 - **Keyframes.** Serialize with `canonicalJson`, not `JSON.stringify`, so a
   `-0` survives the round trip; `JSON.parse(canonicalJson(snap))` restores
   to a world that continues exactly like one restored from `snap`.
-  `@domecs/persist` `save()` still writes `JSON.stringify` (follow-up).
+  `@domecs/persist` `save()` writes `canonicalJson` too (its default `jsonCodec`).
 - The hash is not cryptographic. All five functions are pure and identical
   across runs and JS engines.
 
@@ -2265,28 +2265,62 @@ function createMemoryStorage(initial?: Readonly<Record<string, string>>): Storag
 function createLocalStorageStorage(prefix?: string): Storage
 ```
 
-**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
-serializes to JSON, and writes to `slot`. `load` reads `slot`, parses it,
-migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 4)
-before calling `world.restore`.
+**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`
+(and `meta.appVersion`), encodes it with a codec behind a one-line header, and
+writes the text to `slot`. `load` reads `slot`, reads the header, checks
+`accept`, decodes the body with the codec the header names, migrates the
+envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 4) and calls
+`world.restore`. A slot written before headers (bare JSON) still loads.
+
+Stored text: `domecs-save 1`, a newline, the header as JSON
+(`{ codec, snapshotVersion, savedAt, appVersion?, meta? }`), a newline, then
+the codec's body.
 
 ```ts
-function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
+function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<SaveReport, DomecsError>
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
 // Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
 function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
+// The header without decoding the body (H-12): a save menu's "Day 3 · 14:20". ok(null) when empty.
+function peek(storage: Storage, slot: string): Result<SaveHeader | null, DomecsError>
+
+// The pure halves (H-11), for a host that stores the text itself or works in a worker:
+function prepareSave(world: World, opts?: SaveOptions): WorldSnapshot       // the stamped envelope
+function encodeSave(snap: WorldSnapshot, opts?: { codec?: SnapshotCodec }): Result<{ text: string; header: SaveHeader }, DomecsError>
+function decodeSave(text: string, opts?: DecodeOptions): Result<{ snapshot: WorldSnapshot; header: SaveHeader }, DomecsError>
 
 interface SaveOptions {
-  meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)
-  savedAt?: number                    // override stamped ms-epoch timestamp; default Date.now()
+  meta?:       Record<string, unknown>   // merged into snapshot envelope meta (caller keys win); also the header's
+  savedAt?:    number                    // override stamped ms-epoch timestamp; default Date.now()
+  appVersion?: number | string           // the app's save format, in meta and the header (H-12)
+  codec?:      SnapshotCodec             // default jsonCodec; columnarCodec for large worlds (H-11, P-2)
 }
+interface SaveReport { codec: string; length: number }   // characters written (O-29)
 
-interface LoadOptions {
+interface DecodeOptions {
   targetVersion?: number    // default SNAPSHOT_VERSION (4)
   // Caller migration chain, overlaid on BUILTIN_MIGRATIONS (caller keys win).
   // Default = just the built-ins, so a legacy v1 save upgrades transparently.
   migrations?: MigrationMap
+  codecs?: readonly SnapshotCodec[]                 // decoders beyond json and columnar, by name
+  // Before the body is decoded: true loads; false or a reason refuses (persist_io), world untouched.
+  accept?: (header: SaveHeader) => boolean | string
 }
+type LoadOptions = DecodeOptions
+
+interface SaveHeader {
+  codec: string; snapshotVersion: number; savedAt: number
+  appVersion?: number | string; meta?: Record<string, unknown>
+  length: number                                    // characters of the stored text
+}
+
+// A wire format: name it, and load finds the decoder by that name.
+interface SnapshotCodec { name: string; encode(snap: WorldSnapshot): string; decode(text: string): unknown }
+// canonicalJson / JSON.parse: lossless (-0 kept); NaN and cycles refused, not written as null.
+const jsonCodec: SnapshotCodec
+// P-2: entities of one component of flat fields as tables of rows, the rest as is:
+// lossless, ~0.3x the text of jsonCodec on a 21,000-entity port.
+const columnarCodec: SnapshotCodec
 
 // Plugin: strips entities with an empty serializable component bag from every
 // world.snapshot() envelope via onSnapshot — the declarative way to get

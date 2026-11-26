@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { createSnapshotHistory } from '../src/history.js'
 import { load, save } from '../src/persist.js'
 import { createMemoryStorage } from '../src/storage.js'
+import { decodeStored } from './decode-stored.js'
 
 const Camera = defineResource<{ x: number }>('PTrCamera', {
   default: () => ({ x: 0 }),
@@ -22,7 +23,7 @@ describe('@domecs/persist — transient resources (O-36)', () => {
     expect(save(w, storage, 'slot').ok).toBe(true)
     const raw = storage.read('slot')
     if (!raw.ok || raw.value === null) throw new Error('slot not written')
-    const written = JSON.parse(raw.value) as { resources?: Record<string, unknown> }
+    const written = decodeStored(raw.value) as { resources?: Record<string, unknown> }
     expect(written.resources).toEqual({ PTrGold: 12 })
 
     w.setResource(Gold, 99)

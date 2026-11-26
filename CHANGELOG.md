@@ -36,6 +36,12 @@ each such change is listed under **Breaking**.
   and `NaN` was accepted. `step` stays a hint.
 - `@domecs/core`: `FieldKind` gains `'entity'`, so a `switch` over it needs
   a case (`@domecs/persist`'s schema helpers have one).
+- `@domecs/persist`: `save()` returns `ok({ codec, length })` instead of
+  `ok(undefined)` (O-29), and the stored text starts with a one-line header
+  before the body (H-12). Older bare-JSON slots still load and peek. The
+  default codec writes `canonicalJson`: `-0` survives a save and load, and a
+  `NaN` or a cycle is a `persist_io` error instead of being written as
+  `null` (`JSON.stringify` did both silently).
 - `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
   with the new `finalHash: false`), and by default `runBranch` proves each
   probe read-only once per branch instead of at every call.
@@ -167,6 +173,20 @@ each such change is listed under **Breaking**.
   field; it checks emitted payloads for shape only, so "despawn self, then
   announce" can still name the entity. `@domecs/persist` round-trips the new
   keys.
+- `@domecs/persist`: codecs (H-11). `SaveOptions.codec` picks the wire format
+  — `jsonCodec` (default), `columnarCodec` (P-2: entities of one component of
+  flat fields as tables, 3.07 MB → 0.95 MB on Harbor's hub port, lossless),
+  or any `{ name, encode, decode }` — and `load()` finds the decoder by the
+  name in the header (`LoadOptions.codecs` for custom ones). The pure halves
+  `prepareSave`, `encodeSave` and `decodeSave` let a host put a worker or
+  its own storage between the snapshot and the slot. Before, `save`/`load`
+  fixed the format to `JSON.stringify`, and Harbor re-implemented the
+  envelope, migrations and error mapping to pack its saves.
+- `@domecs/persist`: saves say what they are (H-12). `SaveOptions.appVersion`
+  is stamped into `meta` and the header; `LoadOptions.accept(header)` refuses
+  a save before its body is decoded; `peek(storage, slot)` returns the header
+  (`codec`, `snapshotVersion`, `savedAt`, `appVersion`, `meta`, `length`)
+  without decoding the save, for a save menu.
 - `@domecs/core`: `world.signals.restored` (H-15), emitted after every
   successful `restore()` — `load()`, `AgentBridge.reset()`, a branch, a
   history scrub — once the snapshot is applied, outside any tick and before

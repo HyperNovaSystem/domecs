@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { load, loadIfPresent, save } from '../src/persist.js'
 import { createMemoryStorage, type Storage } from '../src/storage.js'
 import type { Migration } from '../src/migrate.js'
+import { decodeStored } from './decode-stored.js'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 const Tag = defineComponent<{ name: string }>('Tag', { defaults: { name: '' } })
@@ -184,7 +185,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(save(w, storage, 'slot').ok).toBe(true)
     const read = storage.read('slot')
     expect(read.ok).toBe(true)
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(typeof snap.meta?.savedAt).toBe('number')
   })
 
@@ -192,7 +193,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     const w = createWorld()
     expect(save(w, storage, 'slot', { meta: { label: 'checkpoint', n: 3 } }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.label).toBe('checkpoint')
     expect(snap.meta?.n).toBe(3)
     expect(typeof snap.meta?.savedAt).toBe('number')
@@ -202,7 +203,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     const w = createWorld()
     expect(save(w, storage, 'slot', { savedAt: 1234567 }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.savedAt).toBe(1234567)
   })
 
@@ -217,7 +218,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     })
     expect(save(w, storage, 'slot', { meta: { label: 'x' } }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.source).toBe('plugin')
     expect(snap.meta?.label).toBe('x')
     expect(typeof snap.meta?.savedAt).toBe('number')
@@ -257,7 +258,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(save(w1, storage, 'v3').ok).toBe(true)
     const read = storage.read('v3')
     if (!read.ok || read.value === null) throw new Error('slot missing')
-    const raw = JSON.parse(read.value) as WorldSnapshot
+    const raw = decodeStored(read.value)
     expect(raw.version).toBe(4)
     expect(raw.fixedTick).toBe(0)
     expect(raw.rngRoot).toEqual(seedToState(5))
@@ -290,7 +291,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(before.ok && JSON.parse(before.value!).version).toBe(2)
     expect(save(w, storage, 'v2').ok).toBe(true)
     const after = storage.read('v2')
-    expect(after.ok && JSON.parse(after.value!).version).toBe(4)
+    expect(after.ok && decodeStored(after.value!).version).toBe(4)
   })
 
   it('built-in migrations do not paper over pre-v1 gaps (v0 with no user migration fails)', () => {
