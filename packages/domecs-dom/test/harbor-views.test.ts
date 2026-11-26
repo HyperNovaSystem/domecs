@@ -112,6 +112,21 @@ describe('panels: markup derived from the world, patched in place (H-7)', () => 
     expect(renders).toBe(5)
   })
 
+  // PR #30 review (Codex): teardown cleared the slot but not paint's memory
+  // of it, so the same markup mounted again was never written.
+  it('paints again when mounted again into the same slot', () => {
+    const w = createWorld({ headless: true })
+    const panel = definePanel({ slot: 'hud', render: () => '<b>100</b>' })
+    const first = mount(w, [], { panels: [panel] })
+    w.stepOnce()
+    expect(hud.innerHTML).toBe('<b>100</b>')
+    first.teardown()
+    expect(hud.innerHTML).toBe('')
+    mount(w, [], { panels: [panel] })
+    w.stepOnce()
+    expect(hud.innerHTML).toBe('<b>100</b>')
+  })
+
   it('without a gate, repaints every frame, writing only when the markup changed', () => {
     const w = createWorld({ headless: true })
     let tick = 0

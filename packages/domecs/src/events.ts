@@ -273,6 +273,8 @@ export interface EventBus {
   takeFixed(): EventView
   /** The collected, not yet delivered fixed events, as {@link pendingEvents}. */
   pendingFixedEvents(): EmittedEvent[]
+  /** Whether a collected event waits for a fixed step to deliver it. */
+  hasFixedPending(): boolean
   /** Queue `events` ahead of the collected fixed events, in their order (restore). */
   prependFixed(events: readonly EmittedEvent[]): void
   /**
@@ -473,6 +475,9 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
     },
     pendingFixedEvents(): EmittedEvent[] {
       return listed(fixedInbox)
+    },
+    hasFixedPending(): boolean {
+      return fixedInbox.size > 0
     },
     prependFixed(events: readonly EmittedEvent[]): void {
       if (collecting) fixedInbox = ahead(events, fixedInbox)

@@ -236,3 +236,24 @@ describe('a command verdict survives other emits in its tick', () => {
     expect(!out.ok && out.error.kind).toBe('verdict_mismatch')
   })
 })
+
+// PR #30 review (Codex): runSystems took fixed event systems from the fixed
+// list and ran a fixed command's handler again on demand.
+describe('runSystems and fixed event systems', () => {
+  it('skips them, as it skips every event system', () => {
+    const w = createWorld({ headless: true, fixedStep: 1 / 16 })
+    let n = 0
+    const Buy = defineCommand<{ n: number }>('CmFixedBuy', {
+      fixed: true,
+      schema: { fields: { n: { kind: 'number', required: true } } },
+      handle: () => {
+        n++
+      },
+    })
+    w.register(Buy)
+    expect(w.action(Buy, { n: 1 }, { dt: 1 / 16 }).accepted).toBe(true)
+    expect(n).toBe(1)
+    expect(w.runSystems(['command:CmFixedBuy'])).toEqual({ ran: [], skipped: ['command:CmFixedBuy'] })
+    expect(n).toBe(1)
+  })
+})

@@ -13,7 +13,7 @@ import {
   type Result,
 } from '@domecs/core'
 import { ENTITY_ATTRIBUTE, entityOf } from './entity.js'
-import { paint } from './paint.js'
+import { forgetPaint, paint } from './paint.js'
 import type { PanelDef, ViewDef } from './view.js'
 
 export interface MountOptions {
@@ -427,6 +427,8 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       }
       for (const panel of panels) {
         disposePanel(panel)
+        // paint must not think the cleared slot still holds what it wrote (PR #30 review).
+        forgetPaint(panel.slotEl)
         panel.slotEl.replaceChildren()
       }
       const set = mountedSlots.get(world)

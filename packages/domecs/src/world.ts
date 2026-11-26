@@ -1466,7 +1466,14 @@ export function createWorld(options: WorldOptions = {}): World {
         return true
       }
       for (const s of scheduler.systemsByMode('fixed')) {
-        if (isEnabled(s)) return true
+        if (!isEnabled(s)) continue
+        // A fixed event system polls nothing: it needs frames only while
+        // something waits for a fixed step to deliver it (PR #30 review).
+        if (s.fixedEvent) {
+          if (bus.hasFixedPending()) return true
+          continue
+        }
+        return true
       }
     }
     return false
@@ -2602,7 +2609,8 @@ export function createWorld(options: WorldOptions = {}): World {
       // Snapshot both phases first (copy-on-write arrays, O-43): systems a
       // run registers are not run by this call.
       const candidates = [
-        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name)),
+        // A fixed event system is an event system: never run on demand (PR #30 review).
+        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name) && !s.fixedEvent),
         ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
       ]
       const ran: string[] = []

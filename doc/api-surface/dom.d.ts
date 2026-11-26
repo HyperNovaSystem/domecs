@@ -186,6 +186,12 @@ export declare function mountDOM(world: World, opts: MountOptions): Result<Mount
  */
 export declare function paint(target: Element, html: string): boolean;
 /**
+ * Forget what {@link paint} last wrote into `target` (and any markup held
+ * for it), before its content is cleared by other means — so the same
+ * markup painted again is written, not skipped as already there.
+ */
+export declare function forgetPaint(target: Element): void;
+/**
  * Keep {@link paint} off whatever the primary button is pressing in
  * `root`: what was under the pointer when the button went down is still
  * there, unchanged, when it comes up, so the click lands — and lands on what
