@@ -627,20 +627,28 @@ Events emitted in steps 5–6 are buffered for next tick.
 
 ### 5.1 Views, not elements
 
-An entity projects **zero-or-more views**. A view is a named slot + a renderer function:
+An entity projects **zero-or-more views**. A view is a named slot, a query, and the callbacks that build and repaint one element per matching entity:
 
 ```ts
-interface View<T> {
-  slot:    string               // 'stage', 'hud', 'portal', 'inspector'...
-  target?: HTMLElement          // override root
-  create(entity, component): HTMLElement
-  update(el, entity, component, prev): void
-  destroy(el, entity): void
+interface ViewDef<Fields> {
+  slot:       string                  // 'stage', 'hud', 'portal', 'inspector'...
+  query:      QueryShorthand          // the standing set of entities it mounts
+  changedOn?: ChangedOn               // when update runs (§5.3); resources too (H-7)
+  order?(entity): number              // keep its nodes sorted (H-10)
+  parent?:    { view, of(entity), at? } // mount inside another view's element (H-8)
+  create(entity): HTMLElement
+  update?(el, entity): void
+  destroy?(el, entity): void
 }
 ```
 
-A view is **bound to one or more component types**.
-The renderer registry maps component types to views.
+A view is **bound to the component types of its query**; `mountDOM(world, { slots, views, panels? })` installs them. Components are read from the `entity` view (`entity.Position`); there is no previous value — a view that needs one keeps it on its element.
+
+**Entity routing (H-9, normative).** Every element a view mounts carries `data-entity="<id>"` (unless `mountDOM`'s `stamp: false`). `entityOf(target)` returns the entity of the innermost such element at or above an event target, and `MountHandle.on(slot, type, (entity, event) => …)` is a delegated listener that ignores elements not mounted by that mount. `MountHandle.elementOf(view, entity)` returns a mounted element.
+
+**Nested views (H-8, normative).** A view with `parent: { view, of, at? }` mounts each element inside the element `view` (another view of the same mount) has mounted for `of(entity)` — at the descendant matching `at` when given and found — or in its slot when `of` returns `null`/`undefined`. Parents are committed before children in every commit, whatever the order the views were given in; a parent that is not one of the mount's views, or a cycle, is `invalid_parent`. `of` is re-evaluated after each `update` of the entity, and the element is moved (not re-created) when its parent changes. While the parent has no element — not yet mounted, or unmounted — the child stays mounted but out of the page, and is attached at the first commit at which the parent's element exists. Unmounting a parent's element first takes out the children nested in it.
+
+**Ordered lists (H-10, normative).** A view with `order(entity)` keeps its nodes in ascending key order within each container (ties by entity id; a non-finite key sorts last), re-evaluated for every node at each commit in which one of its nodes is created, updated or attached. Only nodes out of place relative to the one before them are moved; nodes of other views in the same container are not.
 
 **View membership (O-52, normative).** A view's query defines a standing set: an entity is mounted while it is in the query's result (`query.entities`, which applies `Where` predicates) and unmounted when it leaves, reconciled at each render commit. Temporal nodes (`OnAdded`, `OnRemoved`, `OnChanged`, `OnChangedResource`) are not valid in a view query; `mountDOM` returns `invalid_view_query`. Change-gated redraws use `changedOn`.
 
@@ -729,9 +737,11 @@ Anything else escapes the compositor and is documented as "slow-path."
 
 ### 5.5 Virtualization
 
-Renderers may declare `virtualize: true`.
-For such views, the renderer calls a `shouldMount(entity, viewport)` hook before `create()`.
-This supports long sortable tables (`@domecs/dom` ships a table-list view for this) and large stage viewports.
+`@domecs/dom` does not virtualize: there is no `virtualize` flag, `shouldMount` hook or table-list view. A view mounts its query's whole set, so a large world draws only what is in view by making that a query term: give the entities on screen a transient tag and put the tag in the view's query. Harbor Authority draws ~300 of ~20,000 entities this way, adding and removing an `OnStage` tag once per frame against the wanted set, so only what moved is touched. A view's redraw gate is intersected with its query (H-10), so marks on entities off the stage cost the renderer nothing.
+
+### 5.5a Panels (H-7, normative)
+
+A *panel* is markup derived from the whole world — a side panel, a status bar, a summary of many entities — rather than one element per entity. `definePanel({ slot, render(world): string, changedOn? })`, passed in `mountDOM`'s `panels`, owns a slot of its own (sharing it is `invalid_panel`). Its `render` runs at the first commit, then at each commit after a listed component was added, changed or removed on any entity, a listed resource was set or marked (`signals.resourceChanged`), or the world was restored; without `changedOn`, at every commit. Its output is written with `paint(slot, html)`: the DOM is patched in place, position by position — an element of the same tag is kept and its attributes and children brought into line — and nothing is written when the markup is what was last painted, so the focused control, a CSS transition and the button under the pointer survive a repaint. `watchPresses(document)` makes `paint` hold off an element while the primary button is pressed inside it, and paint the latest markup asked for as soon as the click has been dispatched (or on the next task for a press without a click), so a click always lands on what was pressed. Writing a panel with `innerHTML` instead replaces the pressed button between press and release, and the click never fires.
 
 ### 5.6 Portals and layers
 

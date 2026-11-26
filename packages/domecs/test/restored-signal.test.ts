@@ -92,3 +92,23 @@ describe('signals.restored (H-15)', () => {
     expect(n).toBe(0)
   })
 })
+
+// H-7: what is not a system (a HUD panel) needs to know a resource changed,
+// even in a world with no entities for a query to report.
+describe('signals.resourceChanged (H-7)', () => {
+  it('fires for setResource and markResourceChanged, transient resources too, and not for restore', async () => {
+    const { defineResource } = await import('../src/resource.js')
+    const Cash = defineResource<number>('RsCash', { default: 0 })
+    const Cam = defineResource<{ x: number }>('RsCam', { default: { x: 0 }, transient: true })
+    const w = createWorld({ headless: true })
+    const seen: string[] = []
+    w.signals.resourceChanged.subscribe((type) => void seen.push(type.name))
+    w.setResource(Cash, 5)
+    w.getResource(Cam)!.x = 3
+    w.markResourceChanged(Cam)
+    const snap = w.snapshot()
+    w.setResource(Cash, 6)
+    w.restore(snap)
+    expect(seen).toEqual(['RsCash', 'RsCam', 'RsCash'])
+  })
+})

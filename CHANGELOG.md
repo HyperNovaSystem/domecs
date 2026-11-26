@@ -89,6 +89,39 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/dom`: views can redraw on resources (H-7):
+  `changedOn: { mode: 'auto' | 'explicit', resources: [Focus] }` redraws
+  every mounted node when a listed resource is set or marked. Before,
+  `changedOn` took component types only, so a view whose look depended on a
+  camera or selection held in a resource had to run in `legacy` mode and
+  redraw every frame.
+- `@domecs/dom`: panels and patching (H-7). `definePanel({ slot, render:
+  (world) => string, changedOn? })` (mount option `panels`) renders markup
+  derived from the whole world into a slot of its own, at the first commit
+  and then when a listed component is added, changed or removed, a listed
+  resource changes, or the world is restored. It is written with the new
+  `paint(target, html)`, which patches the DOM in place and writes nothing
+  when the markup is unchanged, and `watchPresses(document)` holds repaints
+  off a pressed button until its click has landed — ported from Harbor,
+  where `innerHTML` repaints lost 3 in 12 human-speed clicks at 64× and the
+  focus on every repaint, and `paint` lost 0 in 200.
+- `@domecs/dom`: nested views (H-8). `ViewDef.parent: { view, of, at? }`
+  mounts each element inside another view's element (a box on the deck of
+  the ship holding it), moves it when `of` changes on update, and keeps it
+  mounted but out of the page while the parent has no element. Parents
+  commit before children whatever the view order. `MountHandle.elementOf(view,
+  entity)` returns a mounted element.
+- `@domecs/dom`: from a DOM event to an entity (H-9). Mounted elements carry
+  `data-entity="<id>"` (mount option `stamp: false` to opt out);
+  `entityOf(target)` finds the innermost entity at or above an event target,
+  and `MountHandle.on(slot, type, (entity, event) => …)` is a delegated
+  listener for this mount's elements.
+- `@domecs/dom`: ordered lists (H-10). `ViewDef.order(entity)` keeps a view's
+  nodes in ascending key order within each container, moving only nodes out
+  of place; before, nodes stayed in mount order and apps set CSS `order`.
+- `@domecs/core`: `world.signals.resourceChanged`, fired when a resource is
+  set or marked (transient ones too), for what is not a system — a panel in
+  a world with no entities to query (H-7).
 - `@domecs/input`: `preventDefaultKeys` also takes a list of
   `KeyboardEvent.code`s or a function `(e) => boolean`, and the new
   `interactiveSelector` option (default `INTERACTIVE_SELECTOR`, exported)
@@ -152,6 +185,11 @@ each such change is listed under **Breaking**.
 
 ### Performance
 
+- `@domecs/dom`: a view's redraw gate is its own query intersected with each
+  trigger (`And(query, OnChanged(T))`), so marks on entities outside the
+  view are no longer collected and then discarded each commit (H-10). With
+  Harbor's 300 staged of 20,000 containers, hundreds of off-stage marks a
+  frame at 64× no longer make views.
 - `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).
   Structural live queries reuse their result until membership changes,
   stores are found by type identity, add/remove follow archetype edges,

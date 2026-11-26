@@ -2103,15 +2103,50 @@ type MountError =
   | { kind: 'plugin_install_failed'; reason: string }
   | { kind: 'invalid_view_query'; slot: string; reason: string }   // temporal node in a view query (O-52)
   | { kind: 'invalid_changed_on'; slot: string; reason: string }   // update with no redraw trigger (O-55)
+  | { kind: 'invalid_parent'; slot: string; reason: string }       // parent.view not in this mount, or a cycle (H-8)
+  | { kind: 'invalid_panel'; slot: string; reason: string }        // a panel shares its slot (H-7)
 
 interface MountOptions {
   readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
   readonly views: ReadonlyArray<ViewDef>
+  readonly panels?: ReadonlyArray<PanelDef>   // markup derived from the world, patched into their own slot (H-7)
+  readonly stamp?: boolean                    // data-entity="<id>" on every mounted element; default true (H-9)
 }
 
 interface MountHandle {
   teardown(): void
+  // The element a view of this mount has mounted for an entity (H-8);
+  // undefined when none. An element waiting for its parent is mounted but out of the page.
+  elementOf(view: ViewDef, entity: Entity): HTMLElement | undefined
+  // A delegated listener on a slot: fn gets the entity whose mounted element
+  // the event happened in (the innermost, for nested views) — events outside
+  // this mount's elements are ignored. Returns a function that stops it (H-9).
+  on<K extends keyof HTMLElementEventMap>(slot: string, type: K,
+    fn: (entity: Entity, event: HTMLElementEventMap[K]) => void): () => void
 }
+
+// H-9: the entity of the innermost stamped element at or above an event target.
+function entityOf(target: EventTarget | Node | null | undefined): Entity | undefined
+const ENTITY_ATTRIBUTE = 'data-entity'
+
+// H-7: patch an element to match markup, keeping every node still right (so
+// focus, transitions and a pressed button survive); nothing is written when
+// the markup is what was last painted. paint owns the element's content.
+function paint(target: Element, html: string): boolean   // true when the DOM changed
+// Hold paint off whatever the primary button is pressing until its click has
+// landed; markup asked for meanwhile is painted right after. Returns unwatch.
+function watchPresses(root: Document): () => void
+
+// A panel: render(world) to a string, painted into its own slot at the first
+// commit, then when a listed component is added/changed/removed on any entity,
+// a listed resource is set or marked, or after a restore — or every commit
+// without changedOn.
+interface PanelDef {
+  readonly slot: string
+  render(world: World): string
+  readonly changedOn?: { readonly types?: readonly ComponentType<any>[]; readonly resources?: readonly ResourceType<any>[] }
+}
+function definePanel(def: PanelDef): PanelDef
 
 // ViewDef carries optional typed `Fields` so tuple-form queries thread
 // component value types through to `create` / `update` / `destroy`.
@@ -2128,7 +2163,12 @@ interface MountHandle {
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
 //     those component types. Overrides the auto-derive. An empty list with
-//     `update` is err invalid_changed_on.
+//     `update` and no resources is err invalid_changed_on.
+//   - `resources` (auto and explicit, H-7): also redraw every mounted node
+//     when one of these resources is set or marked (a transient camera or
+//     selection).
+// The gate is the view's own query intersected with each trigger (H-10), so a
+// mark on an entity outside the view is never collected.
 //
 // First paint (O-2): under `auto`/`explicit`, `update` also runs once for
 // each newly created node in the commit that mounts it (fresh commit-time
@@ -2136,14 +2176,22 @@ interface MountHandle {
 // window). Later commits stay change-gated. `create` gets the entity as it
 // is at the commit, with components added since it matched (O-55).
 type ChangedOn =
-  | { readonly mode: 'auto' }
+  | { readonly mode: 'auto'; readonly resources?: ReadonlyArray<ResourceType<any>> }
   | { readonly mode: 'legacy' }
-  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>> }
+  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>>
+      readonly resources?: ReadonlyArray<ResourceType<any>> }
 
 interface ViewDef<Fields = Record<string, unknown>> {
   slot:         string
   query:        QueryShorthand
   changedOn?:   ChangedOn
+  // H-10: keep this view's nodes in ascending order(entity), ties by id, in
+  // each container; re-evaluated when one of its nodes is created or updated.
+  order?(entity: EntityView<Fields>): number
+  // H-8: mount each element inside another view's element (`at`: a selector
+  // inside it), or the slot when `of` returns null. Re-evaluated on update;
+  // while the parent has no element the child stays mounted, out of the page.
+  parent?: { view: ViewDef; of(entity: EntityView<Fields>): Entity | null | undefined; at?: string }
   create(entity: EntityView<Fields>): HTMLElement
   update?(el: HTMLElement, entity: EntityView<Fields>): void
   destroy?(el: HTMLElement, entity: EntityView<Fields>): void

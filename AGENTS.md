@@ -351,7 +351,16 @@ mountDOM(world, {
 ```
 
 `update` runs once on first mount (first paint), then only when queried
-components are `markChanged`.
+components are `markChanged` — or, with `changedOn: { mode: 'auto',
+resources: [Camera] }`, when a listed resource is set. Mounted elements carry
+`data-entity`: route DOM events with `handle.on('stage', 'click', (entity,
+ev) => …)` or `entityOf(ev.target)`, find an element with
+`handle.elementOf(view, entity)`, nest one view's elements in another's with
+`parent: { view, of: (e) => e.Box.holder, at: '.deck' }`, and keep a list in
+order with `order: (e) => e.Rank.n`. A panel that sums up many entities is a
+`definePanel({ slot, render: (world) => html, changedOn })`, patched in place
+with `paint` (call `watchPresses(document)` once) so clicks and focus survive
+its repaints.
 
 ---
 

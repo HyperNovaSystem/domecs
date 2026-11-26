@@ -207,6 +207,14 @@ export interface WorldSignals {
    * which has completed.
    */
   restored: Signal<Readonly<WorldSnapshot>>
+  /**
+   * A resource was set (`setResource`) or marked (`markResourceChanged`),
+   * transient ones included — the resource's change mark, as a signal, for
+   * what is not a system: a HUD panel that must repaint when the cash
+   * changes, even in a world with no entities (H-7). Fires on the call site,
+   * synchronously. Not fired by `restore()`, which `restored` reports.
+   */
+  resourceChanged: Signal<ResourceType<unknown>>
 }
 
 export interface World {
@@ -668,6 +676,7 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
   const sigRestored: EmittableSignal<Readonly<WorldSnapshot>> = createSignal()
+  const sigResourceChanged: EmittableSignal<ResourceType<unknown>> = createSignal()
 
   // §7.1 (G4; O-80): the act-log tap (act-tap.ts). Listeners hear external
   // emits, frame boundaries, out-of-tick mutations and restores.
@@ -737,6 +746,7 @@ export function createWorld(options: WorldOptions = {}): World {
     tickEnd: sigTickEnd,
     faultRaised: sigFaultRaised,
     restored: sigRestored,
+    resourceChanged: sigResourceChanged,
   }
 
   let scheduler!: Scheduler
@@ -791,7 +801,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
   // World-singleton resources (#16) — registry and materialized values live
   // in the extracted resource-state module; changes go to the change log.
-  const resourceState = createResourceState((name) => changes.markResource(name))
+  const resourceState = createResourceState((name) => {
+    changes.markResource(name)
+    if (sigResourceChanged.size > 0) {
+      const type = resourceState.lookup(name)
+      if (type !== undefined) sigResourceChanged.emit(type)
+    }
+  })
 
   // queries
   const queries: CompiledQuery[] = []
