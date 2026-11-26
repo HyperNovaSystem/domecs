@@ -25,10 +25,14 @@ export interface SnapshotCodec {
     decode(text: string): unknown;
 }
 /**
- * The default codec: `canonicalJson` (keys sorted, `-0` kept, a non-finite
- * number or a cycle refused) and `JSON.parse`. Lossless, so a loaded world
- * hashes like the saved one; `JSON.stringify`, which `save()` used before,
- * wrote `-0` as `0` and `NaN` as `null`.
+ * The default codec: the snapshot as JSON, written with `canonicalJson`
+ * values (`-0` kept, a non-finite number or a cycle refused) and read with
+ * `JSON.parse`. Lossless, so a loaded world hashes like the saved one;
+ * `JSON.stringify`, which `save()` used before, wrote `-0` as `0` and `NaN`
+ * as `null`. The text is a plain JSON snapshot, so a host that parses its
+ * slots keeps working; its first keys are `meta` and `version`, so `peek()`
+ * reads a slot's header from that prefix without parsing the rest (H-12).
+ * The other keys follow in canonical (sorted) order.
  */
 export declare const jsonCodec: SnapshotCodec;
 /**
@@ -317,8 +321,8 @@ export interface DecodeOptions {
      * Checked against the slot's header before the body is decoded (H-12):
      * `true` loads; `false`, or a string saying why, refuses with a
      * `persist_io` error and leaves the world untouched. For a save written
-     * by another format of the app (`header.appVersion`), say. A save from
-     * before headers is parsed first to read its `meta`.
+     * by another format of the app (`header.appVersion`), say. A 2.x save
+     * (`JSON.stringify`, `meta` last) is parsed first to read its `meta`.
      */
     accept?: (header: SaveHeader) => boolean | string;
 }
@@ -355,10 +359,11 @@ export interface SaveOptions {
  */
 export declare function prepareSave(world: World, opts?: SaveOptions): WorldSnapshot;
 /**
- * The text {@link save} writes for `snap` — a header line naming the codec,
- * versions, `savedAt` and `meta`, then the body — without writing it (H-11).
- * Pure: safe in a worker. A value the codec cannot carry (`NaN`, a cycle)
- * is a `persist_io` error.
+ * The text {@link save} writes for `snap`, without writing it (H-11). For the
+ * `json` codec it is the codec's JSON (a plain snapshot, `meta` first); for
+ * any other codec, a header line naming the codec, versions, `savedAt` and
+ * `meta`, then the codec's body. Pure: safe in a worker. A value the codec
+ * cannot carry (`NaN`, a cycle) is a `persist_io` error.
  */
 export declare function encodeSave(snap: WorldSnapshot, opts?: Pick<SaveOptions, 'codec'>): Result<{
     readonly text: string;
@@ -366,7 +371,7 @@ export declare function encodeSave(snap: WorldSnapshot, opts?: Pick<SaveOptions,
 }, DomecsError>;
 /**
  * Captures {@link prepareSave}, encodes it with `opts.codec` (default
- * {@link jsonCodec}) behind a header, and writes it to `slot`. Returns what
+ * {@link jsonCodec}; see {@link encodeSave}), and writes it to `slot`. Returns what
  * it wrote (O-29). Failures (a value the codec cannot carry, I/O) come back
  * as `persist_io` with the cause normalized via `normalizeCause`. The slot is
  * only touched when encoding succeeded — a failure leaves any prior
@@ -375,7 +380,8 @@ export declare function encodeSave(snap: WorldSnapshot, opts?: Pick<SaveOptions,
 export declare function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<SaveReport, DomecsError>;
 /**
  * The header of the save in `slot`, without decoding the body (H-12): `ok(null)`
- * for an empty slot. A save from before headers is parsed to read it.
+ * for an empty slot. A json save is read from its prefix; a 2.x save is
+ * parsed whole.
  */
 export declare function peek(storage: Storage, slot: string): Result<SaveHeader | null, DomecsError>;
 /**

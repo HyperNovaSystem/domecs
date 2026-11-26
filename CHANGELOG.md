@@ -37,11 +37,13 @@ each such change is listed under **Breaking**.
 - `@domecs/core`: `FieldKind` gains `'entity'`, so a `switch` over it needs
   a case (`@domecs/persist`'s schema helpers have one).
 - `@domecs/persist`: `save()` returns `ok({ codec, length })` instead of
-  `ok(undefined)` (O-29), and the stored text starts with a one-line header
-  before the body (H-12). Older bare-JSON slots still load and peek. The
-  default codec writes `canonicalJson`: `-0` survives a save and load, and a
-  `NaN` or a cycle is a `persist_io` error instead of being written as
-  `null` (`JSON.stringify` did both silently).
+  `ok(undefined)` (O-29). A json save is still a plain JSON snapshot, now
+  with `meta` and `version` as its first keys and the rest in canonical
+  order (so `peek` reads its header from the prefix); a save with any other
+  codec starts with a one-line header (H-12). 2.x slots still load and
+  peek. The default codec writes `canonicalJson` values: `-0` survives a
+  save and load, and a `NaN` or a cycle is a `persist_io` error instead of
+  being written as `null` (`JSON.stringify` did both silently).
 - `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
   with the new `finalHash: false`), and by default `runBranch` proves each
   probe read-only once per branch instead of at every call.

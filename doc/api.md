@@ -2289,13 +2289,16 @@ function createLocalStorageStorage(prefix?: string): Storage
 ```
 
 **Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`
-(and `meta.appVersion`), encodes it with a codec behind a one-line header, and
-writes the text to `slot`. `load` reads `slot`, reads the header, checks
-`accept`, decodes the body with the codec the header names, migrates the
-envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 4) and calls
-`world.restore`. A slot written before headers (bare JSON) still loads.
+(and `meta.appVersion`), encodes it with a codec and writes the text to
+`slot`. `load` reads the slot's header, checks `accept`, decodes the body with
+the codec the header names, migrates the envelope to `targetVersion` (default
+`SNAPSHOT_VERSION`, 4) and calls `world.restore`. Slots written by 2.x
+(`JSON.stringify`) still load.
 
-Stored text: `domecs-save 1`, a newline, the header as JSON
+Stored text: for `jsonCodec`, a plain JSON snapshot whose first keys are
+`meta` and `version` (the rest in canonical order), so a host that parses its
+slots keeps working and `peek` reads the header from that prefix. For any
+other codec: `domecs-save 1`, a newline, the header as JSON
 (`{ codec, snapshotVersion, savedAt, appVersion?, meta? }`), a newline, then
 the codec's body.
 

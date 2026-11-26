@@ -54,8 +54,8 @@ export interface DecodeOptions {
    * Checked against the slot's header before the body is decoded (H-12):
    * `true` loads; `false`, or a string saying why, refuses with a
    * `persist_io` error and leaves the world untouched. For a save written
-   * by another format of the app (`header.appVersion`), say. A save from
-   * before headers is parsed first to read its `meta`.
+   * by another format of the app (`header.appVersion`), say. A 2.x save
+   * (`JSON.stringify`, `meta` last) is parsed first to read its `meta`.
    */
   accept?: (header: SaveHeader) => boolean | string
 }
@@ -109,10 +109,11 @@ export function prepareSave(world: World, opts: SaveOptions = {}): WorldSnapshot
 }
 
 /**
- * The text {@link save} writes for `snap` — a header line naming the codec,
- * versions, `savedAt` and `meta`, then the body — without writing it (H-11).
- * Pure: safe in a worker. A value the codec cannot carry (`NaN`, a cycle)
- * is a `persist_io` error.
+ * The text {@link save} writes for `snap`, without writing it (H-11). For the
+ * `json` codec it is the codec's JSON (a plain snapshot, `meta` first); for
+ * any other codec, a header line naming the codec, versions, `savedAt` and
+ * `meta`, then the codec's body. Pure: safe in a worker. A value the codec
+ * cannot carry (`NaN`, a cycle) is a `persist_io` error.
  */
 export function encodeSave(
   snap: WorldSnapshot,
@@ -133,13 +134,15 @@ export function encodeSave(
   } catch (cause) {
     return saveErr(cause)
   }
-  const text = `${MAGIC}\n${headerText}\n${body}`
+  // A json body is a snapshot already, readable by any JSON reader and
+  // peeked from its first keys; any other body needs the codec's name.
+  const text = codec.name === jsonCodec.name ? body : `${MAGIC}\n${headerText}\n${body}`
   return ok({ text, header: { ...head, length: text.length } })
 }
 
 /**
  * Captures {@link prepareSave}, encodes it with `opts.codec` (default
- * {@link jsonCodec}) behind a header, and writes it to `slot`. Returns what
+ * {@link jsonCodec}; see {@link encodeSave}), and writes it to `slot`. Returns what
  * it wrote (O-29). Failures (a value the codec cannot carry, I/O) come back
  * as `persist_io` with the cause normalized via `normalizeCause`. The slot is
  * only touched when encoding succeeded — a failure leaves any prior
@@ -160,7 +163,8 @@ export function save(
 
 /**
  * The header of the save in `slot`, without decoding the body (H-12): `ok(null)`
- * for an empty slot. A save from before headers is parsed to read it.
+ * for an empty slot. A json save is read from its prefix; a 2.x save is
+ * parsed whole.
  */
 export function peek(storage: Storage, slot: string): Result<SaveHeader | null, DomecsError> {
   const read = storage.read(slot)
@@ -312,7 +316,14 @@ function readSave(
     if (typeof header === 'string') return loadErr(new Error(`slot "${slot}" has a malformed save header: ${header}`))
     return ok({ header, body: text.slice(end + 1) })
   }
-  // Before H-12 a slot held the JSON snapshot alone.
+  // A json save: its first keys are meta and version, read without the rest.
+  const head = readJsonHead(text)
+  if (head !== null) {
+    const header = headerOf({ meta: head.meta, version: head.version } as unknown as WorldSnapshot, 'json')
+    return ok({ header: { ...header, length: text.length }, body: text })
+  }
+  // Older saves (JSON.stringify, meta last) and snapshots written without
+  // meta are parsed whole.
   let decoded: unknown
   try {
     decoded = JSON.parse(text)
@@ -320,8 +331,54 @@ function readSave(
     return loadErr(cause)
   }
   if (!isWorldSnapshot(decoded)) return loadErr(new Error(`slot "${slot}" does not contain a WorldSnapshot`))
-  const head = headerOf(decoded, 'json')
-  return ok({ header: { ...head, length: text.length }, decoded })
+  const legacy = headerOf(decoded, 'json')
+  return ok({ header: { ...legacy, length: text.length }, decoded })
+}
+
+const META_KEY = '{"meta":'
+const VERSION_KEY = '"version":'
+
+/**
+ * `meta` and `version` from the start of a json save written by this
+ * package (`{"meta":{…},"version":4,…`), or null when the text does not
+ * start that way. Reads only that prefix.
+ */
+function readJsonHead(text: string): { meta: Record<string, unknown>; version: number } | null {
+  if (!text.startsWith(META_KEY)) return null
+  const end = endOfJsonObject(text, META_KEY.length)
+  if (end < 0 || text[end] !== ',' || !text.startsWith(VERSION_KEY, end + 1)) return null
+  const digits = /^\d+/.exec(text.slice(end + 1 + VERSION_KEY.length, end + 1 + VERSION_KEY.length + 16))
+  if (digits === null) return null
+  let meta: unknown
+  try {
+    meta = JSON.parse(text.slice(META_KEY.length, end))
+  } catch {
+    return null
+  }
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return null
+  return { meta: meta as Record<string, unknown>, version: Number(digits[0]) }
+}
+
+/** The index just past the JSON object that starts at `start`, or -1. */
+function endOfJsonObject(text: string, start: number): number {
+  if (text[start] !== '{') return -1
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (inString) {
+      if (c === '\\') i++
+      else if (c === '"') inString = false
+      continue
+    }
+    if (c === '"') inString = true
+    else if (c === '{' || c === '[') depth++
+    else if (c === '}' || c === ']') {
+      depth--
+      if (depth === 0) return i + 1
+    }
+  }
+  return -1
 }
 
 /** The header fields of `snap`'s envelope: the codec, its version, and `meta` split out. */

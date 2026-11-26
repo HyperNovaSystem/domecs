@@ -16,14 +16,23 @@ export interface SnapshotCodec {
 }
 
 /**
- * The default codec: `canonicalJson` (keys sorted, `-0` kept, a non-finite
- * number or a cycle refused) and `JSON.parse`. Lossless, so a loaded world
- * hashes like the saved one; `JSON.stringify`, which `save()` used before,
- * wrote `-0` as `0` and `NaN` as `null`.
+ * The default codec: the snapshot as JSON, written with `canonicalJson`
+ * values (`-0` kept, a non-finite number or a cycle refused) and read with
+ * `JSON.parse`. Lossless, so a loaded world hashes like the saved one;
+ * `JSON.stringify`, which `save()` used before, wrote `-0` as `0` and `NaN`
+ * as `null`. The text is a plain JSON snapshot, so a host that parses its
+ * slots keeps working; its first keys are `meta` and `version`, so `peek()`
+ * reads a slot's header from that prefix without parsing the rest (H-12).
+ * The other keys follow in canonical (sorted) order.
  */
 export const jsonCodec: SnapshotCodec = Object.freeze({
   name: 'json',
-  encode: (snap: WorldSnapshot): string => canonicalJson(snap),
+  encode: (snap: WorldSnapshot): string => {
+    const { meta, version, ...rest } = snap as WorldSnapshot & Record<string, unknown>
+    const head = `{${meta !== undefined ? `"meta":${canonicalJson(meta)},` : ''}"version":${canonicalJson(version)}`
+    const body = canonicalJson(rest)
+    return body === '{}' ? `${head}}` : `${head},${body.slice(1)}`
+  },
   decode: (text: string): unknown => JSON.parse(text),
 })
 

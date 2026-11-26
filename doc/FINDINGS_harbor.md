@@ -84,7 +84,7 @@ Each finding was reproduced as a failing test first; the commits are on
 | H-9 | `7dcfd82` | `data-entity` on mounted elements, `entityOf(target)`, `MountHandle.on(slot, type, fn)`. |
 | H-10 | `7dcfd82` | The redraw gate is `And(viewQuery, OnChanged(T))`; `ViewDef.order(entity)`. |
 | H-11 | `cb89ba9` | Codecs (`SaveOptions.codec`, found by name on load), canonical JSON by default, `prepareSave` / `encodeSave` / `decodeSave`; `save()` returns `ok({ codec, length })` (O-29). |
-| H-12 | `cb89ba9` | A header line before the body; `peek(storage, slot)`; `SaveOptions.appVersion`; `LoadOptions.accept(header)` returns `true`, `false` or a reason. Not done: a `'migrate'` answer — app migrations stay an `onRestore` plugin's job. |
+| H-12 | `cb89ba9` | A header any save can be peeked by: a json save stays plain JSON with `meta` and `version` first, other codecs write a header line; `peek(storage, slot)`; `SaveOptions.appVersion`; `LoadOptions.accept(header)` returns `true`, `false` or a reason. Not done: a `'migrate'` answer — app migrations stay an `onRestore` plugin's job. |
 | H-13 | `1e77c20` | `RuleDef.rateHz` / `phase`, and `fixed` for event rules. Not done: emit `once` / `cooldown`. With the handler in the next fixed step (a fixed event rule or fixed command, priority −100) a rule no longer re-emits while waiting, and `rateHz` paces retries; a deduplication by pending events would depend on the consuming phase, and a cooldown would keep rule state outside the snapshot. |
 | P-2 | `cb89ba9` | `columnarCodec` in `@domecs/persist`, rather than a `SNAPSHOT_VERSION` 4 option: lossless, opt-in per save. |
 | P-3 | `1cc3548` | `defineComponent.of<T>()(name, …)`, `defineResource.of<T>()`; the docs lead with the inferred no-type-argument form. |

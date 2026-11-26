@@ -188,3 +188,35 @@ describe('the envelope is a snapshot (unchanged contract)', () => {
     expect(w.time.tick).toBe(3)
   })
 })
+
+describe('json saves stay plain JSON (H-12, without breaking hosts that parse their slots)', () => {
+  it('a json slot is a snapshot any JSON reader can open, meta and version first', () => {
+    const storage = createMemoryStorage()
+    save(port(2), storage, 'slot', { savedAt: 5, meta: { label: 'Before first signal' } })
+    const text = (storage.read('slot') as { value: string }).value
+    expect(text.startsWith('{"meta":{')).toBe(true)
+    const parsed = JSON.parse(text) as WorldSnapshot
+    expect(parsed.meta).toEqual({ savedAt: 5, label: 'Before first signal' })
+    expect(parsed.version).toBe(4)
+    expect(Object.keys(parsed).slice(0, 2)).toEqual(['meta', 'version'])
+  })
+
+  it('peek reads only the prefix, whatever the meta strings hold', () => {
+    const storage = createMemoryStorage()
+    const meta = { note: 'a "quoted" {brace} [bracket] \\\\ back\\\\slash', nested: { deep: ['}', '{'] } }
+    save(port(2), storage, 'slot', { savedAt: 7, meta })
+    const text = (storage.read('slot') as { value: string }).value
+    const cut = text.indexOf('"version":') + 12
+    storage.write('cut', text.slice(0, cut)) // nothing after the version
+    for (const slot of ['slot', 'cut']) {
+      const h = peek(storage, slot)
+      expect(h.ok && h.value).toMatchObject({ codec: 'json', snapshotVersion: 4, savedAt: 7, meta })
+    }
+  })
+
+  it('other codecs keep the header line', () => {
+    const storage = createMemoryStorage()
+    save(port(2), storage, 'slot', { codec: columnarCodec })
+    expect((storage.read('slot') as { value: string }).value.startsWith('domecs-save 1\n')).toBe(true)
+  })
+})

@@ -42,8 +42,10 @@ else if (!boot.value) { /* first run */ }
 
 ## Main API
 
-- `save(world, storage, slot, opts?)` — encode a snapshot behind a one-line
-  header and write it; returns `ok({ codec, length })`. `opts.meta` is merged
+- `save(world, storage, slot, opts?)` — encode a snapshot and write it;
+  returns `ok({ codec, length })`. A json save is plain JSON (`meta` and
+  `version` first, so `peek` reads it from the prefix); other codecs write a
+  one-line header before the body. `opts.meta` is merged
   into the envelope and the header, a numeric `savedAt` is stamped, and
   `opts.appVersion` (your save format) is stamped into both. `opts.codec`
   picks the wire format: `jsonCodec` (default; `canonicalJson`, lossless) or
@@ -54,8 +56,8 @@ else if (!boot.value) { /* first run */ }
   body with the codec the header names (`opts.codecs` for your own), migrate
   to `targetVersion` (default `SNAPSHOT_VERSION`), then restore.
   `opts.migrations` is overlaid on `BUILTIN_MIGRATIONS` (caller keys win), so
-  legacy saves upgrade transparently with no caller config; a bare-JSON slot
-  from before headers still loads. Empty slots return `persist_io` with
+  legacy saves upgrade transparently with no caller config; a slot written
+  by 2.x still loads. Empty slots return `persist_io` with
   `retryable: false` (message includes `empty`).
 - `peek(storage, slot)` — the header (`codec`, `snapshotVersion`, `savedAt`,
   `appVersion`, `meta`, `length`) without decoding the save: a save menu's
