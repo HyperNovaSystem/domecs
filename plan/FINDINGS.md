@@ -270,7 +270,7 @@ blessed recipe or example, not new API:
   permanent RAF loop. (Lighthouse, Halls)
 - **Multi-view projection** is confirmed central (one state → many DOM regions);
   keep it prominent in `@domecs/dom` docs. (All exemplars)
-- **RNG helpers** — `int/range/pick/roll/fork` ship; `oneOf/weighted/shuffle`
+- **RNG helpers** — `uniformInt/uniformRange/pick/uniformRoll/fork` ship; `oneOf/weighted/shuffle`
   still wanted; plus a documented way to expose seed/state for save debugging.
   (Halls)
 - **Engine-source-is-public-surface** — workspace apps consuming `@domecs/*` via

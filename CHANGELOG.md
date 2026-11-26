@@ -255,6 +255,15 @@ each such change is listed under **Breaking**.
   duplicate install or a bundled dependency) now route correctly. Before,
   the bus read every such type under one `undefined` key, so they triggered
   each other's handlers. (O-92)
+- Docs (Harbor findings §5): `doc/api.md` lists the `Rng` methods that ship
+  (`uniform`, `uniformInt`, `uniformRange`, `uniformRoll`) and `persist`'s
+  real `targetVersion` default; SPEC §5.1 describes the real `ViewDef` and
+  §5.5 no longer promises a virtualizer and a table-list view that do not
+  exist; SPEC §3 no longer says a fixed system sees an "integrated fixed
+  delta" (it now does, H-3); AGENTS.md rule 9 compares strict hashes, not
+  `JSON.stringify`; `doc/README.md` describes the per-app findings files that
+  feed the ledger. `iterEntitiesWith` and `query().entities` say what they
+  cost.
 - Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
   `createAgentBridge` example no longer follow every `act()` with `step()`,
   which spent two ticks per turn. (O-92)

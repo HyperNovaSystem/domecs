@@ -25,7 +25,7 @@ specification; the repository's root `README.md` is the pitch.
 
 11. **[../CHANGELOG.md](../CHANGELOG.md)** — Released changes, starting with v1.0.0.
 12. **[ROADMAP.md](ROADMAP.md)** — Post-v1.0 roadmap: directional items + tooling.
-13. **[../plan/FINDINGS.md](../plan/FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2, incl. the 2026-06-01 engine review O-20…O-26 and the fleet O-16 repro recipe), and deferred engine features (§3). **Canonical and sole findings file** — new findings land here.
+13. **[../plan/FINDINGS.md](../plan/FINDINGS.md)** — Consolidated findings ledger: what shipped (§1), open/actionable (§2, incl. the 2026-06-01 engine review O-20…O-26 and the fleet O-16 repro recipe), and deferred engine features (§3). The cross-app ledger: each app records the engine findings it surfaces in its own `doc/FINDINGS_<app>.md` (as `FINDINGS_harbor.md` and `FINDINGS_studio.md` here), and the ledger curates them into O-numbered items.
 14. **[../plan/PLAN.md](../plan/PLAN.md)** — Governing post-v1.0 plan: thesis, workstreams, stop-doing list, kill gates.
 15. **[harness/README.md](harness/README.md)** — Studio harness engine gaps: the authoritative 2.1–2.3 spec and its implementation plan (milestones E1–E21).
 

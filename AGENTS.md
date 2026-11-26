@@ -115,7 +115,9 @@ agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
      exponent, when results must match across JS engines (SPEC §8).
 
    Check it the only way that works: replay the same seed and actions twice
-   and compare `JSON.stringify(snapshot())`.
+   and compare `hashSnapshot(snapshot(), { includeChanges: true })` (not
+   `JSON.stringify`, which depends on insertion order and writes `-0` as `0`;
+   see the checklist below).
 
 ---
 

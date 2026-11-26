@@ -379,7 +379,10 @@ interface World {
   componentTypes(): ComponentType<unknown>[]
   // Iterate every live entity carrying `type`, paired with its value. Same
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
-  // less ceremony at the call-site (F-10).
+  // less ceremony at the call-site (F-10). Each call selects the ids afresh
+  // (a one-shot query) and yields them through a generator: 4–5x slower than
+  // reading a live query's `entities` over the same set (Harbor, 20,000
+  // entities). In a system that runs every step, keep a live query instead.
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   // The entity's component types sorted by name (2.3); despawn marks,
   // componentRemoved and snapshot component keys use the same order.
@@ -656,13 +659,13 @@ interface SystemHandle {
 }
 
 interface Rng {
-  next():      number          // [0, 1)
-  int(max: number): number     // [0, max)
-  range(lo: number, hi: number): number
-  pick<T>(arr: readonly T[]): T
-  roll(sides: number): number  // [1, sides]
-  seed():      readonly [number, number, number, number]
-  fork(label: string): Rng     // deterministic subrng
+  uniform():                  number   // [0, 1)
+  uniformInt(max: number):    number   // [0, max); max a positive finite number, else throws
+  uniformRange(lo: number, hi: number): number   // [lo, hi)
+  pick<T>(arr: readonly T[]): T                  // throws on an empty array
+  uniformRoll(sides: number): number   // [1, sides]
+  seed():      RngState                // readonly [number, number, number, number]
+  fork(label: string): Rng             // deterministic subrng
 }
 ```
 
@@ -763,6 +766,9 @@ type QueryShorthand = ComponentType<unknown>[] | QueryNode
 // queries supply typed fields automatically; combinator-form queries leave
 // `Fields` at its default and the view stays untyped.
 interface QueryResult<Fields = Record<string, unknown>> {
+  // A fresh array on every read (the cached result is copied), and the cache
+  // is dropped by any structural change in the world: read it once per system
+  // run and keep the array, rather than in a loop.
   readonly entities: ReadonlyArray<EntityView<Fields>>
   readonly size:     number
   onAdd(fn: (e: EntityView<Fields>) => void): () => void
