@@ -696,6 +696,10 @@ export function createWorld(options: WorldOptions = {}): World {
     for (const l of tapListeners) l.emitted(type, payload, emitVia)
   })
 
+  // H-17: registered fixed event systems; the bus collects for them while > 0.
+  let fixedEventSystems = 0
+  const NO_EVENTS: EventView = { of: () => [], emit: (type, payload) => bus.emit(type, payload) }
+
   const signals: WorldSignals = {
     entitySpawned: sigEntitySpawned,
     entityDespawned: sigEntityDespawned,
@@ -1642,6 +1646,9 @@ export function createWorld(options: WorldOptions = {}): World {
         if (time.scale !== 0) {
           const h = time.fixedStep
           while (fixedStepDue(time.fixedAccumulator, h)) {
+            // H-17: what fixed event systems see this sub-step — every event
+            // emitted since the previous one's delivery was taken.
+            const delivery = fixedEventSystems > 0 ? bus.takeFixed() : NO_EVENTS
             // A frame of n steps may leave a hair under zero: no time is owed.
             time.fixedAccumulator = Math.max(0, time.fixedAccumulator - h)
             clock.fixedStepsFired += 1
@@ -1656,6 +1663,12 @@ export function createWorld(options: WorldOptions = {}): World {
             fixedTime.alpha = 0
             for (const s of scheduler.systemsByMode('fixed')) {
               if (!isEnabled(s)) continue
+              if (s.fixedEvent) {
+                if (!eventMatches(s, delivery)) continue
+                fixedTime.delta = fixedTime.scaledDelta = h
+                runSystem(s, delivery, fixedTime)
+                continue
+              }
               if ((clock.fixedStepCounter + s.fixedPhase) % s.fixedDivisor !== 0) continue
               fixedTime.delta = fixedTime.scaledDelta = h * s.fixedDivisor
               runSystem(s, eventView, fixedTime)
@@ -2234,6 +2247,7 @@ export function createWorld(options: WorldOptions = {}): World {
         scheduler.systemsByMode(mode).map((s) => ({
           name: s.name,
           schedule: s.schedule,
+          ...(s.fixedEvent ? { fixed: true as const } : {}),
           enabled: s.enabled,
           priority: s.priority,
           order: s.order,
@@ -2583,6 +2597,7 @@ export function createWorld(options: WorldOptions = {}): World {
         options?.pruneEmptyEntities === true,
         options?.pendingEvents === true ? bus.pendingEvents() : undefined,
         (name) => bus.lookup(name),
+        options?.pendingEvents === true ? bus.pendingFixedEvents() : undefined,
       )
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
@@ -2603,6 +2618,7 @@ export function createWorld(options: WorldOptions = {}): World {
       let s = snap
       let clock: SnapshotClock
       let restored: EmittedEvent[] | undefined
+      let restoredFixed: EmittedEvent[] | undefined
       try {
         for (const entry of plugins.list()) {
           if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
@@ -2614,6 +2630,7 @@ export function createWorld(options: WorldOptions = {}): World {
         clock = validateSnapshot(stateCtx, s)
         // §4.7: resolve in-flight event names before any effect.
         restored = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes())
+        restoredFixed = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes(), 'pendingFixedEvents')
       } catch (cause) {
         bus.putBackPending(abandoned)
         if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(false)
@@ -2636,6 +2653,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // The snapshot's queue replaces the abandoned one; anything an
       // onRestore hook emitted stays queued after it.
       if (restored !== undefined) bus.prependPending(restored)
+      if (restoredFixed !== undefined) bus.prependFixed(restoredFixed)
       if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(true)
       // H-15: derived state is rebuilt here, before anything paints it.
       if (sigRestored.size > 0) sigRestored.emit(s)
@@ -2650,6 +2668,11 @@ export function createWorld(options: WorldOptions = {}): World {
     fixedStep,
     (name) => pendingCursors.get(nextCursorKey(name)) ?? lastTickEndSeq,
     (name) => claimStream(name),
+    (count) => {
+      // H-17: collect emits for the fixed sub-steps while someone reads them.
+      fixedEventSystems = count
+      bus.collectFixed(count > 0)
+    },
   )
   plugins = createPluginRegistry(world)
 

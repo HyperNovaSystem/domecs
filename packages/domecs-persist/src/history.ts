@@ -253,6 +253,7 @@ export type Divergence =
         | 'rngOwners'
         | 'fixedBacklog'
         | 'pendingEvents'
+        | 'pendingFixedEvents'
     }
   | { readonly where: 'entity'; readonly entity: Entity; readonly change: 'added' | 'removed' | FieldChange }
   | { readonly where: 'resource'; readonly change: ResourceChange }
@@ -503,6 +504,7 @@ const STATE_KEYS = [
   'rngOwners',
   'fixedBacklog',
   'pendingEvents',
+  'pendingFixedEvents',
 ] as const
 
 /**
@@ -510,7 +512,7 @@ const STATE_KEYS = [
  * top-level state fields (`seed`, `tick`, `scaledTime`, the fixed clock
  * `fixedTick`, `fixedAccumulator` and `fixedStep`, `nextId`, `rngRoot`,
  * `rngStreams`, `rngOwners`, a pre-v4 `fixedBacklog`, then the
- * in-flight `pendingEvents` as a whole, §4.7), then
+ * in-flight `pendingEvents` and `pendingFixedEvents`, each as a whole, §4.7), then
  * the lowest entity id that differs (added, removed, or its first field
  * change by sorted component name and key; a component present on one side
  * only is a change at path `""`), then resources by sorted name. `version`,

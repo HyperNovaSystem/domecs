@@ -253,12 +253,27 @@ export interface EventBus {
   /** Whether a known event type other than `type` already holds `type.name`. */
   nameTakenByOther(type: EventType<unknown>): boolean
   /**
-   * Set all pending (undelivered) events aside and start an empty queue,
-   * returning the set-aside events. Called by `world.restore()`: events
-   * queued before a restore belong to the abandoned timeline and must not
-   * fire into the first tick after it (SPEC §7.1). The current
-   * (already-flushed) view is left alone — it is replaced wholesale at the
-   * next flush.
+   * H-17: collect every emit for the fixed sub-steps too, or (`false`) stop
+   * and drop what is collected. The world turns it on while a fixed event
+   * system is registered.
+   */
+  collectFixed(on: boolean): void
+  /**
+   * The events emitted since the last call — a fixed sub-step's delivery —
+   * and start collecting the next one. Empty when not collecting.
+   */
+  takeFixed(): EventView
+  /** The collected, not yet delivered fixed events, as {@link pendingEvents}. */
+  pendingFixedEvents(): EmittedEvent[]
+  /** Queue `events` ahead of the collected fixed events, in their order (restore). */
+  prependFixed(events: readonly EmittedEvent[]): void
+  /**
+   * Set all pending (undelivered) events aside — the next tick's and the
+   * fixed sub-steps' — and start empty queues, returning the set-aside
+   * events. Called by `world.restore()`: events queued before a restore
+   * belong to the abandoned timeline and must not fire into the first tick
+   * after it (SPEC §7.1). The current (already-flushed) view is left alone —
+   * it is replaced wholesale at the next flush.
    */
   takePending(): PendingEvents
   /**
@@ -284,7 +299,10 @@ export interface EventBus {
 }
 
 /** Pending events set aside by {@link EventBus.takePending}; opaque to callers. */
-export type PendingEvents = Map<symbol, unknown[]>
+export interface PendingEvents {
+  readonly tick: Map<symbol, unknown[]>
+  readonly fixed: Map<symbol, unknown[]>
+}
 
 /**
  * Optional sink invoked when a direct `on()` subscriber throws during
@@ -307,6 +325,9 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
   // Keyed by the per-type `eventTag` symbol — identity-based, not name-based.
   let pending = new Map<symbol, unknown[]>()
   let current = new Map<symbol, unknown[]>()
+  // H-17: the same emits again, for the next fixed sub-step's delivery.
+  let collecting = false
+  let fixedInbox = new Map<symbol, unknown[]>()
   const subs = new Map<symbol, Set<(e: unknown) => void>>()
   // Reverse map tag -> EventType so pendingEvents can reconstruct typed pairs;
   // the pending/current maps only carry the symbol. Populated on first emit of
@@ -325,16 +346,46 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
     byName.set(type.name, byName.has(type.name) ? null : type)
   }
 
-  /** Append `payload` to the pending queue for `type`. */
+  function push(into: Map<symbol, unknown[]>, key: symbol, payload: unknown): void {
+    let a = into.get(key)
+    if (!a) {
+      a = []
+      into.set(key, a)
+    }
+    a.push(payload)
+  }
+
+  /** Append `payload` to the pending queue for `type`, and to the fixed inbox while collecting. */
   function enqueue(type: EventType<unknown>, payload: unknown): void {
     const key = type[eventTag]
     know(type)
-    let a = pending.get(key)
-    if (!a) {
-      a = []
-      pending.set(key, a)
+    push(pending, key, payload)
+    if (collecting) push(fixedInbox, key, payload)
+  }
+
+  function listed(from: Map<symbol, unknown[]>): EmittedEvent[] {
+    const out: EmittedEvent[] = []
+    for (const [key, arr] of from) {
+      const type = typeByTag.get(key)
+      if (!type) continue
+      for (const payload of arr) out.push({ type, payload })
     }
-    a.push(payload)
+    return out
+  }
+
+  /** `events` first, then what `after` held, per type. */
+  function ahead(events: readonly EmittedEvent[], after: Map<symbol, unknown[]>): Map<symbol, unknown[]> {
+    const out = new Map<symbol, unknown[]>()
+    for (const { type, payload } of events) {
+      know(type)
+      push(out, type[eventTag], payload)
+    }
+    for (const [key, arr] of after) {
+      const a = out.get(key)
+      if (a) a.push(...arr)
+      else out.set(key, arr)
+    }
+    return out
   }
 
   const makeView = (src: Map<symbol, unknown[]>): EventView => ({
@@ -397,13 +448,22 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
       return pending.size > 0
     },
     pendingEvents(): EmittedEvent[] {
-      const out: EmittedEvent[] = []
-      for (const [key, arr] of pending) {
-        const type = typeByTag.get(key)
-        if (!type) continue
-        for (const payload of arr) out.push({ type, payload })
-      }
-      return out
+      return listed(pending)
+    },
+    collectFixed(on: boolean): void {
+      collecting = on
+      if (!on) fixedInbox = new Map()
+    },
+    takeFixed(): EventView {
+      const delivered = fixedInbox
+      fixedInbox = new Map()
+      return makeView(delivered)
+    },
+    pendingFixedEvents(): EmittedEvent[] {
+      return listed(fixedInbox)
+    },
+    prependFixed(events: readonly EmittedEvent[]): void {
+      if (collecting) fixedInbox = ahead(events, fixedInbox)
     },
     knownTypes(): EventType<unknown>[] {
       return Array.from(typeByTag.values())
@@ -419,25 +479,21 @@ export function createEventBus(onHandlerFault?: HandlerFaultSink, onEmit?: EmitO
       return held !== undefined && held !== type
     },
     takePending(): PendingEvents {
-      const taken = pending
+      const taken = { tick: pending, fixed: fixedInbox }
       pending = new Map()
+      fixedInbox = new Map()
       return taken
     },
     clearCurrent(): void {
       current = new Map()
     },
     putBackPending(taken: PendingEvents): void {
-      pending = taken
+      pending = taken.tick
+      fixedInbox = collecting ? taken.fixed : new Map()
     },
     prependPending(events: readonly EmittedEvent[]): void {
-      const after = pending
-      pending = new Map()
-      for (const { type, payload } of events) enqueue(type, payload)
-      for (const [key, arr] of after) {
-        const a = pending.get(key)
-        if (a) a.push(...arr)
-        else pending.set(key, arr)
-      }
+      // The tick queue only: restore puts the fixed inbox back with prependFixed.
+      pending = ahead(events, pending)
     },
   }
 }

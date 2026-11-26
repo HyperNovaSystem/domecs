@@ -96,6 +96,21 @@ export interface EventSystemDef<
 > extends SystemDefBase<Fields, State> {
   schedule: 'event'
   triggers?: EventType<unknown>[]
+  /**
+   * Run inside the fixed schedule instead of after it (H-17). Each fixed
+   * sub-step delivers the events emitted since the previous sub-step (during
+   * it, after the previous frame's fixed phase, or between ticks); the
+   * system runs on the sub-steps whose delivery holds one of its `triggers`
+   * (every sub-step when it has none), in (priority, order, registration)
+   * order among the `fixed` systems, with that delivery as `ctx.events` and
+   * the step's clock as `ctx.time`. So an event emitted in sub-step k is
+   * handled in sub-step k + 1 whatever the frame rate, which a fixed-step
+   * simulation needs to use events between its own systems. Events no
+   * sub-step has delivered wait for the next frame that runs one (a paused
+   * world runs none). Tick-phase event systems still see every event, at
+   * the next tick. Default `false`.
+   */
+  fixed?: boolean
 }
 
 /** Runs exactly once, on the first tick after registration. */
@@ -192,6 +207,8 @@ export interface CompiledSystem {
   fixedDivisor: number
   /** for fixed: `def.phase ?? 0`; runs when `(step + fixedPhase) % fixedDivisor === 0` (H-14) */
   fixedPhase: number
+  /** An `event` system with `fixed: true`: it runs in the fixed loop (H-17). */
+  fixedEvent: boolean
   /** for once: has it already run? */
   ranOnce: boolean
   /** Monotonic tie-break for equal priorities; never reused (O-43). */
@@ -264,6 +281,7 @@ export function createScheduler(
   fixedStep: number,
   initialSeen: (name: string) => number,
   claimStream: (name: string) => { key: string; rng: Rng },
+  fixedEventsChanged: (count: number) => void = () => {},
 ): Scheduler {
   const systems: CompiledSystem[] = []
   // name -> live handle, so getHandle(name) hands back the SAME object whose
@@ -277,23 +295,31 @@ export function createScheduler(
     ['reactive', []],
   ])
   let nextId = 0
+  let fixedEvents = 0
+
+  // A fixed event system (H-17) runs in the fixed loop, ordered with the fixed systems.
+  const modeOf = (s: CompiledSystem): SystemSchedule => (s.fixedEvent ? 'fixed' : s.schedule)
 
   // Copy-on-write: a phase loop holds the array it started with, so adding
   // or removing a system mid-phase neither skips nor repeats one (O-43).
   function addToMode(s: CompiledSystem): void {
-    byMode.set(s.schedule, [...byMode.get(s.schedule)!, s].sort(comparator))
+    const mode = modeOf(s)
+    byMode.set(mode, [...byMode.get(mode)!, s].sort(comparator))
   }
 
   function removeFromMode(s: CompiledSystem): void {
-    const arr = byMode.get(s.schedule)!
-    if (arr.includes(s)) byMode.set(s.schedule, arr.filter((x) => x !== s))
+    const mode = modeOf(s)
+    const arr = byMode.get(mode)!
+    if (arr.includes(s)) byMode.set(mode, arr.filter((x) => x !== s))
   }
 
   function drop(s: CompiledSystem): void {
+    if (s.removed) return
     s.removed = true
     const idx = systems.indexOf(s)
     if (idx >= 0) systems.splice(idx, 1)
     removeFromMode(s)
+    if (s.fixedEvent) fixedEventsChanged(--fixedEvents)
   }
 
   return {
@@ -319,6 +345,19 @@ export function createScheduler(
           )
         }
       }
+
+      const fixedFlag: unknown = (def as { fixed?: unknown }).fixed
+      if (fixedFlag !== undefined) {
+        if (def.schedule !== 'event') {
+          throw new Error(
+            `domecs: system "${name}" has fixed=${String(fixedFlag)}, but only an event system can run in the fixed schedule (schedule: 'event', fixed: true; H-17).`,
+          )
+        }
+        if (typeof fixedFlag !== 'boolean') {
+          throw new Error(`domecs: system "${name}" fixed=${JSON.stringify(fixedFlag)} must be a boolean (H-17).`)
+        }
+      }
+      const fixedEvent = fixedFlag === true
 
       const rngMode = def.rng ?? 'shared'
       if (rngMode !== 'shared' && rngMode !== 'own') {
@@ -386,6 +425,7 @@ export function createScheduler(
         state: def.state,
         fixedDivisor,
         fixedPhase,
+        fixedEvent,
         ranOnce: false,
         registrationIndex: id,
         removed: false,
@@ -408,6 +448,7 @@ export function createScheduler(
 
       systems.push(compiled)
       addToMode(compiled)
+      if (fixedEvent) fixedEventsChanged(++fixedEvents)
 
       const handle: SystemHandle = {
         name,

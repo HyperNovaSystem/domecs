@@ -136,6 +136,7 @@ export function buildSnapshot(
   pruneEmpty: boolean,
   pending?: readonly EmittedEvent[],
   lookup?: (name: string) => EventType<unknown> | undefined,
+  pendingFixed?: readonly EmittedEvent[],
 ): WorldSnapshot {
   const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
   const sortedAlive = Array.from(ctx.alive).sort((a, b) => a - b)
@@ -196,6 +197,10 @@ export function buildSnapshot(
     ...(pending !== undefined && pending.length > 0
       ? { pendingEvents: encodePendingEvents(pending, lookup) }
       : {}),
+    // H-17: the events no fixed sub-step has delivered yet.
+    ...(pendingFixed !== undefined && pendingFixed.length > 0
+      ? { pendingFixedEvents: encodePendingEvents(pendingFixed, lookup, 'pendingFixedEvents') }
+      : {}),
   }
 }
 
@@ -222,11 +227,12 @@ export function buildSnapshot(
 export function encodePendingEvents(
   events: readonly EmittedEvent[],
   lookup?: (name: string) => EventType<unknown> | undefined,
+  field: 'pendingEvents' | 'pendingFixedEvents' = 'pendingEvents',
 ): SnapshotPendingEvent[] {
   return events.map((e, i) => {
     if (lookup !== undefined && lookup(e.type.name) !== e.type) {
       throw new TypeError(
-        `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) cannot be recorded ` +
+        `domecs: snapshot: pending event "${e.type.name}" (${field}[${i}]) cannot be recorded ` +
           `by name: distinct known event types share the name "${e.type.name}"; give each event type ` +
           `a unique name`,
       )
@@ -237,7 +243,7 @@ export function encodePendingEvents(
     } catch (fault) {
       if (fault instanceof PlainFault) {
         throw new TypeError(
-          `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) has a payload ` +
+          `domecs: snapshot: pending event "${e.type.name}" (${field}[${i}]) has a payload ` +
             `that is not plain data at payload${fault.path.reverse().join('')}: ${fault.what}`,
         )
       }
@@ -341,29 +347,30 @@ export function resolvePendingEvents(
   s: WorldSnapshot,
   lookup: (name: string) => EventType<unknown> | undefined,
   known: () => readonly EventType<unknown>[],
+  key: 'pendingEvents' | 'pendingFixedEvents' = 'pendingEvents',
 ): EmittedEvent[] | undefined {
-  const field: unknown = (s as { pendingEvents?: unknown }).pendingEvents
+  const field: unknown = (s as unknown as Record<string, unknown>)[key]
   if (field === undefined) return undefined
-  if (!Array.isArray(field)) throw invalid('pendingEvents', 'an array', field)
+  if (!Array.isArray(field)) throw invalid(key, 'an array', field)
   return field.map((rec: unknown, i): EmittedEvent => {
-    if (!isRecord(rec)) throw invalid(`pendingEvents[${i}]`, 'an object', rec)
+    if (!isRecord(rec)) throw invalid(`${key}[${i}]`, 'an object', rec)
     const name = rec.event
-    if (typeof name !== 'string') throw invalid(`pendingEvents[${i}].event`, 'a string', name)
+    if (typeof name !== 'string') throw invalid(`${key}[${i}].event`, 'a string', name)
     const type = lookup(name)
     if (type === undefined) {
       const sharing = known().filter((t) => t.name === name).length
       throw new Error(
         sharing > 1
-          ? `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is ambiguous: ` +
+          ? `domecs: restore: pending event "${name}" (${key}[${i}]) is ambiguous: ` +
               `${sharing} distinct known event types share the name`
-          : `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is not a known event type ` +
+          : `domecs: restore: pending event "${name}" (${key}[${i}]) is not a known event type ` +
               `in this world; register it with world.register(...) before restoring`,
       )
     }
     const payload =
       rec.payload === undefined
         ? undefined
-        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": pendingEvents[${i}].payload`)
+        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": ${key}[${i}].payload`)
     return { type, payload }
   })
 }

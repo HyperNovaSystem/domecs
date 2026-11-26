@@ -78,6 +78,19 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/core`: fixed event systems, `{ schedule: 'event', fixed: true }`
+  (H-17). They run inside the fixed schedule, ordered with the `fixed`
+  systems: each fixed step delivers the events emitted since the previous
+  one, and the system runs on the steps whose delivery holds a trigger, with
+  that delivery as `ctx.events` and the step's clock. An event emitted in
+  step k is handled in step k + 1 at any frame rate; events from outside the
+  fixed loop arrive at the next step that runs. Before, events reached
+  `event` systems only after the whole fixed phase, so a fixed-step sim that
+  used events between its own systems was frame-rate dependent (Harbor's
+  standing orders started a service 27 steps later at fifteen steps a frame
+  than at one). `snapshot({ pendingEvents: true })` records undelivered
+  fixed events as `pendingFixedEvents`; `describe().systems[i].fixed` marks
+  them.
 - `@domecs/core`: payload schemas say what a command needs (H-6).
   `FieldSchema.required` (the field must be present), `integer`, and
   `kind: 'entity'` — an entity id, which `world.action()` checks is alive

@@ -160,6 +160,22 @@ disposable live feed state stays in the world.
 Install redaction plugins **before** constructing history with
 `captureInitial`, or the baseline leaks unredacted state.
 
+### Events in a fixed-step simulation
+An `event` system runs after the whole fixed phase, so in a sim on the
+`fixed` schedule the number of steps between an emit and its handling
+depends on the frame rate. Handle such events in a fixed event system:
+
+```ts
+world.system('service', { schedule: 'event', fixed: true, triggers: [ServiceCrane] }, (ctx) => {
+  for (const { crane } of ctx.events.of(ServiceCrane)) startService(ctx.world, crane, ctx.time.fixedTick)
+})
+```
+
+Each fixed step delivers the events emitted since the previous one, so an
+emit in step k is handled in step k + 1 at 1× or 64×. Commands from outside
+arrive at the next step that runs. Plain `fixed` systems still read the
+frame's events in every step: do not consume events in them.
+
 ### Neighbour queries
 Do not scan every entity per entity (O(n²)). Use `createSpatialHash(world,
 { component: Pos, cellSize })` from `@domecs/scene`: call `index.refresh()`

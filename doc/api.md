@@ -570,6 +570,11 @@ interface SystemDef {
                                            // steps where (fixedTick + phase) % d === 0; default 0 runs
                                            // on steps d, 2d, … Spread sub-rate systems with it (H-14)
   triggers?: EventType<unknown>[]          // event only
+  fixed?:    boolean                       // event only: run in the fixed schedule (H-17). Each fixed
+                                           // step delivers the events emitted since the previous step;
+                                           // the system runs on steps whose delivery holds a trigger,
+                                           // ordered with the fixed systems, with the step's clock.
+                                           // An emit in step k is handled in step k + 1 at any frame rate
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
   state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)

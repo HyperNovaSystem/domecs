@@ -154,6 +154,14 @@ export interface WorldSnapshot {
    * queue (2.0 behaviour).
    */
   readonly pendingEvents?: ReadonlyArray<SnapshotPendingEvent>
+  /**
+   * Events no fixed sub-step has delivered yet to the world's fixed event
+   * systems (`{ schedule: 'event', fixed: true }`, H-17), in bus order. Like
+   * `pendingEvents`, present only with `{ pendingEvents: true }`, and only
+   * while such a system is registered and something is waiting. Restore
+   * resolves the names the same way and queues them for the next sub-step.
+   */
+  readonly pendingFixedEvents?: ReadonlyArray<SnapshotPendingEvent>
   readonly meta?: Record<string, unknown>
 }
 

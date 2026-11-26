@@ -33,6 +33,8 @@ export interface WorldManifest {
   readonly systems: {
     readonly name: string
     readonly schedule: SystemSchedule
+    /** An event system that runs in the fixed schedule (`fixed: true`, H-17); absent otherwise. */
+    readonly fixed?: true
     readonly enabled: boolean
     /** Primary sort key within a schedule (lower runs first). */
     readonly priority: number
