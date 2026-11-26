@@ -1467,9 +1467,10 @@ export function createWorld(options: WorldOptions = {}): World {
       }
       for (const s of scheduler.systemsByMode('fixed')) {
         if (!isEnabled(s)) continue
-        // A fixed event system polls nothing: it needs frames only while
-        // something waits for a fixed step to deliver it (PR #30 review).
-        if (s.fixedEvent) {
+        // A fixed event system with triggers polls nothing: it needs frames
+        // only while something waits for a fixed step to deliver it. With
+        // none it runs every step, like any fixed system (PR #30 review).
+        if (s.fixedEvent && s.def.schedule === 'event' && s.def.triggers !== undefined && s.def.triggers.length > 0) {
           if (bus.hasFixedPending()) return true
           continue
         }

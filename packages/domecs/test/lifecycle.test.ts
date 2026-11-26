@@ -402,4 +402,21 @@ describe('the idle loop and fixed event systems', () => {
     for (let i = 0; i < 4 && raf.pending(); i++) raf.advance(16)
     expect(raf.pending()).toBe(false)
   })
+
+  // PR #30 review (Codex): a fixed event system with no triggers runs on
+  // every fixed step, so it keeps the loop awake like any fixed system.
+  it('stays awake for a fixed event system with no triggers', () => {
+    for (const triggers of [undefined, []]) {
+      const w = createWorld({ idle: true, fixedStep: 1 / 16 })
+      let ran = 0
+      w.system('everyStep', { schedule: 'event', fixed: true, ...(triggers ? { triggers } : {}) }, () => {
+        ran++
+      })
+      w.startLoop()
+      for (let i = 0; i < 20; i++) raf.advance(16)
+      expect(raf.pending()).toBe(true)
+      expect(ran).toBeGreaterThanOrEqual(4)
+      w.stop()
+    }
+  })
 })

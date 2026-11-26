@@ -514,8 +514,9 @@ Rationale: multiple independent accumulators would multiply the state that snaps
 If there are no enabled `tick`/`fixed` systems that require continuous
 frames, no unfired `once` systems, no pending component work, and no queued
 events, the RAF loop sleeps. A fixed event system (`fixed: true`, H-17)
-polls nothing: it keeps the loop awake only while an event waits for a fixed
-step to deliver it.
+with triggers polls nothing: it keeps the loop awake only while an event
+waits for a fixed step to deliver it. One with no triggers runs every fixed
+step and counts as a fixed system.
 It resumes on external `world.emit()`, structural component mutations /
 `markChanged`, input activity through `@domecs/input`, `resume()`, an
 explicit `world.startLoop()`, or a call to `world.requestTick()`.
