@@ -1167,7 +1167,7 @@ stream.uniform()
 assert.equal(b.w.getComponent(b.id, Roll)!.v, stream.uniform())
 
 const snap = a.w.snapshot()
-assert.equal(snap.version, 3)
+assert.equal(snap.version, 4)
 assert.deepEqual(Object.keys(snap.rngStreams!), ['noise', 'roll'])
 assert.deepEqual(snap.rngRoot, seedToState([1, 2, 3, 4]))
 assert.equal(a.w.describe().systems.find((s) => s.name === 'roll')!.rng, 'own')

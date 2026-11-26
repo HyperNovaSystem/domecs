@@ -9,6 +9,39 @@
  */
 export declare const BUILD_ID: string;
 
+// file: codecs.d.ts
+import type { WorldSnapshot } from '@domecs/core';
+/**
+ * A save's wire format: a snapshot to text and back (H-11). `save()` records
+ * the codec's `name` in the slot's header and `load()` picks the decoder by
+ * it, so a slot always reads back with the codec that wrote it. `encode`
+ * may throw (a value it cannot carry); `decode` returns what it read, which
+ * `load()` then checks is a snapshot, migrates and restores.
+ */
+export interface SnapshotCodec {
+    /** Recorded in the header: a non-empty name without line breaks. */
+    readonly name: string;
+    encode(snap: WorldSnapshot): string;
+    decode(text: string): unknown;
+}
+/**
+ * The default codec: `canonicalJson` (keys sorted, `-0` kept, a non-finite
+ * number or a cycle refused) and `JSON.parse`. Lossless, so a loaded world
+ * hashes like the saved one; `JSON.stringify`, which `save()` used before,
+ * wrote `-0` as `0` and `NaN` as `null`.
+ */
+export declare const jsonCodec: SnapshotCodec;
+/**
+ * P-2: most of a large world is entities that hold one component of flat
+ * fields (containers, workers, tiles). This codec writes each such group —
+ * same component, same field names in the same order — as a table of rows
+ * under one header, and every other entity as it is: a 21,000-entity port is
+ * 0.95 MB instead of 3.07 MB, no slower to write. Lossless:
+ * `canonicalJson(decode(encode(s))) === canonicalJson(s)`. Ported from
+ * Harbor Authority's save packer.
+ */
+export declare const columnarCodec: SnapshotCodec;
+
 // file: history.d.ts
 import type { DomecsError, Entity, JsonValue, Result, World, WorldSnapshot } from '@domecs/core';
 export interface SnapshotHistoryOptions {
@@ -128,7 +161,7 @@ export interface SnapshotDiff {
 /** The first difference {@link firstDivergence} finds. */
 export type Divergence = {
     readonly where: 'state';
-    readonly key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'rngOwners' | 'fixedBacklog' | 'pendingEvents';
+    readonly key: 'seed' | 'tick' | 'scaledTime' | 'fixedTick' | 'fixedAccumulator' | 'fixedStep' | 'nextId' | 'rngRoot' | 'rngStreams' | 'rngOwners' | 'fixedBacklog' | 'pendingEvents' | 'pendingFixedEvents';
 } | {
     readonly where: 'entity';
     readonly entity: Entity;
@@ -153,9 +186,10 @@ export type Divergence = {
 export declare function diffSnapshots(prev: WorldSnapshot, next: WorldSnapshot, options?: SnapshotDiffOptions): SnapshotDiff;
 /**
  * The first difference between two snapshots, in canonical order: the
- * top-level state fields (`seed`, `tick`, `scaledTime`, `nextId`,
- * `rngRoot`, `rngStreams`, `rngOwners`, `fixedBacklog` with its `fixedStep`, then the
- * in-flight `pendingEvents` as a whole, §4.7), then
+ * top-level state fields (`seed`, `tick`, `scaledTime`, the fixed clock
+ * `fixedTick`, `fixedAccumulator` and `fixedStep`, `nextId`, `rngRoot`,
+ * `rngStreams`, `rngOwners`, a pre-v4 `fixedBacklog`, then the
+ * in-flight `pendingEvents` and `pendingFixedEvents`, each as a whole, §4.7), then
  * the lowest entity id that differs (added, removed, or its first field
  * change by sorted component name and key; a component present on one side
  * only is a change at path `""`), then resources by sorted name. `version`,
@@ -169,7 +203,8 @@ export declare function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Div
  * @domecs/persist — Result-typed save / load / migrate over WorldSnapshot.
  * See doc/BETTER_ERRORS.md Phase 2 for the discipline this enforces.
  */
-export { load, loadIfPresent, pruneTransientOnlyEntities, save, type LoadOptions, type SaveOptions, } from './persist.js';
+export { decodeSave, encodeSave, load, loadIfPresent, peek, prepareSave, pruneTransientOnlyEntities, save, type DecodeOptions, type LoadOptions, type SaveHeader, type SaveOptions, type SaveReport, } from './persist.js';
+export { columnarCodec, jsonCodec, type SnapshotCodec } from './codecs.js';
 export { migrate, BUILTIN_MIGRATIONS, withBuiltinMigrations, type Migration, type MigrationFailedError, type MigrationMap, } from './migrate.js';
 export { createLocalStorageStorage, createMemoryStorage, type Storage } from './storage.js';
 export { createSnapshotHistory, diffSnapshots, firstDivergence, type SnapshotHistory, type SnapshotHistoryOptions, type SnapshotDiff, type SnapshotDiffOptions, type FieldChange, type ResourceChange, type Divergence, } from './history.js';
@@ -201,6 +236,10 @@ export type MigrationMap = ReadonlyMap<number, Migration>;
  *   `pendingEvents` fields. A v2 snapshot lacks them, so the step is a pure
  *   version bump — restore uses the world's createWorld root, re-derives every own
  *   stream and abandons the event queue, as for a v2 snapshot.
+ * - `3 → 4`: v4 writes the fixed clock itself (`fixedTick`,
+ *   `fixedAccumulator`, and `fixedStep` always; H-16). A v3 snapshot lacks
+ *   them, so the step is a pure version bump — restore derives the clock
+ *   from `scaledTime` and `fixedBacklog`, as a v3 build did.
  */
 export declare const BUILTIN_MIGRATIONS: MigrationMap;
 /**
@@ -226,10 +265,40 @@ export declare function withBuiltinMigrations(user?: MigrationMap): MigrationMap
 export declare function migrate(snap: WorldSnapshot, targetVersion: number, migrations: MigrationMap): Result<WorldSnapshot, MigrationFailedError>;
 
 // file: persist.d.ts
-import type { DomecsError, Plugin, Result, World } from '@domecs/core';
+import type { DomecsError, Plugin, Result, World, WorldSnapshot } from '@domecs/core';
+import { type SnapshotCodec } from './codecs.js';
 import { type MigrationMap } from './migrate.js';
 import type { Storage } from './storage.js';
-export interface LoadOptions {
+/**
+ * What a slot says about itself, readable without decoding the save (H-12):
+ * by {@link peek} for a save menu ("Day 3 · 14:20 · $182,400"), and by
+ * `LoadOptions.accept` before anything is decoded.
+ */
+export interface SaveHeader {
+    /** The codec that wrote the body; load decodes with it. */
+    readonly codec: string;
+    /** The snapshot's `version` (`SNAPSHOT_VERSION` of the engine that saved). */
+    readonly snapshotVersion: number;
+    /** `meta.savedAt`: ms since the epoch, the saver's wall clock. */
+    readonly savedAt: number;
+    /** `SaveOptions.appVersion`, when the app gave one. */
+    readonly appVersion?: number | string;
+    /** The rest of the envelope's `meta` (plugin and caller keys); absent when empty. */
+    readonly meta?: Readonly<Record<string, unknown>>;
+    /** Characters of the whole stored text. */
+    readonly length: number;
+}
+/** What {@link save} wrote. */
+export interface SaveReport {
+    readonly codec: string;
+    /**
+     * Characters written: UTF-16 code units, what Web Storage counts against
+     * its quota; for ASCII text, also the UTF-8 byte count (O-29).
+     */
+    readonly length: number;
+}
+/** Options for {@link decodeSave}, and so for {@link load}. */
+export interface DecodeOptions {
     /** Target version to migrate the snapshot to. Defaults to {@link SNAPSHOT_VERSION}. */
     targetVersion?: number;
     /**
@@ -239,12 +308,28 @@ export interface LoadOptions {
      * transparently.
      */
     migrations?: MigrationMap;
+    /**
+     * Decoders for codecs other than the built-in `json` and `columnar`,
+     * found by the name in the slot's header (H-11).
+     */
+    codecs?: readonly SnapshotCodec[];
+    /**
+     * Checked against the slot's header before the body is decoded (H-12):
+     * `true` loads; `false`, or a string saying why, refuses with a
+     * `persist_io` error and leaves the world untouched. For a save written
+     * by another format of the app (`header.appVersion`), say. A save from
+     * before headers is parsed first to read its `meta`.
+     */
+    accept?: (header: SaveHeader) => boolean | string;
 }
+export type LoadOptions = DecodeOptions;
 export interface SaveOptions {
     /**
      * Extra metadata merged into the snapshot envelope's `meta`. Sits on top
      * of any plugin-provided `meta` (from `onSnapshot`) and below the
-     * auto-stamped `savedAt`, so a caller key wins over a plugin key.
+     * auto-stamped `savedAt`, so a caller key wins over a plugin key. It is
+     * also the header's `meta` ({@link peek}): keep it small — a summary for
+     * a save menu.
      */
     meta?: Record<string, unknown>;
     /**
@@ -252,33 +337,71 @@ export interface SaveOptions {
      * Defaults to `Date.now()`. Provided primarily for deterministic tests.
      */
     savedAt?: number;
+    /**
+     * The app's save format, stamped into `meta.appVersion` and the header
+     * (H-12), for `LoadOptions.accept` to refuse saves this build cannot
+     * read. The engine never interprets it.
+     */
+    appVersion?: number | string;
+    /** The wire format (H-11). Default {@link jsonCodec}; {@link columnarCodec} for large worlds. */
+    codec?: SnapshotCodec;
 }
 /**
- * Captures `world.snapshot()`, serializes to JSON, and writes to `slot`.
- * Failures (non-serializable components, I/O) come back as `persist_io`
- * with the cause normalized via `normalizeCause`. The slot is only
- * touched when serialization succeeded — a serialization failure leaves
- * any prior contents intact.
- *
- * The optional `opts` populate the snapshot envelope's `meta`: a numeric
- * `savedAt` is always stamped (override via `opts.savedAt`) and `opts.meta`
- * keys are merged in. Three-argument callers are unaffected. The envelope is
- * `{ savedAt, ...snapshot.meta, ...opts.meta }` so a caller key overrides a
- * plugin-provided one, while `savedAt` is the default floor.
+ * The envelope {@link save} writes: `world.snapshot()` with `meta`
+ * stamped — `{ savedAt, appVersion?, ...snapshot.meta, ...opts.meta }`, so a
+ * caller key overrides a plugin-provided one while `savedAt` is the floor.
+ * For a host that encodes in a worker: take this on the main thread and
+ * post it.
  */
-export declare function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>;
+export declare function prepareSave(world: World, opts?: SaveOptions): WorldSnapshot;
 /**
- * Reads `slot`, parses it as a `WorldSnapshot`, migrates to
- * `targetVersion` (default {@link SNAPSHOT_VERSION}), then calls
- * `world.restore`. The slot bytes are read-only here — even when
- * migration fails, the original snapshot remains intact for inspection
- * or userland recovery flows.
+ * The text {@link save} writes for `snap` — a header line naming the codec,
+ * versions, `savedAt` and `meta`, then the body — without writing it (H-11).
+ * Pure: safe in a worker. A value the codec cannot carry (`NaN`, a cycle)
+ * is a `persist_io` error.
+ */
+export declare function encodeSave(snap: WorldSnapshot, opts?: Pick<SaveOptions, 'codec'>): Result<{
+    readonly text: string;
+    readonly header: SaveHeader;
+}, DomecsError>;
+/**
+ * Captures {@link prepareSave}, encodes it with `opts.codec` (default
+ * {@link jsonCodec}) behind a header, and writes it to `slot`. Returns what
+ * it wrote (O-29). Failures (a value the codec cannot carry, I/O) come back
+ * as `persist_io` with the cause normalized via `normalizeCause`. The slot is
+ * only touched when encoding succeeded — a failure leaves any prior
+ * contents intact.
+ */
+export declare function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<SaveReport, DomecsError>;
+/**
+ * The header of the save in `slot`, without decoding the body (H-12): `ok(null)`
+ * for an empty slot. A save from before headers is parsed to read it.
+ */
+export declare function peek(storage: Storage, slot: string): Result<SaveHeader | null, DomecsError>;
+/**
+ * Decode save text: read the header, check `opts.accept`, decode the body
+ * with the codec the header names, check it is a snapshot and migrate it to
+ * `opts.targetVersion`. Pure, the inverse of {@link encodeSave}: a host that
+ * reads storage itself (or in a worker) passes the text, then
+ * `world.restore(snapshot)`. Errors as {@link load}'s.
+ */
+export declare function decodeSave(text: string, opts?: DecodeOptions, slot?: string): Result<{
+    readonly snapshot: WorldSnapshot;
+    readonly header: SaveHeader;
+}, DomecsError>;
+/**
+ * Reads `slot`, decodes it ({@link decodeSave}: header, `accept`, codec,
+ * migration to `targetVersion`, default {@link SNAPSHOT_VERSION}), then calls
+ * `world.restore`. The slot bytes are read-only here — even when migration
+ * fails, the original save remains intact for inspection or userland
+ * recovery flows.
  *
  * Errors:
- * - `persist_io`: missing slot, malformed JSON, non-snapshot payload, or
- *   a `world.restore` throw. Empty slots use `retryable: false` (first-run
- *   is deterministic until something is saved). Prefer
- *   {@link loadIfPresent} for boot paths where "no save yet" is normal.
+ * - `persist_io`: missing slot, malformed text, an unknown codec, a refusal
+ *   by `accept`, a non-snapshot payload, or a `world.restore` throw. Empty
+ *   slots use `retryable: false` (first-run is deterministic until something
+ *   is saved). Prefer {@link loadIfPresent} for boot paths where "no save
+ *   yet" is normal.
  * - `migration_failed`: any step in the chain to `targetVersion` fails.
  */
 export declare function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>;
@@ -333,6 +456,10 @@ export interface ComponentFieldData {
     readonly?: boolean;
     /** Free-text meaning of the field (`FieldSchema.description`); round-trips, never dropped. */
     description?: string;
+    /** `FieldSchema.required`, `integer` and `with` (H-6); round-trip like the rest. */
+    required?: boolean;
+    integer?: boolean;
+    with?: string[];
 }
 /** The persisted, document-embeddable form of a `ComponentType` + its `ComponentDescriptor`. */
 export interface ComponentTypeData {

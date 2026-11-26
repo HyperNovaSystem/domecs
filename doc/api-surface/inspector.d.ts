@@ -20,11 +20,11 @@ export declare const BUILD_ID: string;
  * UI panels (Studio, custom devtools) wrap this surface — the package
  * itself has no DOM dependency.
  */
-export { createInspector, type InspectorBundle, type InspectorEntry, type InspectorOptions, type InspectorSnapshot, type InspectorView, type TimelineEvent, type TimelineEventKind, } from './inspector.js';
+export { createInspector, type InspectorBundle, type InspectorEntry, type InspectorOptions, type InspectorSnapshot, type InspectorView, type SystemTimingRow, type TimelineEvent, type TimelineEventKind, } from './inspector.js';
 export { BUILD_ID } from './build-id.js';
 
 // file: inspector.d.ts
-import type { ComponentId, Entity, JsonValue, Plugin, SystemId } from '@domecs/core';
+import type { ComponentId, Entity, JsonValue, Plugin, SystemId, SystemSchedule, SystemTiming } from '@domecs/core';
 /**
  * One normalized record. Both buckets share the same shape so filter
  * chains compose without per-source casing. `entity` discriminates:
@@ -114,6 +114,18 @@ export interface InspectorOptions {
      * {@link bufferSize}. Only used when `recordStateChanges` is true.
      */
     timelineBufferSize?: number;
+    /**
+     * Turn on `world.setProfiling(true)` while installed (P-4), so
+     * {@link InspectorBundle.timings} and `describe()` report what each system
+     * and each tick cost. Teardown turns it off. Default false.
+     */
+    profile?: boolean;
+}
+/** One system's cost, from {@link InspectorBundle.timings} (P-4). */
+export interface SystemTimingRow {
+    readonly name: string;
+    readonly schedule: SystemSchedule;
+    readonly timing: SystemTiming;
 }
 export interface InspectorBundle {
     /** Pass to `world.use(...)`. */
@@ -122,5 +134,11 @@ export interface InspectorBundle {
     readonly view: InspectorView;
     /** Drop all recorded entries (both buckets and the timeline). */
     clear(): void;
+    /**
+     * With `profile: true`: every system's cost since profiling started,
+     * dearest first (by total milliseconds) — where a frame's time goes.
+     * Empty before install or without `profile`.
+     */
+    timings(): SystemTimingRow[];
 }
 export declare function createInspector(opts?: InspectorOptions): InspectorBundle;
