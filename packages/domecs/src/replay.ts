@@ -2,6 +2,7 @@
 // from outside — external emits, the dt and scale of each step, the input
 // systems saw — so a fresh world restored from the same base replays to the
 // same strict hashes.
+import type { CommandVerdict } from './commands.js'
 import { actTapOf, type ActTapListener } from './act-tap.js'
 import { canonicalJson, hashSnapshot } from './canonical.js'
 import type { GamepadSnapshot, InputSnapshot, PointerSnapshot } from './input.js'
@@ -143,6 +144,13 @@ export interface ActRecord {
   readonly payload?: JsonValue
   /** How the act entered the world. Only `'action'` acts are schema-validated on replay. */
   readonly via: 'emit' | 'action'
+  /**
+   * For a command (`defineCommand`) sent with `world.action()`: what its
+   * handler answered in the act's tick (P-1). Replay requires the same
+   * verdict there, so a refusal that differs is caught at the act. Absent
+   * for plain events, and when the handler did not run in that tick.
+   */
+  readonly verdict?: { readonly accepted: boolean; readonly reason?: string }
 }
 
 /** One full step (a `stepOnce()` or a `step(dt)` with `dt > 0`). Heartbeats are not frames. */
@@ -355,6 +363,8 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
   let running: FrameDraft | null = null
   // Whether the running frame's tick-start hooks are done (its systems ran).
   let afterHooks = false
+  // P-1: the record of the last world.action() act, until its verdict comes.
+  let lastAction: { verdict?: NonNullable<ActRecord['verdict']> } | null = null
   // The scale and resume target a replay world holds at the current point
   // of the frame: what the log has set so far (systems and handlers are
   // reproduced, so each frame end syncs it with the source).
@@ -425,18 +435,31 @@ export function createRecorder(world: World, options: RecorderOptions = {}): Rec
       let into: ActRecord[] = pending
       const f = running
       if (f !== null) into = afterHooks ? (f.endActs ??= []) : (f.startActs ??= [])
+      // P-1: an action's emit is the record its verdict will land on — or
+      // none, when it could not be recorded. Other emits (a tickStart or
+      // tickEnd subscriber's, inside the action's tick) leave it waiting.
+      if (via === 'action') lastAction = null
+      let record: { event: string; payload?: JsonValue; via: 'emit' | 'action'; verdict?: NonNullable<ActRecord['verdict']> }
       if (payload === undefined) {
-        into.push({ event: type.name, via })
-        return
+        record = { event: type.name, via }
+      } else {
+        let copy: JsonValue
+        try {
+          copy = plainDataCopy(payload, 'payload')
+        } catch {
+          gap('unserializable_payload', f?.tick)
+          return
+        }
+        record = { event: type.name, payload: copy, via }
       }
-      let copy: JsonValue
-      try {
-        copy = plainDataCopy(payload, 'payload')
-      } catch {
-        gap('unserializable_payload', f?.tick)
-        return
-      }
-      into.push({ event: type.name, payload: copy, via })
+      into.push(record)
+      if (via === 'action') lastAction = record
+    },
+    answered(verdict) {
+      // P-1: the verdict of the act world.action() just emitted and stepped.
+      if (lastAction === null) return
+      lastAction.verdict = verdict.accepted ? { accepted: true } : { accepted: false, reason: verdict.reason }
+      lastAction = null
     },
     frameEntered(tick, dt) {
       checkRand()
@@ -594,6 +617,17 @@ export type ReplayError =
   | { readonly kind: 'unknown_event'; readonly event: string; readonly tick: number }
   | { readonly kind: 'rejected_payload'; readonly event: string; readonly tick: number; readonly reason: string }
   | { readonly kind: 'diverged'; readonly tick: number; readonly expected: string; readonly actual: string }
+  /**
+   * A command's handler answered otherwise than it did when the log was
+   * recorded (P-1); `actual` is `null` when it did not run in the act's tick.
+   */
+  | {
+      readonly kind: 'verdict_mismatch'
+      readonly event: string
+      readonly tick: number
+      readonly expected: { readonly accepted: boolean; readonly reason?: string }
+      readonly actual: { readonly accepted: boolean; readonly reason?: string } | null
+    }
 
 /** Options for {@link replay}. */
 export interface ReplayOptions {
@@ -683,6 +717,13 @@ function checkFrame(f: unknown): string | null {
       const a: unknown = acts[i]
       if (!isRec(a) || typeof a.event !== 'string') return `${field}[${i}].event is not a string`
       if (a.via !== 'emit' && a.via !== 'action') return `${field}[${i}].via is not 'emit' or 'action'`
+      if (a.verdict !== undefined) {
+        const v: unknown = a.verdict
+        if (a.via !== 'action') return `${field}[${i}].verdict is only valid on an 'action' act`
+        if (!isRec(v) || typeof v.accepted !== 'boolean' || (v.reason !== undefined && typeof v.reason !== 'string')) {
+          return `${field}[${i}].verdict is not { accepted: boolean, reason?: string }`
+        }
+      }
       if (a.payload !== undefined) {
         try {
           plainDataCopy(a.payload, `${field}[${i}].payload`)
@@ -764,7 +805,11 @@ export function checkLog(log: unknown): string | null {
  * Returns `null` when the frame was applied. The frame must be valid
  * (checked by {@link replay}); shared with `runBranch` (§7.2).
  */
-type ResolvedAct = { readonly type: EventType<unknown>; readonly payload: unknown }
+type ResolvedAct = {
+  readonly type: EventType<unknown>
+  readonly payload: unknown
+  readonly verdict?: { readonly accepted: boolean; readonly reason?: string }
+}
 
 function resolveActs(world: World, acts: readonly ActRecord[] | undefined, tick: number, out: ResolvedAct[]): ReplayError | null {
   for (const act of acts ?? []) {
@@ -772,10 +817,11 @@ function resolveActs(world: World, acts: readonly ActRecord[] | undefined, tick:
     if (type === undefined) return { kind: 'unknown_event', event: act.event, tick }
     const payload = act.payload === undefined ? undefined : cloneSerializable(act.payload)
     if (act.via === 'action') {
-      const reason = validateEventPayload(type, payload)
+      // As world.action() checked it live: against the world before the act's tick.
+      const reason = validateEventPayload(type, payload, { world })
       if (reason !== null) return { kind: 'rejected_payload', event: act.event, tick, reason }
     }
-    out.push({ type, payload })
+    out.push(act.verdict !== undefined ? { type, payload, verdict: act.verdict } : { type, payload })
   }
   return null
 }
@@ -793,6 +839,7 @@ function onFrameStarted(fn: () => void): ActTapListener {
     mutated: none,
     restoreBegan: none,
     restoreEnded: none,
+    answered: none,
   }
 }
 
@@ -814,7 +861,15 @@ export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | n
   }
   applyScale(frame.scale, frame.resumeScale)
   if (frame.input !== undefined) world.setInput(decodeInput(frame.input))
-  for (const { type, payload } of before) world.emit(type, payload)
+  // P-1: a recorded verdict is awaited like world.action() awaits it.
+  const tapOfWorld = actTapOf(world)
+  let answer: { readonly act: ResolvedAct; read(): CommandVerdict | undefined } | undefined
+  for (const act of before) {
+    if (act.verdict !== undefined && tapOfWorld !== undefined && answer === undefined) {
+      answer = { act, ...tapOfWorld.expectAnswer(act.type) }
+    }
+    world.emit(act.type, act.payload)
+  }
   const unsubscribe: Array<() => void> = []
   if (frame.flushScale !== undefined || frame.flushResume !== undefined) {
     // Where plugin onTickStart set it live: after the tick began, before the
@@ -843,11 +898,21 @@ export function applyActFrame(world: World, frame: ActLogFrame): ReplayError | n
       }),
     )
   }
+  let said: CommandVerdict | undefined
   try {
     if (frame.dt === null) world.stepOnce()
     else world.step(frame.dt)
   } finally {
     for (const u of unsubscribe) u()
+    said = answer?.read()
+  }
+  if (answer !== undefined) {
+    const expected = answer.act.verdict!
+    const actual: { accepted: boolean; reason?: string } | null =
+      said === undefined ? null : said.accepted ? { accepted: true } : { accepted: false, reason: said.reason }
+    if (actual === null || actual.accepted !== expected.accepted || actual.reason !== expected.reason) {
+      return { kind: 'verdict_mismatch', event: answer.act.type.name, tick: frame.tick, expected, actual }
+    }
   }
   return null
 }

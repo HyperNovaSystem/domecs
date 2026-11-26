@@ -6,20 +6,87 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-### Performance
+## [3.0.0] — release candidate (2026-11-26; not yet published)
 
-- `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).
-  Structural live queries reuse their result until membership changes,
-  stores are found by type identity, add/remove follow archetype edges,
-  the change-mark log no longer reallocates every tick, and filtered reads
-  stop allocating per entity. On the bench, a soak with a change reader
-  allocates 88 KB per tick instead of 833 KB and runs about 20% faster;
-  windowed about 20–28%. Behavior is unchanged: `query().entities` still
-  returns a fresh array on every read, and query hooks that run during a
-  spawn, despawn, move or restore see current state.
+All seven `@domecs/*` packages move to 3.0.0 together. A major release: the
+fixes for the findings from rebuilding Harbor Authority
+([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below) change
+behaviour that was wrong or underspecified; each such change is listed
+under **Breaking**. `^2.0.0` ranges do not resolve 3.0.0, and the sibling
+packages' `@domecs/core` peer range packs as `^3.0.0`. Snapshots move to
+format v4. Release notes:
+[`doc/release-notes/v3.0.0.md`](doc/release-notes/v3.0.0.md).
+
+### Breaking
+
+- `@domecs/core`: inside a `fixed` system, `ctx.time` is the clock of the
+  step being run, not the frame's (H-3). `delta` and `scaledDelta` are the
+  system's step (`fixedStep`, times the divisor for a `rateHz` system),
+  `elapsed` is `fixedTick × fixedStep`, and the new `fixedTick` is the
+  step's 1-based index; `tick` and `scale` stay the frame's. Before, every
+  sub-step of a frame saw the frame's values, so a fixed system that
+  integrated with `ctx.time.scaledDelta` moved `substeps ×` too far (16× per
+  frame at 64×). Code that read `ctx.time.fixedStep` for this keeps working.
+  `@domecs/rules` fixed rules now take `dt` and `time` from that clock, so a
+  fixed rule's `time` is the fixed clock.
+- `@domecs/core`: snapshots are format v4 (`SNAPSHOT_VERSION` 4). They carry
+  the fixed clock itself — `fixedTick`, `fixedAccumulator` and, always,
+  `fixedStep` — and never `fixedBacklog` (H-16). v3 and older snapshots
+  restore as before (the clock is derived from `scaledTime` and
+  `fixedBacklog`), and `@domecs/persist` gains the `3 → 4` built-in
+  migration. 2.x engines refuse v4 snapshots. Strict and default hashes of
+  every snapshot change, because the envelope gained fields.
+- `@domecs/core`: `world.action()` / `bridge.act()` refuse non-finite
+  numbers (`NaN`, `±Infinity`) in a schema's `number` fields and enforce
+  `min` / `max` (H-6). Before, `min`, `max` and `step` were widget hints only
+  and `NaN` was accepted. `step` stays a hint.
+- `@domecs/core`: `FieldKind` gains `'entity'`, so a `switch` over it needs
+  a case (`@domecs/persist`'s schema helpers have one).
+- `@domecs/persist`: `save()` returns `ok({ codec, length })` instead of
+  `ok(undefined)` (O-29). A json save is still a plain JSON snapshot, now
+  with `meta` and `version` as its first keys and the rest in canonical
+  order (so `peek` reads its header from the prefix); a save with any other
+  codec starts with a one-line header (H-12). 2.x slots still load and
+  peek. The default codec writes `canonicalJson` values: `-0` survives a
+  save and load, and a `NaN` or a cycle is a `persist_io` error instead of
+  being written as `null` (`JSON.stringify` did both silently).
+- `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
+  with the new `finalHash: false`), and by default `runBranch` proves each
+  probe read-only once per branch instead of at every call.
 
 ### Fixed
 
+- `@domecs/core`: `step(fixedStep)` runs exactly one fixed step, however long
+  the world has run, at any `fixedStep` (H-16). The step count was
+  `floor(total / fixedStep + 1e-9)` over a scaled-time total accumulated in
+  floating point; for any step that is not a binary fraction the total's
+  error outgrew the tolerance, and from tick 22,785 of `step(1/60)` (the
+  default step; #13,146 at 1/20) some ticks ran no fixed step and a later
+  one ran two. Steps are now counted off the time owed, which stays below
+  about one step, so a frame of `n` steps (`step(n × fixedStep)`) runs `n`
+  and worlds stepped the same time in different chunk sizes have run the
+  same steps. F-3's test now runs 30,000 ticks at nine step sizes.
+- `@domecs/input`: a key pressed and released between two ticks is published
+  with both edges, in `keyDelta.pressed` and `keyDelta.released` (H-1). The
+  release used to delete the pending press, so a tap shorter than a frame
+  never fired an edge-triggered handler: every Playwright `keyboard.press`,
+  and any tap during a long frame or in a throttled tab.
+- `@domecs/input`: `preventDefaultKeys: true` no longer prevents a key while
+  Ctrl, Meta or Alt is held (Ctrl/Cmd+R, +F, +L, +P, +1…9 work again), nor
+  when its target is an interactive control, so a focused button or link is
+  activated by Space and Enter and a slider moved by the arrows; the game
+  still sees those keys (H-2). Key repeats are now prevented too, so holding
+  Space no longer scrolls the page after the repeat delay.
+- `@domecs/core`: `snapshot().changes` no longer carries marks on transient
+  components (H-4), as it already did not for transient resources (O-36):
+  the snapshot leaves their values out, so restore re-issued marks for
+  components the restored world did not hold, and two worlds that differed
+  only in presentation tags (written once per rendered frame) stopped being
+  strict-hash equal as soon as any system read changes. A mark is also
+  carried only while a system that can report it has not seen it — one with
+  a change node of that kind for that component or resource — instead of
+  while any change reader at all lags, so a 1 Hz reader of one component no
+  longer pins every other component's marks into each snapshot.
 - `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
   that `defineEvent()` did not create, such as a look-alike object (and, for
   `world.action()`, an event's name string; `bridge.act('Name', …)` resolves
@@ -30,6 +97,15 @@ All notable changes to DOMECS are documented here. The format is based on
   duplicate install or a bundled dependency) now route correctly. Before,
   the bus read every such type under one `undefined` key, so they triggered
   each other's handlers. (O-92)
+- Docs (Harbor findings §5): `doc/api.md` lists the `Rng` methods that ship
+  (`uniform`, `uniformInt`, `uniformRange`, `uniformRoll`) and `persist`'s
+  real `targetVersion` default; SPEC §5.1 describes the real `ViewDef` and
+  §5.5 no longer promises a virtualizer and a table-list view that do not
+  exist; SPEC §3 no longer says a fixed system sees an "integrated fixed
+  delta" (it now does, H-3); AGENTS.md rule 9 compares strict hashes, not
+  `JSON.stringify`; `doc/README.md` describes the per-app findings files that
+  feed the ledger. `iterEntitiesWith` and `query().entities` say what they
+  cost.
 - Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
   `createAgentBridge` example no longer follow every `act()` with `step()`,
   which spent two ticks per turn. (O-92)
@@ -117,6 +193,169 @@ All notable changes to DOMECS are documented here. The format is based on
   `world.input`, `time.scale` and the resume target, which the strict hash
   leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
   `resume` throws. (O-81)
+
+### Added
+
+- `@domecs/core`: `time.fixedTick`, the fixed steps run since the world
+  started, and `time.alpha`, how far the clock is into the next step
+  (`fixedAccumulator / fixedStep`, clamped to 0–1) for views that draw
+  fixed-step state between steps (H-3).
+- `@domecs/core`: `phase` on `fixed` systems with a `rateHz` (H-14): the
+  system runs on the steps where `(fixedTick + phase) % d === 0`, so the
+  sub-rate systems of one rate can be spread over their period instead of
+  all running on the same step. Default 0 keeps today's steps (`d`, `2d`,
+  …: a sub-rate system first runs after one full period); `d − 1` runs it on
+  the first step. Out-of-range or non-integer phases are rejected at
+  registration.
+- `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
+  which every v4 snapshot carries.
+- `@domecs/dom`: views can redraw on resources (H-7):
+  `changedOn: { mode: 'auto' | 'explicit', resources: [Focus] }` redraws
+  every mounted node when a listed resource is set or marked. Before,
+  `changedOn` took component types only, so a view whose look depended on a
+  camera or selection held in a resource had to run in `legacy` mode and
+  redraw every frame.
+- `@domecs/dom`: panels and patching (H-7). `definePanel({ slot, render:
+  (world) => string, changedOn? })` (mount option `panels`) renders markup
+  derived from the whole world into a slot of its own, at the first commit
+  and then when a listed component is added, changed or removed, a listed
+  resource changes, or the world is restored. It is written with the new
+  `paint(target, html)`, which patches the DOM in place and writes nothing
+  when the markup is unchanged, and `watchPresses(document)` holds repaints
+  off a pressed button until its click has landed — ported from Harbor,
+  where `innerHTML` repaints lost 3 in 12 human-speed clicks at 64× and the
+  focus on every repaint, and `paint` lost 0 in 200.
+- `@domecs/dom`: nested views (H-8). `ViewDef.parent: { view, of, at? }`
+  mounts each element inside another view's element (a box on the deck of
+  the ship holding it), moves it when `of` changes on update, and keeps it
+  mounted but out of the page while the parent has no element. Parents
+  commit before children whatever the view order. `MountHandle.elementOf(view,
+  entity)` returns a mounted element.
+- `@domecs/dom`: from a DOM event to an entity (H-9). Mounted elements carry
+  `data-entity="<id>"` (mount option `stamp: false` to opt out);
+  `entityOf(target)` finds the innermost entity at or above an event target,
+  and `MountHandle.on(slot, type, (entity, event) => …)` is a delegated
+  listener for this mount's elements.
+- `@domecs/dom`: ordered lists (H-10). `ViewDef.order(entity)` keeps a view's
+  nodes in ascending key order within each container, moving only nodes out
+  of place; before, nodes stayed in mount order and apps set CSS `order`.
+- `@domecs/core`: `world.signals.resourceChanged`, fired when a resource is
+  set or marked (transient ones too), for what is not a system — a panel in
+  a world with no entities to query (H-7).
+- `@domecs/input`: `preventDefaultKeys` also takes a list of
+  `KeyboardEvent.code`s or a function `(e) => boolean`, and the new
+  `interactiveSelector` option (default `INTERACTIVE_SELECTOR`, exported)
+  names the controls whose keys are left to the browser (H-2).
+- `@domecs/core`: `defineComponent.of<T>()(name, options)` and
+  `defineResource.of<T>()(name, options)` (P-3): an explicit type with the
+  literal name stated once, which typed tuple queries need, instead of
+  `defineComponent<T, 'Name'>('Name')`. The docs now lead with the form that
+  needs no type arguments (`T` inferred from `defaults`).
+- Per-system timings (P-4). `world.setProfiling(true)` times every system
+  run and full tick with the host clock; `describe().systems[i].timing` and
+  `describe().timing` report runs, total, last, mean and max milliseconds.
+  `@domecs/inspector`'s `createInspector({ profile: true })` turns it on while
+  installed and adds `timings()`, the systems dearest first. `@domecs/dom`'s
+  `MountHandle.stats()` counts each view's creates, updates and destroys and
+  each panel's renders and paints, with the last commit's duration (O-5).
+  Before, nothing recorded cost: Harbor timed its frames by hand and needed
+  a CPU profile to find the one view that was half the frame.
+- `@domecs/core`: commands with verdicts (H-5, P-1). `defineCommand(name,
+  { schema, description, handle, fixed?, priority?, rng? })` makes an event
+  type that carries its handler; `world.register(Cmd)` installs it once as
+  the event system `command:<name>` (priority −100). The handler runs once
+  per command and returns `refuse(reason)`, or `accept()` / nothing.
+  `world.action()` and `bridge.act()` return the handler's verdict for that
+  command — before, they said `accepted: true` for a command the handler
+  refused unless the caller passed a resolver, so every app wrote a
+  `Rejected` event and a resolver per call site. A resolver still decides
+  when given, and sees the handler's verdict. A throwing handler refuses its
+  command and raises `event_handler_threw`; an unregistered command is
+  refused before any tick; a `fixed: true` command is handled in the next
+  fixed step. `describe().events[i].command` marks commands. Act logs record
+  each command's verdict (`ActRecord.verdict`), and replay and `runBranch`
+  stop with `verdict_mismatch` at an act whose handler answers otherwise.
+- `@domecs/core`: fixed event systems, `{ schedule: 'event', fixed: true }`
+  (H-17). They run inside the fixed schedule, ordered with the `fixed`
+  systems: each fixed step delivers the events emitted since the previous
+  one, and the system runs on the steps whose delivery holds a trigger, with
+  that delivery as `ctx.events` and the step's clock. An event emitted in
+  step k is handled in step k + 1 at any frame rate; events from outside the
+  fixed loop arrive at the next step that runs. Before, events reached
+  `event` systems only after the whole fixed phase, so a fixed-step sim that
+  used events between its own systems was frame-rate dependent (Harbor's
+  standing orders started a service 27 steps later at fifteen steps a frame
+  than at one). `snapshot({ pendingEvents: true })` records undelivered
+  fixed events as `pendingFixedEvents`; `describe().systems[i].fixed` marks
+  them.
+- `@domecs/core`: payload schemas say what a command needs (H-6).
+  `FieldSchema.required` (the field must be present), `integer`, and
+  `kind: 'entity'` — an entity id, which `world.action()` checks is alive
+  and, with `with: ['Crane']`, holds those components. `describe()` lists
+  them, so an agent can tell a required field from an optional one and an
+  id from a number. `validateEventPayload(type, payload, { world, partial })`
+  applies the same checks (`world` for liveness, `partial` to skip
+  `required`), and `eventSchema(type)` reads an event's schema without a
+  world. Replay checks acts against the world as `action()` did live.
+  `@domecs/rules` refuses to compile an `emit` that leaves out a required
+  field; it checks emitted payloads for shape only, so "despawn self, then
+  announce" can still name the entity. `@domecs/persist` round-trips the new
+  keys.
+- `@domecs/persist`: codecs (H-11). `SaveOptions.codec` picks the wire format
+  — `jsonCodec` (default), `columnarCodec` (P-2: entities of one component of
+  flat fields as tables, 3.07 MB → 0.95 MB on Harbor's hub port, lossless),
+  or any `{ name, encode, decode }` — and `load()` finds the decoder by the
+  name in the header (`LoadOptions.codecs` for custom ones). The pure halves
+  `prepareSave`, `encodeSave` and `decodeSave` let a host put a worker or
+  its own storage between the snapshot and the slot. Before, `save`/`load`
+  fixed the format to `JSON.stringify`, and Harbor re-implemented the
+  envelope, migrations and error mapping to pack its saves.
+- `@domecs/persist`: saves say what they are (H-12). `SaveOptions.appVersion`
+  is stamped into `meta` and the header; `LoadOptions.accept(header)` refuses
+  a save before its body is decoded; `peek(storage, slot)` returns the header
+  (`codec`, `snapshotVersion`, `savedAt`, `appVersion`, `meta`, `length`)
+  without decoding the save, for a save menu.
+- `@domecs/rules`: `RuleDef.rateHz` and `phase` for fixed rules, and `fixed`
+  for event rules (H-13, H-17). A standing order checked once a second no
+  longer polls every step, and a rule that emits a command handled by a
+  fixed event rule (or a fixed command) is carried out in the next step at
+  any frame rate, so the latch and the "auto" flag Harbor needed are gone. A
+  rate the world's fixed step does not divide is a `RuleError` on
+  `'rateHz'`, not a throw. (An emit `once` / `cooldown`, also suggested, is
+  not added: with the fixed handler running before the rule's next step it
+  is not needed, and a cooldown would put rule state outside the snapshot.)
+- `@domecs/core`: `world.signals.restored` (H-15), emitted after every
+  successful `restore()` — `load()`, `AgentBridge.reset()`, a branch, a
+  history scrub — once the snapshot is applied, outside any tick and before
+  an idle driver's repaint, with the envelope as applied. Plugin
+  `onRestore` runs before the snapshot is applied, so there was no single
+  place to rebuild derived state after every restore. `@domecs/scene`'s
+  `createSpatialHash` refreshes itself on it (and stops on `dispose()`).
+- `@domecs/core`: `runBranch` options `finalHash` and `checkProbes` (H-18).
+  `finalHash: false` takes no hash at the end of the call (`BranchRun.finalHash`
+  is then `null`). Probes are proven read-only once per branch by default
+  (`checkProbes: 'once'`: each probe function the first time the world
+  samples it); `true` keeps the 2.x check at every call, `false` skips it.
+  Every strict hash snapshots the whole world — 221 ms per one-step call at
+  22,000 entities, 729 ms with two probes — so extending a branch a few
+  steps at a time was impractical.
+
+### Performance
+
+- `@domecs/dom`: a view's redraw gate is its own query intersected with each
+  trigger (`And(query, OnChanged(T))`), so marks on entities outside the
+  view are no longer collected and then discarded each commit (H-10). With
+  Harbor's 300 staged of 20,000 containers, hundreds of off-stage marks a
+  frame at 64× no longer make views.
+- `@domecs/core` hot paths no longer pay constant overheads per tick (O-94).
+  Structural live queries reuse their result until membership changes,
+  stores are found by type identity, add/remove follow archetype edges,
+  the change-mark log no longer reallocates every tick, and filtered reads
+  stop allocating per entity. On the bench, a soak with a change reader
+  allocates 88 KB per tick instead of 833 KB and runs about 20% faster;
+  windowed about 20–28%. Behavior is unchanged: `query().entities` still
+  returns a fresh array on every read, and query hooks that run during a
+  spawn, despawn, move or restore see current state.
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 

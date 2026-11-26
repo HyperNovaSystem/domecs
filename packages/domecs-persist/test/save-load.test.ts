@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { load, loadIfPresent, save } from '../src/persist.js'
 import { createMemoryStorage, type Storage } from '../src/storage.js'
 import type { Migration } from '../src/migrate.js'
+import { decodeStored } from './decode-stored.js'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 const Tag = defineComponent<{ name: string }>('Tag', { defaults: { name: '' } })
@@ -184,7 +185,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(save(w, storage, 'slot').ok).toBe(true)
     const read = storage.read('slot')
     expect(read.ok).toBe(true)
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(typeof snap.meta?.savedAt).toBe('number')
   })
 
@@ -192,7 +193,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     const w = createWorld()
     expect(save(w, storage, 'slot', { meta: { label: 'checkpoint', n: 3 } }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.label).toBe('checkpoint')
     expect(snap.meta?.n).toBe(3)
     expect(typeof snap.meta?.savedAt).toBe('number')
@@ -202,7 +203,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     const w = createWorld()
     expect(save(w, storage, 'slot', { savedAt: 1234567 }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.savedAt).toBe(1234567)
   })
 
@@ -217,7 +218,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     })
     expect(save(w, storage, 'slot', { meta: { label: 'x' } }).ok).toBe(true)
     const read = storage.read('slot')
-    const snap = JSON.parse((read as { value: string }).value) as WorldSnapshot
+    const snap = decodeStored((read as { value: string }).value)
     expect(snap.meta?.source).toBe('plugin')
     expect(snap.meta?.label).toBe('x')
     expect(typeof snap.meta?.savedAt).toBe('number')
@@ -232,9 +233,9 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w2.getComponent(e, Health)?.hp).toBe(5)
   })
 
-  it('loads a legacy v1 snapshot via the built-in 1->2->3 migrations (review #16)', () => {
+  it('loads a legacy v1 snapshot via the built-in 1->2->3->4 migrations (review #16)', () => {
     // A v1 save predates resources. Loading it with the default target
-    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2 and 2->3 steps,
+    // (current SNAPSHOT_VERSION) must succeed via the built-in 1->2, 2->3 and 3->4 steps,
     // restoring entities with an empty resource set.
     const v1: WorldSnapshot = {
       version: 1,
@@ -250,15 +251,16 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w.getComponent(0 as never, Health)?.hp).toBe(8)
   })
 
-  it('save writes v3 (rngRoot, rngStreams); load restores the streams (§4.4)', () => {
+  it('save writes v4 (rngRoot, rngStreams, the fixed clock); load restores the streams (§4.4)', () => {
     const w1 = createWorld({ seed: 5 })
     w1.system('own', { rng: 'own' }, (ctx) => void ctx.rand.uniform())
     for (let i = 0; i < 3; i++) w1.stepOnce()
     expect(save(w1, storage, 'v3').ok).toBe(true)
     const read = storage.read('v3')
     if (!read.ok || read.value === null) throw new Error('slot missing')
-    const raw = JSON.parse(read.value) as WorldSnapshot
-    expect(raw.version).toBe(3)
+    const raw = decodeStored(read.value)
+    expect(raw.version).toBe(4)
+    expect(raw.fixedTick).toBe(0)
     expect(raw.rngRoot).toEqual(seedToState(5))
     expect(Object.keys(raw.rngStreams!)).toEqual(['own'])
     const w2 = createWorld({ seed: 6 })
@@ -268,7 +270,7 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w2.snapshot().rngRoot).toEqual(seedToState(5))
   })
 
-  it('a v2 save still loads: migrated to v3 in memory, own streams re-derived from the world root (§4.4)', () => {
+  it('a v2 save still loads: migrated to v4 in memory, own streams re-derived from the world root (§4.4)', () => {
     const v2: WorldSnapshot = {
       version: 2,
       seed: [1, 2, 3, 4],
@@ -284,12 +286,12 @@ describe('@domecs/persist — save/load round-trip', () => {
     expect(w.time.tick).toBe(7)
     expect(w.getComponent(0 as never, Health)?.hp).toBe(4)
     expect(w.snapshot().rngStreams).toEqual({ own: deriveStream(seedToState(9), 'own') })
-    // the slot bytes are left as written; the next save writes v3
+    // the slot bytes are left as written; the next save writes v4
     const before = storage.read('v2')
     expect(before.ok && JSON.parse(before.value!).version).toBe(2)
     expect(save(w, storage, 'v2').ok).toBe(true)
     const after = storage.read('v2')
-    expect(after.ok && JSON.parse(after.value!).version).toBe(3)
+    expect(after.ok && decodeStored(after.value!).version).toBe(4)
   })
 
   it('built-in migrations do not paper over pre-v1 gaps (v0 with no user migration fails)', () => {

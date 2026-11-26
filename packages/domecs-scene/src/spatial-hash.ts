@@ -17,7 +17,8 @@ export interface SpatialHashOptions {
  * A world-bound spatial index over one position component (spec §5.1).
  *
  * Positions are those read at the last {@link SpatialIndex.refresh} (the
- * index also refreshes once when it is created). Tag filters are evaluated
+ * index also refreshes once when it is created, and after every
+ * `world.restore()`, through `signals.restored`). Tag filters are evaluated
  * live at query time with `world.has`: an entity must hold every listed
  * component. Results are sorted by id and, like the core grid's, never
  * depend on `cellSize`. The index is derived state and never enters a
@@ -93,6 +94,8 @@ export function createSpatialHash(world: World, options: SpatialHashOptions): Sp
   }
 
   refresh()
+  // H-15: the index is not in the snapshot; rebuild it from the restored positions.
+  const offRestored = world.signals.restored.subscribe(() => refresh())
 
   return {
     refresh,
@@ -124,6 +127,7 @@ export function createSpatialHash(world: World, options: SpatialHashOptions): Sp
     dispose() {
       if (disposed) return
       disposed = true
+      offRestored()
       grid.clear()
       indexed = []
     },

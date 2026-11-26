@@ -55,13 +55,19 @@ interface ComponentOptions<T> {
 
 // Reflection descriptors (#14). describeComponent resolves `fields` from the
 // explicit schema, else infers from defaults, else empty.
-type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'entity' | 'unknown'
+// On a component schema every key is a reflection hint. On an event schema,
+// world.action / bridge.act also enforce kind, options, required, min, max,
+// integer and an entity field's liveness and `with` (H-6).
 interface FieldSchema {
-  readonly kind:      FieldKind
-  readonly min?:      number
-  readonly max?:      number
-  readonly step?:     number
+  readonly kind:      FieldKind                   // 'entity': an entity id, an integer >= 0
+  readonly required?: boolean                     // must be present (default: may be left out)
+  readonly min?:      number                      // inclusive bound of a number field
+  readonly max?:      number                      // inclusive bound of a number field
+  readonly integer?:  boolean                     // a number field holds an integer
+  readonly step?:     number                      // widget step; a hint, never checked
   readonly options?:  ReadonlyArray<string | number>  // enum widget
+  readonly with?:     ReadonlyArray<string>       // entity field: components it must hold
   readonly label?:    string
   readonly readonly?: boolean
   readonly description?: string  // free text for humans/agents; persist round-trips it
@@ -86,23 +92,29 @@ interface ComponentType<T, Name extends string = string> {
 type ComponentValue<C> = C extends ComponentType<infer T, string> ? T : never
 ```
 
-Two usage patterns:
+Ways to write it, the first two recommended (P-3):
 
 ```ts
+// Inferred: no type arguments. T comes from `defaults`, the literal name from
+// the argument. View access is `view.Position` (typed).
+const Position = defineComponent('Position', { defaults: { x: 0, y: 0 } })
+
+// An explicit type, the name stated once: defineComponent.of<T>()(name, options).
+const Ship = defineComponent.of<ShipData>()('Ship', { defaults: { state: 'inbound', hold: [] } })
+
+// The dual-type-arg form: the same, with the name stated twice.
+const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
+
 // Untyped views — Position.name widens to `string`. View access is
 // `(view as Record<string, unknown>).Position`.
 const Position = defineComponent<{ x: number; y: number }>('Position')
-
-// Typed views — Position.name is the literal `'Position'`. View access is
-// `view.Position` (typed). Required for the tuple-form query overload to
-// produce typed EntityView fields.
-const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
 ```
 
-The duplication of `'Position'` in the dual-type-arg form is a TypeScript
-limitation: partial type-argument inference does not fill in `Name` from
-the argument when `T` is supplied explicitly. The single-arg form remains
-fully supported for the common case.
+Typed tuple queries (`world.query([Ship] as const)`) need the literal name.
+Supplying `T` explicitly stops TypeScript inferring `Name` from the argument
+(partial type-argument inference), which is why the dual form repeats it and
+why `.of<T>()` curries: its second call infers `Name`. `defineResource.of<T>()`
+is the same for resources.
 
 ### `defineResource`
 
@@ -367,7 +379,10 @@ interface World {
   componentTypes(): ComponentType<unknown>[]
   // Iterate every live entity carrying `type`, paired with its value. Same
   // semantics as `world.query(Has(type))` + per-entity `getComponent`, with
-  // less ceremony at the call-site (F-10).
+  // less ceremony at the call-site (F-10). Each call selects the ids afresh
+  // (a one-shot query) and yields them through a generator: 4–5x slower than
+  // reading a live query's `entities` over the same set (Harbor, 20,000
+  // entities). In a system that runs every step, keep a live query instead.
   iterEntitiesWith<T>(type: ComponentType<T>): Iterable<{ id: Entity; value: T }>
   // The entity's component types sorted by name (2.3); despawn marks,
   // componentRemoved and snapshot component keys use the same order.
@@ -453,7 +468,19 @@ interface World {
     tickEnd:         Signal<TimeState>
     // A system returned a fault with no entity (doc/error-handling.md).
     faultRaised:     Signal<SystemicFault>
+    // After every successful restore() (load, bridge.reset, branches), outside a
+    // tick, before the repaint: rebuild derived state here (H-15). Payload: the
+    // envelope as applied, after onRestore hooks.
+    restored:        Signal<Readonly<WorldSnapshot>>
+    // A resource was set or marked, transient ones included (H-7): for a
+    // panel or HUD that is not a system. Not fired by restore().
+    resourceChanged: Signal<ResourceType<unknown>>
   }
+  // P-4: time every system run and full tick with performance.now(), reported
+  // as describe().systems[i].timing and describe().timing ({ runs | ticks,
+  // totalMs, lastMs, meanMs, maxMs }). true starts afresh, false drops them.
+  // Diagnostics only: nothing a system, snapshot or hash sees changes.
+  setProfiling(on: boolean): void
 }
 
 type Entity = number
@@ -504,11 +531,13 @@ interface StartOptions {
 interface EmittedEvent { readonly type: EventType<unknown>; readonly payload: unknown }
 type ActionEvent = EmittedEvent
 
-// Game policy: derive the verdict from the tick's events + world. Omit to
-// default to { accepted: true, consumedTurn: true }.
+// Game policy: derive the verdict from the tick's events + world. Omitted,
+// a command (defineCommand) gets its handler's verdict and a plain event
+// { accepted: true, consumedTurn: true }.
 type ActionResolver = (ctx: {
   events: readonly ActionEvent[]
   world:  World
+  verdict?: ActionVerdict | undefined   // a command's handler verdict; undefined = it did not run
 }) => ActionVerdict
 
 interface ActionVerdict {
@@ -555,8 +584,16 @@ interface SystemDef {
   schedule?: 'tick' | 'fixed' | 'event' | 'once' | 'reactive'
   priority?: number                        // lower runs first; default 0
   order?:    number                        // tie-break within a priority; default 0, finite (throws otherwise)
-  rateHz?:   number                        // fixed only
+  rateHz?:   number                        // fixed only; a whole divisor of 1 / fixedStep
+  phase?:    number                        // fixed only, 0 … d − 1 (d = baseHz / rateHz): run on the
+                                           // steps where (fixedTick + phase) % d === 0; default 0 runs
+                                           // on steps d, 2d, … Spread sub-rate systems with it (H-14)
   triggers?: EventType<unknown>[]          // event only
+  fixed?:    boolean                       // event only: run in the fixed schedule (H-17). Each fixed
+                                           // step delivers the events emitted since the previous step;
+                                           // the system runs on steps whose delivery holds a trigger,
+                                           // ordered with the fixed systems, with the step's clock.
+                                           // An emit in step k is handled in step k + 1 at any frame rate
   reactsTo?: QueryDef                      // reactive only
   enabled?:  () => boolean
   state?:    unknown                       // system-local; preserved across dev-mode hot-swap (SPEC §9.5)
@@ -579,7 +616,7 @@ interface SystemContext {
   // takes precedence). Empty
   // when neither is declared.
   entities: EntityView[]
-  time:     TimeState
+  time:     TimeState                      // the frame's clock; in a fixed system, the step's (H-3)
   input:    InputSnapshot
   events:   EventView
   world:    WorldAPI
@@ -622,13 +659,13 @@ interface SystemHandle {
 }
 
 interface Rng {
-  next():      number          // [0, 1)
-  int(max: number): number     // [0, max)
-  range(lo: number, hi: number): number
-  pick<T>(arr: readonly T[]): T
-  roll(sides: number): number  // [1, sides]
-  seed():      readonly [number, number, number, number]
-  fork(label: string): Rng     // deterministic subrng
+  uniform():                  number   // [0, 1)
+  uniformInt(max: number):    number   // [0, max); max a positive finite number, else throws
+  uniformRange(lo: number, hi: number): number   // [lo, hi)
+  pick<T>(arr: readonly T[]): T                  // throws on an empty array
+  uniformRoll(sides: number): number   // [1, sides]
+  seed():      RngState                // readonly [number, number, number, number]
+  fork(label: string): Rng             // deterministic subrng
 }
 ```
 
@@ -729,6 +766,9 @@ type QueryShorthand = ComponentType<unknown>[] | QueryNode
 // queries supply typed fields automatically; combinator-form queries leave
 // `Fields` at its default and the view stays untyped.
 interface QueryResult<Fields = Record<string, unknown>> {
+  // A fresh array on every read (the cached result is copied), and the cache
+  // is dropped by any structural change in the world: read it once per system
+  // run and keep the array, rather than in a loop.
   readonly entities: ReadonlyArray<EntityView<Fields>>
   readonly size:     number
   onAdd(fn: (e: EntityView<Fields>) => void): () => void
@@ -763,15 +803,31 @@ interface QueryHooks<Fields = Record<string, unknown>> {
 ```ts
 function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
 
-// The O-39 payload check world.action / bridge.act apply, without emitting or
-// stepping: null when valid (always null for a schema-less event), else a
-// reason fragment. A rejected action reports
-// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a
-// non-null, non-array object; own keys not declared are rejected (names only
-// inherited from Object.prototype, e.g. toString, count as undeclared);
-// declared keys (all optional) must match their kind / enum options;
-// 'unknown' accepts anything.
-function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null
+// The O-39 / H-6 payload check world.action / bridge.act apply, without
+// emitting or stepping: null when valid (always null for a schema-less event),
+// else a reason fragment. A rejected action reports
+// `invalid payload for "<name>": <fragment>`. The payload must be a non-null,
+// non-array object; own keys not declared are rejected (names only inherited
+// from Object.prototype, e.g. toString, count as undeclared); a `required`
+// field must be present; present fields must match their kind: a number is
+// finite (NaN and ±Infinity are refused), within min/max and an integer when
+// `integer`; an enum value is one of `options`; an entity is an integer >= 0
+// and, with `options.world`, alive and holding every `with` component;
+// 'unknown' accepts anything. `partial: true` skips `required` (a payload
+// built a field at a time).
+function validateEventPayload(
+  type: EventType<unknown>,
+  payload: unknown,
+  options?: { world?: PayloadWorld; partial?: boolean },
+): string | null
+// What the entity check needs; a World is one.
+interface PayloadWorld {
+  isAlive(entity: Entity): boolean
+  has(entity: Entity, type: ComponentType<unknown>): boolean
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+}
+// The schema defineEvent was given, without a world (rule compilers, tools).
+function eventSchema(type: EventType<unknown>): ComponentSchema | undefined
 
 interface EventDefOptions {
   // Payload field schema (component FieldSchema vocabulary). World.action /
@@ -786,7 +842,36 @@ interface EventDescriptor {
   readonly fields:       Readonly<Record<string, FieldSchema>>
   readonly fieldsSource: 'schema' | 'none'
   readonly description?: string
+  readonly command?:     true    // made by defineCommand: its handler answers action()
 }
+
+// Commands (P-1, H-5): an event type that carries the handler that carries it
+// out. world.register(Cmd) installs the handler once per world as the event
+// system `command:<name>` (priority -100; with fixed: true, a fixed event
+// system). It runs once per command delivered, in order; world.action(Cmd, p)
+// and bridge.act return the verdict for *that* command (consumedTurn defaults
+// to accepted). An unregistered command is refused before any tick; a fixed
+// command after a tick that ran no fixed step is reported as not yet handled
+// (accepted: false) and stays queued. A throwing handler refuses its command
+// and raises event_handler_threw.
+function defineCommand<T>(name: string, def: CommandDef<T>): CommandType<T>
+interface CommandDef<T> {
+  readonly description?: string
+  readonly schema?:      ComponentSchema   // enforced by action() (O-39, H-6)
+  readonly handle: (ctx: CommandContext, payload: T) => CommandVerdict | void   // void = accepted
+  readonly fixed?:       boolean           // handle in the next fixed step (H-17); act with { dt }
+  readonly priority?:    number            // default -100
+  readonly rng?:         'shared' | 'own'
+}
+interface CommandContext {                 // a system's context without entities / state
+  readonly time: Readonly<TimeState>; readonly input: InputSnapshot
+  readonly events: EventView; readonly world: World; readonly rand: Rng
+}
+type CommandVerdict = { readonly accepted: true } | { readonly accepted: false; readonly reason: string }
+function accept(): CommandVerdict
+function refuse(reason: string): CommandVerdict   // non-empty reason, else TypeError
+function isCommandType(value: unknown): value is CommandType<unknown>
+interface CommandType<T> extends EventType<T> {}
 
 // `EventType<T>` is identity-keyed: the bus dispatches on a per-instance
 // symbol stored on the type object, not on `name`. Two `defineEvent('Same')`
@@ -930,23 +1015,34 @@ interface TimeState {
                              // engine's unquantized cumulative scaled-time
                              // total (drift-free). See SPEC §2.7.
   scale:            number   // 0 = paused
-  fixedStep:        number   // seconds per fixed tick; the fixed-step driver
-                             // advances against the unquantized cumulative
-                             // total, so an N-Hz system fires exactly N
-                             // times per N*fixedStep seconds at any
-                             // fixedStep — including 1/60.
-  fixedAccumulator: number   // remainder of unquantized scaled time
+  fixedStep:        number   // seconds per fixed step; steps are counted off
+                             // the unquantized time owed (H-16), so
+                             // step(fixedStep) runs exactly one fixed step
+                             // and step(n * fixedStep) exactly n, however long
+                             // the world has run, at any fixedStep — 1/60 too.
+  fixedAccumulator: number   // unquantized scaled seconds owed, not yet run
+  fixedTick:        number   // fixed steps run since the world started
+  alpha:            number   // fixedAccumulator / fixedStep in [0, 1]
 }
 ```
+
+Inside a `fixed` system `ctx.time` is the step's clock, not the frame's (H-3):
+`fixedTick` is the step's 1-based index, `elapsed` is `fixedTick * fixedStep`,
+and `delta` / `scaledDelta` are the system's step (`fixedStep`, times the
+divisor for a `rateHz` system). Integrate with `ctx.time.scaledDelta` and count
+deadlines in `fixedTick`; both are the same at any time scale or frame rate.
+Views draw fixed-step state between steps with `world.time.alpha`.
 
 ### Snapshot
 
 ```ts
-// SNAPSHOT_VERSION === 3. v2 added `resources` (SPEC §2.11); v3 (2.1) added
-// `rngRoot`, `rngStreams` and `pendingEvents`. Every 2.1 snapshot is v3 (2.0
-// engines reject it); restore() accepts any version <= 3. @domecs/persist
-// ships built-in 1→2 and 2→3 migrations so v1 and v2 saves load transparently.
-const SNAPSHOT_VERSION = 3
+// SNAPSHOT_VERSION === 4. v2 added `resources` (SPEC §2.11); v3 (2.1) added
+// `rngRoot`, `rngStreams` and `pendingEvents`; v4 the fixed clock (`fixedTick`,
+// `fixedAccumulator`, and `fixedStep` always; H-16). Every snapshot this build
+// writes is v4 (older engines reject it); restore() accepts any version <= 4.
+// @domecs/persist ships built-in 1→2, 2→3 and 3→4 migrations so older saves
+// load transparently.
+const SNAPSHOT_VERSION = 4
 
 interface WorldSnapshot {
   readonly version:  number
@@ -960,16 +1056,22 @@ interface WorldSnapshot {
   // undefined counts as absent (the reseed recipe). (v3)
   readonly rngStreams?: Readonly<Record<string, RngState>> | undefined
   readonly tick:     number
-  // Cumulative unquantized scaled seconds. restore() re-derives time.elapsed,
-  // the fixed-step count, and fixedAccumulator from it, so fixed systems keep
-  // the live cadence (O-40). Absent in older snapshots → clock starts at 0.
+  // Cumulative unquantized scaled seconds; restore() resumes time.elapsed from
+  // it (O-40). Absent in older snapshots → clock starts at 0.
   readonly scaledTime?: number
-  // Fixed steps due but not yet run (a tickStart hook paused after time
-  // advanced); omitted when 0. restore() keeps them owed (O-40).
-  readonly fixedBacklog?: number
-  // The fixedStep the backlog is counted in; present with it. A world
-  // restored with another fixedStep re-counts the owed time in its own steps.
+  // The fixed clock (v4, H-16): steps run and the scaled time owed to the
+  // fixed schedule (more than one step when a tickStart hook paused after
+  // time advanced). restore() resumes both exactly, so fixed and rateHz
+  // systems keep the live cadence. Written together by every v4 snapshot.
+  readonly fixedTick?: number
+  readonly fixedAccumulator?: number
+  // The step the fixed clock is counted in (always written since v4). A world
+  // restored with another fixedStep re-counts the steps and owed time in its
+  // own steps; createBranch defaults its fixedStep to this.
   readonly fixedStep?: number
+  // Pre-v4 only: fixed steps due but not run. restore() derives a v3
+  // snapshot's step count from scaledTime less this; v4 never writes it.
+  readonly fixedBacklog?: number
   readonly entities: ReadonlyArray<{
     id:         Entity
     components: Record<string, unknown>
@@ -1065,7 +1167,7 @@ stream.uniform()
 assert.equal(b.w.getComponent(b.id, Roll)!.v, stream.uniform())
 
 const snap = a.w.snapshot()
-assert.equal(snap.version, 3)
+assert.equal(snap.version, 4)
 assert.deepEqual(Object.keys(snap.rngStreams!), ['noise', 'roll'])
 assert.deepEqual(snap.rngRoot, seedToState([1, 2, 3, 4]))
 assert.equal(a.w.describe().systems.find((s) => s.name === 'roll')!.rng, 'own')
@@ -1109,7 +1211,7 @@ const HASH_ALGORITHM: 'fnv1a64'
 - **Keyframes.** Serialize with `canonicalJson`, not `JSON.stringify`, so a
   `-0` survives the round trip; `JSON.parse(canonicalJson(snap))` restores
   to a world that continues exactly like one restored from `snap`.
-  `@domecs/persist` `save()` still writes `JSON.stringify` (follow-up).
+  `@domecs/persist` `save()` writes `canonicalJson` too (its default `jsonCodec`).
 - The hash is not cryptographic. All five functions are pure and identical
   across runs and JS engines.
 
@@ -1644,6 +1746,9 @@ interface ActRecord {
   readonly event: string         // replay resolves it with world.lookupEvent
   readonly payload?: JsonValue   // absent for an undefined payload
   readonly via: 'emit' | 'action'  // only 'action' acts are schema-checked on replay
+  // A command sent with action(): its handler's verdict in the act's tick (P-1).
+  // Replay requires the same verdict there (verdict_mismatch otherwise).
+  readonly verdict?: { readonly accepted: boolean; readonly reason?: string }
 }
 type ActLogGapReason = 'out_of_tick_mutation' | 'unserializable_payload' | 'restore' | 'step_threw'
 
@@ -1659,6 +1764,9 @@ type ReplayError =
   | { kind: 'unknown_event'; event: string; tick: number }
   | { kind: 'rejected_payload'; event: string; tick: number; reason: string }
   | { kind: 'diverged'; tick: number; expected: string; actual: string }
+  // A recorded command verdict differs on replay; actual null = the handler did not run.
+  | { kind: 'verdict_mismatch'; event: string; tick: number
+      expected: { accepted: boolean; reason?: string }; actual: { accepted: boolean; reason?: string } | null }
 ```
 
 What is recorded:
@@ -1782,7 +1890,7 @@ function createBranch<T = void>(setup: WorldSetup<T>, from: WorldSnapshot, optio
 function runBranch(world: World, options: RunBranchOptions): Result<BranchRun, ReplayError>
 
 interface BranchOptions {
-  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (snapshots carry it only with a backlog)
+  readonly fixedStep?: number         // default from.fixedStep ?? 1/60 (every v4 snapshot carries it)
   readonly seed?: number | RngState   // only matters for a v2 `from` (no rngRoot)
   readonly scale?: number             // the source's time.scale (not snapshotted); default 1
 }
@@ -1800,6 +1908,11 @@ interface RunBranchOptions {
   readonly hashEvery?: number         // strict hash every k steps
   readonly until?: (world: World) => boolean   // checked after each step
   readonly shouldStop?: () => boolean          // polled before each step
+  readonly finalHash?: boolean        // default true; false → BranchRun.finalHash null, no hash taken
+  // When to prove probes read-only (hash before/after): 'once' (default) = each
+  // probe function the first time this world samples it; true = every probe at
+  // the first sample of every call (2.x); false = never. Else TypeError (H-18).
+  readonly checkProbes?: boolean | 'once'
 }
 interface BranchRun {
   readonly ticks: number              // steps taken by this call
@@ -1808,9 +1921,15 @@ interface BranchRun {
   readonly keyframes: ReadonlyArray<{ tick: number; snapshot: WorldSnapshot }>
   readonly hashes: ReadonlyArray<{ tick: number; hash: string }>
   readonly faults: readonly SystemicFault[]    // signals.faultRaised during this call
-  readonly finalHash: string                   // strict
+  readonly finalHash: string | null            // strict; null with finalHash: false
 }
 ```
+
+A strict hash snapshots the whole world, so on a large one it dominates a
+short call. To extend a branch a few steps at a time (spreading a forecast
+over frames, or cancelling it), pass `finalHash: false` and hash when needed;
+with the default `checkProbes: 'once'`, probes already proven on the branch
+are not re-hashed (H-18).
 
 `createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
 `setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. Pass the
@@ -1929,10 +2048,20 @@ interface InputPluginOptions {
   pointerTarget?: Document | HTMLElement  // default: document when present
   wheelTarget?: Document | HTMLElement    // default: pointerTarget
   clearOnBlur?: boolean                   // default true
-  textInputSelector?: string              // default 'input,textarea,[contenteditable="true"]'
+  textInputSelector?: string              // default TEXT_INPUT_SELECTOR: text-like inputs,
+                                          // textarea, select, contenteditable; their keys pass through
   pollGamepads?: boolean                  // default true when navigator.getGamepads exists
-  preventDefaultKeys?: boolean            // default false
+  // Which captured keydowns get preventDefault() (H-2): false (default) none;
+  // true the game keys (letters, digits, arrows, Space, Enter); a list of codes;
+  // or a function, which alone decides. For true and a list, never while Ctrl,
+  // Meta or Alt is held, nor on an interactive control (interactiveSelector), so
+  // browser shortcuts and Space/Enter on a focused button still work. Repeats too.
+  preventDefaultKeys?: boolean | readonly string[] | ((e: KeyboardEvent) => boolean)
+  interactiveSelector?: string            // default INTERACTIVE_SELECTOR (buttons, links, form
+                                          // controls, contenteditable, ARIA widget roles)
 }
+// A key pressed and released between two snapshots shows both edges: it is in
+// keyDelta.pressed and keyDelta.released, and not in keys (H-1).
 
 interface InputSnapshot {
   readonly keys:       ReadonlySet<string>         // W3C KeyboardEvent.code
@@ -1994,15 +2123,53 @@ type MountError =
   | { kind: 'plugin_install_failed'; reason: string }
   | { kind: 'invalid_view_query'; slot: string; reason: string }   // temporal node in a view query (O-52)
   | { kind: 'invalid_changed_on'; slot: string; reason: string }   // update with no redraw trigger (O-55)
+  | { kind: 'invalid_parent'; slot: string; reason: string }       // parent.view not in this mount, or a cycle (H-8)
+  | { kind: 'invalid_panel'; slot: string; reason: string }        // a panel shares its slot (H-7)
 
 interface MountOptions {
   readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
   readonly views: ReadonlyArray<ViewDef>
+  readonly panels?: ReadonlyArray<PanelDef>   // markup derived from the world, patched into their own slot (H-7)
+  readonly stamp?: boolean                    // data-entity="<id>" on every mounted element; default true (H-9)
 }
 
 interface MountHandle {
   teardown(): void
+  // The element a view of this mount has mounted for an entity (H-8);
+  // undefined when none. An element waiting for its parent is mounted but out of the page.
+  elementOf(view: ViewDef, entity: Entity): HTMLElement | undefined
+  // A delegated listener on a slot: fn gets the entity whose mounted element
+  // the event happened in (the innermost, for nested views) — events outside
+  // this mount's elements are ignored. Returns a function that stops it (H-9).
+  on<K extends keyof HTMLElementEventMap>(slot: string, type: K,
+    fn: (entity: Entity, event: HTMLElementEventMap[K]) => void): () => void
+  // P-4, O-5: per view { view, slot, mounted, creates, updates, destroys,
+  // lastCommitMs }; per panel { slot, renders, paints, lastCommitMs }.
+  stats(): { views: ViewStats[]; panels: PanelStats[] }
 }
+
+// H-9: the entity of the innermost stamped element at or above an event target.
+function entityOf(target: EventTarget | Node | null | undefined): Entity | undefined
+const ENTITY_ATTRIBUTE = 'data-entity'
+
+// H-7: patch an element to match markup, keeping every node still right (so
+// focus, transitions and a pressed button survive); nothing is written when
+// the markup is what was last painted. paint owns the element's content.
+function paint(target: Element, html: string): boolean   // true when the DOM changed
+// Hold paint off whatever the primary button is pressing until its click has
+// landed; markup asked for meanwhile is painted right after. Returns unwatch.
+function watchPresses(root: Document): () => void
+
+// A panel: render(world) to a string, painted into its own slot at the first
+// commit, then when a listed component is added/changed/removed on any entity,
+// a listed resource is set or marked, or after a restore — or every commit
+// without changedOn.
+interface PanelDef {
+  readonly slot: string
+  render(world: World): string
+  readonly changedOn?: { readonly types?: readonly ComponentType<any>[]; readonly resources?: readonly ResourceType<any>[] }
+}
+function definePanel(def: PanelDef): PanelDef
 
 // ViewDef carries optional typed `Fields` so tuple-form queries thread
 // component value types through to `create` / `update` / `destroy`.
@@ -2019,7 +2186,12 @@ interface MountHandle {
 //     component identity.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
 //     those component types. Overrides the auto-derive. An empty list with
-//     `update` is err invalid_changed_on.
+//     `update` and no resources is err invalid_changed_on.
+//   - `resources` (auto and explicit, H-7): also redraw every mounted node
+//     when one of these resources is set or marked (a transient camera or
+//     selection).
+// The gate is the view's own query intersected with each trigger (H-10), so a
+// mark on an entity outside the view is never collected.
 //
 // First paint (O-2): under `auto`/`explicit`, `update` also runs once for
 // each newly created node in the commit that mounts it (fresh commit-time
@@ -2027,14 +2199,22 @@ interface MountHandle {
 // window). Later commits stay change-gated. `create` gets the entity as it
 // is at the commit, with components added since it matched (O-55).
 type ChangedOn =
-  | { readonly mode: 'auto' }
+  | { readonly mode: 'auto'; readonly resources?: ReadonlyArray<ResourceType<any>> }
   | { readonly mode: 'legacy' }
-  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>> }
+  | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>>
+      readonly resources?: ReadonlyArray<ResourceType<any>> }
 
 interface ViewDef<Fields = Record<string, unknown>> {
   slot:         string
   query:        QueryShorthand
   changedOn?:   ChangedOn
+  // H-10: keep this view's nodes in ascending order(entity), ties by id, in
+  // each container; re-evaluated when one of its nodes is created or updated.
+  order?(entity: EntityView<Fields>): number
+  // H-8: mount each element inside another view's element (`at`: a selector
+  // inside it), or the slot when `of` returns null. Re-evaluated on update;
+  // while the parent has no element the child stays mounted, out of the page.
+  parent?: { view: ViewDef; of(entity: EntityView<Fields>): Entity | null | undefined; at?: string }
   create(entity: EntityView<Fields>): HTMLElement
   update?(el: HTMLElement, entity: EntityView<Fields>): void
   destroy?(el: HTMLElement, entity: EntityView<Fields>): void
@@ -2108,28 +2288,65 @@ function createMemoryStorage(initial?: Readonly<Record<string, string>>): Storag
 function createLocalStorageStorage(prefix?: string): Storage
 ```
 
-**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`,
-serializes to JSON, and writes to `slot`. `load` reads `slot`, parses it,
-migrates the envelope to `targetVersion` (default `SNAPSHOT_VERSION`, 2)
-before calling `world.restore`.
+**Save / load.** `save` captures `world.snapshot()`, stamps `meta.savedAt`
+(and `meta.appVersion`), encodes it with a codec and writes the text to
+`slot`. `load` reads the slot's header, checks `accept`, decodes the body with
+the codec the header names, migrates the envelope to `targetVersion` (default
+`SNAPSHOT_VERSION`, 4) and calls `world.restore`. Slots written by 2.x
+(`JSON.stringify`) still load.
+
+Stored text: for `jsonCodec`, a plain JSON snapshot whose first keys are
+`meta` and `version` (the rest in canonical order), so a host that parses its
+slots keeps working and `peek` reads the header from that prefix. For any
+other codec: `domecs-save 1`, a newline, the header as JSON
+(`{ codec, snapshotVersion, savedAt, appVersion?, meta? }`), a newline, then
+the codec's body.
 
 ```ts
-function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<void, DomecsError>
+function save(world: World, storage: Storage, slot: string, opts?: SaveOptions): Result<SaveReport, DomecsError>
 function load(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<void, DomecsError>
 // Boot-friendly: missing slot → ok(false); loaded → ok(true); real failures → err (O-28).
 function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>
+// The header without decoding the body (H-12): a save menu's "Day 3 · 14:20". ok(null) when empty.
+function peek(storage: Storage, slot: string): Result<SaveHeader | null, DomecsError>
+
+// The pure halves (H-11), for a host that stores the text itself or works in a worker:
+function prepareSave(world: World, opts?: SaveOptions): WorldSnapshot       // the stamped envelope
+function encodeSave(snap: WorldSnapshot, opts?: { codec?: SnapshotCodec }): Result<{ text: string; header: SaveHeader }, DomecsError>
+function decodeSave(text: string, opts?: DecodeOptions): Result<{ snapshot: WorldSnapshot; header: SaveHeader }, DomecsError>
 
 interface SaveOptions {
-  meta?:    Record<string, unknown>   // merged into snapshot envelope meta (caller keys win)
-  savedAt?: number                    // override stamped ms-epoch timestamp; default Date.now()
+  meta?:       Record<string, unknown>   // merged into snapshot envelope meta (caller keys win); also the header's
+  savedAt?:    number                    // override stamped ms-epoch timestamp; default Date.now()
+  appVersion?: number | string           // the app's save format, in meta and the header (H-12)
+  codec?:      SnapshotCodec             // default jsonCodec; columnarCodec for large worlds (H-11, P-2)
 }
+interface SaveReport { codec: string; length: number }   // characters written (O-29)
 
-interface LoadOptions {
-  targetVersion?: number    // default SNAPSHOT_VERSION (2)
+interface DecodeOptions {
+  targetVersion?: number    // default SNAPSHOT_VERSION (4)
   // Caller migration chain, overlaid on BUILTIN_MIGRATIONS (caller keys win).
   // Default = just the built-ins, so a legacy v1 save upgrades transparently.
   migrations?: MigrationMap
+  codecs?: readonly SnapshotCodec[]                 // decoders beyond json and columnar, by name
+  // Before the body is decoded: true loads; false or a reason refuses (persist_io), world untouched.
+  accept?: (header: SaveHeader) => boolean | string
 }
+type LoadOptions = DecodeOptions
+
+interface SaveHeader {
+  codec: string; snapshotVersion: number; savedAt: number
+  appVersion?: number | string; meta?: Record<string, unknown>
+  length: number                                    // characters of the stored text
+}
+
+// A wire format: name it, and load finds the decoder by that name.
+interface SnapshotCodec { name: string; encode(snap: WorldSnapshot): string; decode(text: string): unknown }
+// canonicalJson / JSON.parse: lossless (-0 kept); NaN and cycles refused, not written as null.
+const jsonCodec: SnapshotCodec
+// P-2: entities of one component of flat fields as tables of rows, the rest as is:
+// lossless, ~0.3x the text of jsonCodec on a 21,000-entity port.
+const columnarCodec: SnapshotCodec
 
 // Plugin: strips entities with an empty serializable component bag from every
 // world.snapshot() envelope via onSnapshot — the declarative way to get
@@ -2214,13 +2431,14 @@ interface FieldChange {
 }
 interface ResourceChange { readonly resource: string; readonly path: string; readonly before: JsonValue | undefined; readonly after: JsonValue | undefined }
 
-/** First difference: state (seed, tick, scaledTime, nextId, rngRoot, rngStreams,
- *  fixedBacklog, pendingEvents), then the lowest entity id, then resources. null when equal.
+/** First difference: state (seed, tick, scaledTime, fixedTick, fixedAccumulator,
+ *  fixedStep, nextId, rngRoot, rngStreams, rngOwners, fixedBacklog, pendingEvents),
+ *  then the lowest entity id, then resources. null when equal.
  *  version, meta and changes are not compared. */
 function firstDivergence(a: WorldSnapshot, b: WorldSnapshot): Divergence | null
 
 type Divergence =
-  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'nextId' | 'rngRoot' | 'rngStreams' | 'fixedBacklog' | 'pendingEvents' }
+  | { where: 'state'; key: 'seed' | 'tick' | 'scaledTime' | 'fixedTick' | 'fixedAccumulator' | 'fixedStep' | 'nextId' | 'rngRoot' | 'rngStreams' | 'rngOwners' | 'fixedBacklog' | 'pendingEvents' }
   | { where: 'entity'; entity: Entity; change: 'added' | 'removed' | FieldChange }
   | { where: 'resource'; change: ResourceChange }
 ```
@@ -2715,6 +2933,11 @@ interface SpatialOption {
 // RuleDef gains (2.3): schedule 'event'; on?: string (the trigger's name);
 // self?: string / other?: string (expressions giving entity ids, e.g.
 // 'event.target'); effects?: RuleEffectDef[].
+// RuleDef gains (H-13): rateHz?: number and phase?: number on fixed rules
+// (run every d-th fixed step, d = baseHz / rateHz, shifted by phase; dt is the
+// period; a rate the world's step does not divide is a RuleError on 'rateHz'
+// from update()); fixed?: boolean on event rules (handle the event in the
+// next fixed step, H-17 — a sim written as rules stays frame-rate independent).
 type RuleEffectDef =
   | { emit: string; payload?: Record<string, string> }                  // field -> expr
   | { spawn: string; at?: { x: string; y: string }; set?: Record<string, string> }  // 'Component.field' -> expr
@@ -2999,9 +3222,11 @@ schema, an undeclared field is a compile error); `other` is the entity the
 `despawn`, `add`, `remove`) are queued per entity only when `when` held and
 every action succeeded, evaluated then (they see the entity's staged
 writes), and applied at the end of the rule's run in queue order. An
-`emit` is validated with `validateEventPayload` when applied (invalid: a
+`emit` is validated with `validateEventPayload` when applied, for shape
+only — an entity field may name an entity the rule just despawned (invalid: a
 fault on the queuing entity, or a systemic one if that entity was despawned
-earlier in the apply) and delivered **next tick**; a despawn is
+earlier in the apply) and delivered **next tick**; an `emit` whose payload
+leaves out a field the event's schema marks `required` does not compile; a despawn is
 deferred, so later entities in the run still read the entity; spawn ids
 follow apply order. Forks taken with `snapshot({ pendingEvents: true })`
 between an emit and its delivery deliver it too.

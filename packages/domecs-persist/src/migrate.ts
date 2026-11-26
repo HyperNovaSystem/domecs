@@ -25,10 +25,15 @@ export type MigrationMap = ReadonlyMap<number, Migration>
  *   `pendingEvents` fields. A v2 snapshot lacks them, so the step is a pure
  *   version bump — restore uses the world's createWorld root, re-derives every own
  *   stream and abandons the event queue, as for a v2 snapshot.
+ * - `3 → 4`: v4 writes the fixed clock itself (`fixedTick`,
+ *   `fixedAccumulator`, and `fixedStep` always; H-16). A v3 snapshot lacks
+ *   them, so the step is a pure version bump — restore derives the clock
+ *   from `scaledTime` and `fixedBacklog`, as a v3 build did.
  */
 export const BUILTIN_MIGRATIONS: MigrationMap = new Map<number, Migration>([
   [1, (snap) => ok({ ...snap, version: 2 })],
   [2, (snap) => ok({ ...snap, version: 3 })],
+  [3, (snap) => ok({ ...snap, version: 4 })],
 ])
 
 /**

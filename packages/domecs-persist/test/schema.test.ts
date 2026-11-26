@@ -167,3 +167,31 @@ describe('@domecs/persist — field descriptions', () => {
     expect(createWorld().describeComponent(types[0]!).fields.x).toEqual({ kind: 'number' })
   })
 })
+
+// H-6: the keys a payload schema enforces round-trip too, and `entity` is a known kind.
+describe('@domecs/persist — required, integer, with and the entity kind', () => {
+  const Docked = defineComponent<{ berth: number; crane: number }>('Docked', {
+    defaults: { berth: 0, crane: -1 },
+    schema: {
+      fields: {
+        berth: { kind: 'number', integer: true, min: 0, required: true },
+        crane: { kind: 'entity', with: ['Crane'] },
+      },
+    },
+  })
+
+  it('serializes and registers them back', () => {
+    const w = createWorld()
+    const data = serializeComponentType(Docked, w.describeComponent(Docked))
+    expect(data.fields).toEqual([
+      { name: 'berth', kind: 'number', default: 0, min: 0, integer: true, required: true },
+      { name: 'crane', kind: 'entity', default: -1, with: ['Crane'] },
+    ])
+    const { types, problems } = registerComponentTypes([data], new Set())
+    expect(problems).toEqual([])
+    expect(createWorld().describeComponent(types[0]!).fields).toEqual({
+      berth: { kind: 'number', min: 0, integer: true, required: true },
+      crane: { kind: 'entity', with: ['Crane'] },
+    })
+  })
+})

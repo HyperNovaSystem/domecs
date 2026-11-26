@@ -65,6 +65,8 @@ agent.reset({ scale: 1, input: 'empty' })
 
 const obs = agent.observe()          // manifest + tick + entityCount
 const result = agent.act(Damage, { amount: 3 })
+// For a command made with defineCommand (below), accepted/reason are its
+// handler's verdict; for a plain event they come from opts.resolve.
 // act() emits AND runs one tick (pass { dt: 1/60 } for fixed schedules).
 // result: { accepted, consumedTurn, reason?, events, snapshot? }
 // agent.step()                      // only to advance with no command;
@@ -82,7 +84,10 @@ agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
 2. **`spawn` shallow-copies.** Capture the entity id; read live state with
    `world.getComponent(id, C)`. Do not keep the bag you passed to `spawn`.
 3. **`stepOnce` never fires `fixed` systems.** Use `step(world.time.fixedStep)`
-   (or `bridge.step(dt)`) for fixed-schedule sims and tests.
+   (or `bridge.step(dt)`) for fixed-schedule sims and tests: it runs exactly
+   one fixed step. Inside a `fixed` system, `ctx.time` is the step's clock:
+   integrate with `ctx.time.scaledDelta`, count deadlines in
+   `ctx.time.fixedTick`.
 4. **`keyDelta` is one render tick.** Edge-triggered keys belong on `tick`
    systems (or use held `keys`). Do not sample `keyDelta` from `fixed`.
 5. **Paused (`scale === 0`) freezes `tick` and `fixed`.** Put pause/resume
@@ -110,7 +115,9 @@ agent.reset({ scale: 1, input: 'empty' })  // back to baseline for next episode
      exponent, when results must match across JS engines (SPEC §8).
 
    Check it the only way that works: replay the same seed and actions twice
-   and compare `JSON.stringify(snapshot())`.
+   and compare `hashSnapshot(snapshot(), { includeChanges: true })` (not
+   `JSON.stringify`, which depends on insertion order and writes `-0` as `0`;
+   see the checklist below).
 
 ---
 
@@ -128,10 +135,11 @@ over cloning state for each UI region.
 
 ### Post-restore rebuild
 After `restore`/`load`, rebuild transient projection entities (viewport, table
-rows) from persistent state — in a call right after `restore`/`load` returns,
-or in a boot `once` system when restoring into a fresh world. Not in a plugin
-`onRestore`: it runs before the snapshot is applied, so anything it spawns is
-wiped.
+rows) and caches from persistent state in a `world.signals.restored`
+subscriber: it runs once after every restore, whoever called it (`load`,
+`bridge.reset()`, a branch), outside a tick, before the repaint. Not in a
+plugin `onRestore`: it runs before the snapshot is applied, so anything it
+spawns is wiped. `createSpatialHash` indexes refresh themselves on it.
 
 Forks and checkpoints taken between ticks pass
 `snapshot({ pendingEvents: true })` so events in flight are delivered after
@@ -155,6 +163,22 @@ disposable live feed state stays in the world.
 
 Install redaction plugins **before** constructing history with
 `captureInitial`, or the baseline leaks unredacted state.
+
+### Events in a fixed-step simulation
+An `event` system runs after the whole fixed phase, so in a sim on the
+`fixed` schedule the number of steps between an emit and its handling
+depends on the frame rate. Handle such events in a fixed event system:
+
+```ts
+world.system('service', { schedule: 'event', fixed: true, triggers: [ServiceCrane] }, (ctx) => {
+  for (const { crane } of ctx.events.of(ServiceCrane)) startService(ctx.world, crane, ctx.time.fixedTick)
+})
+```
+
+Each fixed step delivers the events emitted since the previous one, so an
+emit in step k is handled in step k + 1 at 1× or 64×. Commands from outside
+arrive at the next step that runs. Plain `fixed` systems still read the
+frame's events in every step: do not consume events in them.
 
 ### Neighbour queries
 Do not scan every entity per entity (O(n²)). Use `createSpatialHash(world,
@@ -191,6 +215,33 @@ only its own entity; other entities react by reading it (`first(S).C.f`) in
 their own rules. `self`, `tick`, `other`, `event`, `pointer` are reserved
 words. Contract: SPEC Appendix A; tutorial:
 the `@domecs/rules` README.
+
+### Commands with verdicts
+An agent's "did my command work?" is answered by the command's handler:
+
+```ts
+import { defineCommand, refuse } from '@domecs/core'
+
+const BuyCrane = defineCommand<{ berth: number }>('BuyCrane', {
+  description: 'Buy a crane for a berth that has room on its rails: $90,000.',
+  schema: { fields: { berth: { kind: 'entity', required: true, with: ['Berth'] } } },
+  handle(ctx, { berth }) {
+    const cash = ctx.world.getResource(Cash)!
+    if (cash < 90_000) return refuse(`Not enough cash: $90,000 needed, $${cash} held.`)
+    // … spend, spawn, ctx.events.emit(CraneBought, { berth })
+  },
+})
+world.register(BuyCrane)                          // installs the handler, once
+bridge.act('BuyCrane', { berth: 7 })              // { accepted: false, reason: 'Not enough cash: …' }
+```
+
+`register` installs the handler as the event system `command:BuyCrane`
+(priority −100). `action()` / `bridge.act()` return the handler's verdict for
+that command; refusals spend no turn. Pass `fixed: true` for a command to a
+fixed-step simulation: it is handled in the next fixed step, so act with
+`{ dt: world.time.fixedStep }`. `describe().events[i].command` marks commands,
+and act logs keep each verdict, so replay reports a diverging refusal at the
+act.
 
 ### Commands as event rules
 Declare the command with a `schema` and `world.register` it, then handle it
@@ -261,13 +312,15 @@ if (run.ok) console.log(run.value.stoppedBy, run.value.samples, run.value.finalH
 ```
 
 Compare branches (or a branch with the live world) by `finalHash` / `hashes`
-(strict) and by probe samples. Call `runBranch` again to extend a branch.
+(strict) and by probe samples. Call `runBranch` again to extend a branch; on a
+large world pass `finalHash: false` to the calls that only advance it (a strict
+hash snapshots the whole world).
 `once` systems in the setup refuse a branch from `tick > 0` (`once_systems`):
 gate boot work on snapshotted state so it is not re-run (the gate is read
 after the restore), or leave it out of the branch setup.
-Neither `fixedStep` (only with a fixed backlog) nor scale is in the snapshot:
-pass the source's `time.fixedStep` and `time.scale` (for a paused source, its
-resume scale, then `pause()` the branch). A probe that
+The snapshot carries the source's `fixedStep` (the branch's default) but not
+its scale: pass the source's `time.scale` (for a paused source, its resume
+scale, then `pause()` the branch). A probe that
 changes the world throws at the first sample.
 
 ### Render state
@@ -300,7 +353,16 @@ mountDOM(world, {
 ```
 
 `update` runs once on first mount (first paint), then only when queried
-components are `markChanged`.
+components are `markChanged` — or, with `changedOn: { mode: 'auto',
+resources: [Camera] }`, when a listed resource is set. Mounted elements carry
+`data-entity`: route DOM events with `handle.on('stage', 'click', (entity,
+ev) => …)` or `entityOf(ev.target)`, find an element with
+`handle.elementOf(view, entity)`, nest one view's elements in another's with
+`parent: { view, of: (e) => e.Box.holder, at: '.deck' }`, and keep a list in
+order with `order: (e) => e.Rank.n`. A panel that sums up many entities is a
+`definePanel({ slot, render: (world) => html, changedOn })`, patched in place
+with `paint` (call `watchPresses(document)` once) so clicks and focus survive
+its repaints.
 
 ---
 
@@ -330,9 +392,13 @@ components are `markChanged`.
   event identity, so no handler could ever see it. `bridge.act('Name', …)`
   resolves a name to its token first (below).
 - `act()` validates payloads **only when the event declares a `schema`**
-  (then typo'd fields / wrong types return `accepted: false` with a reason —
-  declare schemas on every agent-facing command; schema-less events stay
-  unvalidated).
+  (then typo'd fields, wrong types, missing `required` fields, NaN,
+  out-of-`min`/`max` numbers, non-integers where `integer` is set and
+  `entity` fields that name no live entity — or one without the `with`
+  components — return `accepted: false` with a reason, before any tick).
+  Declare schemas on every agent-facing command, with `required` on the
+  fields a handler needs and `kind: 'entity'` on ids; schema-less events
+  stay unvalidated.
 - `bridge.step(0)` is a heartbeat (no systems run), unlike `bridge.step()`.
 
 Name-based act: `bridge.act('Damage', payload)` resolves through

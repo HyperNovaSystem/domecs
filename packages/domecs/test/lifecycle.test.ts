@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineCommand } from '../src/commands.js'
 import { defineEvent } from '../src/events.js'
 import { createWorld } from '../src/world.js'
 
@@ -365,5 +366,57 @@ describe('World.start() — visibilitychange handling (F-5)', () => {
     doc._dispatch()
     expect(w.time.scale).toBe(1)
     w.stop()
+  })
+})
+
+// PR #30 review (Codex): a fixed event system sat in the fixed list, so a
+// world holding only an unused fixed command never let the idle loop sleep;
+// it must still stay awake while a delivery waits for a fixed step.
+describe('the idle loop and fixed event systems', () => {
+  let raf: RafHarness & { restore: () => void }
+  beforeEach(() => {
+    raf = installRaf() as RafHarness & { restore: () => void }
+  })
+  afterEach(() => raf.restore())
+
+  it('sleeps with only a fixed command registered, and wakes until the command is handled', () => {
+    const w = createWorld({ idle: true, fixedStep: 1 / 16 })
+    let handled = 0
+    const Cmd = defineCommand<{ n: number }>('LcFixedCmd', {
+      fixed: true,
+      schema: { fields: { n: { kind: 'number', required: true } } },
+      handle: () => {
+        handled++
+      },
+    })
+    w.register(Cmd)
+    w.startLoop()
+    raf.advance(16) // prime
+    raf.advance(16)
+    expect(raf.pending()).toBe(false)
+    w.emit(Cmd, { n: 1 })
+    expect(raf.pending()).toBe(true)
+    // 16 ms frames: the 62.5 ms fixed step comes on the fourth or fifth.
+    for (let i = 0; i < 12 && handled === 0; i++) raf.advance(16)
+    expect(handled).toBe(1)
+    for (let i = 0; i < 4 && raf.pending(); i++) raf.advance(16)
+    expect(raf.pending()).toBe(false)
+  })
+
+  // PR #30 review (Codex): a fixed event system with no triggers runs on
+  // every fixed step, so it keeps the loop awake like any fixed system.
+  it('stays awake for a fixed event system with no triggers', () => {
+    for (const triggers of [undefined, []]) {
+      const w = createWorld({ idle: true, fixedStep: 1 / 16 })
+      let ran = 0
+      w.system('everyStep', { schedule: 'event', fixed: true, ...(triggers ? { triggers } : {}) }, () => {
+        ran++
+      })
+      w.startLoop()
+      for (let i = 0; i < 20; i++) raf.advance(16)
+      expect(raf.pending()).toBe(true)
+      expect(ran).toBeGreaterThanOrEqual(4)
+      w.stop()
+    }
   })
 })

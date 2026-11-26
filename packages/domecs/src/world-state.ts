@@ -10,7 +10,7 @@ import {
   type SnapshotPendingEvent,
   type WorldSnapshot,
 } from './snapshot.js'
-import { fixedStepsDue, type TimeState } from './time.js'
+import { fixedAlpha, fixedStepsDue, type TimeState } from './time.js'
 import type { ComponentType, Entity } from './types.js'
 import type { SortedIdSet } from './id-set.js'
 import type { EntityView, QueryNode } from './query.js'
@@ -136,6 +136,7 @@ export function buildSnapshot(
   pruneEmpty: boolean,
   pending?: readonly EmittedEvent[],
   lookup?: (name: string) => EventType<unknown> | undefined,
+  pendingFixed?: readonly EmittedEvent[],
 ): WorldSnapshot {
   const entities: Array<{ id: Entity; components: Record<string, unknown> }> = []
   const sortedAlive = Array.from(ctx.alive).sort((a, b) => a - b)
@@ -157,14 +158,16 @@ export function buildSnapshot(
   // #16: serialize materialized resources by name; the field is omitted
   // entirely when there are none.
   const resourcesSnap = ctx.resources.snapshotValues()
-  // O-40: fixed steps the clock has accumulated but not run — normally 0;
-  // positive when a tickStart hook paused the world after time advanced, or
-  // when the snapshot is taken inside the fixed-step loop.
-  const fixedBacklog =
-    fixedStepsDue(ctx.clock.totalScaledSeconds, ctx.time.fixedStep) - ctx.clock.fixedStepsFired
-  // O-42: marks a system has not seen yet, so restore can re-issue them.
-  // Transient resources' marks are left out with their values (O-36).
-  const changes = ctx.changes.encode(ctx.changeCursors(), ctx.resources.isTransient)
+  // O-42: marks a system watching them has not seen yet, so restore can
+  // re-issue them. Transient resources' and components' marks are left out
+  // with their values (O-36, H-4).
+  const changes = ctx.changes.encode(ctx.changeCursors(), {
+    resource: ctx.resources.isTransient,
+    component: (name) => {
+      const type = ctx.typeRegistry.get(name)
+      return type !== undefined && internal(type).__transient
+    },
+  })
   // §4.4: every own stream's state, by key; omitted while there is none.
   let rngStreams: Record<string, RngState> | undefined
   for (const [key, rng] of ctx.getStreams()) {
@@ -181,13 +184,22 @@ export function buildSnapshot(
     ...(rngOwners !== undefined ? { rngOwners } : {}),
     tick: ctx.time.tick,
     scaledTime: ctx.clock.totalScaledSeconds,
-    ...(fixedBacklog > 0 ? { fixedBacklog, fixedStep: ctx.time.fixedStep } : {}),
+    // H-16: the fixed clock itself, not a total to re-derive it from. The
+    // accumulator holds any owed steps (O-40): a tickStart hook that paused
+    // the world after time advanced, or a snapshot inside the fixed loop.
+    fixedTick: ctx.clock.fixedStepsFired,
+    fixedAccumulator: ctx.time.fixedAccumulator,
+    fixedStep: ctx.time.fixedStep,
     entities,
     nextId: ctx.getNextId(),
     ...(resourcesSnap !== undefined ? { resources: resourcesSnap } : {}),
     ...(changes !== undefined ? { changes } : {}),
     ...(pending !== undefined && pending.length > 0
       ? { pendingEvents: encodePendingEvents(pending, lookup) }
+      : {}),
+    // H-17: the events no fixed sub-step has delivered yet.
+    ...(pendingFixed !== undefined && pendingFixed.length > 0
+      ? { pendingFixedEvents: encodePendingEvents(pendingFixed, lookup, 'pendingFixedEvents') }
       : {}),
   }
 }
@@ -215,11 +227,12 @@ export function buildSnapshot(
 export function encodePendingEvents(
   events: readonly EmittedEvent[],
   lookup?: (name: string) => EventType<unknown> | undefined,
+  field: 'pendingEvents' | 'pendingFixedEvents' = 'pendingEvents',
 ): SnapshotPendingEvent[] {
   return events.map((e, i) => {
     if (lookup !== undefined && lookup(e.type.name) !== e.type) {
       throw new TypeError(
-        `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) cannot be recorded ` +
+        `domecs: snapshot: pending event "${e.type.name}" (${field}[${i}]) cannot be recorded ` +
           `by name: distinct known event types share the name "${e.type.name}"; give each event type ` +
           `a unique name`,
       )
@@ -230,7 +243,7 @@ export function encodePendingEvents(
     } catch (fault) {
       if (fault instanceof PlainFault) {
         throw new TypeError(
-          `domecs: snapshot: pending event "${e.type.name}" (pendingEvents[${i}]) has a payload ` +
+          `domecs: snapshot: pending event "${e.type.name}" (${field}[${i}]) has a payload ` +
             `that is not plain data at payload${fault.path.reverse().join('')}: ${fault.what}`,
         )
       }
@@ -334,29 +347,30 @@ export function resolvePendingEvents(
   s: WorldSnapshot,
   lookup: (name: string) => EventType<unknown> | undefined,
   known: () => readonly EventType<unknown>[],
+  key: 'pendingEvents' | 'pendingFixedEvents' = 'pendingEvents',
 ): EmittedEvent[] | undefined {
-  const field: unknown = (s as { pendingEvents?: unknown }).pendingEvents
+  const field: unknown = (s as unknown as Record<string, unknown>)[key]
   if (field === undefined) return undefined
-  if (!Array.isArray(field)) throw invalid('pendingEvents', 'an array', field)
+  if (!Array.isArray(field)) throw invalid(key, 'an array', field)
   return field.map((rec: unknown, i): EmittedEvent => {
-    if (!isRecord(rec)) throw invalid(`pendingEvents[${i}]`, 'an object', rec)
+    if (!isRecord(rec)) throw invalid(`${key}[${i}]`, 'an object', rec)
     const name = rec.event
-    if (typeof name !== 'string') throw invalid(`pendingEvents[${i}].event`, 'a string', name)
+    if (typeof name !== 'string') throw invalid(`${key}[${i}].event`, 'a string', name)
     const type = lookup(name)
     if (type === undefined) {
       const sharing = known().filter((t) => t.name === name).length
       throw new Error(
         sharing > 1
-          ? `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is ambiguous: ` +
+          ? `domecs: restore: pending event "${name}" (${key}[${i}]) is ambiguous: ` +
               `${sharing} distinct known event types share the name`
-          : `domecs: restore: pending event "${name}" (pendingEvents[${i}]) is not a known event type ` +
+          : `domecs: restore: pending event "${name}" (${key}[${i}]) is not a known event type ` +
               `in this world; register it with world.register(...) before restoring`,
       )
     }
     const payload =
       rec.payload === undefined
         ? undefined
-        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": pendingEvents[${i}].payload`)
+        : plainDataCopy(rec.payload, `domecs: restore: pending event "${name}": ${key}[${i}].payload`)
     return { type, payload }
   })
 }
@@ -461,8 +475,11 @@ export function applySnapshot(ctx: WorldStateCtx, s: WorldSnapshot, clock: Snaps
 /** The clock fields of a snapshot, validated, with absent fields defaulted. */
 export interface SnapshotClock {
   readonly scaledTime: number
+  /** v4 (H-16): the fixed clock as the source had it; undefined in older snapshots. */
+  readonly fixed: { readonly tick: number; readonly accumulator: number } | undefined
+  /** Pre-v4: steps owed under `scaledTime`; 0 when absent (and always with `fixed`). */
   readonly fixedBacklog: number
-  /** The step `fixedBacklog` is counted in; undefined means this world's. */
+  /** The step the fixed clock is counted in; undefined means this world's. */
   readonly fixedStep: number | undefined
 }
 
@@ -517,7 +534,28 @@ export function validateSnapshot(ctx: WorldStateCtx, s: WorldSnapshot): Snapshot
       `domecs: invalid snapshot fixedStep: expected a finite number > 0, got ${String(fixedStep)}`,
     )
   }
-  return { scaledTime, fixedBacklog, fixedStep }
+  // H-16 (v4): the fixed clock travels as itself. Both fields or neither;
+  // a v4 snapshot carries owed steps in the accumulator, never a backlog.
+  const hasTick = s.fixedTick !== undefined
+  const hasAcc = s.fixedAccumulator !== undefined
+  if (hasTick !== hasAcc) {
+    throw new Error(
+      `domecs: invalid snapshot fixed clock: fixedTick and fixedAccumulator come together, got ${hasTick ? 'fixedTick' : 'fixedAccumulator'} alone`,
+    )
+  }
+  if (!hasTick) return { scaledTime, fixed: undefined, fixedBacklog, fixedStep }
+  const tick: unknown = s.fixedTick
+  if (!isNonNegativeInt(tick)) throw invalid('fixedTick', 'an integer >= 0', tick)
+  const accumulator: unknown = s.fixedAccumulator
+  if (typeof accumulator !== 'number' || !Number.isFinite(accumulator) || accumulator < 0) {
+    throw invalid('fixedAccumulator', 'a finite number >= 0', accumulator)
+  }
+  if (s.fixedBacklog !== undefined) {
+    throw new Error(
+      'domecs: invalid snapshot fixedBacklog: a snapshot with fixedTick carries owed steps in fixedAccumulator, not fixedBacklog',
+    )
+  }
+  return { scaledTime, fixed: { tick, accumulator }, fixedBacklog: 0, fixedStep }
 }
 
 function invalid(what: string, expected: string, got: unknown): Error {
@@ -649,32 +687,45 @@ function validateChanges(c: unknown): void {
 }
 
 /**
- * O-40: rebuild the F-3 clock from the cumulative scaled time, using the
- * tick's own expressions (`fixedStepsDue`, the accumulator remainder), so
- * every value matches the live world bit for bit. The fixed-step count is
- * derived against this world's `fixedStep` rather than stored: a world
- * restored with a different `fixedStep` neither bursts through catch-up
- * steps nor stalls until the old count is reached. `fixedBacklog` keeps the
- * steps the live world still owed outstanding after the restore — under
- * another `fixedStep`, the time they stood for.
+ * O-40: resume the clock. `elapsed` comes from the cumulative scaled time;
+ * the fixed clock from a v4 snapshot's own `fixedTick` and
+ * `fixedAccumulator`, bit for bit (H-16). A pre-v4 snapshot carries only the
+ * total, so the step count is derived from it the way those builds counted
+ * (`fixedStepsDue`), less the `fixedBacklog` they still owed.
+ *
+ * Under another `fixedStep`, the fixed time the source's steps consumed is
+ * re-counted in this world's steps and the time still owed carries over
+ * (within one step), so a restored world neither bursts through catch-up
+ * steps nor stalls until the old count is reached.
  */
 function resumeClock(
   ctx: WorldStateCtx,
-  { scaledTime, fixedBacklog, fixedStep }: SnapshotClock,
+  { scaledTime, fixed, fixedBacklog, fixedStep }: SnapshotClock,
 ): void {
   const { clock, time } = ctx
   const quantizedMs = Math.round(scaledTime * 1000)
-  // Steps the live world had run, in the step size the backlog counts in.
   const step = fixedStep ?? time.fixedStep
-  const ran = Math.max(0, fixedStepsDue(scaledTime, step) - fixedBacklog)
-  // Under another fixedStep, keep the fixed time those steps consumed and
-  // count it in this world's steps, so the time still owed carries over
-  // (within one step) rather than the number of steps.
-  const fixedSteps = step === time.fixedStep ? ran : fixedStepsDue(ran * step, time.fixedStep)
+  // Steps the source had run, in its step size, and the time it still owed.
+  let ran: number
+  let owed: number
+  if (fixed !== undefined) {
+    ran = fixed.tick
+    owed = fixed.accumulator
+  } else {
+    ran = Math.max(0, fixedStepsDue(scaledTime, step) - fixedBacklog)
+    owed = scaledTime - ran * step
+  }
+  let fixedSteps = ran
+  if (step !== time.fixedStep) {
+    fixedSteps = fixedStepsDue(ran * step, time.fixedStep)
+    owed += ran * step - fixedSteps * time.fixedStep
+  }
   clock.totalScaledSeconds = scaledTime
   clock.lastQuantizedElapsedMs = quantizedMs
   clock.fixedStepsFired = fixedSteps
   clock.fixedStepCounter = fixedSteps
   time.elapsed = quantizedMs / 1000
-  time.fixedAccumulator = scaledTime - fixedSteps * time.fixedStep
+  time.fixedTick = fixedSteps
+  time.fixedAccumulator = Math.max(0, owed)
+  time.alpha = fixedAlpha(time.fixedAccumulator, time.fixedStep)
 }

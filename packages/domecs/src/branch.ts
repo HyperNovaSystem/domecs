@@ -22,9 +22,9 @@ export type WorldSetup<T = void> = (world: World) => T
 /** Options for {@link createBranch}. */
 export interface BranchOptions {
   /**
-   * Default `from.fixedStep ?? 1/60`. A snapshot carries `fixedStep` only
-   * with a fixed backlog, so pass the source's `time.fixedStep` whenever it
-   * is not 1/60.
+   * Default `from.fixedStep ?? 1/60`. Every v4 snapshot carries the source's
+   * `fixedStep` (H-16); pass it for an older snapshot taken from a world
+   * whose step was not 1/60.
    */
   readonly fixedStep?: number
   /** The `createWorld` seed; only matters for a v2 `from` (no `rngRoot`). */
@@ -59,8 +59,8 @@ export type BranchError =
  *
  * Take `from` with `snapshot({ pendingEvents: true })` and without
  * snapshot-rewriting plugins (redaction), or the branch starts from a
- * different state than the source had. Pass the source's `fixedStep` and
- * `scale`: neither is in a snapshot (`fixedStep` only with a backlog).
+ * different state than the source had. Pass the source's `scale`: it is not
+ * in a snapshot. `fixedStep` is (since v4), and is the default.
  */
 export function createBranch<T = void>(
   setup: WorldSetup<T>,
@@ -100,6 +100,9 @@ function snapshotFixedStep(from: WorldSnapshot): number | undefined {
 /** Where each world's last runBranch call ended, to tell a continuation from a new start. */
 const runEnds = new WeakMap<World, { readonly tick: number; readonly input: unknown; readonly log: ActLog | undefined }>()
 
+/** The probe functions each world has proved read-only (`checkProbes: 'once'`, H-18). */
+const provenProbes = new WeakMap<World, WeakSet<(world: World) => JsonValue>>()
+
 /** Options for {@link runBranch}. */
 export interface RunBranchOptions {
   /** How many steps to take at most (a non-negative integer). */
@@ -132,6 +135,26 @@ export interface RunBranchOptions {
   readonly until?: (world: World) => boolean
   /** Polled before each step for cooperative cancellation (`stoppedBy: 'cancelled'`). */
   readonly shouldStop?: () => boolean
+  /**
+   * Take the strict hash of the world when the call returns (default
+   * `true`). `false` leaves `BranchRun.finalHash` `null` and takes no hash:
+   * a strict hash snapshots the whole world, so a host that extends a large
+   * branch a few steps per frame passes `false` and hashes when it needs to
+   * (H-18).
+   */
+  readonly finalHash?: boolean
+  /**
+   * When to prove the probes read-only, by comparing the world's strict hash
+   * (and input, scale, resume target) before and after a probe:
+   * - `'once'` (default): each probe function the first time this world
+   *   samples it, in whichever call — so extending a branch with the same
+   *   probes costs no hash after the first call (H-18);
+   * - `true`: every probe at the first sample of every call (the 2.x
+   *   behaviour);
+   * - `false`: never.
+   * Any other value throws `TypeError`.
+   */
+  readonly checkProbes?: boolean | 'once'
 }
 
 /** What {@link runBranch} observed. */
@@ -144,8 +167,11 @@ export interface BranchRun {
   readonly hashes: ReadonlyArray<{ readonly tick: number; readonly hash: string }>
   /** Systemic faults raised (`signals.faultRaised`) during this call. */
   readonly faults: readonly SystemicFault[]
-  /** Strict hash (`includeChanges: true`, pending events included) when the call returned. */
-  readonly finalHash: string
+  /**
+   * Strict hash (`includeChanges: true`, pending events included) when the
+   * call returned; `null` when the call passed `finalHash: false`.
+   */
+  readonly finalHash: string | null
 }
 
 function checkCount(name: string, v: unknown, min: 0 | 1): void {
@@ -167,10 +193,12 @@ function checkCount(name: string, v: unknown, min: 0 | 1): void {
  * same way. All hashes are strict. Equal `(setup, from, options)` give equal
  * `finalHash`, `hashes` and `samples`.
  *
- * Probes must be read-only: at the first sample of each call, the world's
- * strict hash is compared before and after every probe, and a probe that
- * changed it throws an `Error` naming it. A probe value that is not plain
- * data throws `TypeError`.
+ * Probes must be read-only: the first time this world samples a probe (by
+ * default; see `checkProbes`), the world's strict hash is compared before and
+ * after it, and a probe that changed it throws an `Error` naming it. A probe
+ * value that is not plain data throws `TypeError`. Each such check, like
+ * `finalHash`, snapshots the whole world: pass `finalHash: false` to extend
+ * a large branch cheaply (H-18).
  *
  * A malformed log, a log for another `fixedStep`, or an act that does not
  * resolve or validate is a {@link ReplayError} value (the steps already taken
@@ -188,6 +216,18 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   if (options.sampleEvery !== undefined) checkCount('sampleEvery', options.sampleEvery, 1)
   if (options.keyframeEvery !== undefined) checkCount('keyframeEvery', options.keyframeEvery, 1)
   if (options.hashEvery !== undefined) checkCount('hashEvery', options.hashEvery, 1)
+  const checkProbes = options.checkProbes ?? 'once'
+  if (checkProbes !== true && checkProbes !== false && checkProbes !== 'once') {
+    throw new TypeError(`domecs: runBranch checkProbes must be true, false or 'once'; got ${String(options.checkProbes)}`)
+  }
+  if (options.finalHash !== undefined && typeof options.finalHash !== 'boolean') {
+    throw new TypeError(`domecs: runBranch finalHash must be a boolean; got ${String(options.finalHash)}`)
+  }
+  let proven = provenProbes.get(world)
+  if (proven === undefined) {
+    proven = new WeakSet()
+    provenProbes.set(world, proven)
+  }
 
   // Frames keyed by tick; the first one wins when ticks repeat.
   const frames = new Map<number, ActLogFrame>()
@@ -233,24 +273,36 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   // changes them is caught by comparing them, not the hash.
   const tap = actTapOf(world)
   const controls = (): readonly unknown[] => [world.input, world.time.scale, tap?.resumeScale]
+  const shouldCheck = (probe: (w: World) => JsonValue): boolean =>
+    checkProbes === 'once' ? !proven.has(probe) : checkProbes && !checked
   const sample = (): void => {
     const values: Record<string, JsonValue> = {}
-    let before = checked ? '' : actLogHash(world)
-    let beforeControls = checked ? [] : controls()
+    // The state a checked probe must leave as it found it; null when the
+    // probe before it was not checked (it may have moved it).
+    let before: string | null = null
+    let beforeControls: readonly unknown[] = []
     for (const [name, probe] of probes) {
+      const check = shouldCheck(probe)
+      if (check && before === null) {
+        before = actLogHash(world)
+        beforeControls = controls()
+      }
       // An own data property, so a probe named "__proto__" is a key, not the prototype.
       setOwn(values, name, plainDataCopy(probe(world), `probe "${name}"`))
-      if (!checked) {
-        const after = actLogHash(world)
-        const afterControls = controls()
-        if (after !== before || afterControls.some((v, i) => !Object.is(v, beforeControls[i]))) {
-          throw new Error(
-            `domecs: runBranch probe "${name}" changed the world (its strict hash, input, scale or resume target differs before and after the probe); probes must be read-only`,
-          )
-        }
-        before = after
-        beforeControls = afterControls
+      if (!check) {
+        before = null
+        continue
       }
+      const after = actLogHash(world)
+      const afterControls = controls()
+      if (after !== before || afterControls.some((v, i) => !Object.is(v, beforeControls[i]))) {
+        throw new Error(
+          `domecs: runBranch probe "${name}" changed the world (its strict hash, input, scale or resume target differs before and after the probe); probes must be read-only`,
+        )
+      }
+      proven.add(probe)
+      before = after
+      beforeControls = afterControls
     }
     checked = true
     samples.push({ tick: world.time.tick, values })
@@ -292,7 +344,8 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
     }
     // The horizon value is always sampled.
     if (hasProbes && sampledAt !== n) sample()
-    return ok({ ticks: n, stoppedBy, samples, keyframes, hashes, faults, finalHash: actLogHash(world) })
+    const finalHash = options.finalHash === false ? null : actLogHash(world)
+    return ok({ ticks: n, stoppedBy, samples, keyframes, hashes, faults, finalHash })
   } finally {
     unsubscribe()
     runEnds.set(world, { tick: world.time.tick, input: world.input, log: options.log })

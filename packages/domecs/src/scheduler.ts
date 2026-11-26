@@ -1,3 +1,4 @@
+import type { MarkWatch } from './change-log.js'
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
 import { normalize, treeHas, type EntityView, type QueryDef, type QueryNode, type QueryResult } from './query.js'
@@ -63,13 +64,29 @@ export interface TickSystemDef<
   schedule?: 'tick'
 }
 
-/** Fixed-rate system; `rateHz` must be a whole-number divisor of the world's base rate. */
+/**
+ * Fixed-rate system; `rateHz` must be a whole-number divisor of the world's
+ * base rate (`1 / fixedStep`). A system at a divisor `d = baseHz / rateHz`
+ * runs on every `d`-th fixed step: steps `d`, `2d`, … — so it first runs
+ * after one full period, not on the first step. `ctx.time` is the step's
+ * clock (H-3): `scaledDelta` is the system's period, `d × fixedStep`.
+ */
 export interface FixedSystemDef<
   Fields = Record<string, unknown>,
   State = unknown,
 > extends SystemDefBase<Fields, State> {
   schedule: 'fixed'
   rateHz?: number
+  /**
+   * Shifts a `rateHz` system's steps earlier by `phase` (an integer from 0
+   * to `d − 1`; default 0): it runs on the steps where `(fixedTick + phase)
+   * % d === 0`, i.e. `d − phase`, `2d − phase`, … Give the sub-rate systems
+   * of one rate different phases to spread their cost over the period
+   * instead of running them all on the same step (H-14). `phase: d − 1`
+   * runs a system on the first step. Deterministic, and part of the
+   * system's definition, not of the snapshot.
+   */
+  phase?: number
 }
 
 /** Event-driven system; runs when any of `triggers` fired this tick. */
@@ -79,6 +96,21 @@ export interface EventSystemDef<
 > extends SystemDefBase<Fields, State> {
   schedule: 'event'
   triggers?: EventType<unknown>[]
+  /**
+   * Run inside the fixed schedule instead of after it (H-17). Each fixed
+   * sub-step delivers the events emitted since the previous sub-step (during
+   * it, after the previous frame's fixed phase, or between ticks); the
+   * system runs on the sub-steps whose delivery holds one of its `triggers`
+   * (every sub-step when it has none), in (priority, order, registration)
+   * order among the `fixed` systems, with that delivery as `ctx.events` and
+   * the step's clock as `ctx.time`. So an event emitted in sub-step k is
+   * handled in sub-step k + 1 whatever the frame rate, which a fixed-step
+   * simulation needs to use events between its own systems. Events no
+   * sub-step has delivered wait for the next frame that runs one (a paused
+   * world runs none). Tick-phase event systems still see every event, at
+   * the next tick. Default `false`.
+   */
+  fixed?: boolean
 }
 
 /** Runs exactly once, on the first tick after registration. */
@@ -173,6 +205,10 @@ export interface CompiledSystem {
   reactsTo?: QueryResult
   /** for fixed: divisor = baseHz / rateHz */
   fixedDivisor: number
+  /** for fixed: `def.phase ?? 0`; runs when `(step + fixedPhase) % fixedDivisor === 0` (H-14) */
+  fixedPhase: number
+  /** An `event` system with `fixed: true`: it runs in the fixed loop (H-17). */
+  fixedEvent: boolean
   /** for once: has it already run? */
   ranOnce: boolean
   /** Monotonic tie-break for equal priorities; never reused (O-43). */
@@ -194,6 +230,8 @@ export interface CompiledSystem {
   watchesChanges: boolean
   /** Its query or reactsTo has an `OnRemoved` node (removal-mark pruning). */
   watchesRemoved: boolean
+  /** The marks its change nodes can report, by kind (snapshot `changes`, H-4). */
+  watches: MarkWatch
 }
 
 export interface Scheduler {
@@ -243,6 +281,7 @@ export function createScheduler(
   fixedStep: number,
   initialSeen: (name: string) => number,
   claimStream: (name: string) => { key: string; rng: Rng },
+  fixedEventsChanged: (count: number) => void = () => {},
 ): Scheduler {
   const systems: CompiledSystem[] = []
   // name -> live handle, so getHandle(name) hands back the SAME object whose
@@ -256,23 +295,31 @@ export function createScheduler(
     ['reactive', []],
   ])
   let nextId = 0
+  let fixedEvents = 0
+
+  // A fixed event system (H-17) runs in the fixed loop, ordered with the fixed systems.
+  const modeOf = (s: CompiledSystem): SystemSchedule => (s.fixedEvent ? 'fixed' : s.schedule)
 
   // Copy-on-write: a phase loop holds the array it started with, so adding
   // or removing a system mid-phase neither skips nor repeats one (O-43).
   function addToMode(s: CompiledSystem): void {
-    byMode.set(s.schedule, [...byMode.get(s.schedule)!, s].sort(comparator))
+    const mode = modeOf(s)
+    byMode.set(mode, [...byMode.get(mode)!, s].sort(comparator))
   }
 
   function removeFromMode(s: CompiledSystem): void {
-    const arr = byMode.get(s.schedule)!
-    if (arr.includes(s)) byMode.set(s.schedule, arr.filter((x) => x !== s))
+    const mode = modeOf(s)
+    const arr = byMode.get(mode)!
+    if (arr.includes(s)) byMode.set(mode, arr.filter((x) => x !== s))
   }
 
   function drop(s: CompiledSystem): void {
+    if (s.removed) return
     s.removed = true
     const idx = systems.indexOf(s)
     if (idx >= 0) systems.splice(idx, 1)
     removeFromMode(s)
+    if (s.fixedEvent) fixedEventsChanged(--fixedEvents)
   }
 
   return {
@@ -299,6 +346,19 @@ export function createScheduler(
         }
       }
 
+      const fixedFlag: unknown = (def as { fixed?: unknown }).fixed
+      if (fixedFlag !== undefined) {
+        if (def.schedule !== 'event') {
+          throw new Error(
+            `domecs: system "${name}" has fixed=${String(fixedFlag)}, but only an event system can run in the fixed schedule (schedule: 'event', fixed: true; H-17).`,
+          )
+        }
+        if (typeof fixedFlag !== 'boolean') {
+          throw new Error(`domecs: system "${name}" fixed=${JSON.stringify(fixedFlag)} must be a boolean (H-17).`)
+        }
+      }
+      const fixedEvent = fixedFlag === true
+
       const rngMode = def.rng ?? 'shared'
       if (rngMode !== 'shared' && rngMode !== 'own') {
         throw new Error(
@@ -323,6 +383,7 @@ export function createScheduler(
       }
 
       let fixedDivisor = 1
+      let fixedPhase = 0
       if (def.schedule === 'fixed') {
         const baseHz = 1 / fixedStep
         const rateHz = def.rateHz ?? baseHz
@@ -336,6 +397,13 @@ export function createScheduler(
           )
         }
         fixedDivisor = rounded
+        const phase: unknown = def.phase ?? 0
+        if (!Number.isInteger(phase) || (phase as number) < 0 || (phase as number) >= fixedDivisor) {
+          throw new Error(
+            `domecs: system "${name}" phase=${String(phase)} must be an integer from 0 to ${fixedDivisor - 1} (its rateHz=${rateHz} runs every ${fixedDivisor} fixed steps). SPEC §3 fixed-rate rule.`,
+          )
+        }
+        fixedPhase = phase as number
       }
 
       const id = nextId++
@@ -356,6 +424,8 @@ export function createScheduler(
         enabled: true,
         state: def.state,
         fixedDivisor,
+        fixedPhase,
+        fixedEvent,
         ranOnce: false,
         registrationIndex: id,
         removed: false,
@@ -364,6 +434,7 @@ export function createScheduler(
         running: false,
         watchesChanges: nodes.some((n) => treeHas(n, CHANGE_KINDS)),
         watchesRemoved: nodes.some((n) => treeHas(n, REMOVED_KIND)),
+        watches: watchedMarks(nodes),
       }
       if (def.query) compiled.query = makeQuery(def.query, compiled)
       if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo, compiled)
@@ -377,6 +448,7 @@ export function createScheduler(
 
       systems.push(compiled)
       addToMode(compiled)
+      if (fixedEvent) fixedEventsChanged(++fixedEvents)
 
       const handle: SystemHandle = {
         name,
@@ -450,6 +522,28 @@ function referencedComponentNames(nodes: readonly QueryNode[]): string[] {
   }
   nodes.forEach(walk)
   return Array.from(out).sort()
+}
+
+/**
+ * The marks a system's change nodes can report: component names under
+ * `OnAdded` / `OnChanged` / `OnRemoved` and resource names under
+ * `OnChangedResource`, anywhere in the tree (`Not` and `Or` included).
+ */
+function watchedMarks(nodes: readonly QueryNode[]): MarkWatch {
+  const out = {
+    added: new Set<string>(),
+    changed: new Set<string>(),
+    removed: new Set<string>(),
+    resource: new Set<string>(),
+  }
+  const walk = (n: QueryNode): void => {
+    if (n.kind === 'and' || n.kind === 'or') n.children.forEach(walk)
+    else if (n.kind === 'not') walk(n.child)
+    else if (n.kind === 'added' || n.kind === 'changed' || n.kind === 'removed') out[n.kind].add(n.type.name)
+    else if (n.kind === 'changedResource') out.resource.add(n.resource.name)
+  }
+  nodes.forEach(walk)
+  return out
 }
 
 /**

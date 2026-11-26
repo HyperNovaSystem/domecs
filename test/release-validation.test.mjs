@@ -135,11 +135,12 @@ test('findLegacyDomecsImportSpecifiers flags old runtime imports only', () => {
   assert.deepEqual(matches, ['domecs', 'domecs-dom', 'domecs-input'])
 })
 
-// E1.1 / E13.1 / E18.1: the harness branch ships 2.3.0 in lockstep (2.1.0
-// before E13, 2.2.0 before E18). Every package shares one version, and that version still satisfies
-// the `^2.0.0` peer ranges apps and sibling packages declare (build metadata,
-// as pack-for-studio stamps it, is ignored by range checks).
-const RELEASE_VERSION = '2.3.0'
+// E1.1 / E13.1 / E18.1: every package ships in lockstep at one version
+// (2.1.0, 2.2.0 and 2.3.0 on the harness branch; 3.0.0 with the Harbor
+// fixes). 3.0.0 is a major: it satisfies `^3.0.0` and not the `^2.0.0`
+// ranges 2.x apps declare (build metadata, as pack-for-studio stamps it, is
+// ignored by range checks).
+const RELEASE_VERSION = '3.0.0'
 
 function parseVersion(v) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(v)
@@ -156,7 +157,7 @@ function satisfiesCaret(range, version) {
   return v.patch >= r.patch
 }
 
-test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1, E13.1, E18.1)', async () => {
+test('every @domecs package shares one version, and ^3.0.0 (not ^2.0.0) satisfies it (E1.1, E13.1, E18.1)', async () => {
   const fs = await import('node:fs')
   const path = await import('node:path')
   const { workspaceRoot } = await import('../scripts/validate-release.mjs')
@@ -169,14 +170,15 @@ test('every @domecs package shares one version, and ^2.0.0 satisfies it (E1.1, E
     dirs.map((d) => [d, JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'packages', d, 'package.json'), 'utf8')).version]),
   )
   assert.deepEqual([...new Set(versions.values())], [RELEASE_VERSION], JSON.stringify(Object.fromEntries(versions)))
-  assert.ok(satisfiesCaret('^2.0.0', RELEASE_VERSION))
-  assert.ok(satisfiesCaret('^2.0.0', `${RELEASE_VERSION}+g1a2b3c4-dirty`))
-  assert.ok(!satisfiesCaret('^2.0.0', '3.0.0'))
-  assert.ok(!satisfiesCaret('^2.0.0', '2.3.0-pre.1'))
-  // workspace:^ peers publish as ^<version>: a 2.3 package installs only
-  // beside a 2.3 core (lockstep; studio pins one engine build).
-  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.1.0'))
-  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.2.0'))
+  assert.ok(satisfiesCaret('^3.0.0', RELEASE_VERSION))
+  assert.ok(satisfiesCaret('^3.0.0', `${RELEASE_VERSION}+g1a2b3c4-dirty`))
+  // A major: apps on ^2.0.0 do not pick it up, and a prerelease is no release.
+  assert.ok(!satisfiesCaret('^2.0.0', RELEASE_VERSION))
+  assert.ok(!satisfiesCaret('^3.0.0', '3.0.0-pre.1'))
+  // workspace:^ peers publish as ^<version>: a 3.0 package installs only
+  // beside a 3.x core (lockstep; studio pins one engine build).
+  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.3.0'))
+  assert.ok(!satisfiesCaret(`^${RELEASE_VERSION}`, '2.0.0'))
 })
 
 test('every package peers on @domecs/core as workspace:^, so it packs as ^<release> and rejects an older core (E13.1)', async () => {

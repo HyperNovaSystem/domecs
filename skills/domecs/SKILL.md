@@ -117,8 +117,8 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   `log = rec.stop()` (plain JSON); `replay(build(), log, { base })` → `Result<{ ticks, hash }>`.
   Direct writes / `spawn` / `setResource` outside a tick are gaps (replay diverges);
   replay world = same setup minus input plugin and emitting hooks; `register` command events
-- **Branch and compare:** `createBranch(setup, live.snapshot({ pendingEvents: true }), { fixedStep, scale })`
-  (the source's `time.fixedStep` / `time.scale`: neither is reliably in the snapshot)
+- **Branch and compare:** `createBranch(setup, live.snapshot({ pendingEvents: true }), { scale })`
+  (the source's `time.scale`: it is not in the snapshot; `fixedStep` is, and is the default)
   → `Result<{ world, setup }>` (`restore_failed` / `once_systems`, never thrown); then
   `runBranch(world, { steps, probes, sampleEvery, log?, until?, shouldStop? })` → `{ ticks,
   stoppedBy, samples, keyframes, hashes, faults, finalHash }`; counts are per call, the last
@@ -161,6 +161,9 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
   `pointer.x|y|buttons|wheel` read the tick's `world.input` (`KeyboardEvent.code` names); drive
   headless runs with `world.setInput(snapshot)` before each step and record those snapshots to
   replay. Not allowed in world expressions
+- **Commands with verdicts:** `defineCommand<T>(name, { schema, description, handle(ctx, p) { return refuse('why') } })`,
+  `world.register(Cmd)` (installs the handler); `act()` returns the handler's verdict;
+  `fixed: true` for a fixed-step sim (act with `{ dt }`)
 - **Commands as event rules:** `{ schedule: 'event', on: 'Move', self: 'event.target',
   query: ['Pos'], actions: [{ set: 'Pos.x', expr: 'Pos.x + event.dx' }] }` runs per delivered
   payload for that entity (dead/unmatched: no-op); without `self` it broadcasts over `query`, or

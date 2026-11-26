@@ -1,13 +1,13 @@
 {
   "note": "Pinned by scripts/determinism-golden.mjs (spec §3.4). Regenerate with --write only for a deliberate change.",
   "fixtures": {
-    "trig": "6f561265a775465f",
-    "random": "ae1d5a006eac6305",
-    "own-streams": "0050966bbbaaf81d",
-    "bounce0": "eb5dcd602be2af2c",
-    "rules-chase": "e16d403786a03931",
-    "rules-event-chain": "f1570bfe845c6207",
-    "rules-keep-distance": "5b45fa6e6409ef48"
+    "trig": "c70dced296be1182",
+    "random": "0b1b13bd3cc0608e",
+    "own-streams": "6e159d40609e8838",
+    "bounce0": "00b2296ff6a43c61",
+    "rules-chase": "7b24feef2e742aa0",
+    "rules-event-chain": "bd8e93c72dd4c9d8",
+    "rules-keep-distance": "a9d6f31d79ec7049"
   },
   "dmathFingerprint": "82b97b8cd0be9c5d",
   "dmath2Fingerprint": "da4d0b5115d4135b"

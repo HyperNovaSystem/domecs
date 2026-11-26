@@ -61,9 +61,10 @@ import {
   type SystemHandle,
   type SystemSchedule,
 } from './scheduler.js'
-import type { WorldManifest, PluginManifestEntry } from './manifest.js'
+import type { SystemTiming, WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
-import { createTime, fixedStepsDue, type TimeState } from './time.js'
+import { createTime, fixedAlpha, fixedStepDue, type TimeState } from './time.js'
+import { commandTag, isCommandType, type CommandContext, type CommandType, type CommandVerdict } from './commands.js'
 import type {
   ComponentBag,
   ComponentDescriptor,
@@ -131,9 +132,22 @@ function describeValue(v: unknown): string {
 
 function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSchema> {
   const out: Record<string, FieldSchema> = {}
-  for (const [key, value] of Object.entries(src)) out[key] = { ...value }
+  for (const [key, value] of Object.entries(src)) {
+    out[key] = {
+      ...value,
+      ...(value.options !== undefined ? { options: [...value.options] } : {}),
+      ...(value.with !== undefined ? { with: [...value.with] } : {}),
+    }
+  }
   return out
 }
+
+/** A command handler's default priority: the commands band of SPEC §3 (P-1). */
+const COMMAND_PRIORITY = -100
+
+/** P-4: the host's clock for timings — diagnostics only, never sim state. */
+const hostNow: () => number =
+  typeof globalThis.performance?.now === 'function' ? () => globalThis.performance.now() : () => Date.now()
 
 // null when `value` carries defineEvent()'s identity symbol; otherwise a short
 // description of what action() was handed instead, for its rejection reason.
@@ -184,6 +198,27 @@ export interface WorldSignals {
    * to attach to. See doc/BETTER_ERRORS.md.
    */
   faultRaised: Signal<SystemicFault>
+  /**
+   * After every successful `restore()` — `load()`, `AgentBridge.reset()`, a
+   * branch, a history scrub — once the snapshot is applied and its pending
+   * events re-queued, before an idle driver's repaint, and outside any tick
+   * (H-15). The payload is the envelope as applied (after the plugins'
+   * `onRestore` hooks). The one place to rebuild derived state, such as a
+   * cache or a spatial index, that the snapshot does not carry (plugin
+   * `onRestore` runs before the snapshot is applied). Not emitted when the
+   * restore is refused. A subscriber's world writes are out-of-tick
+   * mutations, as from any host code; a throw propagates out of `restore()`,
+   * which has completed.
+   */
+  restored: Signal<Readonly<WorldSnapshot>>
+  /**
+   * A resource was set (`setResource`) or marked (`markResourceChanged`),
+   * transient ones included — the resource's change mark, as a signal, for
+   * what is not a system: a HUD panel that must repaint when the cash
+   * changes, even in a world with no entities (H-7). Fires on the call site,
+   * synchronously. Not fired by `restore()`, which `restored` reports.
+   */
+  resourceChanged: Signal<ResourceType<unknown>>
 }
 
 export interface World {
@@ -454,6 +489,15 @@ export interface World {
    */
   render(): void
   stepN(n: number, dt?: number): void
+  /**
+   * Time every system run and every full tick (P-4) with the host's clock
+   * (`performance.now()`), reported by `describe().systems[i].timing` and
+   * `describe().timing`. `true` starts afresh; `false` stops and drops the
+   * figures. Off by default: it costs two clock reads per system run.
+   * Diagnostics only — nothing a system sees, a snapshot records or a hash
+   * covers changes.
+   */
+  setProfiling(on: boolean): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
    * Turn-based command with a structured result. Emits `type`, advances
@@ -567,6 +611,11 @@ export interface ActionVerdict {
 export type ActionResolver = (ctx: {
   events: readonly ActionEvent[]
   world: World
+  /**
+   * For a command (`defineCommand`): its handler's verdict; `undefined`
+   * when the handler did not run in this tick. Absent for a plain event.
+   */
+  verdict?: ActionVerdict | undefined
 }) => ActionVerdict
 
 export interface ActionOptions {
@@ -625,6 +674,8 @@ export function createWorld(options: WorldOptions = {}): World {
   let streams = new Map<string, Rng>()
   const fixedStep = options.fixedStep ?? 1 / 60
   const time = createTime(fixedStep)
+  // H-3: the clock a fixed system sees, set for each step it runs in.
+  const fixedTime = createTime(fixedStep)
   let preResumeScale = 1
   let input: InputSnapshot = emptyInput()
 
@@ -637,6 +688,8 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
+  const sigRestored: EmittableSignal<Readonly<WorldSnapshot>> = createSignal()
+  const sigResourceChanged: EmittableSignal<ResourceType<unknown>> = createSignal()
 
   // §7.1 (G4; O-80): the act-log tap (act-tap.ts). Listeners hear external
   // emits, frame boundaries, out-of-tick mutations and restores.
@@ -680,6 +733,41 @@ export function createWorld(options: WorldOptions = {}): World {
     for (const l of tapListeners) l.emitted(type, payload, emitVia)
   })
 
+  // P-4: system and frame timings while profiling is on (diagnostics, never state).
+  let profiling = false
+  const systemTimings = new Map<CompiledSystem, { runs: number; totalMs: number; lastMs: number; maxMs: number }>()
+  const frameTiming = { ticks: 0, totalMs: 0, lastMs: 0, maxMs: 0 }
+  const timingOf = (s: CompiledSystem): { timing?: SystemTiming } => {
+    if (!profiling) return {}
+    const t = systemTimings.get(s)
+    const runs = t?.runs ?? 0
+    return {
+      timing: {
+        runs,
+        totalMs: t?.totalMs ?? 0,
+        lastMs: t?.lastMs ?? 0,
+        meanMs: runs > 0 ? t!.totalMs / runs : 0,
+        maxMs: t?.maxMs ?? 0,
+      },
+    }
+  }
+  // H-17: registered fixed event systems; the bus collects for them while > 0.
+  let fixedEventSystems = 0
+  // P-1: the commands whose handlers this world has installed (world.register).
+  const installedCommands = new Set<EventType<unknown>>()
+  // P-1: the command world.action() is waiting on: where in its delivery it
+  // will be (the deliveries are recorded as the tick takes them) and what
+  // its handler said. One at a time: action() cannot run inside a tick.
+  let awaited: {
+    readonly type: EventType<unknown>
+    readonly tickIndex: number
+    readonly fixedIndex: number
+    tickView?: EventView
+    fixedView?: EventView
+    verdict?: CommandVerdict
+  } | null = null
+  const NO_EVENTS: EventView = { of: () => [], emit: (type, payload) => bus.emit(type, payload) }
+
   const signals: WorldSignals = {
     entitySpawned: sigEntitySpawned,
     entityDespawned: sigEntityDespawned,
@@ -688,6 +776,8 @@ export function createWorld(options: WorldOptions = {}): World {
     tickStart: sigTickStart,
     tickEnd: sigTickEnd,
     faultRaised: sigFaultRaised,
+    restored: sigRestored,
+    resourceChanged: sigResourceChanged,
   }
 
   let scheduler!: Scheduler
@@ -742,7 +832,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
   // World-singleton resources (#16) — registry and materialized values live
   // in the extracted resource-state module; changes go to the change log.
-  const resourceState = createResourceState((name) => changes.markResource(name))
+  const resourceState = createResourceState((name) => {
+    changes.markResource(name)
+    if (sigResourceChanged.size > 0) {
+      const type = resourceState.lookup(name)
+      if (type !== undefined) sigResourceChanged.emit(type)
+    }
+  })
 
   // queries
   const queries: CompiledQuery[] = []
@@ -796,7 +892,7 @@ export function createWorld(options: WorldOptions = {}): World {
         .map((sys) => ({
           name: keys.get(sys)!,
           seenThrough: sys.seenThrough,
-          readsRemovals: sys.watchesRemoved,
+          watches: sys.watches,
         }))
     },
     storesReplaced: () => {
@@ -1370,7 +1466,15 @@ export function createWorld(options: WorldOptions = {}): World {
         return true
       }
       for (const s of scheduler.systemsByMode('fixed')) {
-        if (isEnabled(s)) return true
+        if (!isEnabled(s)) continue
+        // A fixed event system with triggers polls nothing: it needs frames
+        // only while something waits for a fixed step to deliver it. With
+        // none it runs every step, like any fixed system (PR #30 review).
+        if (s.fixedEvent && s.def.schedule === 'event' && s.def.triggers !== undefined && s.def.triggers.length > 0) {
+          if (bus.hasFixedPending()) return true
+          continue
+        }
+        return true
       }
     }
     return false
@@ -1403,29 +1507,98 @@ export function createWorld(options: WorldOptions = {}): World {
     driver.wake()
   }
 
-  function runSystem(s: CompiledSystem, view: EventView): void {
+  /**
+   * P-1: install `type`'s handler as the event system `command:<name>`. It
+   * runs the handler once per command in its delivery, in order, and keeps
+   * the verdict of the one `action()` is waiting on.
+   */
+  function installCommand(type: CommandType<unknown>): void {
+    installedCommands.add(type)
+    const def = type[commandTag]
+    const fixed = def.fixed === true
+    world.system(
+      `command:${type.name}`,
+      {
+        schedule: 'event',
+        triggers: [type],
+        priority: def.priority ?? COMMAND_PRIORITY,
+        ...(fixed ? { fixed: true } : {}),
+        ...(def.rng !== undefined ? { rng: def.rng } : {}),
+        meta: { command: type.name },
+      },
+      (ctx) => {
+        const payloads = ctx.events.of(type)
+        const w = awaited
+        const mine =
+          w !== null && w.type === type && ctx.events === (fixed ? w.fixedView : w.tickView)
+            ? fixed ? w.fixedIndex : w.tickIndex
+            : -1
+        const cctx: CommandContext = { time: ctx.time, input: ctx.input, events: ctx.events, world: ctx.world, rand: ctx.rand }
+        for (let i = 0; i < payloads.length; i++) {
+          const verdict = handleCommand(type, cctx, payloads[i])
+          if (i === mine) w!.verdict = verdict
+        }
+      },
+    )
+  }
+
+  /** One command through its handler: a throw or a malformed return refuses it. */
+  function handleCommand(type: CommandType<unknown>, ctx: CommandContext, payload: unknown): CommandVerdict {
+    let r: unknown
+    try {
+      r = type[commandTag].handle(ctx, payload)
+    } catch (cause) {
+      const error: DomecsError = { kind: 'event_handler_threw', event: type.name, cause: normalizeCause(cause), retryable: true }
+      sigFaultRaised.emit({ source: type.name, tick: time.tick, entry: buildFaultEntry(type.name, { error, recoverable: true }) })
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return { accepted: false, reason: `command "${type.name}" handler threw: ${message}` }
+    }
+    if (r === undefined) return { accepted: true }
+    const v = r as { accepted?: unknown; reason?: unknown }
+    if (v !== null && typeof v === 'object' && v.accepted === true) return r as CommandVerdict
+    if (v !== null && typeof v === 'object' && v.accepted === false && typeof v.reason === 'string') return r as CommandVerdict
+    return {
+      accepted: false,
+      reason: `command "${type.name}" handler returned ${describeValue(r)}, not accept() or refuse(reason)`,
+    }
+  }
+
+  /** @param clockSeen the `ctx.time` the system sees: the frame's, or a fixed step's (H-3). */
+  function runSystem(s: CompiledSystem, view: EventView, clockSeen: Readonly<TimeState> = time): void {
     // O-42: this run's change window is (seenThrough, runStart]. Whatever is
     // marked while it runs — its own writes included — is after the window,
     // and seenThrough moves past it when the run ends.
     s.runStart = changes.seq
     s.running = true
     reproducing++
+    const t0 = profiling ? hostNow() : 0
     try {
-      runSystemBody(s, view)
+      runSystemBody(s, view, clockSeen)
     } finally {
       reproducing--
       s.running = false
       s.seenThrough = changes.seq
+      if (profiling) {
+        const ms = hostNow() - t0
+        const t = systemTimings.get(s)
+        if (t === undefined) systemTimings.set(s, { runs: 1, totalMs: ms, lastMs: ms, maxMs: ms })
+        else {
+          t.runs++
+          t.totalMs += ms
+          t.lastMs = ms
+          if (ms > t.maxMs) t.maxMs = ms
+        }
+      }
     }
   }
 
-  function runSystemBody(s: CompiledSystem, view: EventView): void {
+  function runSystemBody(s: CompiledSystem, view: EventView, clockSeen: Readonly<TimeState>): void {
     const ctx: SystemContext = {
       // Explicit `query` wins; otherwise a reactive system's `reactsTo` delta
       // is delivered as ctx.entities (SPEC: reactive systems see the query
       // delta). Falls back to [] for systems with neither.
       entities: s.query ? s.query.entities : s.reactsTo ? s.reactsTo.entities : [],
-      time,
+      time: clockSeen,
       input,
       events: view,
       world,
@@ -1553,6 +1726,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return
     }
     const d = dt ?? 0
+    const frameStart = profiling ? hostNow() : 0
     // §7.1: the scale on entry is the one this step's dt is scaled by,
     // before any tickStart hook can change it.
     if (tapListeners.size > 0) {
@@ -1569,6 +1743,8 @@ export function createWorld(options: WorldOptions = {}): World {
     // user-visible scaledDelta/elapsed from the cumulative total. Per-frame
     // values stay ms-aligned (SPEC §2.7) but aggregate rates do not drift.
     clock.totalScaledSeconds += scaledDt
+    // H-16: the fixed steps are counted from what is owed, not the total.
+    time.fixedAccumulator += scaledDt
     const newQuantizedMs = Math.round(clock.totalScaledSeconds * 1000)
     // F-6: when the caller passed a positive dt, floor per-tick
     // quantized dt at 1 ms so sub-ms wall-clock frames never expose
@@ -1602,6 +1778,7 @@ export function createWorld(options: WorldOptions = {}): World {
       } finally {
         reproducing--
       }
+      if (awaited !== null && awaited.tickView === undefined) awaited.tickView = eventView
       if (sigTickStart.size > 0) sigTickStart.emit(time)
       if (tapListeners.size > 0) for (const l of tapListeners) l.hooksDone()
 
@@ -1613,25 +1790,46 @@ export function createWorld(options: WorldOptions = {}): World {
       reproducing++
       try {
         // SPEC §4 step 3 — fixed systems against shared accumulator (SPEC §3).
-        // F-3: drive from cumulative unquantized seconds; ms-rounding drift
-        // in per-tick scaledDelta does not entangle the scheduler.
+        // H-16: steps are counted off the unquantized scaled time not yet
+        // run, which stays below about one step, so the rounding error is
+        // that of one step, never that of the world's age: `step(fixedStep)`
+        // runs exactly one fixed step however long the world has run. When a
+        // tickStart hook paused the world after time advanced, the time stays
+        // owed in the accumulator (O-40) and runs on resume.
         if (time.scale !== 0) {
-          const expected = fixedStepsDue(clock.totalScaledSeconds, time.fixedStep)
-          while (clock.fixedStepsFired < expected) {
+          const h = time.fixedStep
+          while (fixedStepDue(time.fixedAccumulator, h)) {
+            // H-17: what fixed event systems see this sub-step — every event
+            // emitted since the previous one's delivery was taken.
+            const delivery = fixedEventSystems > 0 ? bus.takeFixed() : NO_EVENTS
+            if (awaited !== null && awaited.fixedView === undefined && fixedEventSystems > 0) awaited.fixedView = delivery
+            // A frame of n steps may leave a hair under zero: no time is owed.
+            time.fixedAccumulator = Math.max(0, time.fixedAccumulator - h)
             clock.fixedStepsFired += 1
             clock.fixedStepCounter += 1
+            time.fixedTick = clock.fixedStepsFired
+            // H-3: a fixed system sees the step's clock, not the frame's.
+            fixedTime.tick = time.tick
+            fixedTime.scale = time.scale
+            fixedTime.fixedTick = clock.fixedStepsFired
+            fixedTime.elapsed = clock.fixedStepsFired * h
+            fixedTime.fixedAccumulator = time.fixedAccumulator
+            fixedTime.alpha = 0
             for (const s of scheduler.systemsByMode('fixed')) {
               if (!isEnabled(s)) continue
-              if (clock.fixedStepCounter % s.fixedDivisor !== 0) continue
-              runSystem(s, eventView)
+              if (s.fixedEvent) {
+                if (!eventMatches(s, delivery)) continue
+                fixedTime.delta = fixedTime.scaledDelta = h
+                runSystem(s, delivery, fixedTime)
+                continue
+              }
+              if ((clock.fixedStepCounter + s.fixedPhase) % s.fixedDivisor !== 0) continue
+              fixedTime.delta = fixedTime.scaledDelta = h * s.fixedDivisor
+              runSystem(s, eventView, fixedTime)
             }
           }
         }
-        // Kept current even when a tickStart hook paused the world after time
-        // advanced: the unrun steps stay owed (snapshot `fixedBacklog`, O-40)
-        // and the accumulator reports them.
-        time.fixedAccumulator =
-          clock.totalScaledSeconds - clock.fixedStepsFired * time.fixedStep
+        time.alpha = fixedAlpha(time.fixedAccumulator, time.fixedStep)
 
         // SPEC §3 — `once` systems fire on first tick of world.
         for (const s of scheduler.systemsByMode('once')) {
@@ -1697,6 +1895,13 @@ export function createWorld(options: WorldOptions = {}): World {
     pendingCursors.clear()
     changes.pruneRemoved(removalHorizon())
     if (tapListeners.size > 0) for (const l of tapListeners) l.frameEnded()
+    if (profiling) {
+      const ms = hostNow() - frameStart
+      frameTiming.ticks++
+      frameTiming.totalMs += ms
+      frameTiming.lastMs = ms
+      if (ms > frameTiming.maxMs) frameTiming.maxMs = ms
+    }
   }
 
   /**
@@ -2111,6 +2316,10 @@ export function createWorld(options: WorldOptions = {}): World {
       for (const t of components.values()) storeFor(t)
       for (const t of events.values()) bus.note(t)
       for (const t of resources.values()) resourceState.register(t as ResourceType<unknown>)
+      // P-1: a command's handler is installed once per world, on registration.
+      for (const t of events.values()) {
+        if (isCommandType(t) && !installedCommands.has(t)) installCommand(t)
+      }
       return ok(undefined)
     },
 
@@ -2176,8 +2385,10 @@ export function createWorld(options: WorldOptions = {}): World {
 
     describeEvent(type: EventType<unknown>): EventDescriptor {
       const meta = internalEvent(type)
-      const description =
-        meta.__description !== undefined ? { description: meta.__description } : {}
+      const description = {
+        ...(meta.__description !== undefined ? { description: meta.__description } : {}),
+        ...(isCommandType(type) ? { command: true as const } : {}),
+      }
       if (meta.__schema) {
         return {
           name: type.name,
@@ -2203,12 +2414,14 @@ export function createWorld(options: WorldOptions = {}): World {
         scheduler.systemsByMode(mode).map((s) => ({
           name: s.name,
           schedule: s.schedule,
+          ...(s.fixedEvent ? { fixed: true as const } : {}),
           enabled: s.enabled,
           priority: s.priority,
           order: s.order,
           rng: s.rng,
           components: s.components.slice(),
           ...(s.meta !== undefined ? { meta: cloneSerializable(s.meta) } : {}),
+          ...timingOf(s),
         })),
       )
 
@@ -2241,6 +2454,17 @@ export function createWorld(options: WorldOptions = {}): World {
         entityCount: alive.size,
         componentCounts,
         archetypes: archetypeList,
+        ...(profiling
+          ? {
+              timing: {
+                ticks: frameTiming.ticks,
+                totalMs: frameTiming.totalMs,
+                lastMs: frameTiming.lastMs,
+                meanMs: frameTiming.ticks > 0 ? frameTiming.totalMs / frameTiming.ticks : 0,
+                maxMs: frameTiming.maxMs,
+              },
+            }
+          : {}),
       }
     },
 
@@ -2386,7 +2610,8 @@ export function createWorld(options: WorldOptions = {}): World {
       // Snapshot both phases first (copy-on-write arrays, O-43): systems a
       // run registers are not run by this call.
       const candidates = [
-        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name)),
+        // A fixed event system is an event system: never run on demand (PR #30 review).
+        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name) && !s.fixedEvent),
         ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
       ]
       const ran: string[] = []
@@ -2445,6 +2670,13 @@ export function createWorld(options: WorldOptions = {}): World {
       for (let i = 0; i < n; i++) dt === undefined ? world.stepOnce() : world.step(dt)
     },
 
+    setProfiling(on: boolean): void {
+      if (typeof on !== 'boolean') throw new TypeError(`domecs: setProfiling(on) takes a boolean; got ${String(on)}`)
+      profiling = on
+      systemTimings.clear()
+      frameTiming.ticks = frameTiming.totalMs = frameTiming.lastMs = frameTiming.maxMs = 0
+    },
+
     turn<T>(type: EventType<T>, payload: T, dt?: number): void {
       // SPEC §3 turn-based mode: emit action, advance one tick.
       // Because events flush at next step's step 1, we emit first then step.
@@ -2467,12 +2699,22 @@ export function createWorld(options: WorldOptions = {}): World {
           events: [],
         }
       }
+      // P-1: a command is answered by its handler, which this world must have.
+      const command = isCommandType(type)
+      if (command && !installedCommands.has(type)) {
+        return {
+          accepted: false,
+          consumedTurn: false,
+          reason: `command "${type.name}" is not registered in this world: world.register(${type.name}) installs its handler`,
+          events: [],
+        }
+      }
       // O-39: when the event declares a schema, the command boundary rejects
       // malformed payloads outright — no emit, no tick, no consumed turn —
       // instead of accepting a command whose handler will silently no-op or
       // NaN-poison state. Schema-less events remain unvalidated (declare a
       // schema on agent-facing commands to opt in). turn()/emit stay raw.
-      const invalid = validateEventPayload(type, payload)
+      const invalid = validateEventPayload(type, payload, { world })
       if (invalid !== null) {
         return {
           accepted: false,
@@ -2487,29 +2729,52 @@ export function createWorld(options: WorldOptions = {}): World {
       // — they are now buffered as "pending" for next tick, so bus.pendingEvents
       // is exactly the command's downstream effects (the action event itself was
       // already consumed and is not included).
-      emitVia = 'action'
-      try {
-        bus.emit(type, payload)
-      } finally {
-        emitVia = 'emit'
+      let said: CommandVerdict | undefined
+      if (command) {
+        // Where this command lands in the deliveries: after those queued now.
+        const at = bus.pendingCount(type)
+        awaited = { type, tickIndex: at.tick, fixedIndex: at.fixed }
       }
       const heartbeat = opts.dt !== undefined && opts.dt <= 0
-      opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
+      try {
+        emitVia = 'action'
+        try {
+          bus.emit(type, payload)
+        } finally {
+          emitVia = 'emit'
+        }
+        opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
+      } finally {
+        said = awaited?.verdict
+        awaited = null
+      }
+      // P-1: an attached recorder keeps the verdict with the act.
+      if (said !== undefined && tapListeners.size > 0) for (const l of tapListeners) l.answered(said)
       // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
       // is still pending — not consumed, not processed — so it must not be
       // reported as a downstream event, the resolver has no tick to
       // adjudicate, and the command cannot have been accepted. The action
       // stays buffered and flushes on the next real tick.
       const events = heartbeat ? [] : bus.pendingEvents()
-      const verdict = heartbeat
+      const handlerVerdict: ActionVerdict | undefined =
+        said === undefined ? undefined : said.accepted ? { accepted: true } : { accepted: false, reason: said.reason }
+      const verdict: ActionVerdict = heartbeat
         ? {
             accepted: false,
             consumedTurn: false,
             reason: 'heartbeat (dt <= 0): action not processed; it remains pending for the next tick',
           }
         : opts.resolve
-          ? opts.resolve({ events, world })
-          : { accepted: true, consumedTurn: true }
+          ? opts.resolve(command ? { events, world, verdict: handlerVerdict } : { events, world })
+          : !command
+            ? { accepted: true, consumedTurn: true }
+            : handlerVerdict ?? {
+                accepted: false,
+                consumedTurn: false,
+                reason: (type as CommandType<unknown>)[commandTag].fixed === true
+                  ? `command "${type.name}" is handled in the fixed schedule and this tick ran no fixed step; it stays queued for the next one (pass { dt } to step one)`
+                  : `command "${type.name}" was not handled: its handler system command:${type.name} is disabled or removed`,
+              }
       const consumedTurn = verdict.consumedTurn ?? verdict.accepted
       const result: ActionResult = {
         accepted: verdict.accepted,
@@ -2552,6 +2817,7 @@ export function createWorld(options: WorldOptions = {}): World {
         options?.pruneEmptyEntities === true,
         options?.pendingEvents === true ? bus.pendingEvents() : undefined,
         (name) => bus.lookup(name),
+        options?.pendingEvents === true ? bus.pendingFixedEvents() : undefined,
       )
       for (const entry of plugins.list()) {
         if (entry.handle?.onSnapshot) {
@@ -2572,6 +2838,7 @@ export function createWorld(options: WorldOptions = {}): World {
       let s = snap
       let clock: SnapshotClock
       let restored: EmittedEvent[] | undefined
+      let restoredFixed: EmittedEvent[] | undefined
       try {
         for (const entry of plugins.list()) {
           if (entry.handle?.onRestore) s = entry.handle.onRestore(s) as WorldSnapshot
@@ -2583,6 +2850,7 @@ export function createWorld(options: WorldOptions = {}): World {
         clock = validateSnapshot(stateCtx, s)
         // §4.7: resolve in-flight event names before any effect.
         restored = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes())
+        restoredFixed = resolvePendingEvents(s, (name) => bus.lookup(name), () => bus.knownTypes(), 'pendingFixedEvents')
       } catch (cause) {
         bus.putBackPending(abandoned)
         if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(false)
@@ -2605,7 +2873,10 @@ export function createWorld(options: WorldOptions = {}): World {
       // The snapshot's queue replaces the abandoned one; anything an
       // onRestore hook emitted stays queued after it.
       if (restored !== undefined) bus.prependPending(restored)
+      if (restoredFixed !== undefined) bus.prependFixed(restoredFixed)
       if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(true)
+      // H-15: derived state is rebuilt here, before anything paints it.
+      if (sigRestored.size > 0) sigRestored.emit(s)
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()
@@ -2617,6 +2888,11 @@ export function createWorld(options: WorldOptions = {}): World {
     fixedStep,
     (name) => pendingCursors.get(nextCursorKey(name)) ?? lastTickEndSeq,
     (name) => claimStream(name),
+    (count) => {
+      // H-17: collect emits for the fixed sub-steps while someone reads them.
+      fixedEventSystems = count
+      bus.collectFixed(count > 0)
+    },
   )
   plugins = createPluginRegistry(world)
 
@@ -2634,6 +2910,17 @@ export function createWorld(options: WorldOptions = {}): World {
     },
     get resumeScale() {
       return preResumeScale
+    },
+    expectAnswer(type) {
+      const at = bus.pendingCount(type)
+      const mine = { type, tickIndex: at.tick, fixedIndex: at.fixed } as NonNullable<typeof awaited>
+      awaited = mine
+      return {
+        read() {
+          if (awaited === mine) awaited = null
+          return mine.verdict
+        },
+      }
     },
     onceDue() {
       const names: string[] = []

@@ -218,10 +218,14 @@ describe('firstDivergence', () => {
     const a = snap([[1, { P: { x: 1 } }]], { resources: { R: { n: 1 } } })
     expect(firstDivergence(a, { ...a, tick: 11, entities: [] })).toEqual({ where: 'state', key: 'tick' })
     expect(firstDivergence(a, { ...a, seed: [1, 2, 3, 5] })).toEqual({ where: 'state', key: 'seed' })
-    expect(firstDivergence(a, { ...a, fixedBacklog: 2, fixedStep: 1 / 60 })).toEqual({
+    expect(firstDivergence(a, { ...a, fixedBacklog: 2 })).toEqual({ where: 'state', key: 'fixedBacklog' })
+    // H-16: the v4 fixed clock, field by field, after scaledTime.
+    expect(firstDivergence(a, { ...a, fixedTick: 4, fixedAccumulator: 0 })).toEqual({ where: 'state', key: 'fixedTick' })
+    expect(firstDivergence({ ...a, fixedTick: 4, fixedAccumulator: 0 }, { ...a, fixedTick: 4, fixedAccumulator: 0.01 })).toEqual({
       where: 'state',
-      key: 'fixedBacklog',
+      key: 'fixedAccumulator',
     })
+    expect(firstDivergence(a, { ...a, fixedStep: 1 / 60, fixedBacklog: 2 })).toEqual({ where: 'state', key: 'fixedStep' })
     expect(firstDivergence(a, { ...a, resources: { R: { n: 2 } } })).toEqual({
       where: 'resource',
       change: { resource: 'R', path: 'n', before: 1, after: 2 },

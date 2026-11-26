@@ -8,7 +8,10 @@ export type {
   AgentObservation,
   AgentResetOptions,
 } from './agent.js'
-export { defineEvent, validateEventPayload } from './events.js'
+export { defineEvent, eventSchema, validateEventPayload } from './events.js'
+export { accept, defineCommand, isCommandType, refuse } from './commands.js'
+export type { CommandContext, CommandDef, CommandType, CommandVerdict } from './commands.js'
+export type { PayloadCheckOptions, PayloadWorld } from './events.js'
 export { createRng, deriveStream, restoreRng, seedToState } from './rng.js'
 export { createTime, quantizeMs } from './time.js'
 export {
@@ -37,7 +40,7 @@ export type {
   RegisterError,
 } from './world.js'
 export type { EventType, EventView, EmittedEvent, EventDescriptor, EventDefOptions } from './events.js'
-export type { WorldManifest, PluginManifestEntry } from './manifest.js'
+export type { FrameTiming, SystemTiming, WorldManifest, PluginManifestEntry } from './manifest.js'
 export type { InputSnapshot, PointerSnapshot, GamepadSnapshot } from './input.js'
 export type {
   System,

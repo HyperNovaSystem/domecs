@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_INPUT_OPTIONS, TEXT_INPUT_SELECTOR } from '../src/index.js'
+import { DEFAULT_INPUT_OPTIONS, INTERACTIVE_SELECTOR, TEXT_INPUT_SELECTOR } from '../src/index.js'
 
 describe('DEFAULT_INPUT_OPTIONS', () => {
   it('exposes the static input defaults', () => {
@@ -7,6 +7,7 @@ describe('DEFAULT_INPUT_OPTIONS', () => {
       clearOnBlur: true,
       textInputSelector: TEXT_INPUT_SELECTOR,
       preventDefaultKeys: false,
+      interactiveSelector: INTERACTIVE_SELECTOR,
     })
   })
 

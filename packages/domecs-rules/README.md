@@ -58,6 +58,9 @@ within that part's string, or −1:
 | Malformed `actions[i].set`, unknown target component, forbidden field | `{ action: i, part: 'set' }` |
 | Any error inside `actions[i].expr` | `{ action: i, part: 'expr' }` |
 | Event rules (2.3): `on` missing, unknown, or on a polling rule | `'on'` |
+| `rateHz` not a positive number, on a non-fixed rule, or not a whole divisor of the world's fixed rate (from `update()`) | `'rateHz'` |
+| `phase` not an integer ≥ 0, on a non-fixed rule, or not below the rule's divisor | `'phase'` |
+| `fixed` not a boolean, or on a non-event rule | `'fixed'` |
 | `self` / `other` binding errors, or either on a polling rule (2.3) | `'self'` / `'other'` |
 | Effect `i` (2.3): its shape, a key, or an expression in it | `{ effect: i, part }` (`part`: `'effect'`, `'emit'`, `'payload'`, `'payload.<field>'`, `'spawn'`, `'at'`, `'at.x'`, `'at.y'`, `'set'`, `'set.<key>'`, `'despawn'`, `'add'`, `'to'`, `'remove'`, `'from'`) |
 | `effects` is not an array (2.3) | `{ effect: -1, part: 'effects' }` |
@@ -343,6 +346,14 @@ world.action(Move, { target: id, dx: 3 }) // moves only `id`
   `describe().events` lists the command. It runs at step 5 of the tick in
   which the event is delivered (the tick after an `emit`, the same tick for
   `action`/`turn`), also while paused, once per payload in emission order.
+  With `fixed: true` it runs in the fixed schedule instead (H-17): in the
+  fixed step after the one in which the event was emitted, so a standing
+  order written as a fixed rule that emits a command, and an event rule that
+  carries it out, behave the same at 1× and at 64×.
+- **Rate.** A fixed rule with `rateHz: 1` runs once a second instead of every
+  fixed step (H-13), on the same steps as a fixed system of that rate; `phase`
+  moves it earlier in its period. Use it for standing orders and other checks
+  that need not run every step: they cost less and retry at that pace.
 - **Who it runs for.** With `self` (an expression, usually `event.target`):
   that entity, when it is alive and matches `query`/`without` — otherwise
   nothing happens, deterministically. A `self` that gives no value (a

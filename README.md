@@ -88,11 +88,12 @@ It is trying to be the best runtime where the **model is the product**.
 
 ## Status
 
-**v2.0.0 — API-stable.** Seven `@domecs/*` packages are published at 2.0.0:
-core, dom, input, persist, inspector, plus `@domecs/scene` (parent/child
-hierarchy) and `@domecs/rules` (data-defined rules), new in 2.0.0. 2.0.0 is a
+**v3.0.0 — release candidate.** The seven `@domecs/*` packages — core, dom,
+input, persist, inspector, scene (parent/child hierarchy) and rules
+(data-defined rules) — are at 3.0.0 in this repo; npm has 2.0.0. 3.0.0 is a
 major release because several fixes change behavior; see the
-[CHANGELOG](CHANGELOG.md) upgrade notes.
+[release notes](doc/release-notes/v3.0.0.md) and the
+[CHANGELOG](CHANGELOG.md).
 Semver is honored; the product contract is still hardening via corrective
 releases (first-hour traps, benchmarks, agent surface). See
 [`plan/PLAN.md`](plan/PLAN.md) for governing direction and kill gates.

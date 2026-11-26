@@ -171,7 +171,7 @@ pnpm run publish:npm
 
 The script builds all packages, stamps each `dist/build-id.js` with the plain
 version (`scripts/stamp-build-id.mjs`, so a published `BUILD_ID` is e.g.
-`'2.3.0'`, not `'dev'`), then runs:
+`'3.0.0'`, not `'dev'`), then runs:
 
 ```bash
 pnpm -r --filter './packages/*' publish --access public

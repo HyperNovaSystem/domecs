@@ -42,13 +42,29 @@ else if (!boot.value) { /* first run */ }
 
 ## Main API
 
-- `save(world, storage, slot, opts?)` — serialize a snapshot; `opts.meta` is
-  merged into the envelope and a numeric `savedAt` is stamped.
-- `load(world, storage, slot, opts?)` — parse, migrate to `targetVersion`
-  (default `SNAPSHOT_VERSION`), then restore. `opts.migrations` is overlaid on
-  `BUILTIN_MIGRATIONS` (caller keys win), so legacy v1 and v2 (2.0) saves
-  upgrade transparently with no caller config. Empty slots return `persist_io` with
+- `save(world, storage, slot, opts?)` — encode a snapshot and write it;
+  returns `ok({ codec, length })`. A json save is plain JSON (`meta` and
+  `version` first, so `peek` reads it from the prefix); other codecs write a
+  one-line header before the body. `opts.meta` is merged
+  into the envelope and the header, a numeric `savedAt` is stamped, and
+  `opts.appVersion` (your save format) is stamped into both. `opts.codec`
+  picks the wire format: `jsonCodec` (default; `canonicalJson`, lossless) or
+  `columnarCodec` (entities of one component of flat fields as tables — about
+  a third of the text on a large world), or your own `{ name, encode, decode }`.
+- `load(world, storage, slot, opts?)` — read the header, `opts.accept(header)`
+  (return `false` or a reason to refuse, e.g. an old `appVersion`), decode the
+  body with the codec the header names (`opts.codecs` for your own), migrate
+  to `targetVersion` (default `SNAPSHOT_VERSION`), then restore.
+  `opts.migrations` is overlaid on `BUILTIN_MIGRATIONS` (caller keys win), so
+  legacy saves upgrade transparently with no caller config; a slot written
+  by 2.x still loads. Empty slots return `persist_io` with
   `retryable: false` (message includes `empty`).
+- `peek(storage, slot)` — the header (`codec`, `snapshotVersion`, `savedAt`,
+  `appVersion`, `meta`, `length`) without decoding the save: a save menu's
+  "Day 3 · 14:20 · $182,400" from `opts.meta`.
+- `prepareSave(world, opts?)`, `encodeSave(snapshot, opts?)`,
+  `decodeSave(text, opts?)` — the pure halves of `save` and `load`, for a host
+  that stores the text itself or encodes in a worker.
 - `loadIfPresent(world, storage, slot, opts?)` — boot-friendly (O-28):
   `ok(true)` loaded, `ok(false)` missing slot, `err(...)` for real failures.
   Prefer this for first-run restore paths.
@@ -60,9 +76,11 @@ else if (!boot.value) { /* first run */ }
 - `BUILTIN_MIGRATIONS` — framework-supplied steps applied as the floor beneath
   any caller chain. Ships the `1 → 2` resources bump (a v1 snapshot simply
   lacks `resources`) and, from 2.1, the `2 → 3` bump (a v2 snapshot simply
-  lacks `rngRoot`, `rngStreams` and `pendingEvents`); both are pure version
-  bumps. A loaded v2 save uses the world's `createWorld` root and re-derives every
-  `rng: 'own'` stream. `save()` writes v3, which 2.0 engines reject.
+  lacks `rngRoot`, `rngStreams` and `pendingEvents`) and the `3 → 4` bump (a
+  v3 snapshot simply lacks the fixed clock, which restore derives from
+  `scaledTime`); all are pure version bumps. A loaded v2 save uses the world's
+  `createWorld` root and re-derives every `rng: 'own'` stream. `save()` writes
+  v4, which 2.x engines reject.
 - `withBuiltinMigrations(user?)` — overlay a caller `MigrationMap` on the
   built-ins (caller keys win); returns the built-ins unchanged when `user` is
   empty. `load()` uses this internally.
@@ -97,7 +115,8 @@ else if (!boot.value) { /* first run */ }
   types (`ComponentTypeData`) and rebuild them; every `FieldSchema` key
   round-trips, `description` included. `registerComponentTypes` never throws:
   defects come back as `SchemaProblem`s.
-- Types: `SaveOptions`, `LoadOptions`, `Migration`, `MigrationMap`,
+- Types: `SaveOptions`, `SaveReport`, `SaveHeader`, `LoadOptions`,
+  `DecodeOptions`, `SnapshotCodec`, `Migration`, `MigrationMap`,
   `MigrationFailedError`, `Storage`, `SnapshotHistory`,
   `SnapshotHistoryOptions`, `SnapshotDiff`, `SnapshotDiffOptions`,
   `FieldChange`, `ResourceChange`, `Divergence`, `ComponentTypeData`,

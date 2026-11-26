@@ -3,7 +3,7 @@ import { canonicalJson, hashSnapshot } from '../src/canonical.js'
 import { defineComponent } from '../src/component.js'
 import { mergeSortedRuns, SortedIdSet } from '../src/id-set.js'
 import { defineEvent } from '../src/events.js'
-import { Has, OnAdded, OnRemoved, Where } from '../src/query.js'
+import { Has, OnAdded, OnRemoved, Or, Where } from '../src/query.js'
 import { defineResource } from '../src/resource.js'
 import { ok } from '../src/result.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
@@ -170,7 +170,8 @@ describe('restore continuity — clock (O-40)', () => {
   it('starts the clock at zero for snapshots without scaledTime (older builds)', () => {
     const w = createWorld({ headless: true })
     w.step(0.5)
-    const { scaledTime: _omit, ...legacy } = w.snapshot()
+    // An older build wrote none of the clock fields.
+    const { scaledTime: _omit, fixedTick: _t, fixedAccumulator: _a, fixedStep: _s, ...legacy } = w.snapshot()
     w.step(0.5)
     w.restore(legacy)
     expect(w.time.elapsed).toBe(0)
@@ -235,8 +236,11 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     live.pauseNext()
     live.w.step(0.25) // 2 steps due, none run
     const snap = live.w.snapshot()
-    expect(snap.fixedBacklog).toBe(2)
+    // H-16: the owed time is in the accumulator.
+    expect(snap.fixedTick).toBe(0)
+    expect(snap.fixedAccumulator).toBe(0.25)
     expect(snap.fixedStep).toBe(0.1)
+    expect('fixedBacklog' in snap).toBe(false)
 
     const twin = mk()
     twin.w.restore(JSON.parse(JSON.stringify(snap)) as WorldSnapshot)
@@ -256,7 +260,8 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     live.pauseNext()
     live.w.step(0.25) // 3 more due, none run: 0.3 s owed
     const snap = live.w.snapshot()
-    expect(snap.fixedBacklog).toBe(3)
+    expect(snap.fixedTick).toBe(2)
+    expect(snap.fixedAccumulator).toBeCloseTo(0.3, 9)
     const owed = live.w.time.fixedAccumulator
     expect(owed).toBeCloseTo(0.3, 9)
     live.w.resume()
@@ -280,12 +285,14 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     }
   })
 
-  it('omits fixedBacklog and fixedStep after an ordinary tick', () => {
+  it('writes the fixed clock after an ordinary tick, and never fixedBacklog (H-16)', () => {
     const { w } = mk()
     w.step(0.25)
     const snap = w.snapshot()
+    expect(snap.fixedTick).toBe(2)
+    expect(snap.fixedAccumulator).toBeCloseTo(0.05, 12)
+    expect(snap.fixedStep).toBe(0.1)
     expect('fixedBacklog' in snap).toBe(false)
-    expect('fixedStep' in snap).toBe(false)
   })
 
   it('rejects an invalid fixedBacklog or fixedStep', () => {
@@ -297,6 +304,10 @@ describe('restore continuity — fixed-step backlog (O-40)', () => {
     for (const bad of [0, -0.1, Number.POSITIVE_INFINITY, null as unknown as number]) {
       expect(() => w.restore({ ...snap, fixedBacklog: 1, fixedStep: bad })).toThrow(/fixedStep/)
     }
+    // A v4 snapshot carries owed steps in its accumulator: a backlog beside it is refused.
+    expect(() => w.restore({ ...snap, fixedBacklog: 1 })).toThrow(/fixedBacklog/)
+    const { fixedAccumulator: _a, ...half } = snap
+    expect(() => w.restore(half)).toThrow(/fixedTick and fixedAccumulator/)
   })
 })
 
@@ -617,8 +628,9 @@ describe('component order within an entity — by name, not history (E18.1)', ()
 
   const build = (): World => {
     const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
-    // An OnRemoved reader keeps removal marks in the snapshot until it runs.
-    w.system('reader', { query: OnRemoved(Alpha) }, () => {})
+    // OnRemoved readers keep removal marks in the snapshot until they run;
+    // since H-4 only the marks of the components they watch.
+    w.system('reader', { query: Or(OnRemoved(Alpha), OnRemoved(Mid), OnRemoved(Zeta)) }, () => {})
     return w
   }
   const strict = (w: World): string => hashSnapshot(w.snapshot(), { includeChanges: true })

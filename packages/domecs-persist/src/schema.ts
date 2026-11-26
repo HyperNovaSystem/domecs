@@ -8,6 +8,7 @@ const FIELD_KINDS: ReadonlySet<string> = new Set<FieldKind>([
   'boolean',
   'enum',
   'object',
+  'entity',
   'unknown',
 ])
 
@@ -35,6 +36,10 @@ export interface ComponentFieldData {
   readonly?: boolean
   /** Free-text meaning of the field (`FieldSchema.description`); round-trips, never dropped. */
   description?: string
+  /** `FieldSchema.required`, `integer` and `with` (H-6); round-trip like the rest. */
+  required?: boolean
+  integer?: boolean
+  with?: string[]
 }
 
 /** The persisted, document-embeddable form of a `ComponentType` + its `ComponentDescriptor`. */
@@ -71,6 +76,9 @@ export function serializeComponentType(
     if (field.label !== undefined) data.label = field.label
     if (field.readonly !== undefined) data.readonly = field.readonly
     if (field.description !== undefined) data.description = field.description
+    if (field.required !== undefined) data.required = field.required
+    if (field.integer !== undefined) data.integer = field.integer
+    if (field.with !== undefined) data.with = field.with.slice()
     fields.push(data)
   }
 
@@ -175,6 +183,9 @@ export function registerComponentTypes(
         ...(field.label !== undefined ? { label: field.label } : {}),
         ...(field.readonly !== undefined ? { readonly: field.readonly } : {}),
         ...(typeof field.description === 'string' ? { description: field.description } : {}),
+        ...(typeof field.required === 'boolean' ? { required: field.required } : {}),
+        ...(typeof field.integer === 'boolean' ? { integer: field.integer } : {}),
+        ...(Array.isArray(field.with) && field.with.every((n) => typeof n === 'string') ? { with: field.with.slice() } : {}),
       }
       if (field.description !== undefined && typeof field.description !== 'string') {
         // The field stays; only the description is dropped.
@@ -225,6 +236,9 @@ function defaultMismatch(schema: FieldSchema, value: unknown): string | null {
         : `default for an enum field must be a string or number, got ${typeof value}`
     case 'object':
       return value !== null && typeof value === 'object' ? null : 'default for an object field must be an object'
+    case 'entity':
+      // A component may hold "no entity" as -1 or null.
+      return value === null || Number.isSafeInteger(value) ? null : 'default for an entity field must be an integer or null'
     case 'unknown':
       return null
   }

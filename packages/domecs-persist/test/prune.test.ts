@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { save } from '../src/persist.js'
 import { pruneTransientOnlyEntities } from '../src/persist.js'
 import { createMemoryStorage } from '../src/storage.js'
+import { decodeStored } from './decode-stored.js'
 
 const Health = defineComponent<{ hp: number }>('Health', { defaults: { hp: 10 } })
 const Hover = defineComponent<{ over: number }>('Hover', { transient: true })
@@ -20,7 +21,7 @@ describe('@domecs/persist — pruneTransientOnlyEntities (review #12)', () => {
     const raw = storage.read('slot')
     expect(raw.ok).toBe(true)
     if (!raw.ok || raw.value === null) throw new Error('expected bytes')
-    const snap = JSON.parse(raw.value) as WorldSnapshot
+    const snap = decodeStored(raw.value)
     const ids = snap.entities.map((e) => e.id)
     expect(ids).toContain(real)
     expect(ids).not.toContain(ghost)
@@ -33,7 +34,7 @@ describe('@domecs/persist — pruneTransientOnlyEntities (review #12)', () => {
     expect(save(w, storage, 'slot').ok).toBe(true)
     const raw = storage.read('slot')
     if (!raw.ok || raw.value === null) throw new Error('expected bytes')
-    const snap = JSON.parse(raw.value) as WorldSnapshot
+    const snap = decodeStored(raw.value)
     expect(snap.entities.map((e) => e.id)).toContain(ghost)
   })
 })

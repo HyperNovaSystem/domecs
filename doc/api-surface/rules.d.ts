@@ -765,6 +765,27 @@ export interface RuleDef {
      */
     priority?: number;
     /**
+     * Fixed rules (H-13): run at this rate instead of every fixed step — a
+     * whole divisor of the world's `1 / fixedStep`, like a fixed system's
+     * `rateHz`. A standing order checked once a second costs a sixteenth of
+     * one checked every step at 16 Hz, and retries at that pace. The rule's
+     * `dt` is then its period. A rate the world's step does not divide is a
+     * {@link RuleError} on `'rateHz'` from `update()`.
+     */
+    rateHz?: number;
+    /**
+     * Fixed rules with a `rateHz` (H-14): run `phase` steps earlier in each
+     * period (0 to `d − 1`), to spread rules of one rate over the period.
+     */
+    phase?: number;
+    /**
+     * Event rules (H-17): run in the fixed schedule, so an event a fixed rule
+     * (or fixed system) emits in one step is handled in the next, whatever the
+     * frame rate — a simulation written as rules stays frame-rate
+     * independent. See core's `{ schedule: 'event', fixed: true }`.
+     */
+    fixed?: boolean;
+    /**
      * Which stream the rule's `random()` draws (§4.4; SPEC §2.8). Overrides
      * {@link InstallRulesOptions.rng} for this rule. `'own'`: the rule's own
      * stream, keyed `rule:<name>` and derived from the world's root seed, so
@@ -795,7 +816,7 @@ export interface RuleDef {
  * Which part of a {@link RuleDef} an error is about (§4.6). Later minors add
  * members, so keep a default branch when switching on it.
  */
-export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'when' | 'on' | 'self' | 'other'
+export type RuleDefPath = 'name' | 'schedule' | 'priority' | 'rng' | 'rateHz' | 'phase' | 'fixed' | 'when' | 'on' | 'self' | 'other'
 /** An effect's part: its key (`'emit'`, `'spawn'`, `'to'`, ...), an
  *  expression (`'payload.<field>'`, `'at.x'`, `'set.<key>'`), `'effect'`
  *  (its shape), or `{ effect: -1, part: 'effects' }` (not an array). */

@@ -89,7 +89,8 @@ describe('createBranch (§7.2)', () => {
     const live = source()
     steps(live, 3)
     const snap = live.snapshot({ pendingEvents: true })
-    expect(snap.fixedStep).toBeUndefined()
+    // H-16: every v4 snapshot carries its fixed step.
+    expect(snap.fixedStep).toBe(1 / 60)
     const plain = createBranch(setup, snap)
     expect(plain.ok && plain.value.world.time.fixedStep).toBe(1 / 60)
     const opt = createBranch(setup, snap, { fixedStep: 1 / 30 })
@@ -97,6 +98,9 @@ describe('createBranch (§7.2)', () => {
     const withStep: WorldSnapshot = { ...snap, fixedStep: 1 / 120 }
     const fromSnap = createBranch(setup, withStep)
     expect(fromSnap.ok && fromSnap.value.world.time.fixedStep).toBe(1 / 120)
+    const { fixedStep: _step, ...stepless } = snap
+    const fallback = createBranch(setup, stepless)
+    expect(fallback.ok && fallback.value.world.time.fixedStep).toBe(1 / 60)
   })
 
   it('seed is the root for own streams when `from` has no rngRoot (a v2 snapshot)', () => {
@@ -181,21 +185,25 @@ describe('createBranch (§7.2)', () => {
     expect(createBranch(gated, snap, { scale: 2 }).ok).toBe(true)
   })
 
-  it('a snapshot without a fixed backlog carries no fixedStep: a source at 1/30 needs the option', () => {
+  it('a v4 snapshot carries its fixedStep: a branch of a source at 1/30 needs no option (H-16)', () => {
     const live = createWorld({ headless: true, fixedStep: 1 / 30, seed: [9, 8, 7, 6] })
     setup(live)
     live.spawn([entry(Body, { x: 5, v: -1 }), entry(Stats, { t: 0, hits: 0, r: 0, fixed: 0 })])
     steps(live, 6)
     const snap = live.snapshot({ pendingEvents: true })
-    expect(snap.fixedStep).toBeUndefined()
+    expect(snap.fixedStep).toBe(1 / 30)
     steps(live, 12)
+    // A snapshot without the field (written before v4 with no backlog) still needs it.
+    const { fixedStep: _step, ...stepless } = snap
     const plain = createBranch(setup, snap)
-    const given = createBranch(setup, snap, { fixedStep: live.time.fixedStep })
-    if (!plain.ok || !given.ok) throw new Error('branch failed')
-    expect(plain.value.world.time.fixedStep).toBe(1 / 60)
-    steps(plain.value.world, 12)
-    steps(given.value.world, 12)
-    expect(strict(plain.value.world)).not.toBe(strict(live))
+    const bare = createBranch(setup, stepless)
+    const given = createBranch(setup, stepless, { fixedStep: live.time.fixedStep })
+    if (!plain.ok || !bare.ok || !given.ok) throw new Error('branch failed')
+    expect(plain.value.world.time.fixedStep).toBe(1 / 30)
+    expect(bare.value.world.time.fixedStep).toBe(1 / 60)
+    for (const b of [plain, bare, given]) steps(b.value.world, 12)
+    expect(strict(plain.value.world)).toBe(strict(live))
+    expect(strict(bare.value.world)).not.toBe(strict(live))
     expect(strict(given.value.world)).toBe(strict(live))
   })
 
@@ -717,5 +725,75 @@ describe('runBranch (§7.2)', () => {
     expect(() => runBranch(w, { steps: 1, sampleEvery: 0 })).toThrow(TypeError)
     expect(() => runBranch(w, { steps: 1, sampleEvery: 2.5 })).toThrow(TypeError)
     expect(w.time.tick).toBe(30)
+  })
+})
+
+// H-18 (Harbor findings): every runBranch call took a strict hash of the
+// whole world for finalHash, and hashed it before and after every probe at
+// its first sample, so extending a large branch a few steps at a time cost a
+// fifth of a second per call before it had done anything.
+describe('runBranch cost (H-18)', () => {
+  /** Count the world's snapshots, which is what every strict hash takes. */
+  const counting = (w: World): { snapshots: () => number } => {
+    let n = 0
+    const real = w.snapshot.bind(w)
+    ;(w as { snapshot: World['snapshot'] }).snapshot = (o) => {
+      n++
+      return real(o)
+    }
+    return { snapshots: () => n }
+  }
+
+  it('finalHash: false takes no hash: the result has finalHash null', () => {
+    const w = branch(liveAt30().snap)
+    const c = counting(w)
+    const out = run(w, { steps: 5, finalHash: false })
+    expect(out.finalHash).toBeNull()
+    expect(c.snapshots()).toBe(0)
+    expect(run(w, { steps: 1 }).finalHash).toBe(strict(w))
+  })
+
+  it('checks each probe once per branch by default, however many calls sample it', () => {
+    const w = branch(liveAt30().snap)
+    const c = counting(w)
+    const probes = { r: (x: World) => statsOf(x).r, t: (x: World) => statsOf(x).t }
+    run(w, { steps: 1, probes, finalHash: false })
+    const first = c.snapshots()
+    expect(first).toBeGreaterThan(0)
+    for (let i = 0; i < 5; i++) run(w, { steps: 1, probes, finalHash: false })
+    expect(c.snapshots()).toBe(first)
+    // A probe this branch has not sampled yet is checked at its first sample.
+    let calls = 0
+    const late = { late: (x: World) => (calls++, statsOf(x).hits) }
+    run(w, { steps: 1, probes: late, finalHash: false })
+    expect(c.snapshots()).toBeGreaterThan(first)
+    expect(calls).toBe(1)
+  })
+
+  it('an impure probe is still caught at its first sample, in a later call too', () => {
+    const w = branch(liveAt30().snap)
+    run(w, { steps: 1, probes: { ok: (x) => statsOf(x).r } })
+    const bad = (x: World): number => {
+      const id = x.listEntities([Stats])[0]!
+      x.getComponent(id, Stats)!.hits += 1
+      x.markChanged(id, Stats)
+      return 0
+    }
+    expect(() => runBranch(w, { steps: 1, probes: { bad } })).toThrow(/probe "bad" changed the world/)
+  })
+
+  it('checkProbes: true checks at every call (2.x); false never checks', () => {
+    const w = branch(liveAt30().snap)
+    const c = counting(w)
+    const probes = { r: (x: World) => statsOf(x).r }
+    run(w, { steps: 1, probes, finalHash: false, checkProbes: true })
+    const once = c.snapshots()
+    run(w, { steps: 1, probes, finalHash: false, checkProbes: true })
+    expect(c.snapshots()).toBe(2 * once)
+    const fresh = branch(liveAt30().snap)
+    const f = counting(fresh)
+    run(fresh, { steps: 3, probes, finalHash: false, checkProbes: false })
+    expect(f.snapshots()).toBe(0)
+    expect(() => runBranch(fresh, { steps: 1, checkProbes: 'sometimes' as never })).toThrow(TypeError)
   })
 })

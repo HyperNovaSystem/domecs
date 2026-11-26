@@ -634,3 +634,38 @@ const OPTIONS_C: Parameters<typeof compileRule>[2] = {
   spatial: { component: 'FxPos' },
   resolveEvent: (name) => [Ping, Died, Seen, Fire, Hit].find((t) => t.name === name),
 }
+
+// H-6: an emit effect whose payload leaves out a field the event requires
+// could never be valid, so it does not compile; an entity field names an
+// entity the rule may already have despawned, so it is checked for shape only.
+describe('emit effects and required / entity fields (H-6)', () => {
+  const Service = defineEvent<{ crane: number; why?: string }>('FxService', {
+    schema: { fields: { crane: { kind: 'entity', required: true }, why: { kind: 'string' } } },
+  })
+  const Gone = defineEvent<{ who: number }>('FxGone', { schema: { fields: { who: { kind: 'entity', required: true } } } })
+
+  it('refuses an emit that leaves out a required field', () => {
+    const w = world()
+    w.register(Service)
+    const errors = installRules(w, [], resolve, OPTIONS).update([
+      { name: 'ask', schedule: 'tick', query: ['FxGun'], actions: [], effects: [{ emit: 'FxService', payload: { why: '"worn"' } }] },
+    ])
+    expect(errors.get('ask')?.map((e) => e.message)).toEqual(['Event "FxService": missing required field "crane"'])
+  })
+
+  it('accepts one that gives it, and lets "despawn self, then announce" name the entity', () => {
+    const w = world()
+    w.register(Service, Gone)
+    install(w, [
+      { name: 'ask', schedule: 'tick', query: ['FxGun'], actions: [], effects: [{ emit: 'FxService', payload: { crane: 'self.id' } }] },
+      { name: 'die', schedule: 'tick', query: ['FxHp'], actions: [], effects: [{ despawn: 'self' }, { emit: 'FxGone', payload: { who: 'self.id' } }] },
+    ])
+    const gun = w.spawn([entry(Gun, { t: 0, kills: 0 })])
+    const mortal = w.spawn([entry(Hp, { hp: 1 })])
+    w.stepOnce()
+    expect(w.pendingEvents().map((e) => [e.type.name, e.payload])).toEqual([
+      ['FxService', { crane: gun }],
+      ['FxGone', { who: mortal }],
+    ])
+  })
+})
