@@ -157,9 +157,16 @@ export function buildSnapshot(
   // #16: serialize materialized resources by name; the field is omitted
   // entirely when there are none.
   const resourcesSnap = ctx.resources.snapshotValues()
-  // O-42: marks a system has not seen yet, so restore can re-issue them.
-  // Transient resources' marks are left out with their values (O-36).
-  const changes = ctx.changes.encode(ctx.changeCursors(), ctx.resources.isTransient)
+  // O-42: marks a system watching them has not seen yet, so restore can
+  // re-issue them. Transient resources' and components' marks are left out
+  // with their values (O-36, H-4).
+  const changes = ctx.changes.encode(ctx.changeCursors(), {
+    resource: ctx.resources.isTransient,
+    component: (name) => {
+      const type = ctx.typeRegistry.get(name)
+      return type !== undefined && internal(type).__transient
+    },
+  })
   // §4.4: every own stream's state, by key; omitted while there is none.
   let rngStreams: Record<string, RngState> | undefined
   for (const [key, rng] of ctx.getStreams()) {

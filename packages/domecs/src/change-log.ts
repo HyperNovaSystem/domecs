@@ -38,13 +38,32 @@ export interface ChangesSnapshot {
   readonly seen: Readonly<Record<string, number>>
 }
 
+/**
+ * The marks a reader can report, by kind: the component names under its
+ * `OnAdded` / `OnChanged` / `OnRemoved` nodes, and the resource names under
+ * its `OnChangedResource` nodes. Each node kind reads only its own kind of
+ * mark, so a mark nobody watches can never be reported.
+ */
+export interface MarkWatch {
+  readonly added: ReadonlySet<string>
+  readonly changed: ReadonlySet<string>
+  readonly removed: ReadonlySet<string>
+  readonly resource: ReadonlySet<string>
+}
+
 /** One change-detection reader for snapshot encoding: a system's cursor. */
 export interface ChangeCursor {
   /** The system's name, made unique by occurrence (`name#1`, …) on a clash. */
   readonly name: string
   readonly seenThrough: number
-  /** The system reads `OnRemoved`: removal marks are carried for it. */
-  readonly readsRemovals: boolean
+  /** What it can report: a mark is carried for it only when it watches it (H-4). */
+  readonly watches: MarkWatch
+}
+
+/** What a snapshot leaves out with its values: transient components and resources (O-36, H-4). */
+export interface EncodeSkip {
+  readonly component?: (name: string) => boolean
+  readonly resource?: (name: string) => boolean
 }
 
 export type ChangeLog = ReturnType<typeof createChangeLog>
@@ -281,36 +300,49 @@ export function createChangeLog() {
   }
 
   /**
-   * Encode the marks that some cursor has not seen, renumbered from 1 in
-   * stamp order so the result depends only on the marks' relative order.
-   * Returns undefined when every cursor has seen every mark.
+   * Encode the marks that some cursor watching them has not seen, renumbered
+   * from 1 in stamp order so the result depends only on the marks' relative
+   * order. Returns undefined when no such mark is left.
    */
-  function encode(
-    cursors: readonly ChangeCursor[],
-    skipResource?: (name: string) => boolean,
-  ): ChangesSnapshot | undefined {
+  function encode(cursors: readonly ChangeCursor[], skip: EncodeSkip = {}): ChangesSnapshot | undefined {
     if (cursors.length === 0) return undefined
-    // A mark is carried while some system that could report it has not
-    // seen it: removal marks only for `OnRemoved` readers, so retention for
-    // other readers (non-system queries) never shows up in the snapshot.
-    let floor = Infinity
-    let removedFloor = Infinity
-    for (const c of cursors) {
-      if (c.seenThrough < floor) floor = c.seenThrough
-      if (c.readsRemovals && c.seenThrough < removedFloor) removedFloor = c.seenThrough
+    // H-4: a mark is carried while some system that watches its kind and
+    // name has not seen it — not while any reader at all lags — so a slow
+    // reader of one component pins no other component's marks, and marks
+    // only non-system queries read never show up in the snapshot. Marks on
+    // a transient component or resource are never carried: the snapshot
+    // leaves their values out, so a restored world has nothing to mark.
+    const floors = {
+      added: new Map<string, number>(),
+      changed: new Map<string, number>(),
+      removed: new Map<string, number>(),
+      resource: new Map<string, number>(),
     }
-    const carried: Array<[number, ChangesSnapshot['marks'][number]]> = []
-    for (const kind of ['added', 'changed', 'removed'] as const) {
-      const kindFloor = kind === 'removed' ? removedFloor : floor
-      for (const [name, m] of stamps[kind]) {
-        for (const [entity, stamp] of m) {
-          if (stamp > kindFloor) carried.push([stamp, [kind, name, entity]])
+    for (const c of cursors) {
+      for (const kind of ['added', 'changed', 'removed', 'resource'] as const) {
+        const f = floors[kind]
+        for (const name of c.watches[kind]) {
+          const at = f.get(name)
+          if (at === undefined || c.seenThrough < at) f.set(name, c.seenThrough)
         }
       }
     }
-    for (const [name, stamp] of resourceStamps) {
-      // A transient resource (O-36) is not in the snapshot; neither are its marks.
-      if (stamp > floor && !skipResource?.(name)) carried.push([stamp, ['resource', name]])
+    const carried: Array<[number, ChangesSnapshot['marks'][number]]> = []
+    for (const kind of ['added', 'changed', 'removed'] as const) {
+      for (const [name, floor] of floors[kind]) {
+        if (skip.component?.(name) === true) continue
+        const m = stamps[kind].get(name)
+        if (m === undefined) continue
+        for (const [entity, stamp] of m) {
+          if (stamp > floor) carried.push([stamp, [kind, name, entity]])
+        }
+      }
+    }
+    for (const [name, floor] of floors.resource) {
+      const stamp = resourceStamps.get(name)
+      if (stamp !== undefined && stamp > floor && skip.resource?.(name) !== true) {
+        carried.push([stamp, ['resource', name]])
+      }
     }
     if (carried.length === 0) return undefined
     carried.sort((a, b) => a[0] - b[0])

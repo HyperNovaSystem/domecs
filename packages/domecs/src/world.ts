@@ -798,7 +798,7 @@ export function createWorld(options: WorldOptions = {}): World {
         .map((sys) => ({
           name: keys.get(sys)!,
           seenThrough: sys.seenThrough,
-          readsRemovals: sys.watchesRemoved,
+          watches: sys.watches,
         }))
     },
     storesReplaced: () => {

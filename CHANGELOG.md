@@ -43,6 +43,16 @@ each such change is listed under **Breaking**.
   about one step, so a frame of `n` steps (`step(n × fixedStep)`) runs `n`
   and worlds stepped the same time in different chunk sizes have run the
   same steps. F-3's test now runs 30,000 ticks at nine step sizes.
+- `@domecs/core`: `snapshot().changes` no longer carries marks on transient
+  components (H-4), as it already did not for transient resources (O-36):
+  the snapshot leaves their values out, so restore re-issued marks for
+  components the restored world did not hold, and two worlds that differed
+  only in presentation tags (written once per rendered frame) stopped being
+  strict-hash equal as soon as any system read changes. A mark is also
+  carried only while a system that can report it has not seen it — one with
+  a change node of that kind for that component or resource — instead of
+  while any change reader at all lags, so a 1 Hz reader of one component no
+  longer pins every other component's marks into each snapshot.
 
 ### Added
 

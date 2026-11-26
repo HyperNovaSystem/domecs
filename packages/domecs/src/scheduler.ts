@@ -1,3 +1,4 @@
+import type { MarkWatch } from './change-log.js'
 import type { EventType, EventView } from './events.js'
 import type { InputSnapshot } from './input.js'
 import { normalize, treeHas, type EntityView, type QueryDef, type QueryNode, type QueryResult } from './query.js'
@@ -212,6 +213,8 @@ export interface CompiledSystem {
   watchesChanges: boolean
   /** Its query or reactsTo has an `OnRemoved` node (removal-mark pruning). */
   watchesRemoved: boolean
+  /** The marks its change nodes can report, by kind (snapshot `changes`, H-4). */
+  watches: MarkWatch
 }
 
 export interface Scheduler {
@@ -391,6 +394,7 @@ export function createScheduler(
         running: false,
         watchesChanges: nodes.some((n) => treeHas(n, CHANGE_KINDS)),
         watchesRemoved: nodes.some((n) => treeHas(n, REMOVED_KIND)),
+        watches: watchedMarks(nodes),
       }
       if (def.query) compiled.query = makeQuery(def.query, compiled)
       if (def.schedule === 'reactive') compiled.reactsTo = makeQuery(def.reactsTo, compiled)
@@ -477,6 +481,28 @@ function referencedComponentNames(nodes: readonly QueryNode[]): string[] {
   }
   nodes.forEach(walk)
   return Array.from(out).sort()
+}
+
+/**
+ * The marks a system's change nodes can report: component names under
+ * `OnAdded` / `OnChanged` / `OnRemoved` and resource names under
+ * `OnChangedResource`, anywhere in the tree (`Not` and `Or` included).
+ */
+function watchedMarks(nodes: readonly QueryNode[]): MarkWatch {
+  const out = {
+    added: new Set<string>(),
+    changed: new Set<string>(),
+    removed: new Set<string>(),
+    resource: new Set<string>(),
+  }
+  const walk = (n: QueryNode): void => {
+    if (n.kind === 'and' || n.kind === 'or') n.children.forEach(walk)
+    else if (n.kind === 'not') walk(n.child)
+    else if (n.kind === 'added' || n.kind === 'changed' || n.kind === 'removed') out[n.kind].add(n.type.name)
+    else if (n.kind === 'changedResource') out.resource.add(n.resource.name)
+  }
+  nodes.forEach(walk)
+  return out
 }
 
 /**

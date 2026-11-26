@@ -3,7 +3,7 @@ import { canonicalJson, hashSnapshot } from '../src/canonical.js'
 import { defineComponent } from '../src/component.js'
 import { mergeSortedRuns, SortedIdSet } from '../src/id-set.js'
 import { defineEvent } from '../src/events.js'
-import { Has, OnAdded, OnRemoved, Where } from '../src/query.js'
+import { Has, OnAdded, OnRemoved, Or, Where } from '../src/query.js'
 import { defineResource } from '../src/resource.js'
 import { ok } from '../src/result.js'
 import type { WorldSnapshot } from '../src/snapshot.js'
@@ -628,8 +628,9 @@ describe('component order within an entity — by name, not history (E18.1)', ()
 
   const build = (): World => {
     const w = createWorld({ headless: true, seed: [1, 2, 3, 4] })
-    // An OnRemoved reader keeps removal marks in the snapshot until it runs.
-    w.system('reader', { query: OnRemoved(Alpha) }, () => {})
+    // OnRemoved readers keep removal marks in the snapshot until they run;
+    // since H-4 only the marks of the components they watch.
+    w.system('reader', { query: Or(OnRemoved(Alpha), OnRemoved(Mid), OnRemoved(Zeta)) }, () => {})
     return w
   }
   const strict = (w: World): string => hashSnapshot(w.snapshot(), { includeChanges: true })
