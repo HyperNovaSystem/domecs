@@ -79,6 +79,112 @@ each such change is listed under **Breaking**.
   a change node of that kind for that component or resource — instead of
   while any change reader at all lags, so a 1 Hz reader of one component no
   longer pins every other component's marks into each snapshot.
+- `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
+  that `defineEvent()` did not create, such as a look-alike object (and, for
+  `world.action()`, an event's name string; `bridge.act('Name', …)` resolves
+  the name first). They return `accepted: false` with a reason and neither
+  emit nor tick. Before, a string ran a tick that no handler saw and
+  reported `accepted: true`, and `null` or `undefined` threw. (O-92)
+- `@domecs/core`: event types made by a second copy of `@domecs/core` (a
+  duplicate install or a bundled dependency) now route correctly. Before,
+  the bus read every such type under one `undefined` key, so they triggered
+  each other's handlers. (O-92)
+- Docs (Harbor findings §5): `doc/api.md` lists the `Rng` methods that ship
+  (`uniform`, `uniformInt`, `uniformRange`, `uniformRoll`) and `persist`'s
+  real `targetVersion` default; SPEC §5.1 describes the real `ViewDef` and
+  §5.5 no longer promises a virtualizer and a table-list view that do not
+  exist; SPEC §3 no longer says a fixed system sees an "integrated fixed
+  delta" (it now does, H-3); AGENTS.md rule 9 compares strict hashes, not
+  `JSON.stringify`; `doc/README.md` describes the per-app findings files that
+  feed the ledger. `iterEntitiesWith` and `query().entities` say what they
+  cost.
+- Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
+  `createAgentBridge` example no longer follow every `act()` with `step()`,
+  which spent two ticks per turn. (O-92)
+- `@domecs/core`: an act log started while an event with a non-plain payload
+  is pending now records an `unserializable_payload` gap at `startTick`. That
+  event cannot enter `baseHash` or the log, so before, a replay could report
+  `ok` without it. (O-80, 2.1 release candidate)
+- Release: `pnpm publish:npm` stamps each package's `BUILD_ID` with the plain
+  version (`scripts/stamp-build-id.mjs`); before, a published build would
+  have reported `'dev'`. `pnpm cold-install` packs the stamped payload and
+  fails unless every `BUILD_ID` is the version. (ED-15, 2.1 release candidate)
+- `@domecs/core`: act-log frames record a scale set by plugin `onTickStart`
+  (`flushScale`) apart from one set by a `signals.tickStart` subscriber
+  (`hookScale`), and the input such a subscriber sets (`hookInput`) apart
+  from `input`, the input the event flush saw. Replay applies each at the
+  point it was set. Before, both were applied at one point, so direct `on`
+  handlers that read `time.scale` or `world.input` during the flush saw
+  different values in replay and the replay diverged. (O-80, 2.1 release
+  candidate)
+- `@domecs/scene`: `instantiateScene` into a world where another component
+  type holds the name `SceneMember` (or `Parent`, with parent keys) spawns
+  nothing and reports one problem. Before, it threw part-way through and
+  left a bare entity behind. (2.3 release candidate)
+- `@domecs/core`: `createBranch` checks for `once` systems after restoring
+  the snapshot and evaluates their `enabled` gates there. Before, it read only
+  each system's static flag on the empty setup world, so boot work gated on
+  snapshotted state (as AGENTS.md advises) was refused as `once_systems`.
+  A gate that throws counts as due. (O-81, 2.1 release candidate)
+- `@domecs/core`: an act-log frame entered paused records `resumeScale` when
+  the host changed the resume target between steps (`setScale(3); pause()`),
+  and replay restores it; `flushResume` and `hookResume` do the same for a
+  target a tick-start hook set while leaving the world paused. Before, a
+  `resume()` in a handler or system resumed to 1 in replay while the source
+  resumed to 3. `runBranch` from a mid-log snapshot
+  carries a `tickStart` subscriber's `hookInput`, not only the frame's
+  `input`. (O-80, O-81, 2.1 release candidate)
+- `@domecs/core`: act logs (Codex review of PR #27). Emits made from
+  `enabled` gates and reactive `Where` predicates during a step are part of
+  the reproduced step and are no longer recorded; replay had emitted them
+  twice. `encodeInput` keeps the input Sets' iteration order instead of
+  sorting, so a system iterating `input.keys` sees the same order after a
+  replay. `stop()` records a gap for a `world.rand` draw after the last step.
+  `createBranch` sets the requested scale before reading `once` gates.
+  SPEC §7.5 now says which signal subscribers stay in a replay setup and
+  where replay applies each stimulus. (O-80, O-81, 2.1 release candidate)
+- `@domecs/rules`: a `spawn` effect whose prefab (fetched again at apply
+  time) holds a component type whose name another type holds in the world,
+  or an `add` effect of such a type, faults the entity (`rule_eval_failed`)
+  and changes nothing. Before, it threw out of the tick, and a spawn left a
+  bare entity behind. (O-84, 2.3 release candidate)
+- `@domecs/core`: `restore()` refuses a snapshot whose pending-event payload
+  is not plain data (a `Date`, `NaN`, a `Map`) with a `TypeError` before any
+  state changes, under the rules `snapshot({ pendingEvents: true })` records
+  by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
+- `@domecs/rules`: a component or event resolver or a `prefabs` callback that
+  throws is a compile error (`compileRule`, `compileWorldExpression`,
+  `RulesHandle.update`) or, when a `spawn` effect is applied, a
+  `rule_eval_failed` fault that skips that effect. Before, the throw escaped:
+  it aborted `update()` after the rule's old registration was removed, or
+  ended the tick part-way through the queued effects.
+- `@domecs/rules`: an `add` effect on a component the entity already has
+  runs the component's `validate` on the written value first; a rejected
+  value is a `rule_eval_failed` fault and the component is unchanged.
+- `@domecs/core`: act logs. When a full step throws, the recorder drops that
+  step's frame and records a new `step_threw` gap. Before, the half-built
+  frame stayed in the log and the next step's emits were attached to it.
+  `runBranch` called again on the same branch with the same log keeps the
+  input the branch's systems left, instead of re-applying the log's, so
+  two `steps: 1` calls equal one `steps: 2` call; a call with another log
+  is a new start. `Recorder.stop()` and `peek()` throw when called during a
+  tick.
+  (O-80, O-81)
+- `@domecs/core`: snapshots record `rngOwners` (cursor key → stream key)
+  for live own-stream systems that do not hold their cursor key's stream,
+  and restore re-keys each live own-stream system from it. Before, the
+  survivor of two same-named systems whose first was removed drew from the
+  removed one's stream after a restore into a world with only the current
+  systems. `@domecs/persist`'s `firstDivergence` compares the field.
+  `restore()` validates `rngOwners`: each target is a key of `rngStreams`,
+  names one owner, and no two live own systems end up on one stream. Every
+  restore puts each live own system on the stream the snapshot names (its
+  cursor key's for a v2 or streamless one), so an earlier restore's owners
+  do not carry over. (O-77)
+- `@domecs/core`: `runBranch`'s first-sample probe check also compares
+  `world.input`, `time.scale` and the resume target, which the strict hash
+  leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
+  `resume` throws. (O-81)
 
 ### Added
 
@@ -242,115 +348,6 @@ each such change is listed under **Breaking**.
   windowed about 20–28%. Behavior is unchanged: `query().entities` still
   returns a fresh array on every read, and query hooks that run during a
   spawn, despawn, move or restore see current state.
-
-### Fixed
-
-- `@domecs/core`: `world.action()` and `bridge.act()` reject a command type
-  that `defineEvent()` did not create, such as a look-alike object (and, for
-  `world.action()`, an event's name string; `bridge.act('Name', …)` resolves
-  the name first). They return `accepted: false` with a reason and neither
-  emit nor tick. Before, a string ran a tick that no handler saw and
-  reported `accepted: true`, and `null` or `undefined` threw. (O-92)
-- `@domecs/core`: event types made by a second copy of `@domecs/core` (a
-  duplicate install or a bundled dependency) now route correctly. Before,
-  the bus read every such type under one `undefined` key, so they triggered
-  each other's handlers. (O-92)
-- Docs (Harbor findings §5): `doc/api.md` lists the `Rng` methods that ship
-  (`uniform`, `uniformInt`, `uniformRange`, `uniformRoll`) and `persist`'s
-  real `targetVersion` default; SPEC §5.1 describes the real `ViewDef` and
-  §5.5 no longer promises a virtualizer and a table-list view that do not
-  exist; SPEC §3 no longer says a fixed system sees an "integrated fixed
-  delta" (it now does, H-3); AGENTS.md rule 9 compares strict hashes, not
-  `JSON.stringify`; `doc/README.md` describes the per-app findings files that
-  feed the ledger. `iterEntitiesWith` and `query().entities` say what they
-  cost.
-- Docs: `act()` already runs one tick, so AGENTS.md, the skill and the
-  `createAgentBridge` example no longer follow every `act()` with `step()`,
-  which spent two ticks per turn. (O-92)
-- `@domecs/core`: an act log started while an event with a non-plain payload
-  is pending now records an `unserializable_payload` gap at `startTick`. That
-  event cannot enter `baseHash` or the log, so before, a replay could report
-  `ok` without it. (O-80, 2.1 release candidate)
-- Release: `pnpm publish:npm` stamps each package's `BUILD_ID` with the plain
-  version (`scripts/stamp-build-id.mjs`); before, a published build would
-  have reported `'dev'`. `pnpm cold-install` packs the stamped payload and
-  fails unless every `BUILD_ID` is the version. (ED-15, 2.1 release candidate)
-- `@domecs/core`: act-log frames record a scale set by plugin `onTickStart`
-  (`flushScale`) apart from one set by a `signals.tickStart` subscriber
-  (`hookScale`), and the input such a subscriber sets (`hookInput`) apart
-  from `input`, the input the event flush saw. Replay applies each at the
-  point it was set. Before, both were applied at one point, so direct `on`
-  handlers that read `time.scale` or `world.input` during the flush saw
-  different values in replay and the replay diverged. (O-80, 2.1 release
-  candidate)
-- `@domecs/scene`: `instantiateScene` into a world where another component
-  type holds the name `SceneMember` (or `Parent`, with parent keys) spawns
-  nothing and reports one problem. Before, it threw part-way through and
-  left a bare entity behind. (2.3 release candidate)
-- `@domecs/core`: `createBranch` checks for `once` systems after restoring
-  the snapshot and evaluates their `enabled` gates there. Before, it read only
-  each system's static flag on the empty setup world, so boot work gated on
-  snapshotted state (as AGENTS.md advises) was refused as `once_systems`.
-  A gate that throws counts as due. (O-81, 2.1 release candidate)
-- `@domecs/core`: an act-log frame entered paused records `resumeScale` when
-  the host changed the resume target between steps (`setScale(3); pause()`),
-  and replay restores it; `flushResume` and `hookResume` do the same for a
-  target a tick-start hook set while leaving the world paused. Before, a
-  `resume()` in a handler or system resumed to 1 in replay while the source
-  resumed to 3. `runBranch` from a mid-log snapshot
-  carries a `tickStart` subscriber's `hookInput`, not only the frame's
-  `input`. (O-80, O-81, 2.1 release candidate)
-- `@domecs/core`: act logs (Codex review of PR #27). Emits made from
-  `enabled` gates and reactive `Where` predicates during a step are part of
-  the reproduced step and are no longer recorded; replay had emitted them
-  twice. `encodeInput` keeps the input Sets' iteration order instead of
-  sorting, so a system iterating `input.keys` sees the same order after a
-  replay. `stop()` records a gap for a `world.rand` draw after the last step.
-  `createBranch` sets the requested scale before reading `once` gates.
-  SPEC §7.5 now says which signal subscribers stay in a replay setup and
-  where replay applies each stimulus. (O-80, O-81, 2.1 release candidate)
-- `@domecs/rules`: a `spawn` effect whose prefab (fetched again at apply
-  time) holds a component type whose name another type holds in the world,
-  or an `add` effect of such a type, faults the entity (`rule_eval_failed`)
-  and changes nothing. Before, it threw out of the tick, and a spawn left a
-  bare entity behind. (O-84, 2.3 release candidate)
-- `@domecs/core`: `restore()` refuses a snapshot whose pending-event payload
-  is not plain data (a `Date`, `NaN`, a `Map`) with a `TypeError` before any
-  state changes, under the rules `snapshot({ pendingEvents: true })` records
-  by. Before, a `Date` was restored as `{}` and `NaN` kept. (O-90)
-- `@domecs/rules`: a component or event resolver or a `prefabs` callback that
-  throws is a compile error (`compileRule`, `compileWorldExpression`,
-  `RulesHandle.update`) or, when a `spawn` effect is applied, a
-  `rule_eval_failed` fault that skips that effect. Before, the throw escaped:
-  it aborted `update()` after the rule's old registration was removed, or
-  ended the tick part-way through the queued effects.
-- `@domecs/rules`: an `add` effect on a component the entity already has
-  runs the component's `validate` on the written value first; a rejected
-  value is a `rule_eval_failed` fault and the component is unchanged.
-- `@domecs/core`: act logs. When a full step throws, the recorder drops that
-  step's frame and records a new `step_threw` gap. Before, the half-built
-  frame stayed in the log and the next step's emits were attached to it.
-  `runBranch` called again on the same branch with the same log keeps the
-  input the branch's systems left, instead of re-applying the log's, so
-  two `steps: 1` calls equal one `steps: 2` call; a call with another log
-  is a new start. `Recorder.stop()` and `peek()` throw when called during a
-  tick.
-  (O-80, O-81)
-- `@domecs/core`: snapshots record `rngOwners` (cursor key → stream key)
-  for live own-stream systems that do not hold their cursor key's stream,
-  and restore re-keys each live own-stream system from it. Before, the
-  survivor of two same-named systems whose first was removed drew from the
-  removed one's stream after a restore into a world with only the current
-  systems. `@domecs/persist`'s `firstDivergence` compares the field.
-  `restore()` validates `rngOwners`: each target is a key of `rngStreams`,
-  names one owner, and no two live own systems end up on one stream. Every
-  restore puts each live own system on the stream the snapshot names (its
-  cursor key's for a v2 or streamless one), so an earlier restore's owners
-  do not carry over. (O-77)
-- `@domecs/core`: `runBranch`'s first-sample probe check also compares
-  `world.input`, `time.scale` and the resume target, which the strict hash
-  leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
-  `resume` throws. (O-81)
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 
