@@ -583,6 +583,24 @@ function resolveContainer(
   return { container: at ?? prec.el, parent: p }
 }
 
+/**
+ * H-8: after `id`'s element was updated, queue the elements nested in it that
+ * are no longer in their mount point (an update that rewrote its content made
+ * a new one); the child views, committed after this one, put them back.
+ */
+function requeueNested(state: ViewState, id: Entity, rec: MountedRecord): void {
+  for (const child of state.children) {
+    const kids = child.byParent.get(id)
+    if (kids === undefined || kids.size === 0) continue
+    const at = child.def.parent?.at
+    const point = (at !== undefined ? rec.el.querySelector<HTMLElement>(at) : null) ?? rec.el
+    for (const kid of kids) {
+      const krec = child.mounted.get(kid)
+      if (krec !== undefined && (krec.container !== point || krec.el.parentNode !== point)) child.orphans.add(kid)
+    }
+  }
+}
+
 /** H-8: put `rec.el` where it belongs now; true when it moved into a container. */
 function place(state: ViewState, id: Entity, rec: MountedRecord, view: EntityView, errors: unknown[]): boolean {
   const { container, parent } = resolveContainer(state, view, errors)
@@ -716,7 +734,9 @@ function commitView(state: ViewState, errors: unknown[]): void {
     guard(errors, () => update!(rec.el, view))
     state.counts.updates++
     state.touched = true
-    // H-8: the update may have moved it to another parent.
+    // H-8: the update may have replaced the elements its children hang in…
+    if (state.children.length > 0) requeueNested(state, id, rec)
+    // …and may have moved it to another parent.
     if (state.parentState !== null) place(state, id, rec, view, errors)
   }
   if (update && state.mounted.size > 0) {

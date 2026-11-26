@@ -205,6 +205,44 @@ describe('nested views (H-8)', () => {
     expect(boxEl.parentElement).toBe(handle.elementOf(ships, c)!.querySelector('.deck'))
   })
 
+  // PR #30 review (Codex): a parent update that rewrote its content left the
+  // children in the old mount point, out of the page, until they changed.
+  it('puts the children back when the parent’s update replaces their mount point', () => {
+    const w = createWorld({ headless: true })
+    const ships = defineView({
+      slot: 'stage',
+      query: [Ship],
+      changedOn: { mode: 'auto' },
+      create: () => document.createElement('div'),
+      update: (el, e) => {
+        el.innerHTML = `<b>${e.HvShip!.name}</b><div class="deck"></div>`
+      },
+    })
+    const boxes = defineView({
+      slot: 'stage',
+      query: [Box],
+      changedOn: { mode: 'auto' },
+      parent: { view: ships, of: (e) => e.HvBox!.holder, at: '.deck' },
+      create: () => document.createElement('i'),
+      update: () => {},
+    })
+    const handle = mount(w, [ships, boxes])
+    const a = w.spawn([entry(Ship, { name: 'Ada' })])
+    const box = w.spawn([entry(Box, { holder: a })])
+    w.stepOnce()
+    const deck = () => handle.elementOf(ships, a)!.querySelector('.deck')
+    expect(handle.elementOf(boxes, box)!.parentElement).toBe(deck())
+    w.getComponent(a, Ship)!.name = 'Ada II'
+    w.markChanged(a, Ship)
+    w.stepOnce()
+    expect(handle.elementOf(boxes, box)!.isConnected).toBe(true)
+    expect(handle.elementOf(boxes, box)!.parentElement).toBe(deck())
+    // Nothing moves when the update leaves the mount point alone.
+    const kept = handle.elementOf(boxes, box)!
+    w.stepOnce()
+    expect(kept.parentElement).toBe(deck())
+  })
+
   it('refuses a parent view that is not in the mount, or a cycle', () => {
     const w = createWorld({ headless: true })
     const outside = defineView({ slot: 'stage', query: [Ship], create: () => document.createElement('b') })
