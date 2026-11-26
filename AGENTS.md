@@ -131,10 +131,11 @@ over cloning state for each UI region.
 
 ### Post-restore rebuild
 After `restore`/`load`, rebuild transient projection entities (viewport, table
-rows) from persistent state — in a call right after `restore`/`load` returns,
-or in a boot `once` system when restoring into a fresh world. Not in a plugin
-`onRestore`: it runs before the snapshot is applied, so anything it spawns is
-wiped.
+rows) and caches from persistent state in a `world.signals.restored`
+subscriber: it runs once after every restore, whoever called it (`load`,
+`bridge.reset()`, a branch), outside a tick, before the repaint. Not in a
+plugin `onRestore`: it runs before the snapshot is applied, so anything it
+spawns is wiped. `createSpatialHash` indexes refresh themselves on it.
 
 Forks and checkpoints taken between ticks pass
 `snapshot({ pendingEvents: true })` so events in flight are delivered after

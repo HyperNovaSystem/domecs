@@ -453,6 +453,10 @@ interface World {
     tickEnd:         Signal<TimeState>
     // A system returned a fault with no entity (doc/error-handling.md).
     faultRaised:     Signal<SystemicFault>
+    // After every successful restore() (load, bridge.reset, branches), outside a
+    // tick, before the repaint: rebuild derived state here (H-15). Payload: the
+    // envelope as applied, after onRestore hooks.
+    restored:        Signal<Readonly<WorldSnapshot>>
   }
 }
 

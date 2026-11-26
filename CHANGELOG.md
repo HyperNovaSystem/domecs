@@ -72,6 +72,13 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/core`: `world.signals.restored` (H-15), emitted after every
+  successful `restore()` — `load()`, `AgentBridge.reset()`, a branch, a
+  history scrub — once the snapshot is applied, outside any tick and before
+  an idle driver's repaint, with the envelope as applied. Plugin
+  `onRestore` runs before the snapshot is applied, so there was no single
+  place to rebuild derived state after every restore. `@domecs/scene`'s
+  `createSpatialHash` refreshes itself on it (and stops on `dispose()`).
 - `@domecs/core`: `runBranch` options `finalHash` and `checkProbes` (H-18).
   `finalHash: false` takes no hash at the end of the call (`BranchRun.finalHash`
   is then `null`). Probes are proven read-only once per branch by default

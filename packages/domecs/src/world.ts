@@ -184,6 +184,19 @@ export interface WorldSignals {
    * to attach to. See doc/BETTER_ERRORS.md.
    */
   faultRaised: Signal<SystemicFault>
+  /**
+   * After every successful `restore()` — `load()`, `AgentBridge.reset()`, a
+   * branch, a history scrub — once the snapshot is applied and its pending
+   * events re-queued, before an idle driver's repaint, and outside any tick
+   * (H-15). The payload is the envelope as applied (after the plugins'
+   * `onRestore` hooks). The one place to rebuild derived state, such as a
+   * cache or a spatial index, that the snapshot does not carry (plugin
+   * `onRestore` runs before the snapshot is applied). Not emitted when the
+   * restore is refused. A subscriber's world writes are out-of-tick
+   * mutations, as from any host code; a throw propagates out of `restore()`,
+   * which has completed.
+   */
+  restored: Signal<Readonly<WorldSnapshot>>
 }
 
 export interface World {
@@ -639,6 +652,7 @@ export function createWorld(options: WorldOptions = {}): World {
   const sigTickStart: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigTickEnd: EmittableSignal<Readonly<TimeState>> = createSignal()
   const sigFaultRaised: EmittableSignal<SystemicFault> = createSignal()
+  const sigRestored: EmittableSignal<Readonly<WorldSnapshot>> = createSignal()
 
   // §7.1 (G4; O-80): the act-log tap (act-tap.ts). Listeners hear external
   // emits, frame boundaries, out-of-tick mutations and restores.
@@ -690,6 +704,7 @@ export function createWorld(options: WorldOptions = {}): World {
     tickStart: sigTickStart,
     tickEnd: sigTickEnd,
     faultRaised: sigFaultRaised,
+    restored: sigRestored,
   }
 
   let scheduler!: Scheduler
@@ -2622,6 +2637,8 @@ export function createWorld(options: WorldOptions = {}): World {
       // onRestore hook emitted stays queued after it.
       if (restored !== undefined) bus.prependPending(restored)
       if (tapListeners.size > 0) for (const l of tapListeners) l.restoreEnded(true)
+      // H-15: derived state is rebuilt here, before anything paints it.
+      if (sigRestored.size > 0) sigRestored.emit(s)
       // O-48: an idle startLoop driver repaints the restored state with a
       // heartbeat frame — no tick, so the world stays at the checkpoint.
       driver.repaint()

@@ -394,6 +394,7 @@ interface Signal<T> {
 
 - `entitySpawned` / `entityDespawned` / `componentAdded` / `componentRemoved` fire on the call site of the structural change (inside `spawn`, `despawn`, `addComponent`, `removeComponent`).
 - `tickStart` fires inside step 1; `tickEnd` fires inside step 8 after tick-end bookkeeping.
+- `restored` fires at the end of every successful `restore()` (`load()`, `AgentBridge.reset()`, a branch, a history scrub), outside any tick: after the snapshot is applied and its pending events re-queued, before an idle driver's repaint frame (H-15). Its payload is the envelope as applied — after the plugins' `onRestore` hooks; restore copied every value out of it, so it holds no component references. It is the one hook from which to rebuild derived state the snapshot does not carry (a cache, a spatial index: `createSpatialHash` refreshes itself on it), since plugin `onRestore` runs before the snapshot is applied. A refused restore does not emit it.
 
 A subscriber that throws propagates to the call site that emitted the signal; the world does not catch.
 

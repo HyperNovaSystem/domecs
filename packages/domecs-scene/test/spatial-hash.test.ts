@@ -192,3 +192,21 @@ describe('createSpatialHash (spec §5.1)', () => {
     expect(() => createSpatialHash(world, { component: Pos, cellSize: 0 })).toThrow(RangeError)
   })
 })
+
+// H-15 (Harbor findings): the index is never snapshotted, so after a restore
+// it answered from the abandoned timeline's positions until refresh() ran.
+describe('createSpatialHash after a restore (H-15)', () => {
+  it('rebuilds itself from the restored positions, and stops listening once disposed', () => {
+    const w = createWorld({ headless: true })
+    const a = w.spawn([entry(Pos, { x: 0, y: 0 })])
+    const index = createSpatialHash(w, { component: Pos, cellSize: 10 })
+    const snap = w.snapshot()
+    w.getComponent(a, Pos)!.x = 100
+    index.refresh()
+    expect(index.within(0, 0, 1)).toEqual([])
+    w.restore(snap)
+    expect(index.within(0, 0, 1)).toEqual([a])
+    index.dispose()
+    expect(() => w.restore(snap)).not.toThrow()
+  })
+})
