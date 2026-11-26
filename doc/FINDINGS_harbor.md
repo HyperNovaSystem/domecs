@@ -14,8 +14,17 @@ Every defect below was reproduced with a small test before it was written
 down; the reproductions are quoted. Timings are from a 2-vCPU arm64 Linux
 host, Node 26 (tests) and headless Chromium (browser).
 
+**Status (2026-11-26, branch `fix/harbor-findings`):** every defect and gap
+below is fixed, and so are P-1 to P-4 and the documentation drift. Several
+fixes change behaviour, so the next release is a major; `CHANGELOG.md`
+lists them under *Breaking*. [§0](#0-resolution) says what each fix is,
+where it landed, and what was left out. Harbor's 144 tests pass on the
+fixed engine, and a deterministic 18,560-step career run with the deputy
+hashes the same on the engine before and after.
+
 Contents:
 
+0. [Resolution](#0-resolution) — what was done about each finding
 1. [Defects](#1-defects) — seven behaviours that are wrong today
 2. [Gaps](#2-gaps) — eleven things the app had to build or work around
 3. [Proposals](#3-proposals) — larger changes, given that nothing depends on the engine yet
@@ -49,6 +58,45 @@ At a glance:
 Harbor works around all of them; none blocks the app. The three that shaped
 its design most are H-3 (its own step clock), H-16 (a 16 Hz step) and H-17
 (no events inside the simulation).
+
+---
+
+## 0. Resolution
+
+Each finding was reproduced as a failing test first; the commits are on
+`fix/harbor-findings`, off this file's branch.
+
+| | Commit | What changed |
+|---|---|---|
+| H-16 | `d38bf30` | Fixed steps are counted off the time owed (a remainder below one step), not `floor(total / step)`: `step(fixedStep)` runs exactly one step and `step(n × fixedStep)` exactly n, at any step size, however long the world runs. Snapshots are v4 and carry `fixedTick`, `fixedAccumulator` and `fixedStep`; v3 ones restore as before. |
+| H-3 | `d38bf30` | A fixed system's `ctx.time` is its step's clock: `delta = scaledDelta` = its step (× its divisor), `elapsed = fixedTick × fixedStep`, plus `fixedTick`. `world.time` gains `fixedTick` and `alpha`. Fixed rules take `dt` and `time` from it. |
+| H-14 | `d38bf30` | `phase` on `rateHz` systems (and rules); SPEC §3 says a sub-rate system first runs after one period. Default 0 is unchanged; there is no automatic stagger, which would make run order depend on registration. |
+| H-4 | `71903a3` | Snapshots drop marks on transient components, and carry a mark only while a system that watches that kind and component has not seen it. |
+| H-18 | `ba59d76` | `runBranch` `finalHash: false` takes no hash (`finalHash` is then `null`); `checkProbes` defaults to `'once'` — each probe proven read-only the first time the world samples it (`true` keeps the 2.x check every call). |
+| H-15 | `e9c90a1` | `world.signals.restored` after every successful restore, outside a tick, before the repaint; `createSpatialHash` refreshes on it. |
+| H-6 | `e3bcf7d` | `FieldSchema.required`, `integer`, `kind: 'entity'` with `with: [...]`; non-finite numbers refused, `min`/`max` enforced, all before any tick; `describe()` shows them. `validateEventPayload(type, payload, { world, partial })`, `eventSchema(type)`. `step` stays a hint (`integer` says "integer"). |
+| H-17 | `da6f6d0` | `{ schedule: 'event', fixed: true }`: an event system in the fixed loop; each step delivers what was emitted since the previous one, so step k's emits are handled in step k + 1 at any frame rate. Undelivered ones travel as `pendingFixedEvents`. Plain fixed systems keep reading the frame's view. |
+| H-5, P-1 | `0759944` | `defineCommand(name, { schema, description, handle, fixed? })`, registered with `world.register`: `action()` / `bridge.act()` return the handler's `refuse(reason)` / `accept()` for that command. Throwing handlers refuse and fault; `describe()` marks commands; act logs record verdicts and replay stops with `verdict_mismatch`. Not done: an `action()` that applies without a tick. |
+| H-1 | `2482730` | A tap inside one frame publishes both edges. |
+| H-2 | `2482730` | `preventDefaultKeys` never prevents with Ctrl/Meta/Alt held or on an interactive control, also prevents repeats, and takes a list of codes or a function. |
+| H-7 | `7dcfd82` | `changedOn.resources`; `definePanel` + `paint` / `watchPresses` (Harbor's helper, ported); `signals.resourceChanged` in core. A view of a resource alone (`defineView({ slot, resource })`) was not added: a panel covers it. |
+| H-8 | `7dcfd82` | `ViewDef.parent: { view, of, at? }`, re-evaluated on update, children kept mounted out of the page while their parent has no element; `MountHandle.elementOf`. |
+| H-9 | `7dcfd82` | `data-entity` on mounted elements, `entityOf(target)`, `MountHandle.on(slot, type, fn)`. |
+| H-10 | `7dcfd82` | The redraw gate is `And(viewQuery, OnChanged(T))`; `ViewDef.order(entity)`. |
+| H-11 | `cb89ba9` | Codecs (`SaveOptions.codec`, found by name on load), canonical JSON by default, `prepareSave` / `encodeSave` / `decodeSave`; `save()` returns `ok({ codec, length })` (O-29). |
+| H-12 | `cb89ba9` | A header line before the body; `peek(storage, slot)`; `SaveOptions.appVersion`; `LoadOptions.accept(header)` returns `true`, `false` or a reason. Not done: a `'migrate'` answer — app migrations stay an `onRestore` plugin's job. |
+| H-13 | `1e77c20` | `RuleDef.rateHz` / `phase`, and `fixed` for event rules. Not done: emit `once` / `cooldown`. With the handler in the next fixed step (a fixed event rule or fixed command, priority −100) a rule no longer re-emits while waiting, and `rateHz` paces retries; a deduplication by pending events would depend on the consuming phase, and a cooldown would keep rule state outside the snapshot. |
+| P-2 | `cb89ba9` | `columnarCodec` in `@domecs/persist`, rather than a `SNAPSHOT_VERSION` 4 option: lossless, opt-in per save. |
+| P-3 | `1cc3548` | `defineComponent.of<T>()(name, …)`, `defineResource.of<T>()`; the docs lead with the inferred no-type-argument form. |
+| P-4 | `78bb837` | `world.setProfiling(true)` → `describe().systems[i].timing` and `describe().timing`; `createInspector({ profile: true })` and `timings()`; `MountHandle.stats()` per view and panel (O-5). |
+| §5 | `5280884`, with the fixes | Every drift item: `Rng` names, `targetVersion`, SPEC §5.1, §5.5, §3, AGENTS.md rule 9, `doc/README.md`; `iterEntitiesWith` and `query().entities` state their cost. |
+
+From §4, `maxSubsteps` (O-15) was not added: capping catch-up drops or
+defers time, which is a policy for the app, not a fix.
+
+The determinism golden was re-blessed (`632341e`) after checking that each
+fixture's state and change marks hash the same on the engine before and
+after; only the v4 clock fields differ.
 
 ---
 
