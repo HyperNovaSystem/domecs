@@ -52,6 +52,17 @@ each such change is listed under **Breaking**.
   about one step, so a frame of `n` steps (`step(n × fixedStep)`) runs `n`
   and worlds stepped the same time in different chunk sizes have run the
   same steps. F-3's test now runs 30,000 ticks at nine step sizes.
+- `@domecs/input`: a key pressed and released between two ticks is published
+  with both edges, in `keyDelta.pressed` and `keyDelta.released` (H-1). The
+  release used to delete the pending press, so a tap shorter than a frame
+  never fired an edge-triggered handler: every Playwright `keyboard.press`,
+  and any tap during a long frame or in a throttled tab.
+- `@domecs/input`: `preventDefaultKeys: true` no longer prevents a key while
+  Ctrl, Meta or Alt is held (Ctrl/Cmd+R, +F, +L, +P, +1…9 work again), nor
+  when its target is an interactive control, so a focused button or link is
+  activated by Space and Enter and a slider moved by the arrows; the game
+  still sees those keys (H-2). Key repeats are now prevented too, so holding
+  Space no longer scrolls the page after the repeat delay.
 - `@domecs/core`: `snapshot().changes` no longer carries marks on transient
   components (H-4), as it already did not for transient resources (O-36):
   the snapshot leaves their values out, so restore re-issued marks for
@@ -78,6 +89,10 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/input`: `preventDefaultKeys` also takes a list of
+  `KeyboardEvent.code`s or a function `(e) => boolean`, and the new
+  `interactiveSelector` option (default `INTERACTIVE_SELECTOR`, exported)
+  names the controls whose keys are left to the browser (H-2).
 - `@domecs/core`: commands with verdicts (H-5, P-1). `defineCommand(name,
   { schema, description, handle, fixed?, priority?, rng? })` makes an event
   type that carries its handler; `world.register(Cmd)` installs it once as

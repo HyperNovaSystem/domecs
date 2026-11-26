@@ -86,7 +86,8 @@ createInputPlugin({
   clearOnBlur?: boolean
   textInputSelector?: string
   pollGamepads?: boolean
-  preventDefaultKeys?: boolean
+  preventDefaultKeys?: boolean | readonly string[] | ((e: KeyboardEvent) => boolean)
+  interactiveSelector?: string
 })
 ```
 
@@ -96,9 +97,26 @@ Defaults:
 - `pointerTarget`: `document`
 - `wheelTarget`: `pointerTarget`
 - `clearOnBlur`: `true`
-- `textInputSelector`: `input,textarea,[contenteditable="true"]`
+- `textInputSelector`: `TEXT_INPUT_SELECTOR` (text-like `input`s, `textarea`,
+  `select`, `contenteditable`)
 - `pollGamepads`: `true` when `navigator.getGamepads` exists
 - `preventDefaultKeys`: `false`
+- `interactiveSelector`: `INTERACTIVE_SELECTOR` (buttons, links, form controls,
+  `contenteditable`, ARIA widget roles)
+
+`preventDefaultKeys: true` prevents the default action of the game keys —
+letters, digits, arrows, Space, Enter — so Space does not scroll the page. Pass
+a list of `KeyboardEvent.code`s to prevent only those, or a function to decide
+yourself. With `true` or a list, a key is never prevented while Ctrl, Meta or
+Alt is held, so browser shortcuts (Ctrl/Cmd+R, +F, +L, +1…9) keep working, nor
+when its target is an interactive control matching `interactiveSelector`, so a
+focused button is still pressed by Space or Enter and a slider moved by the
+arrows; the game still sees those keys.
+
+A key pressed and released between two ticks is published with both edges: it
+is in `keyDelta.pressed` and `keyDelta.released` of the next snapshot and not
+in `keys`, so a tap shorter than a frame (a long frame, a throttled tab, an
+automated driver's `keyboard.press`) still fires an edge-triggered handler.
 
 Key presses made while an element matching `textInputSelector` has focus pass
 through to it; releases are always processed, so a key pressed in the game and

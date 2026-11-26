@@ -2028,10 +2028,20 @@ interface InputPluginOptions {
   pointerTarget?: Document | HTMLElement  // default: document when present
   wheelTarget?: Document | HTMLElement    // default: pointerTarget
   clearOnBlur?: boolean                   // default true
-  textInputSelector?: string              // default 'input,textarea,[contenteditable="true"]'
+  textInputSelector?: string              // default TEXT_INPUT_SELECTOR: text-like inputs,
+                                          // textarea, select, contenteditable; their keys pass through
   pollGamepads?: boolean                  // default true when navigator.getGamepads exists
-  preventDefaultKeys?: boolean            // default false
+  // Which captured keydowns get preventDefault() (H-2): false (default) none;
+  // true the game keys (letters, digits, arrows, Space, Enter); a list of codes;
+  // or a function, which alone decides. For true and a list, never while Ctrl,
+  // Meta or Alt is held, nor on an interactive control (interactiveSelector), so
+  // browser shortcuts and Space/Enter on a focused button still work. Repeats too.
+  preventDefaultKeys?: boolean | readonly string[] | ((e: KeyboardEvent) => boolean)
+  interactiveSelector?: string            // default INTERACTIVE_SELECTOR (buttons, links, form
+                                          // controls, contenteditable, ARIA widget roles)
 }
+// A key pressed and released between two snapshots shows both edges: it is in
+// keyDelta.pressed and keyDelta.released, and not in keys (H-1).
 
 interface InputSnapshot {
   readonly keys:       ReadonlySet<string>         // W3C KeyboardEvent.code

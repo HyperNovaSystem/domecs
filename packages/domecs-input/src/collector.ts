@@ -23,8 +23,28 @@ export interface InputPluginOptions {
   readonly textInputSelector?: string
   /** Whether to read gamepads via navigator.getGamepads(). Default: true in browsers that expose it. */
   readonly pollGamepads?: boolean
-  /** If true, calls preventDefault() on handled keydown events. Default: false. */
-  readonly preventDefaultKeys?: boolean
+  /**
+   * Which captured keydowns get `preventDefault()` — to stop Space scrolling
+   * the page, say (H-2). Default `false`: none.
+   * - `true`: the game keys — letters, digits, arrows, Space, Enter;
+   * - a list of `KeyboardEvent.code`s: those;
+   * - a function: whatever it returns `true` for. It alone decides.
+   *
+   * For `true` and a list, a key is never prevented while Ctrl, Meta or Alt
+   * is held (so Ctrl/Cmd+R, +F, +L, +1…9 keep working), nor when its target
+   * is an interactive control ({@link InputPluginOptions.interactiveSelector}),
+   * so a focused button or link is still activated by Space and Enter and a
+   * slider moved by the arrows. The game sees those keys either way. Key
+   * repeats are prevented like the first press. Keys typed into a text input
+   * are never captured or prevented.
+   */
+  readonly preventDefaultKeys?: boolean | readonly string[] | ((e: KeyboardEvent) => boolean)
+  /**
+   * CSS selector for the controls whose keys `preventDefaultKeys` leaves to
+   * the browser: the event target or an ancestor matches it. Default
+   * {@link INTERACTIVE_SELECTOR}.
+   */
+  readonly interactiveSelector?: string
 }
 
 interface MutablePointer {
@@ -49,10 +69,21 @@ export const TEXT_INPUT_SELECTOR =
   ':not([type=submit]):not([type=reset]):not([type=color]):not([type=file]):not([type=image]),' +
   'textarea,select,[contenteditable]:not([contenteditable="false"])'
 
+/**
+ * H-2: the default {@link InputPluginOptions.interactiveSelector} — elements
+ * that act on keys themselves: buttons, links, summaries, form controls,
+ * editable content and the ARIA widget roles.
+ */
+export const INTERACTIVE_SELECTOR =
+  'button,a[href],area[href],summary,input,select,textarea,[contenteditable]:not([contenteditable="false"]),' +
+  '[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],' +
+  '[role="menuitem"],[role="option"],[role="slider"],[role="spinbutton"]'
+
 export const DEFAULT_INPUT_OPTIONS = Object.freeze({
   clearOnBlur: true,
   textInputSelector: TEXT_INPUT_SELECTOR,
   preventDefaultKeys: false,
+  interactiveSelector: INTERACTIVE_SELECTOR,
 } as const satisfies Partial<InputPluginOptions>)
 
 export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
@@ -72,6 +103,17 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
       const pollGamepads =
         options.pollGamepads ?? (typeof navigator !== 'undefined' && !!(navigator as Navigator).getGamepads)
       const preventDefaultKeys = options.preventDefaultKeys ?? DEFAULT_INPUT_OPTIONS.preventDefaultKeys
+      const interactiveSelector = options.interactiveSelector ?? DEFAULT_INPUT_OPTIONS.interactiveSelector
+      if (
+        typeof preventDefaultKeys !== 'boolean' &&
+        typeof preventDefaultKeys !== 'function' &&
+        !(Array.isArray(preventDefaultKeys) && preventDefaultKeys.every((c) => typeof c === 'string'))
+      ) {
+        throw new TypeError(
+          `@domecs/input: preventDefaultKeys must be a boolean, a list of KeyboardEvent.code strings or a function; got ${JSON.stringify(preventDefaultKeys)}`,
+        )
+      }
+      const preventCodes = Array.isArray(preventDefaultKeys) ? new Set<string>(preventDefaultKeys) : undefined
 
       const held = new Set<string>()
       const pressedNext = new Set<string>()
@@ -93,22 +135,17 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
 
       function onKeyDown(ev: Event): void {
         const e = ev as KeyboardEvent
-        if (e.repeat) {
-          syncMods(e)
-          return
-        }
-        if (!shouldCaptureKeys()) {
-          syncMods(e)
-          return
-        }
+        syncMods(e)
+        if (!shouldCaptureKeys()) return
         const code = e.code
+        // Repeats too, or holding Space scrolls the page after the repeat delay.
+        if (shouldPrevent(e, code)) e.preventDefault()
+        if (e.repeat) return
         if (!held.has(code)) {
           held.add(code)
           pressedNext.add(code)
           releasedNext.delete(code)
         }
-        syncMods(e)
-        if (preventDefaultKeys && isHandledKey(code)) e.preventDefault()
         wake()
       }
       function onKeyUp(ev: Event): void {
@@ -116,13 +153,29 @@ export function createInputPlugin(options: InputPluginOptions = {}): Plugin {
         // O-56: a release is always processed, even while a text input has
         // focus — a key pressed in the game and released in a textarea
         // must not stay held. Only presses pass through to text inputs.
+        // H-1: a press made since the last snapshot stays published: a tap
+        // shorter than a frame shows both edges, not only the release.
         const code = e.code
-        if (held.delete(code)) {
-          releasedNext.add(code)
-          pressedNext.delete(code)
-        }
+        if (held.delete(code)) releasedNext.add(code)
         syncMods(e)
         wake()
+      }
+      /** H-2: whether to preventDefault() a captured keydown. */
+      function shouldPrevent(e: KeyboardEvent, code: string): boolean {
+        if (typeof preventDefaultKeys === 'function') return preventDefaultKeys(e) === true
+        if (preventDefaultKeys === false) return false
+        if (e.ctrlKey || e.metaKey || e.altKey) return false
+        if (onInteractive(e)) return false
+        return preventCodes !== undefined ? preventCodes.has(code) : isHandledKey(code)
+      }
+      function onInteractive(e: KeyboardEvent): boolean {
+        const target = e.target as Element | null
+        if (!target || typeof target.closest !== 'function') return false
+        try {
+          return target.closest(interactiveSelector) !== null
+        } catch {
+          return false
+        }
       }
       function onBlur(): void {
         if (!clearOnBlur) return
