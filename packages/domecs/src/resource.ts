@@ -44,6 +44,18 @@ export function defineResource<T>(
   return shape as unknown as ResourceType<T, string>
 }
 
+/**
+ * P-3: `defineResource.of<T>()('Name', options)` — an explicit value type
+ * with the literal name stated once, as `defineComponent.of`.
+ */
+defineResource.of = function of<T>(): <const Name extends string>(
+  name: Name,
+  options?: ResourceOptions<T>,
+) => ResourceType<T, Name> {
+  return <const Name extends string>(name: Name, options?: ResourceOptions<T>): ResourceType<T, Name> =>
+    defineResource<T, Name>(name, options)
+}
+
 /** Whether `value` is a {@link ResourceType} made by `defineResource`. */
 export function isResourceType(value: unknown): value is ResourceType<unknown> {
   return (

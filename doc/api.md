@@ -92,23 +92,29 @@ interface ComponentType<T, Name extends string = string> {
 type ComponentValue<C> = C extends ComponentType<infer T, string> ? T : never
 ```
 
-Two usage patterns:
+Ways to write it, the first two recommended (P-3):
 
 ```ts
+// Inferred: no type arguments. T comes from `defaults`, the literal name from
+// the argument. View access is `view.Position` (typed).
+const Position = defineComponent('Position', { defaults: { x: 0, y: 0 } })
+
+// An explicit type, the name stated once: defineComponent.of<T>()(name, options).
+const Ship = defineComponent.of<ShipData>()('Ship', { defaults: { state: 'inbound', hold: [] } })
+
+// The dual-type-arg form: the same, with the name stated twice.
+const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
+
 // Untyped views — Position.name widens to `string`. View access is
 // `(view as Record<string, unknown>).Position`.
 const Position = defineComponent<{ x: number; y: number }>('Position')
-
-// Typed views — Position.name is the literal `'Position'`. View access is
-// `view.Position` (typed). Required for the tuple-form query overload to
-// produce typed EntityView fields.
-const Position = defineComponent<{ x: number; y: number }, 'Position'>('Position')
 ```
 
-The duplication of `'Position'` in the dual-type-arg form is a TypeScript
-limitation: partial type-argument inference does not fill in `Name` from
-the argument when `T` is supplied explicitly. The single-arg form remains
-fully supported for the common case.
+Typed tuple queries (`world.query([Ship] as const)`) need the literal name.
+Supplying `T` explicitly stops TypeScript inferring `Name` from the argument
+(partial type-argument inference), which is why the dual form repeats it and
+why `.of<T>()` curries: its second call infers `Name`. `defineResource.of<T>()`
+is the same for resources.
 
 ### `defineResource`
 

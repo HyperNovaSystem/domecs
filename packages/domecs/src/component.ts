@@ -69,6 +69,23 @@ export function defineComponent<T>(
 }
 
 /**
+ * P-3: `defineComponent.of<T>()('Name', options)` — a component with an
+ * explicit payload type `T` whose literal name is stated once, for typed
+ * tuple queries (`world.query([Ship] as const).entities[0].Ship`). The
+ * two-argument form `defineComponent<T, 'Ship'>('Ship')` states it twice
+ * because TypeScript cannot infer one type argument while another is given.
+ * With no type arguments at all, `defineComponent('Ship', { defaults })`
+ * infers both `T` (from `defaults`) and the literal name.
+ */
+defineComponent.of = function of<T>(): <const Name extends string>(
+  name: Name,
+  options?: ComponentOptions<T>,
+) => ComponentType<T, Name> {
+  return <const Name extends string>(name: Name, options?: ComponentOptions<T>): ComponentType<T, Name> =>
+    defineComponent<T, Name>(name, options)
+}
+
+/**
  * Copy `defaults` per entity: arrays and plain objects (null-prototype ones
  * included) are cloned recursively with their own enumerable string and
  * symbol keys, cycles preserved; anything else (class instances, Maps,

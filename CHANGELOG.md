@@ -132,6 +132,11 @@ each such change is listed under **Breaking**.
   `KeyboardEvent.code`s or a function `(e) => boolean`, and the new
   `interactiveSelector` option (default `INTERACTIVE_SELECTOR`, exported)
   names the controls whose keys are left to the browser (H-2).
+- `@domecs/core`: `defineComponent.of<T>()(name, options)` and
+  `defineResource.of<T>()(name, options)` (P-3): an explicit type with the
+  literal name stated once, which typed tuple queries need, instead of
+  `defineComponent<T, 'Name'>('Name')`. The docs now lead with the form that
+  needs no type arguments (`T` inferred from `defaults`).
 - `@domecs/core`: commands with verdicts (H-5, P-1). `defineCommand(name,
   { schema, description, handle, fixed?, priority?, rng? })` makes an event
   type that carries its handler; `world.register(Cmd)` installs it once as
