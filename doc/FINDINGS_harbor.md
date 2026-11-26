@@ -773,7 +773,7 @@ them gave trouble.
 ## 7. Adopting 3.0.0
 
 Harbor was moved onto 3.0.0 the same day (`../harbor_game`, branch
-`feat/harbor-authority`, `1025460` to `ef635cf`). What it uses now, in
+`feat/harbor-authority`, `1025460` to `0d4b3f7`). What it uses now, in
 place of what it had built:
 
 - **Commands** (P-1, H-5, H-6): its twenty commands are `defineCommand`s,
@@ -804,7 +804,7 @@ place of what it had built:
   outlook made of the port before the load.
 - **`defineComponent.of`** (P-3) for its twenty components.
 
-148 tests pass, and `npm run e2e` (33 checks in Chromium) passes on five
+148 tests pass, and `npm run e2e` (34 checks in Chromium) passes on five
 runs in a row. What it does not use, and why, is below.
 
 ### H-19 · `save()` drops events that have not been delivered yet
