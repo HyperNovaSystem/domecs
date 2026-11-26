@@ -239,6 +239,30 @@ describe('from a DOM event to an entity (H-9)', () => {
   })
 })
 
+describe('mount stats (P-4, O-5)', () => {
+  it('counts creates, updates and destroys per view, renders and paints per panel', () => {
+    const w = createWorld({ headless: true })
+    const tiles = defineView({ slot: 'stage', query: [Tile], create: () => document.createElement('i'), update: () => {} })
+    const handle = mount(w, [tiles], {
+      panels: [definePanel({ slot: 'hud', changedOn: { resources: [Cash] }, render: (world) => `<b>${world.getResource(Cash)! > 50 ? 'rich' : 'poor'}</b>` })],
+    })
+    const a = w.spawn([entry(Tile, { n: 0 })])
+    w.spawn([entry(Tile, { n: 1 })])
+    w.stepOnce()
+    w.markChanged(a, Tile)
+    w.stepOnce()
+    w.despawn(a)
+    w.setResource(Cash, 90) // still "rich": rendered, not painted
+    w.stepOnce()
+    const { views, panels } = handle.stats()
+    expect(views).toEqual([
+      expect.objectContaining({ view: tiles, slot: 'stage', mounted: 1, creates: 2, updates: 3, destroys: 1 }),
+    ])
+    expect(views[0]!.lastCommitMs).toBeGreaterThanOrEqual(0)
+    expect(panels).toEqual([expect.objectContaining({ slot: 'hud', renders: 2, paints: 1 })])
+  })
+})
+
 describe('ordered lists (H-10)', () => {
   it('keeps a view’s nodes in order(entity) order, as ranks change and entities come and go', () => {
     const w = createWorld({ headless: true })

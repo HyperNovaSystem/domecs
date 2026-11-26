@@ -137,6 +137,15 @@ each such change is listed under **Breaking**.
   literal name stated once, which typed tuple queries need, instead of
   `defineComponent<T, 'Name'>('Name')`. The docs now lead with the form that
   needs no type arguments (`T` inferred from `defaults`).
+- Per-system timings (P-4). `world.setProfiling(true)` times every system
+  run and full tick with the host clock; `describe().systems[i].timing` and
+  `describe().timing` report runs, total, last, mean and max milliseconds.
+  `@domecs/inspector`'s `createInspector({ profile: true })` turns it on while
+  installed and adds `timings()`, the systems dearest first. `@domecs/dom`'s
+  `MountHandle.stats()` counts each view's creates, updates and destroys and
+  each panel's renders and paints, with the last commit's duration (O-5).
+  Before, nothing recorded cost: Harbor timed its frames by hand and needed
+  a CPU profile to find the one view that was half the frame.
 - `@domecs/core`: commands with verdicts (H-5, P-1). `defineCommand(name,
   { schema, description, handle, fixed?, priority?, rng? })` makes an event
   type that carries its handler; `world.register(Cmd)` installs it once as

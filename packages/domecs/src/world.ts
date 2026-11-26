@@ -61,7 +61,7 @@ import {
   type SystemHandle,
   type SystemSchedule,
 } from './scheduler.js'
-import type { WorldManifest, PluginManifestEntry } from './manifest.js'
+import type { SystemTiming, WorldManifest, PluginManifestEntry } from './manifest.js'
 import { createSignal, type EmittableSignal, type Signal } from './signals.js'
 import { createTime, fixedAlpha, fixedStepDue, type TimeState } from './time.js'
 import { commandTag, isCommandType, type CommandContext, type CommandType, type CommandVerdict } from './commands.js'
@@ -144,6 +144,10 @@ function cloneFields(src: Record<string, FieldSchema>): Record<string, FieldSche
 
 /** A command handler's default priority: the commands band of SPEC §3 (P-1). */
 const COMMAND_PRIORITY = -100
+
+/** P-4: the host's clock for timings — diagnostics only, never sim state. */
+const hostNow: () => number =
+  typeof globalThis.performance?.now === 'function' ? () => globalThis.performance.now() : () => Date.now()
 
 // null when `value` carries defineEvent()'s identity symbol; otherwise a short
 // description of what action() was handed instead, for its rejection reason.
@@ -485,6 +489,15 @@ export interface World {
    */
   render(): void
   stepN(n: number, dt?: number): void
+  /**
+   * Time every system run and every full tick (P-4) with the host's clock
+   * (`performance.now()`), reported by `describe().systems[i].timing` and
+   * `describe().timing`. `true` starts afresh; `false` stops and drops the
+   * figures. Off by default: it costs two clock reads per system run.
+   * Diagnostics only — nothing a system sees, a snapshot records or a hash
+   * covers changes.
+   */
+  setProfiling(on: boolean): void
   turn<T>(type: EventType<T>, payload: T, dt?: number): void
   /**
    * Turn-based command with a structured result. Emits `type`, advances
@@ -720,6 +733,24 @@ export function createWorld(options: WorldOptions = {}): World {
     for (const l of tapListeners) l.emitted(type, payload, emitVia)
   })
 
+  // P-4: system and frame timings while profiling is on (diagnostics, never state).
+  let profiling = false
+  const systemTimings = new Map<CompiledSystem, { runs: number; totalMs: number; lastMs: number; maxMs: number }>()
+  const frameTiming = { ticks: 0, totalMs: 0, lastMs: 0, maxMs: 0 }
+  const timingOf = (s: CompiledSystem): { timing?: SystemTiming } => {
+    if (!profiling) return {}
+    const t = systemTimings.get(s)
+    const runs = t?.runs ?? 0
+    return {
+      timing: {
+        runs,
+        totalMs: t?.totalMs ?? 0,
+        lastMs: t?.lastMs ?? 0,
+        meanMs: runs > 0 ? t!.totalMs / runs : 0,
+        maxMs: t?.maxMs ?? 0,
+      },
+    }
+  }
   // H-17: registered fixed event systems; the bus collects for them while > 0.
   let fixedEventSystems = 0
   // P-1: the commands whose handlers this world has installed (world.register).
@@ -1532,12 +1563,24 @@ export function createWorld(options: WorldOptions = {}): World {
     s.runStart = changes.seq
     s.running = true
     reproducing++
+    const t0 = profiling ? hostNow() : 0
     try {
       runSystemBody(s, view, clockSeen)
     } finally {
       reproducing--
       s.running = false
       s.seenThrough = changes.seq
+      if (profiling) {
+        const ms = hostNow() - t0
+        const t = systemTimings.get(s)
+        if (t === undefined) systemTimings.set(s, { runs: 1, totalMs: ms, lastMs: ms, maxMs: ms })
+        else {
+          t.runs++
+          t.totalMs += ms
+          t.lastMs = ms
+          if (ms > t.maxMs) t.maxMs = ms
+        }
+      }
     }
   }
 
@@ -1675,6 +1718,7 @@ export function createWorld(options: WorldOptions = {}): World {
       return
     }
     const d = dt ?? 0
+    const frameStart = profiling ? hostNow() : 0
     // §7.1: the scale on entry is the one this step's dt is scaled by,
     // before any tickStart hook can change it.
     if (tapListeners.size > 0) {
@@ -1843,6 +1887,13 @@ export function createWorld(options: WorldOptions = {}): World {
     pendingCursors.clear()
     changes.pruneRemoved(removalHorizon())
     if (tapListeners.size > 0) for (const l of tapListeners) l.frameEnded()
+    if (profiling) {
+      const ms = hostNow() - frameStart
+      frameTiming.ticks++
+      frameTiming.totalMs += ms
+      frameTiming.lastMs = ms
+      if (ms > frameTiming.maxMs) frameTiming.maxMs = ms
+    }
   }
 
   /**
@@ -2362,6 +2413,7 @@ export function createWorld(options: WorldOptions = {}): World {
           rng: s.rng,
           components: s.components.slice(),
           ...(s.meta !== undefined ? { meta: cloneSerializable(s.meta) } : {}),
+          ...timingOf(s),
         })),
       )
 
@@ -2394,6 +2446,17 @@ export function createWorld(options: WorldOptions = {}): World {
         entityCount: alive.size,
         componentCounts,
         archetypes: archetypeList,
+        ...(profiling
+          ? {
+              timing: {
+                ticks: frameTiming.ticks,
+                totalMs: frameTiming.totalMs,
+                lastMs: frameTiming.lastMs,
+                meanMs: frameTiming.ticks > 0 ? frameTiming.totalMs / frameTiming.ticks : 0,
+                maxMs: frameTiming.maxMs,
+              },
+            }
+          : {}),
       }
     },
 
@@ -2596,6 +2659,13 @@ export function createWorld(options: WorldOptions = {}): World {
 
     stepN(n: number, dt?: number): void {
       for (let i = 0; i < n; i++) dt === undefined ? world.stepOnce() : world.step(dt)
+    },
+
+    setProfiling(on: boolean): void {
+      if (typeof on !== 'boolean') throw new TypeError(`domecs: setProfiling(on) takes a boolean; got ${String(on)}`)
+      profiling = on
+      systemTimings.clear()
+      frameTiming.ticks = frameTiming.totalMs = frameTiming.lastMs = frameTiming.maxMs = 0
     },
 
     turn<T>(type: EventType<T>, payload: T, dt?: number): void {

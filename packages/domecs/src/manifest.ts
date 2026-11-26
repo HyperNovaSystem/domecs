@@ -4,6 +4,27 @@ import type { SystemSchedule } from './scheduler.js'
 import type { ComponentDescriptor, ResourceDescriptor } from './types.js'
 
 /**
+ * What a system has cost while profiling was on (`world.setProfiling(true)`,
+ * P-4): wall-clock milliseconds per run. Diagnostics only — never state.
+ */
+export interface SystemTiming {
+  readonly runs: number
+  readonly totalMs: number
+  readonly lastMs: number
+  readonly meanMs: number
+  readonly maxMs: number
+}
+
+/** What full ticks have cost while profiling was on (P-4), heartbeats excluded. */
+export interface FrameTiming {
+  readonly ticks: number
+  readonly totalMs: number
+  readonly lastMs: number
+  readonly meanMs: number
+  readonly maxMs: number
+}
+
+/**
  * Serializable projection of an installed plugin for {@link WorldManifest}.
  * Deliberately NOT the internal `InstalledPlugin` (which carries live
  * `install`/`teardown` functions and arbitrary `options`) — a manifest exists
@@ -50,6 +71,8 @@ export interface WorldManifest {
     readonly components: string[]
     /** The system's `meta` annotation, cloned per call; absent when none was given. */
     readonly meta?: JsonValue
+    /** Its cost while profiling (P-4); absent while profiling is off. */
+    readonly timing?: SystemTiming
   }[]
   readonly plugins: PluginManifestEntry[]
   readonly capabilities: string[]
@@ -58,4 +81,6 @@ export interface WorldManifest {
   readonly entityCount: number
   readonly componentCounts: Record<string, number>
   readonly archetypes: { readonly components: string[]; readonly entityCount: number }[]
+  /** Full ticks' cost while profiling (P-4); absent while profiling is off. */
+  readonly timing?: FrameTiming
 }

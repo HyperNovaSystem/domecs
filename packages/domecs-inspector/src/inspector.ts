@@ -10,6 +10,8 @@ import type {
   Result,
   SystemicFault,
   SystemId,
+  SystemSchedule,
+  SystemTiming,
   World,
 } from '@domecs/core'
 import { OnChanged, Faulted, Has, ok } from '@domecs/core'
@@ -113,6 +115,19 @@ export interface InspectorOptions {
    * {@link bufferSize}. Only used when `recordStateChanges` is true.
    */
   timelineBufferSize?: number
+  /**
+   * Turn on `world.setProfiling(true)` while installed (P-4), so
+   * {@link InspectorBundle.timings} and `describe()` report what each system
+   * and each tick cost. Teardown turns it off. Default false.
+   */
+  profile?: boolean
+}
+
+/** One system's cost, from {@link InspectorBundle.timings} (P-4). */
+export interface SystemTimingRow {
+  readonly name: string
+  readonly schedule: SystemSchedule
+  readonly timing: SystemTiming
 }
 
 export interface InspectorBundle {
@@ -122,6 +137,12 @@ export interface InspectorBundle {
   readonly view: InspectorView
   /** Drop all recorded entries (both buckets and the timeline). */
   clear(): void
+  /**
+   * With `profile: true`: every system's cost since profiling started,
+   * dearest first (by total milliseconds) — where a frame's time goes.
+   * Empty before install or without `profile`.
+   */
+  timings(): SystemTimingRow[]
 }
 
 const DEFAULT_BUFFER = 1024
@@ -199,10 +220,19 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
     pushEntry(entry)
   }
 
+  let profiled: World | null = null
   const plugin: Plugin<void> = {
     name: '@domecs/inspector',
     install(world: World): Result<PluginHandle, DomecsError> {
       const unsubs: Array<() => void> = []
+      if (opts.profile === true) {
+        world.setProfiling(true)
+        profiled = world
+        unsubs.push(() => {
+          world.setProfiling(false)
+          if (profiled === world) profiled = null
+        })
+      }
 
       unsubs.push(
         world.signals.faultRaised.subscribe((fr) => ingestSystemic(fr, Date.now())),
@@ -304,6 +334,14 @@ export function createInspector(opts: InspectorOptions = {}): InspectorBundle {
       entries.clear()
       timeline.clear()
       keys.clear()
+    },
+    timings() {
+      if (profiled === null) return []
+      const rows: SystemTimingRow[] = []
+      for (const s of profiled.describe().systems) {
+        if (s.timing !== undefined) rows.push({ name: s.name, schedule: s.schedule, timing: s.timing })
+      }
+      return rows.sort((a, b) => b.timing.totalMs - a.timing.totalMs || a.name.localeCompare(b.name))
     },
   }
 }

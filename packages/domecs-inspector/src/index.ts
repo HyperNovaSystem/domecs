@@ -15,6 +15,7 @@ export {
   type InspectorOptions,
   type InspectorSnapshot,
   type InspectorView,
+  type SystemTimingRow,
   type TimelineEvent,
   type TimelineEventKind,
 } from './inspector.js'

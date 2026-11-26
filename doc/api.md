@@ -469,7 +469,15 @@ interface World {
     // tick, before the repaint: rebuild derived state here (H-15). Payload: the
     // envelope as applied, after onRestore hooks.
     restored:        Signal<Readonly<WorldSnapshot>>
+    // A resource was set or marked, transient ones included (H-7): for a
+    // panel or HUD that is not a system. Not fired by restore().
+    resourceChanged: Signal<ResourceType<unknown>>
   }
+  // P-4: time every system run and full tick with performance.now(), reported
+  // as describe().systems[i].timing and describe().timing ({ runs | ticks,
+  // totalMs, lastMs, meanMs, maxMs }). true starts afresh, false drops them.
+  // Diagnostics only: nothing a system, snapshot or hash sees changes.
+  setProfiling(on: boolean): void
 }
 
 type Entity = number
@@ -2129,6 +2137,9 @@ interface MountHandle {
   // this mount's elements are ignored. Returns a function that stops it (H-9).
   on<K extends keyof HTMLElementEventMap>(slot: string, type: K,
     fn: (entity: Entity, event: HTMLElementEventMap[K]) => void): () => void
+  // P-4, O-5: per view { view, slot, mounted, creates, updates, destroys,
+  // lastCommitMs }; per panel { slot, renders, paints, lastCommitMs }.
+  stats(): { views: ViewStats[]; panels: PanelStats[] }
 }
 
 // H-9: the entity of the innermost stamped element at or above an event target.

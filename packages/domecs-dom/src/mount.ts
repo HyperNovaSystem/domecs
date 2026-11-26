@@ -32,8 +32,37 @@ export interface MountOptions {
   readonly stamp?: boolean
 }
 
+/** One view's work since mount (P-4, O-5), from {@link MountHandle.stats}. */
+export interface ViewStats {
+  readonly view: ViewDef<any>
+  readonly slot: string
+  /** Elements mounted now. */
+  readonly mounted: number
+  readonly creates: number
+  readonly updates: number
+  readonly destroys: number
+  /** Wall-clock milliseconds the view's last commit took. */
+  readonly lastCommitMs: number
+}
+
+/** One panel's work since mount (P-4). */
+export interface PanelStats {
+  readonly slot: string
+  readonly renders: number
+  /** Renders whose markup differed, so the DOM was written. */
+  readonly paints: number
+  readonly lastCommitMs: number
+}
+
 export interface MountHandle {
   teardown(): void
+  /**
+   * What each view and panel of this mount has done since it was mounted
+   * (P-4, O-5): creates, updates and destroys per view, renders and paints
+   * per panel, and how long the last commit took — to find the view that is
+   * half the frame.
+   */
+  stats(): { readonly views: ViewStats[]; readonly panels: PanelStats[] }
   /**
    * The element `view` (one of this mount's views) has mounted for `entity`,
    * or `undefined` — for a selection outline, a tooltip, a measurement
@@ -139,6 +168,8 @@ interface ViewState {
   orphans: Set<Entity>
   /** H-10: a node was created, updated or attached this commit, so the order may have changed. */
   touched: boolean
+  /** P-4: work counts and the last commit's duration. */
+  readonly counts: { creates: number; updates: number; destroys: number; lastCommitMs: number }
   stamp: boolean
   unsubAdd: () => void
   unsubRemove: () => void
@@ -152,6 +183,8 @@ interface PanelState {
   /** A listed resource changed, a restore happened, or nothing was painted yet. */
   dirty: boolean
   unsub: Array<() => void>
+  /** P-4. */
+  readonly counts: { renders: number; paints: number; lastCommitMs: number }
 }
 
 /**
@@ -250,6 +283,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       byParent: new Map(),
       orphans: new Set(),
       touched: false,
+      counts: { creates: 0, updates: 0, destroys: 0, lastCommitMs: 0 },
       stamp,
       unsubAdd: () => {},
       unsubRemove: () => {},
@@ -316,6 +350,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       gate: def.changedOn === undefined ? null : types.map((t) => world.query(Or(OnAdded(t), OnChanged(t), OnRemoved(t)))),
       dirty: true,
       unsub: [],
+      counts: { renders: 0, paints: 0, lastCommitMs: 0 },
     }
     const watched = new Set<ResourceType<any>>(def.changedOn?.resources ?? [])
     if (watched.size > 0) {
@@ -397,6 +432,26 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       const set = mountedSlots.get(world)
       if (set) for (const k of Object.keys(opts.slots)) set.delete(k)
       if (errors.length > 0) throw errors[0]
+    },
+
+    stats() {
+      return {
+        views: states.map((s) => ({
+          view: s.def,
+          slot: s.def.slot,
+          mounted: s.mounted.size,
+          creates: s.counts.creates,
+          updates: s.counts.updates,
+          destroys: s.counts.destroys,
+          lastCommitMs: s.counts.lastCommitMs,
+        })),
+        panels: panels.map((p) => ({
+          slot: p.def.slot,
+          renders: p.counts.renders,
+          paints: p.counts.paints,
+          lastCommitMs: p.counts.lastCommitMs,
+        })),
+      }
     },
 
     elementOf(view, entity) {
@@ -504,6 +559,7 @@ function unmount(state: ViewState, id: Entity, rec: MountedRecord, errors: unkno
   }
   if (state.def.destroy) guard(errors, () => state.def.destroy!(rec.el, rec.view))
   rec.el.remove()
+  state.counts.destroys++
   if (rec.parent !== null) state.byParent.get(rec.parent)?.delete(id)
   state.orphans.delete(id)
 }
@@ -563,6 +619,7 @@ function mount(state: ViewState, id: Entity, view: EntityView, errors: unknown[]
   state.mounted.set(id, rec)
   place(state, id, rec, view, errors)
   state.touched = true
+  state.counts.creates++
   return true
 }
 
@@ -574,6 +631,15 @@ function mount(state: ViewState, id: Entity, view: EntityView, errors: unknown[]
  * create leaves the entity unmounted until it is next marked changed.
  */
 function commit(state: ViewState, errors: unknown[]): void {
+  const t0 = clockNow()
+  try {
+    commitView(state, errors)
+  } finally {
+    state.counts.lastCommitMs = clockNow() - t0
+  }
+}
+
+function commitView(state: ViewState, errors: unknown[]): void {
   if (state.filtered) reconcileFiltered(state)
   const pendingDestroy = state.pendingDestroy
   const pendingCreate = state.pendingCreate
@@ -646,6 +712,7 @@ function commit(state: ViewState, errors: unknown[]): void {
   const repaint = (id: Entity, rec: MountedRecord, view: EntityView): void => {
     rec.view = view
     guard(errors, () => update!(rec.el, view))
+    state.counts.updates++
     state.touched = true
     // H-8: the update may have moved it to another parent.
     if (state.parentState !== null) place(state, id, rec, view, errors)
@@ -757,10 +824,18 @@ function commitPanel(world: World, panel: PanelState, errors: unknown[]): void {
   for (const q of panel.gate ?? []) if (q.entities.length > 0) due = true
   if (!due) return
   panel.dirty = false
+  const t0 = clockNow()
   guard(errors, () => {
-    paint(panel.slotEl, panel.def.render(world))
+    const html = panel.def.render(world)
+    panel.counts.renders++
+    if (paint(panel.slotEl, html)) panel.counts.paints++
   })
+  panel.counts.lastCommitMs = clockNow() - t0
 }
+
+/** P-4: the host's clock, for commit durations (diagnostics only). */
+const clockNow: () => number =
+  typeof globalThis.performance?.now === 'function' ? () => globalThis.performance.now() : () => Date.now()
 
 function disposePanel(panel: PanelState): void {
   for (const q of panel.gate ?? []) q.dispose()
