@@ -6,10 +6,16 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-Fixes for the findings from rebuilding Harbor Authority
-([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below). Some change
-behaviour that was wrong or underspecified, so the next release is a major;
-each such change is listed under **Breaking**.
+## [3.0.0] — release candidate (2026-11-26; not yet published)
+
+All seven `@domecs/*` packages move to 3.0.0 together. A major release: the
+fixes for the findings from rebuilding Harbor Authority
+([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below) change
+behaviour that was wrong or underspecified; each such change is listed
+under **Breaking**. `^2.0.0` ranges do not resolve 3.0.0, and the sibling
+packages' `@domecs/core` peer range packs as `^3.0.0`. Snapshots move to
+format v4. Release notes:
+[`doc/release-notes/v3.0.0.md`](doc/release-notes/v3.0.0.md).
 
 ### Breaking
 
