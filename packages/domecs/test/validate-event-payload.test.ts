@@ -77,3 +77,90 @@ describe('validateEventPayload (public export)', () => {
     expect(world.time.tick).toBe(0)
   })
 })
+
+// H-6 (Harbor findings): every declared field was optional and only its type
+// was checked, so a command missing its one needed field, a NaN, a 1.5 where
+// an entity id goes, or an id of nothing were all accepted, and every app
+// handler re-validated its payload.
+describe('payload schemas say what a command needs (H-6)', () => {
+  const { createWorld, defineComponent, defineEvent, validateEventPayload, entry } = core
+  const Crane = defineComponent<{ condition: number }>('VpCrane', { defaults: { condition: 1 } })
+  const Ship = defineComponent<{ name: string }>('VpShip', { defaults: { name: '' } })
+  const Service = defineEvent<{ crane: number; budget?: number; berth?: number }>('VpService', {
+    schema: {
+      fields: {
+        crane: { kind: 'entity', required: true, with: ['VpCrane'] },
+        budget: { kind: 'number', min: 0, max: 1000 },
+        berth: { kind: 'number', integer: true, min: 0 },
+      },
+    },
+  })
+
+  it('rejects a payload missing a required field', () => {
+    expect(validateEventPayload(Service, {})).toBe('missing required field "crane"')
+    expect(validateEventPayload(Service, { crane: undefined })).toBe('missing required field "crane"')
+    expect(validateEventPayload(Service, { crane: 0 })).toBeNull()
+  })
+
+  it('rejects non-finite numbers in every number field', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(validateEventPayload(Service, { crane: 0, budget: bad })).toMatch(/field "budget" must be a finite number/)
+    }
+    const Plain = defineEvent<{ x: number }>('VpPlain', { schema: { fields: { x: { kind: 'number' } } } })
+    expect(validateEventPayload(Plain, { x: Number.NaN })).toMatch(/must be a finite number/)
+  })
+
+  it('honours min, max and integer', () => {
+    expect(validateEventPayload(Service, { crane: 0, budget: -1 })).toBe('field "budget" must be >= 0, got -1')
+    expect(validateEventPayload(Service, { crane: 0, budget: 1001 })).toBe('field "budget" must be <= 1000, got 1001')
+    expect(validateEventPayload(Service, { crane: 0, budget: 1000 })).toBeNull()
+    expect(validateEventPayload(Service, { crane: 0, berth: 1.5 })).toBe('field "berth" must be an integer, got 1.5')
+    expect(validateEventPayload(Service, { crane: 0, berth: 2 })).toBeNull()
+  })
+
+  it('an entity field holds an entity id: an integer >= 0', () => {
+    for (const bad of [1.5, -1, '3', Number.NaN]) {
+      expect(validateEventPayload(Service, { crane: bad })).toMatch(/field "crane" must be an entity id/)
+    }
+  })
+
+  it('with a world, an entity field must name a live entity holding every `with` component', () => {
+    const w = createWorld({ headless: true })
+    const crane = w.spawn([entry(Crane, { condition: 1 })])
+    const ship = w.spawn([entry(Ship, { name: 'Ada' })])
+    const gone = w.spawn([entry(Crane, { condition: 1 })])
+    w.despawn(gone)
+    expect(validateEventPayload(Service, { crane }, { world: w })).toBeNull()
+    expect(validateEventPayload(Service, { crane: ship }, { world: w })).toBe(
+      `field "crane" must name an entity with VpCrane; entity ${ship} has no VpCrane`,
+    )
+    expect(validateEventPayload(Service, { crane: gone }, { world: w })).toBe(
+      `field "crane" must name a live entity; entity ${gone} is not alive`,
+    )
+  })
+
+  it('world.action() applies all of it before any tick, and describe() shows it', () => {
+    const w = createWorld({ headless: true })
+    w.register(Service)
+    const crane = w.spawn([entry(Crane, { condition: 1 })])
+    let handled = 0
+    w.system('service', { schedule: 'event', triggers: [Service] }, (ctx) => void (handled += ctx.events.of(Service).length))
+    for (const bad of [{}, { crane: 99 }, { crane, budget: Number.NaN }, { crane, berth: 0.5 }]) {
+      const r = w.action(Service, bad as never)
+      expect(r.accepted).toBe(false)
+      expect(r.reason).toMatch(/^invalid payload for "VpService": /)
+    }
+    expect(w.time.tick).toBe(0)
+    expect(w.action(Service, { crane }).accepted).toBe(true)
+    expect(handled).toBe(1)
+    const fields = w.describe().events.find((e) => e.name === 'VpService')!.fields
+    expect(fields.crane).toEqual({ kind: 'entity', required: true, with: ['VpCrane'] })
+    expect(fields.berth).toEqual({ kind: 'number', integer: true, min: 0 })
+  })
+
+  it('partial: true checks only the fields given (for tools that build a payload a field at a time)', () => {
+    expect(validateEventPayload(Service, { budget: 5 }, { partial: true })).toBeNull()
+    expect(validateEventPayload(Service, { budget: -5 }, { partial: true })).toMatch(/must be >= 0/)
+    expect(validateEventPayload(Service, { nope: 1 }, { partial: true })).toMatch(/unknown field "nope"/)
+  })
+})

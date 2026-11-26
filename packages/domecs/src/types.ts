@@ -36,21 +36,45 @@ export interface ComponentOptions<T> {
   schema?: ComponentSchema
 }
 
-/** Field kinds a reflection widget can render. */
-export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+/**
+ * Field kinds a reflection widget can render. `entity` is an entity id (an
+ * integer >= 0) that names another entity (H-6).
+ */
+export type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'entity' | 'unknown'
 
 /**
- * Per-field reflection metadata. `kind` is required; the rest are optional
- * widget hints (numeric range/step, enum `options`, display `label`,
- * `readonly`) and a free-text `description`. Field names are plain strings, not keyed to `T` — this is a
- * runtime descriptor consumed by tooling, not a type-level constraint.
+ * Per-field metadata. `kind` is required; the rest are optional. Field names
+ * are plain strings, not keyed to `T` — this is a runtime descriptor
+ * consumed by tooling, not a type-level constraint.
+ *
+ * On a component schema every key is reflection (widget hints). On an event
+ * schema, `world.action()` / `bridge.act()` also enforce `kind`, `options`,
+ * `required`, `min`, `max`, `integer` and an entity field's liveness and
+ * `with` before any tick (`validateEventPayload`, O-39, H-6), so a handler
+ * receives only payloads its schema describes; `step`, `label`,
+ * `readonly` and `description` stay hints.
  */
 export interface FieldSchema {
   readonly kind: FieldKind
+  /**
+   * The field must be present (not `undefined`). Default `false`: a declared
+   * field may be left out.
+   */
+  readonly required?: boolean
+  /** Inclusive lower bound of a `number` field. */
   readonly min?: number
+  /** Inclusive upper bound of a `number` field. */
   readonly max?: number
+  /** A `number` field must hold an integer. */
+  readonly integer?: boolean
+  /** Widget step for a `number` field; a hint, not checked. */
   readonly step?: number
   readonly options?: ReadonlyArray<string | number>
+  /**
+   * For an `entity` field: component names the entity must hold. Checked,
+   * with liveness, when a world is at hand (`world.action()` always is).
+   */
+  readonly with?: ReadonlyArray<string>
   readonly label?: string
   readonly readonly?: boolean
   /**

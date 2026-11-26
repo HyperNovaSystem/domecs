@@ -55,13 +55,19 @@ interface ComponentOptions<T> {
 
 // Reflection descriptors (#14). describeComponent resolves `fields` from the
 // explicit schema, else infers from defaults, else empty.
-type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'unknown'
+type FieldKind = 'number' | 'string' | 'boolean' | 'enum' | 'object' | 'entity' | 'unknown'
+// On a component schema every key is a reflection hint. On an event schema,
+// world.action / bridge.act also enforce kind, options, required, min, max,
+// integer and an entity field's liveness and `with` (H-6).
 interface FieldSchema {
-  readonly kind:      FieldKind
-  readonly min?:      number
-  readonly max?:      number
-  readonly step?:     number
+  readonly kind:      FieldKind                   // 'entity': an entity id, an integer >= 0
+  readonly required?: boolean                     // must be present (default: may be left out)
+  readonly min?:      number                      // inclusive bound of a number field
+  readonly max?:      number                      // inclusive bound of a number field
+  readonly integer?:  boolean                     // a number field holds an integer
+  readonly step?:     number                      // widget step; a hint, never checked
   readonly options?:  ReadonlyArray<string | number>  // enum widget
+  readonly with?:     ReadonlyArray<string>       // entity field: components it must hold
   readonly label?:    string
   readonly readonly?: boolean
   readonly description?: string  // free text for humans/agents; persist round-trips it
@@ -770,15 +776,31 @@ interface QueryHooks<Fields = Record<string, unknown>> {
 ```ts
 function defineEvent<T>(name: string, options?: EventDefOptions): EventType<T>
 
-// The O-39 payload check world.action / bridge.act apply, without emitting or
-// stepping: null when valid (always null for a schema-less event), else a
-// reason fragment. A rejected action reports
-// `invalid payload for "<name>": <fragment>`. Shallow: payload must be a
-// non-null, non-array object; own keys not declared are rejected (names only
-// inherited from Object.prototype, e.g. toString, count as undeclared);
-// declared keys (all optional) must match their kind / enum options;
-// 'unknown' accepts anything.
-function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null
+// The O-39 / H-6 payload check world.action / bridge.act apply, without
+// emitting or stepping: null when valid (always null for a schema-less event),
+// else a reason fragment. A rejected action reports
+// `invalid payload for "<name>": <fragment>`. The payload must be a non-null,
+// non-array object; own keys not declared are rejected (names only inherited
+// from Object.prototype, e.g. toString, count as undeclared); a `required`
+// field must be present; present fields must match their kind: a number is
+// finite (NaN and ±Infinity are refused), within min/max and an integer when
+// `integer`; an enum value is one of `options`; an entity is an integer >= 0
+// and, with `options.world`, alive and holding every `with` component;
+// 'unknown' accepts anything. `partial: true` skips `required` (a payload
+// built a field at a time).
+function validateEventPayload(
+  type: EventType<unknown>,
+  payload: unknown,
+  options?: { world?: PayloadWorld; partial?: boolean },
+): string | null
+// What the entity check needs; a World is one.
+interface PayloadWorld {
+  isAlive(entity: Entity): boolean
+  has(entity: Entity, type: ComponentType<unknown>): boolean
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+}
+// The schema defineEvent was given, without a world (rule compilers, tools).
+function eventSchema(type: EventType<unknown>): ComponentSchema | undefined
 
 interface EventDefOptions {
   // Payload field schema (component FieldSchema vocabulary). World.action /
@@ -3035,9 +3057,11 @@ schema, an undeclared field is a compile error); `other` is the entity the
 `despawn`, `add`, `remove`) are queued per entity only when `when` held and
 every action succeeded, evaluated then (they see the entity's staged
 writes), and applied at the end of the rule's run in queue order. An
-`emit` is validated with `validateEventPayload` when applied (invalid: a
+`emit` is validated with `validateEventPayload` when applied, for shape
+only — an entity field may name an entity the rule just despawned (invalid: a
 fault on the queuing entity, or a systemic one if that entity was despawned
-earlier in the apply) and delivered **next tick**; a despawn is
+earlier in the apply) and delivered **next tick**; an `emit` whose payload
+leaves out a field the event's schema marks `required` does not compile; a despawn is
 deferred, so later entities in the run still read the entity; spawn ids
 follow apply order. Forks taken with `snapshot({ pendingEvents: true })`
 between an emit and its delivery deliver it too.

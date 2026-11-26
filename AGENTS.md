@@ -336,9 +336,13 @@ components are `markChanged`.
   event identity, so no handler could ever see it. `bridge.act('Name', …)`
   resolves a name to its token first (below).
 - `act()` validates payloads **only when the event declares a `schema`**
-  (then typo'd fields / wrong types return `accepted: false` with a reason —
-  declare schemas on every agent-facing command; schema-less events stay
-  unvalidated).
+  (then typo'd fields, wrong types, missing `required` fields, NaN,
+  out-of-`min`/`max` numbers, non-integers where `integer` is set and
+  `entity` fields that name no live entity — or one without the `with`
+  components — return `accepted: false` with a reason, before any tick).
+  Declare schemas on every agent-facing command, with `required` on the
+  fields a handler needs and `kind: 'entity'` on ids; schema-less events
+  stay unvalidated.
 - `bridge.step(0)` is a heartbeat (no systems run), unlike `bridge.step()`.
 
 Name-based act: `bridge.act('Damage', payload)` resolves through

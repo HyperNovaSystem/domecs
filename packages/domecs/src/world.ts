@@ -2503,7 +2503,7 @@ export function createWorld(options: WorldOptions = {}): World {
       // instead of accepting a command whose handler will silently no-op or
       // NaN-poison state. Schema-less events remain unvalidated (declare a
       // schema on agent-facing commands to opt in). turn()/emit stay raw.
-      const invalid = validateEventPayload(type, payload)
+      const invalid = validateEventPayload(type, payload, { world })
       if (invalid !== null) {
         return {
           accepted: false,

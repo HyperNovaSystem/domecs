@@ -355,8 +355,8 @@ export function compileRule(
         } else if (FORBIDDEN_FIELDS.has(node.field)) {
           checkField(node.field, node.pos, path)
         } else if (eventType) {
-          // A declared schema fixes the payload's fields (absent = optional).
-          const problem = validateEventPayload(eventType, Object.fromEntries([[node.field, undefined]]))
+          // A declared schema fixes the payload's fields; only the name is checked here.
+          const problem = validateEventPayload(eventType, Object.fromEntries([[node.field, undefined]]), { partial: true })
           if (problem !== null) fail(path, node.pos, `Event "${def.on}": ${problem}`)
         }
       } else if (node.kind === 'other') {

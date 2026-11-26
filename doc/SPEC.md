@@ -556,7 +556,7 @@ Roguelike default.
 - `accepted` / `consumedTurn` / `reason` come from an optional `opts.resolve({ events, world })` verdict — game policy, which the engine does not interpret. The default verdict is `{ accepted: true, consumedTurn: true }`; when a resolver omits `consumedTurn` it defaults to `accepted` (an accepted command spends the turn, a rejected one does not). `consumedTurn` is a *reported* value for the caller's turn bookkeeping — `action` always advances exactly one tick regardless, because turn-consumption policy can only be decided by systems that run *inside* the tick.
 - `snapshot` is attached only when `opts.snapshot` is set (`true` for defaults, or a `SnapshotOptions` object to forward e.g. `pruneEmptyEntities`).
 - `opts.dt` is forwarded to `step`; omit it for a turn-based tick advance (as `turn()` does). A non-positive explicit `dt` is a heartbeat (§4.0) and will not process the action.
-- **Payload validation (O-39, normative).** When the event type was defined with a `schema`, `action()` validates the payload *before* emitting: a non-object payload, a field not declared in the schema, a wrong-typed declared field, or an out-of-`options` enum value returns `{ accepted: false, consumedTurn: false, reason, events: [] }` — no event is emitted and **no tick advances** (the malformed command never enters the world). Declared fields absent from the payload are treated as optional (`FieldSchema` carries no required-marker). Schema-less events are not validated, and `turn()` / `emit` are never validated — the check is an *action-boundary* contract.
+- **Payload validation (O-39, H-6, normative).** When the event type was defined with a `schema`, `action()` validates the payload *before* emitting: a non-object payload, a field not declared in the schema, a missing `required` field, a wrong-typed declared field, a non-finite number (`NaN`, `±Infinity`), a number outside `min`/`max` or not an integer where `integer` is set, an out-of-`options` enum value, or an `entity` field that is not an integer ≥ 0, names no live entity, or names one without a `with` component returns `{ accepted: false, consumedTurn: false, reason, events: [] }` — no event is emitted and **no tick advances** (the malformed command never enters the world). Declared fields that are not `required` may be left out. `step`, `label`, `readonly` and `description` are hints and are not checked. Schema-less events are not validated, and `turn()` / `emit` are never validated — the check is an *action-boundary* contract. `describe().events[i].fields` lists `required`, `integer`, `min`, `max` and `with`, so an agent can tell a required field from an optional one and a number that names an entity from one that does not.
 
 ---
 
@@ -1270,8 +1270,10 @@ a string; `pointer.*` are numbers; field reads are unknown).
   entity, seeing its staged writes; `random()` draws then), and applied at
   the end of the rule's run in queue order (payload, entity ascending,
   effect index). `emit` is validated with `validateEventPayload` when
-  applied (invalid: a `rule_eval_failed` fault on the queuing entity) and
-  delivered next tick. `spawn` calls `prefabs(name)` per spawn,
+  applied, for shape only (an `entity` field may name an entity the rule
+  despawned earlier in the apply; invalid: a `rule_eval_failed` fault on the
+  queuing entity) and delivered next tick; an `emit` whose `payload` leaves
+  out a field the event's schema marks `required` is a compile error. `spawn` calls `prefabs(name)` per spawn,
   plain-data clones each entry, writes `at` (the `spatial` position fields)
   then `set` (`Component.field`), and assigns ids in apply order. `despawn`
   is idempotent and later effects targeting a dead entity are skipped.

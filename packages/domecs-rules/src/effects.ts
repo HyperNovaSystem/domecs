@@ -1,4 +1,5 @@
 import {
+  eventSchema,
   validateEventPayload,
   type ComponentBag,
   type ComponentType,
@@ -215,7 +216,7 @@ export function compileEffects(
               continue
             }
             if (type) {
-              const problem = validateEventPayload(type, Object.fromEntries([[field, undefined]]))
+              const problem = validateEventPayload(type, Object.fromEntries([[field, undefined]]), { partial: true })
               if (problem !== null) {
                 ctx.fail(path, -1, `Event "${eventName}": ${problem}`)
                 ok = false
@@ -225,6 +226,14 @@ export function compileEffects(
             const s = slot(source, path, `referenced in emit "${eventName}" payload.${field}`)
             if (s) fields.push([field, s])
             else ok = false
+          }
+          // H-6: a payload that leaves out a required field could never be valid.
+          const schemaFields = type ? eventSchema(type)?.fields : undefined
+          for (const [field, spec] of Object.entries(schemaFields ?? {})) {
+            if (spec.required === true && !Object.hasOwn(payload, field)) {
+              ctx.fail(at('payload'), -1, `Event "${eventName}": missing required field "${field}"`)
+              ok = false
+            }
           }
         }
         if (ok && eventName !== undefined && type) plans.push({ kind, name: eventName, type, fields })
@@ -424,6 +433,8 @@ export function applyEffects(
   for (const effect of queue) {
     switch (effect.kind) {
       case 'emit': {
+        // Shape only, not liveness: "despawn self, then announce" names an
+        // entity that is gone by now, and an event may be about one.
         const problem = validateEventPayload(effect.type, effect.payload)
         if (problem !== null) fault(effect.source, `emit "${effect.name}": invalid payload: ${problem}`)
         else world.emit(effect.type, effect.payload)

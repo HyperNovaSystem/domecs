@@ -30,6 +30,12 @@ each such change is listed under **Breaking**.
   `fixedBacklog`), and `@domecs/persist` gains the `3 → 4` built-in
   migration. 2.x engines refuse v4 snapshots. Strict and default hashes of
   every snapshot change, because the envelope gained fields.
+- `@domecs/core`: `world.action()` / `bridge.act()` refuse non-finite
+  numbers (`NaN`, `±Infinity`) in a schema's `number` fields and enforce
+  `min` / `max` (H-6). Before, `min`, `max` and `step` were widget hints only
+  and `NaN` was accepted. `step` stays a hint.
+- `@domecs/core`: `FieldKind` gains `'entity'`, so a `switch` over it needs
+  a case (`@domecs/persist`'s schema helpers have one).
 - `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
   with the new `finalHash: false`), and by default `runBranch` proves each
   probe read-only once per branch instead of at every call.
@@ -72,6 +78,19 @@ each such change is listed under **Breaking**.
   registration.
 - `@domecs/core`: `createBranch` defaults its `fixedStep` to the snapshot's,
   which every v4 snapshot carries.
+- `@domecs/core`: payload schemas say what a command needs (H-6).
+  `FieldSchema.required` (the field must be present), `integer`, and
+  `kind: 'entity'` — an entity id, which `world.action()` checks is alive
+  and, with `with: ['Crane']`, holds those components. `describe()` lists
+  them, so an agent can tell a required field from an optional one and an
+  id from a number. `validateEventPayload(type, payload, { world, partial })`
+  applies the same checks (`world` for liveness, `partial` to skip
+  `required`), and `eventSchema(type)` reads an event's schema without a
+  world. Replay checks acts against the world as `action()` did live.
+  `@domecs/rules` refuses to compile an `emit` that leaves out a required
+  field; it checks emitted payloads for shape only, so "despawn self, then
+  announce" can still name the entity. `@domecs/persist` round-trips the new
+  keys.
 - `@domecs/core`: `world.signals.restored` (H-15), emitted after every
   successful `restore()` — `load()`, `AgentBridge.reset()`, a branch, a
   history scrub — once the snapshot is applied, outside any tick and before

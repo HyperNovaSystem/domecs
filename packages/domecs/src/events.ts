@@ -1,4 +1,4 @@
-import type { ComponentSchema, FieldSchema } from './types.js'
+import type { ComponentSchema, ComponentType, Entity, FieldSchema } from './types.js'
 
 /**
  * Per-event nominal-identity tag. Stored on every `EventType` returned by
@@ -63,30 +63,72 @@ export function internalEvent<T>(type: EventType<T>): InternalEventType<T> {
   return type as InternalEventType<T>
 }
 
+/**
+ * The payload schema `defineEvent` was given, or `undefined` — the same
+ * fields `world.describeEvent(type)` reports, without a world (for rule
+ * compilers and other tools that check payloads ahead of time).
+ */
+export function eventSchema(type: EventType<unknown>): ComponentSchema | undefined {
+  return internalEvent(type).__schema
+}
+
 const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key)
 
 /**
- * O-39: shallow payload validation against an event's declared schema, used
- * by `world.action()` / `bridge.act()` so the typed command boundary rejects
- * malformed commands instead of accepting them as no-ops. Only applies when
- * the event was defined with `{ schema }` — schema-less events stay
- * unvalidated (always `null`).
+ * What {@link validateEventPayload} needs of a world to check `entity`
+ * fields: a `World` is one.
+ */
+export interface PayloadWorld {
+  isAlive(entity: Entity): boolean
+  has(entity: Entity, type: ComponentType<unknown>): boolean
+  lookupComponent(name: string): ComponentType<unknown> | undefined
+}
+
+/** Options for {@link validateEventPayload}. */
+export interface PayloadCheckOptions {
+  /**
+   * Check `entity` fields against this world: the id must be alive and
+   * hold every `with` component. Without it only their shape is checked.
+   * `world.action()` always passes its world.
+   */
+  readonly world?: PayloadWorld
+  /**
+   * Check only the fields present: `required` is not enforced. For tools
+   * that build a payload a field at a time (`@domecs/rules` emit effects).
+   */
+  readonly partial?: boolean
+}
+
+/**
+ * O-39, H-6: payload validation against an event's declared schema, used by
+ * `world.action()` / `bridge.act()` so the typed command boundary rejects
+ * malformed commands before any tick instead of accepting them as no-ops.
+ * Only applies when the event was defined with `{ schema }` — schema-less
+ * events stay unvalidated (always `null`).
  *
  * Public so hosts (editors, agent harnesses) can pre-validate a payload with
  * exactly the check `action()` applies, without emitting or stepping. For a
  * rejected payload, `action()` reports
  * `invalid payload for "<event name>": <this fragment>`.
  *
- * Rules (FieldSchema carries no required-marker, so absence is optional):
+ * Rules:
  * - payload must be a non-null, non-array object
  * - own keys not declared in the schema are rejected (catches typo'd
  *   fields; names inherited from `Object.prototype` count as undeclared)
- * - declared keys, when present, must match their `kind` (`enum` must be a
- *   member of `options`); `unknown` accepts anything
+ * - a `required` field must be present (not `undefined`), unless
+ *   `options.partial`; other declared fields may be left out
+ * - present fields must match their `kind`: `number` a finite number, within
+ *   `min` / `max` (inclusive) and an integer when `integer`; `enum` a member
+ *   of `options`; `entity` an integer >= 0 and, given `options.world`, a
+ *   live entity holding every `with` component; `unknown` accepts anything
  *
  * @returns `null` when valid, else a human-readable reason fragment.
  */
-export function validateEventPayload(type: EventType<unknown>, payload: unknown): string | null {
+export function validateEventPayload(
+  type: EventType<unknown>,
+  payload: unknown,
+  options: PayloadCheckOptions = {},
+): string | null {
   const schema = internalEvent(type).__schema
   if (!schema) return null
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -102,28 +144,53 @@ export function validateEventPayload(type: EventType<unknown>, payload: unknown)
     }
   }
   for (const [key, spec] of Object.entries(fields)) {
-    // Absent ⇒ optional; never read a declared name through the prototype chain.
+    // Never read a declared name through the prototype chain.
     const v = hasOwn(payload, key) ? (payload as Record<string, unknown>)[key] : undefined
-    if (v === undefined) continue
-    switch (spec.kind) {
-      case 'number':
-      case 'string':
-      case 'boolean':
-        if (typeof v !== spec.kind) return `field "${key}" must be a ${spec.kind}, got ${typeof v}`
-        break
-      case 'enum':
-        if (!spec.options?.includes(v as string | number)) {
-          return `field "${key}" must be one of ${JSON.stringify(spec.options ?? [])}`
-        }
-        break
-      case 'object':
-        if (v === null || typeof v !== 'object') return `field "${key}" must be an object`
-        break
-      case 'unknown':
-        break
+    if (v === undefined) {
+      if (spec.required === true && options.partial !== true) return `missing required field "${key}"`
+      continue
     }
+    const problem = fieldProblem(key, spec, v, options.world)
+    if (problem !== null) return problem
   }
   return null
+}
+
+function fieldProblem(key: string, spec: FieldSchema, v: unknown, world: PayloadWorld | undefined): string | null {
+  switch (spec.kind) {
+    case 'number':
+      if (typeof v !== 'number') return `field "${key}" must be a number, got ${typeof v}`
+      if (!Number.isFinite(v)) return `field "${key}" must be a finite number, got ${String(v)}`
+      if (spec.integer === true && !Number.isInteger(v)) return `field "${key}" must be an integer, got ${v}`
+      if (spec.min !== undefined && v < spec.min) return `field "${key}" must be >= ${spec.min}, got ${v}`
+      if (spec.max !== undefined && v > spec.max) return `field "${key}" must be <= ${spec.max}, got ${v}`
+      return null
+    case 'string':
+    case 'boolean':
+      return typeof v === spec.kind ? null : `field "${key}" must be a ${spec.kind}, got ${typeof v}`
+    case 'enum':
+      return spec.options?.includes(v as string | number)
+        ? null
+        : `field "${key}" must be one of ${JSON.stringify(spec.options ?? [])}`
+    case 'object':
+      return v === null || typeof v !== 'object' ? `field "${key}" must be an object` : null
+    case 'entity': {
+      if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
+        return `field "${key}" must be an entity id (an integer >= 0), got ${typeof v === 'number' ? String(v) : typeof v}`
+      }
+      if (world === undefined) return null
+      if (!world.isAlive(v)) return `field "${key}" must name a live entity; entity ${v} is not alive`
+      for (const name of spec.with ?? []) {
+        const component = world.lookupComponent(name)
+        if (component === undefined || !world.has(v, component)) {
+          return `field "${key}" must name an entity with ${name}; entity ${v} has no ${name}`
+        }
+      }
+      return null
+    }
+    case 'unknown':
+      return null
+  }
 }
 
 /**

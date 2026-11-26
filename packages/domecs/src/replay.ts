@@ -772,7 +772,8 @@ function resolveActs(world: World, acts: readonly ActRecord[] | undefined, tick:
     if (type === undefined) return { kind: 'unknown_event', event: act.event, tick }
     const payload = act.payload === undefined ? undefined : cloneSerializable(act.payload)
     if (act.via === 'action') {
-      const reason = validateEventPayload(type, payload)
+      // As world.action() checked it live: against the world before the act's tick.
+      const reason = validateEventPayload(type, payload, { world })
       if (reason !== null) return { kind: 'rejected_payload', event: act.event, tick, reason }
     }
     out.push({ type, payload })
