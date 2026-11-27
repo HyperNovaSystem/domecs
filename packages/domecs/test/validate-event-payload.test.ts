@@ -139,6 +139,32 @@ describe('payload schemas say what a command needs (H-6)', () => {
     )
   })
 
+  // H-20 (Harbor 3.0 findings): a target that can vanish between the click
+  // and the command was refused in the engine's words, not the player's.
+  it('live: false leaves a vanished id to the handler, and still checks a live one', () => {
+    const Berth = core.defineCommand<{ ship: number }>('VpBerth', {
+      schema: { fields: { ship: { kind: 'entity', required: true, with: ['VpShip'], live: false } } },
+      handle(ctx, { ship }) {
+        return ctx.world.isAlive(ship) ? core.accept() : core.refuse('That ship is not waiting for a berth.')
+      },
+    })
+    const w = createWorld({ headless: true })
+    w.register(Berth)
+    const ship = w.spawn([entry(Ship, { name: 'Ada' })])
+    const crane = w.spawn([entry(Crane, { condition: 1 })])
+    const sailed = w.spawn([entry(Ship, { name: 'Bea' })])
+    w.despawn(sailed)
+    expect(validateEventPayload(Berth, { ship: sailed }, { world: w })).toBeNull()
+    expect(validateEventPayload(Berth, { ship: crane }, { world: w })).toMatch(/must name an entity with VpShip/)
+    expect(validateEventPayload(Berth, { ship: -1 }, { world: w })).toMatch(/must be an entity id/)
+    expect(w.action(Berth, { ship })).toMatchObject({ accepted: true })
+    expect(w.action(Berth, { ship: sailed })).toMatchObject({
+      accepted: false,
+      reason: 'That ship is not waiting for a berth.',
+    })
+    expect(w.describeEvent(Berth).fields.ship).toMatchObject({ kind: 'entity', with: ['VpShip'], live: false })
+  })
+
   it('world.action() applies all of it before any tick, and describe() shows it', () => {
     const w = createWorld({ headless: true })
     w.register(Service)

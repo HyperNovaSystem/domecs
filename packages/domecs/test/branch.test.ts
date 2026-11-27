@@ -796,4 +796,41 @@ describe('runBranch cost (H-18)', () => {
     expect(f.snapshots()).toBe(0)
     expect(() => runBranch(fresh, { steps: 1, checkProbes: 'sometimes' as never })).toThrow(TypeError)
   })
+
+  // H-23 (Harbor 3.0 findings): 'once' costs N + 1 strict hashes for N
+  // probes on a branch's first sample; 'sample' costs two, and says so.
+  it("checkProbes: 'sample' takes two hashes for the unchecked probes, then none", () => {
+    const probes = {
+      r: (x: World) => statsOf(x).r,
+      t: (x: World) => statsOf(x).t,
+      h: (x: World) => statsOf(x).hits,
+    }
+    const once = branch(liveAt30().snap)
+    const o = counting(once)
+    run(once, { steps: 1, probes, finalHash: false })
+    expect(o.snapshots()).toBe(4)
+    const w = branch(liveAt30().snap)
+    const c = counting(w)
+    const out = run(w, { steps: 1, probes, finalHash: false, checkProbes: 'sample' })
+    expect(c.snapshots()).toBe(2)
+    expect(out.samples).toEqual(run(branch(liveAt30().snap), { steps: 1, probes, finalHash: false }).samples)
+    run(w, { steps: 3, probes, finalHash: false, checkProbes: 'sample' })
+    expect(c.snapshots()).toBe(2)
+    // A sample-checked probe is not proven for 'once', which checks it alone.
+    run(w, { steps: 1, probes: { r: probes.r }, finalHash: false })
+    expect(c.snapshots()).toBe(4)
+  })
+
+  it("checkProbes: 'sample' catches a change but names every probe it checked", () => {
+    const w = branch(liveAt30().snap)
+    const bad = (x: World): number => {
+      const id = x.listEntities([Stats])[0]!
+      x.getComponent(id, Stats)!.hits += 1
+      x.markChanged(id, Stats)
+      return 0
+    }
+    expect(() =>
+      runBranch(w, { steps: 1, probes: { ok: (x) => statsOf(x).r, bad }, checkProbes: 'sample' }),
+    ).toThrow(/probes "ok", "bad" changed the world.*'sample' cannot say which/)
+  })
 })

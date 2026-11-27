@@ -120,7 +120,8 @@ export interface PayloadCheckOptions {
  * - present fields must match their `kind`: `number` a finite number, within
  *   `min` / `max` (inclusive) and an integer when `integer`; `enum` a member
  *   of `options`; `entity` an integer >= 0 and, given `options.world`, a
- *   live entity holding every `with` component; `unknown` accepts anything
+ *   live entity (any id when `live: false`, H-20) holding every `with`
+ *   component; `unknown` accepts anything
  *
  * @returns `null` when valid, else a human-readable reason fragment.
  */
@@ -179,7 +180,10 @@ function fieldProblem(key: string, spec: FieldSchema, v: unknown, world: Payload
         return `field "${key}" must be an entity id (an integer >= 0), got ${typeof v === 'number' ? String(v) : typeof v}`
       }
       if (world === undefined) return null
-      if (!world.isAlive(v)) return `field "${key}" must name a live entity; entity ${v} is not alive`
+      if (!world.isAlive(v)) {
+        // H-20: the handler says what a vanished target means.
+        return spec.live === false ? null : `field "${key}" must name a live entity; entity ${v} is not alive`
+      }
       for (const name of spec.with ?? []) {
         const component = world.lookupComponent(name)
         if (component === undefined || !world.has(v, component)) {

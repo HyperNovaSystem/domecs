@@ -145,7 +145,8 @@ Forks and checkpoints taken between ticks pass
 `snapshot({ pendingEvents: true })` so events in flight are delivered after
 the restore too. Restore resolves them by name: `world.register(...)` every
 event type that can be in flight in the restoring world's setup, or the
-restore throws.
+restore throws. `save()` from `@domecs/persist` keeps them by
+default (`SaveOptions.pendingEvents`), so the same goes for a loading world.
 
 ### Feed coalesce
 External telemetry: queue → coalesce by entity key → one batch event per frame.
@@ -332,6 +333,20 @@ live value.
 Do not put resume hotkeys in a `tick` system. Use `tickStart` or a DOM
 listener calling `world.resume()` / `setScale(1)`.
 
+### Acting on what a listener heard
+A `world.on` listener, a hook or a system runs inside a tick, and a tick
+cannot start another: there `world.action()` returns `accepted: false`
+without running, and `step`, `stepOnce` and `turn` throw. Queue the command
+with `world.afterTick(fn)`; it runs once the tick, and the `action()` or
+`step()` that ran it, have finished:
+
+```ts
+world.on(GameOver, () => world.afterTick(() => world.action(SetSpeed, { speed: 0 })))
+```
+
+The command delivered with the report still gets its verdict, and an act-log
+recorder records the queued command as an act.
+
 ---
 
 ## DOM views (short)
@@ -398,8 +413,12 @@ its repaints.
   components — return `accepted: false` with a reason, before any tick).
   Declare schemas on every agent-facing command, with `required` on the
   fields a handler needs and `kind: 'entity'` on ids; schema-less events
-  stay unvalidated.
+  stay unvalidated. For a target that can vanish before the command lands
+  (a ship that sails), `live: false` on the field leaves a dead id to the
+  handler, so it can refuse in the app's words.
 - `bridge.step(0)` is a heartbeat (no systems run), unlike `bridge.step()`.
+- Inside a tick (a system, hook or `world.on` listener) `action()` is
+  refused and `step()` throws; use `world.afterTick(fn)` (above).
 
 Name-based act: `bridge.act('Damage', payload)` resolves through
 `world.lookupEvent`. Call `world.register(...commandEvents)` at setup so each

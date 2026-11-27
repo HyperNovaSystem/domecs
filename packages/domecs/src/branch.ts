@@ -102,6 +102,12 @@ const runEnds = new WeakMap<World, { readonly tick: number; readonly input: unkn
 
 /** The probe functions each world has proved read-only (`checkProbes: 'once'`, H-18). */
 const provenProbes = new WeakMap<World, WeakSet<(world: World) => JsonValue>>()
+/**
+ * The probe functions each world has sampled under `checkProbes: 'sample'`
+ * with no change found (H-23): weaker than {@link provenProbes}, so a later
+ * `'once'` call still proves them one by one.
+ */
+const sampleCheckedProbes = new WeakMap<World, WeakSet<(world: World) => JsonValue>>()
 
 /** Options for {@link runBranch}. */
 export interface RunBranchOptions {
@@ -151,10 +157,16 @@ export interface RunBranchOptions {
    *   probes costs no hash after the first call (H-18);
    * - `true`: every probe at the first sample of every call (the 2.x
    *   behaviour);
+   * - `'sample'`: weaker and cheaper (H-23) — one strict hash before the
+   *   first sample's probes this world has not checked, one after them: two
+   *   hashes in place of one per probe. A change is caught, but the error
+   *   cannot say which of them made it, and a probe that changes a field a
+   *   later probe puts back is missed. Use it when the probes are plain
+   *   reads and a strict hash is expensive;
    * - `false`: never.
    * Any other value throws `TypeError`.
    */
-  readonly checkProbes?: boolean | 'once'
+  readonly checkProbes?: boolean | 'once' | 'sample'
 }
 
 /** What {@link runBranch} observed. */
@@ -217,8 +229,8 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   if (options.keyframeEvery !== undefined) checkCount('keyframeEvery', options.keyframeEvery, 1)
   if (options.hashEvery !== undefined) checkCount('hashEvery', options.hashEvery, 1)
   const checkProbes = options.checkProbes ?? 'once'
-  if (checkProbes !== true && checkProbes !== false && checkProbes !== 'once') {
-    throw new TypeError(`domecs: runBranch checkProbes must be true, false or 'once'; got ${String(options.checkProbes)}`)
+  if (checkProbes !== true && checkProbes !== false && checkProbes !== 'once' && checkProbes !== 'sample') {
+    throw new TypeError(`domecs: runBranch checkProbes must be true, false, 'once' or 'sample'; got ${String(options.checkProbes)}`)
   }
   if (options.finalHash !== undefined && typeof options.finalHash !== 'boolean') {
     throw new TypeError(`domecs: runBranch finalHash must be a boolean; got ${String(options.finalHash)}`)
@@ -227,6 +239,11 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   if (proven === undefined) {
     proven = new WeakSet()
     provenProbes.set(world, proven)
+  }
+  let sampleChecked = sampleCheckedProbes.get(world)
+  if (sampleChecked === undefined) {
+    sampleChecked = new WeakSet()
+    sampleCheckedProbes.set(world, sampleChecked)
   }
 
   // Frames keyed by tick; the first one wins when ticks repeat.
@@ -275,7 +292,37 @@ export function runBranch(world: World, options: RunBranchOptions): Result<Branc
   const controls = (): readonly unknown[] => [world.input, world.time.scale, tap?.resumeScale]
   const shouldCheck = (probe: (w: World) => JsonValue): boolean =>
     checkProbes === 'once' ? !proven.has(probe) : checkProbes && !checked
+  const sampleAsWhole = (): void => {
+    const values: Record<string, JsonValue> = {}
+    const unchecked: number[] = []
+    probes.forEach(([, probe], i) => {
+      if (!proven.has(probe) && !sampleChecked.has(probe)) unchecked.push(i)
+    })
+    const first = unchecked.length > 0 ? unchecked[0]! : -1
+    const last = unchecked.length > 0 ? unchecked[unchecked.length - 1]! : -1
+    let before = ''
+    let beforeControls: readonly unknown[] = []
+    probes.forEach(([name, probe], i) => {
+      if (i === first) {
+        before = actLogHash(world)
+        beforeControls = controls()
+      }
+      setOwn(values, name, plainDataCopy(probe(world), `probe "${name}"`))
+      if (i !== last) return
+      const after = actLogHash(world)
+      const afterControls = controls()
+      if (after !== before || afterControls.some((v, j) => !Object.is(v, beforeControls[j]))) {
+        const names = unchecked.map((k) => `"${probes[k]![0]}"`).join(', ')
+        throw new Error(
+          `domecs: runBranch probes ${names} changed the world (its strict hash, input, scale or resume target differs before and after them); probes must be read-only. checkProbes: 'sample' cannot say which: 'once' proves each one`,
+        )
+      }
+      for (const k of unchecked) sampleChecked.add(probes[k]![1])
+    })
+    samples.push({ tick: world.time.tick, values })
+  }
   const sample = (): void => {
+    if (checkProbes === 'sample') return sampleAsWhole()
     const values: Record<string, JsonValue> = {}
     // The state a checked probe must leave as it found it; null when the
     // probe before it was not checked (it may have moved it).

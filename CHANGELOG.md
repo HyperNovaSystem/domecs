@@ -6,20 +6,12 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
-### Changed
-
-- Infra: CI and the Pages workflow pin the Node 24 releases of their actions
-  (`actions/checkout` 7.0.1, `actions/setup-node` 7.1.0,
-  `actions/configure-pages` 6.0.0, `actions/upload-pages-artifact` 5.0.0,
-  `actions/deploy-pages` 5.0.1), since GitHub deprecated the Node 20 runtime.
-  CI also tests Node 26, the active LTS, and the Plantroom Pages build runs on
-  it (it ran on Node 20, past its end of life).
-
 ## [3.0.0] — 2026-11-27 (tagged; not yet on npm)
 
 All seven `@domecs/*` packages move to 3.0.0 together. A major release: the
 fixes for the findings from rebuilding Harbor Authority
-([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below) change
+([`doc/FINDINGS_harbor.md`](doc/FINDINGS_harbor.md), H-n below), and from
+moving it onto the first cut of 3.0.0 (H-19 to H-25, §7 there), change
 behaviour that was wrong or underspecified; each such change is listed
 under **Breaking**. `^2.0.0` ranges do not resolve 3.0.0, and the sibling
 packages' `@domecs/core` peer range packs as `^3.0.0`. Snapshots move to
@@ -62,6 +54,18 @@ format v4. Release notes:
 - `@domecs/core`: `BranchRun.finalHash` is `string | null` (H-18; `null`
   with the new `finalHash: false`), and by default `runBranch` proves each
   probe read-only once per branch instead of at every call.
+- `@domecs/core`: no tick runs inside a tick (H-25). Called from a system,
+  hook, signal subscriber or `world.on` listener, `world.action()` runs
+  nothing and returns `accepted: false` with a reason naming
+  `world.afterTick`; `step`, `stepOnce` and `turn` throw, as `runSystems`
+  and `render` already did. Before, the inner tick's flush replaced the
+  outer tick's events, so a command delivered alongside the listener's
+  event was never handled and was refused for a reason that was not true.
+- `@domecs/persist`: `save()` keeps events emitted and not yet delivered
+  (`SaveOptions.pendingEvents`, default `true`; H-19), so a fixed event in
+  flight between two steps survives a save and load. The loading world must
+  `register` each such event type; a pending payload that is not plain data
+  makes the save a `persist_io` error. `pendingEvents: false` leaves them out.
 
 ### Fixed
 
@@ -202,6 +206,10 @@ format v4. Release notes:
   `world.input`, `time.scale` and the resume target, which the strict hash
   leaves out, so a probe that calls `setInput`, `setScale`, `pause` or
   `resume` throws. (O-81)
+- `@domecs/dom`: `ViewDef.order` moves only the nodes out of place — the
+  longest run already in order stays — and uses `Element.moveBefore` where
+  the browser has it, so a control inside a moved row keeps its focus
+  (H-22). Before, every node behind one that belonged first was moved.
 
 ### Added
 
@@ -348,6 +356,22 @@ format v4. Release notes:
   Every strict hash snapshots the whole world — 221 ms per one-step call at
   22,000 entities, 729 ms with two probes — so extending a branch a few
   steps at a time was impractical.
+- `@domecs/core`: `world.afterTick(fn)` runs `fn` once the tick in progress,
+  and the call that ran it, have finished: how a listener acts on what it
+  heard (H-25).
+- `@domecs/core`: `live: false` on an `entity` schema field accepts an id
+  that is no longer alive, so the handler can refuse a vanished target in
+  the app's words (H-20).
+- `@domecs/core`: `runBranch({ checkProbes: 'sample' })`: two strict hashes
+  around a sample's unchecked probes in place of one per probe, for probes
+  that are plain reads; it cannot say which probe changed the world (H-23).
+- `@domecs/dom`: `ViewDef.parent.views`, with `of` returning `{ view,
+  entity, at? }`: one view's elements hang in different views' elements and
+  move between them without being re-created (H-21).
+- `@domecs/dom`: `PanelDef.everyFrames` and `MountHandle.invalidate(slot)`
+  (H-24).
+- `@domecs/dom`: `changedOn: { mode: 'always' }`, the name for redrawing
+  every commit; `'legacy'` stays as an alias.
 
 ### Performance
 
@@ -365,6 +389,15 @@ format v4. Release notes:
   windowed about 20–28%. Behavior is unchanged: `query().entities` still
   returns a fresh array on every read, and query hooks that run during a
   spawn, despawn, move or restore see current state.
+
+### Changed
+
+- Infra: CI and the Pages workflow pin the Node 24 releases of their actions
+  (`actions/checkout` 7.0.1, `actions/setup-node` 7.1.0,
+  `actions/configure-pages` 6.0.0, `actions/upload-pages-artifact` 5.0.0,
+  `actions/deploy-pages` 5.0.1), since GitHub deprecated the Node 20 runtime.
+  CI also tests Node 26, the active LTS, and the Plantroom Pages build runs on
+  it (it ran on Node 20, past its end of life).
 
 ## [2.3.0] — release candidate (2026-10-19; not yet published)
 
