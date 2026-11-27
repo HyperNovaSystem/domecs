@@ -71,6 +71,14 @@ export interface MountHandle {
    */
   elementOf(view: ViewDef<any>, entity: Entity): HTMLElement | undefined
   /**
+   * Render the panel in `slot` at the next commit, whatever its `changedOn`
+   * and `everyFrames` say (H-24): for a repaint the world did not cause — a
+   * tab change, a forecast finished off the world. A sleeping idle loop
+   * does not wake for it; `world.render()` (outside a tick) repaints now.
+   * Throws for a slot that holds none of this mount's panels.
+   */
+  invalidate(slot: string): void
+  /**
    * Listen for `type` on a slot and call `fn` with the entity whose mounted
    * element the event happened in — the innermost, for nested views — and
    * the event (H-9). Events outside this mount's elements are ignored.
@@ -99,12 +107,13 @@ export interface MountHandle {
  *   is a standing set; use `changedOn` for change-gated redraws (O-52).
  * - `invalid_changed_on`: a view with `update` has no redraw trigger —
  *   `{ mode: 'explicit', types: [] }` without resources, or `auto` over a
- *   query with no positive `Has`/`Where` leaf. Use `{ mode: 'legacy' }` to
+ *   query with no positive `Has`/`Where` leaf. Use `{ mode: 'always' }` to
  *   redraw every tick on purpose (O-55).
- * - `invalid_parent`: a view's `parent.view` is not one of this mount's
- *   views, or parents form a cycle (H-8).
+ * - `invalid_parent`: a view's `parent.view` or one of its `parent.views`
+ *   is not one of this mount's views, it names neither, or parents form a
+ *   cycle (H-8, H-21).
  * - `invalid_panel`: a panel shares its slot with a view or another panel
- *   (H-7).
+ *   (H-7), or its `everyFrames` is not an integer >= 1 (H-24).
  */
 export type MountError =
   | { readonly kind: 'slot_already_mounted'; readonly slot: string }
@@ -127,6 +136,10 @@ interface MountedRecord {
   container: HTMLElement | null
   /** The parent entity it is nested under (H-8); null in the slot. */
   parent: Entity | null
+  /** The view of that parent entity (H-21); null in the slot. */
+  parentView: ViewState | null
+  /** The mount point selector inside the parent's element (H-21). */
+  at: string | undefined
 }
 
 interface ViewState {
@@ -148,7 +161,7 @@ interface ViewState {
   failed: Set<Entity>
   /**
    * O-53: the queries that trigger a failed create's retry — the redraw
-   * triggers, or for a view without them (create-only, `legacy`) `OnChanged`
+   * triggers, or for a view without them (create-only, `always`) `OnChanged`
    * of its `Has` leaves. Created on the first failure.
    */
   retryQueries: QueryResult[] | null
@@ -158,12 +171,12 @@ interface ViewState {
    * `query.entities` at each commit.
    */
   filtered: boolean
-  /** H-8: the view this one nests in, resolved from `def.parent`. */
-  parentState: ViewState | null
-  /** H-8: the views nested in this one. */
+  /** H-8, H-21: the views this one may nest in, from `def.parent.view` and `.views`. */
+  parentStates: ViewState[]
+  /** H-8: the views that may nest in this one. */
   children: ViewState[]
-  /** H-8: this view's mounted entities by the parent entity they are nested under. */
-  byParent: Map<Entity, Set<Entity>>
+  /** H-8: this view's mounted entities by the parent view and entity they are nested under. */
+  byParent: Map<ViewState, Map<Entity, Set<Entity>>>
   /** H-8: mounted entities waiting for their parent's element. */
   orphans: Set<Entity>
   /** H-10: a node was created, updated or attached this commit, so the order may have changed. */
@@ -182,6 +195,11 @@ interface PanelState {
   gate: QueryResult[] | null
   /** A listed resource changed, a restore happened, or nothing was painted yet. */
   dirty: boolean
+  /** H-24: render at the next commit whatever the rate (invalidate, restore, first paint). */
+  urgent: boolean
+  /** H-24: `everyFrames`, and the commits since the last render. */
+  readonly every: number
+  sinceRender: number
   unsub: Array<() => void>
   /** P-4. */
   readonly counts: { renders: number; paints: number; lastCommitMs: number }
@@ -253,11 +271,11 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
         reason:
           def.changedOn?.mode === 'explicit'
             ? 'changedOn { mode: "explicit" } needs at least one type or resource'
-            : 'the view has update but its query has no Has/Where leaf to redraw on; pass changedOn explicitly, or { mode: "legacy" } to redraw every tick',
+            : 'the view has update but its query has no Has/Where leaf to redraw on; pass changedOn explicitly, or { mode: "always" } to redraw every commit',
       })
     }
     const q = world.query(def.query)
-    const resources = def.changedOn && def.changedOn.mode !== 'legacy' ? def.changedOn.resources ?? [] : []
+    const resources = def.changedOn?.mode === 'auto' || def.changedOn?.mode === 'explicit' ? def.changedOn.resources ?? [] : []
     // H-10: the gate is the view's own query intersected with each trigger,
     // so a mark on an entity outside the view is never collected; H-7: a
     // resource trigger yields every member when the resource changed.
@@ -278,7 +296,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       failed: new Set(),
       retryQueries: null,
       filtered: findKind(node, WHERE_KIND) !== null,
-      parentState: null,
+      parentStates: [],
       children: [],
       byParent: new Map(),
       orphans: new Set(),
@@ -301,17 +319,25 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     states.push(state)
   }
 
-  // H-8: link each nested view to its parent's state; parents commit first.
+  // H-8: link each nested view to its parents' states; parents commit first.
   for (const state of states) {
     const link = state.def.parent
     if (link === undefined) continue
-    const parent = states.find((s) => s.def === link.view)
-    if (parent === undefined) {
+    const named = [...(link.view !== undefined ? [link.view] : []), ...(link.views ?? [])]
+    if (named.length === 0) {
       rollback()
-      return err({ kind: 'invalid_parent', slot: state.def.slot, reason: 'parent.view is not one of the views given to this mountDOM' })
+      return err({ kind: 'invalid_parent', slot: state.def.slot, reason: 'parent needs a view, or views that parent.of may name' })
     }
-    state.parentState = parent
-    parent.children.push(state)
+    for (const view of named) {
+      const parent = states.find((s) => s.def === view)
+      if (parent === undefined) {
+        rollback()
+        return err({ kind: 'invalid_parent', slot: state.def.slot, reason: 'a parent view is not one of the views given to this mountDOM' })
+      }
+      if (state.parentStates.includes(parent)) continue
+      state.parentStates.push(parent)
+      parent.children.push(state)
+    }
   }
   const ordered: ViewState[] = []
   const visiting = new Set<ViewState>()
@@ -319,7 +345,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     if (ordered.includes(s)) return true
     if (visiting.has(s)) return false
     visiting.add(s)
-    if (s.parentState !== null && !visit(s.parentState)) return false
+    for (const p of s.parentStates) if (!visit(p)) return false
     visiting.delete(s)
     ordered.push(s)
     return true
@@ -343,12 +369,20 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       rollback()
       return err({ kind: 'invalid_panel', slot: def.slot, reason: 'a panel needs a slot of its own: another view or panel uses it' })
     }
+    const every = def.everyFrames ?? 1
+    if (!Number.isInteger(every) || every < 1) {
+      rollback()
+      return err({ kind: 'invalid_panel', slot: def.slot, reason: `everyFrames must be an integer >= 1, got ${String(def.everyFrames)}` })
+    }
     const types = def.changedOn?.types ?? []
     const panel: PanelState = {
       def,
       slotEl,
       gate: def.changedOn === undefined ? null : types.map((t) => world.query(Or(OnAdded(t), OnChanged(t), OnRemoved(t)))),
       dirty: true,
+      urgent: true,
+      every,
+      sinceRender: 0,
       unsub: [],
       counts: { renders: 0, paints: 0, lastCommitMs: 0 },
     }
@@ -360,6 +394,7 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
     }
     panel.unsub.push(world.signals.restored.subscribe(() => {
       panel.dirty = true
+      panel.urgent = true
     }))
     panels.push(panel)
   }
@@ -460,6 +495,13 @@ export function mountDOM(world: World, opts: MountOptions): Result<MountHandle, 
       return states.find((s) => s.def === view)?.mounted.get(entity)?.el
     },
 
+    invalidate(slot) {
+      const panel = panels.find((p) => p.def.slot === slot)
+      if (panel === undefined) throw new Error(`@domecs/dom: invalidate(): this mount has no panel in slot "${slot}"`)
+      panel.dirty = true
+      panel.urgent = true
+    },
+
     on(slot, type, fn) {
       const slotEl = opts.slots[slot]
       if (!slotEl) throw new Error(`@domecs/dom: on(): this mount has no slot "${slot}"`)
@@ -549,7 +591,7 @@ function unmount(state: ViewState, id: Entity, rec: MountedRecord, errors: unkno
   // H-8: the elements nested in this one would go with it: take them out
   // first, still mounted, to wait for a parent element.
   for (const child of state.children) {
-    const kids = child.byParent.get(id)
+    const kids = child.byParent.get(state)?.get(id)
     if (kids === undefined) continue
     for (const kid of kids) {
       const krec = child.mounted.get(kid)
@@ -562,25 +604,51 @@ function unmount(state: ViewState, id: Entity, rec: MountedRecord, errors: unkno
   if (state.def.destroy) guard(errors, () => state.def.destroy!(rec.el, rec.view))
   rec.el.remove()
   state.counts.destroys++
-  if (rec.parent !== null) state.byParent.get(rec.parent)?.delete(id)
+  if (rec.parentView !== null && rec.parent !== null) state.byParent.get(rec.parentView)?.get(rec.parent)?.delete(id)
   state.orphans.delete(id)
 }
 
-/** H-8: the container `view`'s element belongs in, and its parent entity; container null = wait. */
-function resolveContainer(
-  state: ViewState,
-  view: EntityView,
-  errors: unknown[],
-): { container: HTMLElement | null; parent: Entity | null } {
+interface Placement {
+  /** Where the element goes; null = wait for the parent's element. */
+  container: HTMLElement | null
+  parent: Entity | null
+  parentView: ViewState | null
+  at: string | undefined
+}
+
+const IN_SLOT = (state: ViewState): Placement => ({ container: state.slotEl, parent: null, parentView: null, at: undefined })
+
+/** H-8, H-21: the container `view`'s element belongs in, and its parent. */
+function resolveContainer(state: ViewState, view: EntityView, errors: unknown[]): Placement {
   const link = state.def.parent
-  if (link === undefined || state.parentState === null) return { container: state.slotEl, parent: null }
-  let p: Entity | null | undefined
-  if (!guard(errors, () => { p = link.of(view) })) return { container: null, parent: null }
-  if (p === null || p === undefined) return { container: state.slotEl, parent: null }
-  const prec = state.parentState.mounted.get(p)
-  if (prec === undefined) return { container: null, parent: p }
-  const at = link.at !== undefined ? prec.el.querySelector<HTMLElement>(link.at) : null
-  return { container: at ?? prec.el, parent: p }
+  if (link === undefined || state.parentStates.length === 0) return IN_SLOT(state)
+  let p: ReturnType<typeof link.of> | undefined
+  if (!guard(errors, () => { p = link.of(view) })) return { container: null, parent: null, parentView: null, at: undefined }
+  if (p === null || p === undefined) return IN_SLOT(state)
+  let parentView: ViewState | undefined
+  let parent: Entity
+  let at = link.at
+  if (typeof p === 'number') {
+    parentView = link.view !== undefined ? state.parentStates.find((s) => s.def === link.view) : undefined
+    parent = p
+    if (parentView === undefined) {
+      errors.push(new Error(`@domecs/dom: parent.of returned entity ${p} for a view with no parent.view; return { view, entity } to name one of parent.views`))
+      return { container: null, parent: null, parentView: null, at: undefined }
+    }
+  } else {
+    const ref = p
+    parentView = state.parentStates.find((s) => s.def === ref.view)
+    parent = ref.entity
+    if (ref.at !== undefined) at = ref.at
+    if (parentView === undefined) {
+      errors.push(new Error('@domecs/dom: parent.of named a view that is not in parent.view or parent.views'))
+      return { container: null, parent: null, parentView: null, at: undefined }
+    }
+  }
+  const prec = parentView.mounted.get(parent)
+  if (prec === undefined) return { container: null, parent, parentView, at }
+  const point = at !== undefined ? prec.el.querySelector<HTMLElement>(at) : null
+  return { container: point ?? prec.el, parent, parentView, at }
 }
 
 /**
@@ -590,29 +658,33 @@ function resolveContainer(
  */
 function requeueNested(state: ViewState, id: Entity, rec: MountedRecord): void {
   for (const child of state.children) {
-    const kids = child.byParent.get(id)
+    const kids = child.byParent.get(state)?.get(id)
     if (kids === undefined || kids.size === 0) continue
-    const at = child.def.parent?.at
-    const point = (at !== undefined ? rec.el.querySelector<HTMLElement>(at) : null) ?? rec.el
     for (const kid of kids) {
       const krec = child.mounted.get(kid)
-      if (krec !== undefined && (krec.container !== point || krec.el.parentNode !== point)) child.orphans.add(kid)
+      if (krec === undefined) continue
+      const point = (krec.at !== undefined ? rec.el.querySelector<HTMLElement>(krec.at) : null) ?? rec.el
+      if (krec.container !== point || krec.el.parentNode !== point) child.orphans.add(kid)
     }
   }
 }
 
 /** H-8: put `rec.el` where it belongs now; true when it moved into a container. */
 function place(state: ViewState, id: Entity, rec: MountedRecord, view: EntityView, errors: unknown[]): boolean {
-  const { container, parent } = resolveContainer(state, view, errors)
-  if (parent !== rec.parent) {
-    if (rec.parent !== null) state.byParent.get(rec.parent)?.delete(id)
-    if (parent !== null) {
-      let set = state.byParent.get(parent)
-      if (set === undefined) state.byParent.set(parent, (set = new Set()))
+  const { container, parent, parentView, at } = resolveContainer(state, view, errors)
+  if (parent !== rec.parent || parentView !== rec.parentView) {
+    if (rec.parentView !== null && rec.parent !== null) state.byParent.get(rec.parentView)?.get(rec.parent)?.delete(id)
+    if (parentView !== null && parent !== null) {
+      let byEntity = state.byParent.get(parentView)
+      if (byEntity === undefined) state.byParent.set(parentView, (byEntity = new Map()))
+      let set = byEntity.get(parent)
+      if (set === undefined) byEntity.set(parent, (set = new Set()))
       set.add(id)
     }
     rec.parent = parent
+    rec.parentView = parentView
   }
+  rec.at = at
   if (container === null) {
     if (rec.container !== null) rec.el.remove()
     rec.container = null
@@ -635,7 +707,7 @@ function mount(state: ViewState, id: Entity, view: EntityView, errors: unknown[]
   }
   state.failed.delete(id)
   if (state.stamp) el!.setAttribute(ENTITY_ATTRIBUTE, String(id))
-  const rec: MountedRecord = { el: el!, view, container: null, parent: null }
+  const rec: MountedRecord = { el: el!, view, container: null, parent: null, parentView: null, at: undefined }
   state.mounted.set(id, rec)
   place(state, id, rec, view, errors)
   state.touched = true
@@ -707,7 +779,7 @@ function commitView(state: ViewState, errors: unknown[]): void {
     // added later in the same window are visible, unlike the onAdd-time
     // `view` captured here) and an entity that was also marked changed this
     // window still gets exactly one update() per commit. Skip when
-    // changedQueries is null (legacy / create-only): the full-update path
+    // changedQueries is null (always / create-only): the full-update path
     // already paints every mounted entity this commit.
     if (state.def.update && state.changedQueries !== null) {
       ;(created ??= new Set()).add(id)
@@ -737,7 +809,7 @@ function commitView(state: ViewState, errors: unknown[]): void {
     // H-8: the update may have replaced the elements its children hang in…
     if (state.children.length > 0) requeueNested(state, id, rec)
     // …and may have moved it to another parent.
-    if (state.parentState !== null) place(state, id, rec, view, errors)
+    if (state.parentStates.length > 0) place(state, id, rec, view, errors)
   }
   if (update && state.mounted.size > 0) {
     if (!changed) {
@@ -781,8 +853,10 @@ function commitView(state: ViewState, errors: unknown[]): void {
 
 /**
  * H-10: put the view's nodes in `order(entity)` order (ties by id) within
- * each container, moving only the nodes that are out of place relative to
- * the one before them.
+ * each container. H-22: the nodes already in order relative to each other —
+ * the longest such run — stay where they are and only the rest move, each
+ * with `moveBefore` where the browser has it (which keeps focus inside the
+ * moved node). Nodes of other views in the container are not moved.
  */
 function reorder(state: ViewState, errors: unknown[]): void {
   const order = state.def.order!
@@ -798,13 +872,74 @@ function reorder(state: ViewState, errors: unknown[]): void {
     keyed.push({ id, rec, key })
   }
   keyed.sort((a, b) => (a.key === b.key ? a.id - b.id : a.key < b.key ? -1 : 1))
-  const last = new Map<HTMLElement, HTMLElement>()
+  const byContainer = new Map<HTMLElement, HTMLElement[]>()
   for (const { rec } of keyed) {
     const container = rec.container!
-    const prev = last.get(container)
-    if (prev !== undefined && prev.nextSibling !== rec.el) prev.after(rec.el)
-    last.set(container, rec.el)
+    let list = byContainer.get(container)
+    if (list === undefined) byContainer.set(container, (list = []))
+    list.push(rec.el)
   }
+  for (const [container, wanted] of byContainer) arrange(container, wanted)
+}
+
+/**
+ * H-22: order `wanted` (children of `container`) as listed, moving the
+ * fewest: the longest subsequence already in document order stays put.
+ */
+function arrange(container: HTMLElement, wanted: HTMLElement[]): void {
+  if (wanted.length < 2) return
+  const position = new Map<Element, number>()
+  let i = 0
+  for (const child of Array.from(container.children)) position.set(child, i++)
+  const at = wanted.map((el) => position.get(el) ?? -1)
+  const keep = longestIncreasing(at)
+  if (keep.size === wanted.length) return
+  // Back to front: each node that moves goes before the one that follows it,
+  // which is already in place; the last goes after the last node kept.
+  let lastKept: HTMLElement | null = null
+  for (let k = wanted.length - 1; k >= 0 && lastKept === null; k--) if (keep.has(k)) lastKept = wanted[k]!
+  let next: HTMLElement | null = null
+  for (let k = wanted.length - 1; k >= 0; k--) {
+    const el = wanted[k]!
+    if (!keep.has(k)) move(container, el, next ?? lastKept!.nextSibling)
+    next = el
+  }
+}
+
+/** Indexes of one longest strictly increasing subsequence of `a` (O(n log n)). */
+function longestIncreasing(a: readonly number[]): Set<number> {
+  const tails: number[] = [] // index into a of the smallest tail of each length
+  const prev = new Array<number>(a.length).fill(-1)
+  for (let i = 0; i < a.length; i++) {
+    const v = a[i]!
+    if (v < 0) continue // not in the container: always moved
+    let lo = 0
+    let hi = tails.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (a[tails[mid]!]! < v) lo = mid + 1
+      else hi = mid
+    }
+    if (lo > 0) prev[i] = tails[lo - 1]!
+    tails[lo] = i
+  }
+  const out = new Set<number>()
+  for (let k = tails.length > 0 ? tails[tails.length - 1]! : -1; k >= 0; k = prev[k]!) out.add(k)
+  return out
+}
+
+/** Insert `el` before `ref` in `container`, keeping its state where the browser can (H-22). */
+function move(container: HTMLElement, el: HTMLElement, ref: Node | null): void {
+  const moveBefore = (container as { moveBefore?: (node: Node, child: Node | null) => void }).moveBefore
+  if (typeof moveBefore === 'function' && el.isConnected && container.isConnected) {
+    try {
+      moveBefore.call(container, el, ref)
+      return
+    } catch {
+      // Not movable state-preservingly (e.g. another document): insert instead.
+    }
+  }
+  container.insertBefore(el, ref)
 }
 
 function ascending(a: Entity, b: Entity): number {
@@ -841,11 +976,15 @@ function collectChanged(changedQueries: QueryResult[] | null): Map<Entity, Entit
 
 /** H-7: render a panel when its gate says so, and patch its slot. */
 function commitPanel(world: World, panel: PanelState, errors: unknown[]): void {
-  let due = panel.dirty || panel.gate === null
-  // Read every gate query, so each one's window moves on.
-  for (const q of panel.gate ?? []) if (q.entities.length > 0) due = true
-  if (!due) return
+  panel.sinceRender++
+  // Read every gate query, so each one's window moves on; a change seen
+  // before the panel is due is kept (H-24).
+  for (const q of panel.gate ?? []) if (q.entities.length > 0) panel.dirty = true
+  if (!(panel.dirty || panel.gate === null)) return
+  if (!panel.urgent && panel.sinceRender < panel.every) return
   panel.dirty = false
+  panel.urgent = false
+  panel.sinceRender = 0
   const t0 = clockNow()
   guard(errors, () => {
     const html = panel.def.render(world)
@@ -870,7 +1009,7 @@ function disposePanel(panel: PanelState): void {
  *
  * - `changedOn` omitted / `{ mode: 'auto' }`: derive from the positive
  *   `Has(T)` and `Where(T, …)` leaves of the view's query. P-3, O-55.
- * - `{ mode: 'legacy' }`: return `[]` — callers map an empty array to
+ * - `{ mode: 'always' }` (or `'legacy'`): return `[]` — callers map an empty array to
  *   `changedQueries: null`, which causes `commit` to update every mounted
  *   entity every tick (legacy "redraw everything" behaviour).
  * - `{ mode: 'explicit', types }`: return `types` directly.
@@ -885,7 +1024,7 @@ function resolveChangedTypes(def: ViewDef): ReadonlyArray<ComponentType<unknown>
     const hasTrigger = def.changedOn.types.length > 0 || (def.changedOn.resources?.length ?? 0) > 0
     return hasTrigger || !def.update ? def.changedOn.types : null
   }
-  if (def.changedOn?.mode === 'legacy') return []
+  if (def.changedOn?.mode === 'always' || def.changedOn?.mode === 'legacy') return []
   if (!def.update) return []
   const leaves = positiveLeafTypes(normalizeQuery(def.query))
   return leaves.length > 0 ? leaves : null
