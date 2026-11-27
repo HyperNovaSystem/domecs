@@ -509,6 +509,22 @@ export interface World {
    * `turn()` remains the void fire-and-forget form.
    */
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  /**
+   * Run `fn` once the tick in progress has finished and the call that ran it
+   * — `step`, `stepOnce`, `turn`, `action`, `runSystems`, `render` or a
+   * `startLoop` frame — has its result (H-25). For a listener, hook or system
+   * that needs to act on what it saw: `action()`, `step()`, `stepOnce()` and
+   * `turn()` cannot run inside a tick, so call them from `fn`.
+   *
+   * Callbacks run in the order queued, outside any tick; one queued by a
+   * callback runs in the same drain. A callback that throws does not stop
+   * the rest: the first throw propagates from the call that ran them, once
+   * they have all run. If that call itself threw, they wait for the next
+   * one that returns. Outside a tick and any such call, `fn` runs at once.
+   * Host code, like a listener: not part of the deterministic tick, so an
+   * act-log recorder sees what `fn` does as it would any outside caller.
+   */
+  afterTick(fn: () => void): void
   startLoop(options?: StartOptions): () => void
   stop(): void
   /**
@@ -812,6 +828,210 @@ export function createWorld(options: WorldOptions = {}): World {
   // them, by cursor key (see cursorKey); dropped at the next tick end.
   const pendingCursors = new Map<string, number>()
   let inTick = false
+  // H-25: the calls (step, stepOnce, turn, action, runSystems, render, a
+  // driver frame) in progress, and what world.afterTick() queued for when
+  // the outermost one returns.
+  let outerCalls = 0
+  const afterTickQueue: Array<() => void> = []
+  let drainingAfterTick = false
+
+  function refuseInTick(what: string): void {
+    if (inTick) {
+      throw new Error(
+        `domecs: ${what} must be called outside a tick (not from a system, hook or handler); ` +
+          'world.afterTick(fn) runs fn once the tick has returned',
+      )
+    }
+  }
+
+  function drainAfterTick(): void {
+    if (drainingAfterTick || afterTickQueue.length === 0) return
+    drainingAfterTick = true
+    let threw = false
+    let first: unknown
+    try {
+      while (afterTickQueue.length > 0) {
+        const fn = afterTickQueue.shift()!
+        try {
+          fn()
+        } catch (e) {
+          if (!threw) {
+            threw = true
+            first = e
+          }
+        }
+      }
+    } finally {
+      drainingAfterTick = false
+    }
+    if (threw) throw first
+  }
+
+  /** Run `body` as an outer call: afterTick callbacks drain when the outermost returns. */
+  function asOuterCall<R>(body: () => R): R {
+    outerCalls++
+    let result: R
+    try {
+      result = body()
+    } finally {
+      outerCalls--
+    }
+    if (outerCalls === 0) drainAfterTick()
+    return result
+  }
+
+  /** runSystems(names) once its arguments and the tick guard have passed. */
+  function runNamedSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] } {
+    const wanted = new Set(names)
+    // Snapshot both phases first (copy-on-write arrays, O-43): systems a
+    // run registers are not run by this call.
+    const candidates = [
+      // A fixed event system is an event system: never run on demand (PR #30 review).
+      ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name) && !s.fixedEvent),
+      ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
+    ]
+    const ran: string[] = []
+    const ranNames = new Set<string>()
+    if (candidates.length > 0) {
+      const view = bus.view()
+      let noted = false
+      inTick = true
+      try {
+        for (const s of candidates) {
+          if (!isEnabled(s)) continue
+          // §6.3: out of tick, whatever the system writes (or reads from
+          // world.rand); a replay cannot reproduce it.
+          if (!noted) {
+            noted = true
+            tapMutated()
+          }
+          runSystem(s, view)
+          ran.push(s.name)
+          ranNames.add(s.name)
+        }
+      } finally {
+        inTick = false
+        // O-48 as after a restore: an idle loop repaints what ran (also
+        // when a system threw) with a heartbeat frame. A wake would make
+        // that frame a step and move tick identity, which priming must not.
+        if (ran.length > 0 || noted) driver.repaint()
+      }
+    }
+    const skipped: string[] = []
+    const listed = new Set<string>()
+    for (const n of names) {
+      if (ranNames.has(n) || listed.has(n)) continue
+      listed.add(n)
+      skipped.push(n)
+    }
+    return { ran, skipped }
+  }
+
+  /** world.action() once it is known not to be inside a tick. */
+  function runAction<T>(type: EventType<T>, payload: T, opts: ActionOptions): ActionResult {
+    // The command boundary is where untyped callers (agent transports,
+    // JSON-driven tools) arrive. The bus routes on the identity symbol that
+    // only defineEvent() sets, so a name string or a look-alike object
+    // would be emitted under no type: the tick runs, no handler fires, and
+    // the command used to come back accepted. Reject it before emitting.
+    const notToken = describeNonEventToken(type)
+    if (notToken !== null) {
+      return {
+        accepted: false,
+        consumedTurn: false,
+        reason: `not an event type: ${notToken}; pass the token defineEvent() returned, not its name`,
+        events: [],
+      }
+    }
+    // P-1: a command is answered by its handler, which this world must have.
+    const command = isCommandType(type)
+    if (command && !installedCommands.has(type)) {
+      return {
+        accepted: false,
+        consumedTurn: false,
+        reason: `command "${type.name}" is not registered in this world: world.register(${type.name}) installs its handler`,
+        events: [],
+      }
+    }
+    // O-39: when the event declares a schema, the command boundary rejects
+    // malformed payloads outright — no emit, no tick, no consumed turn —
+    // instead of accepting a command whose handler will silently no-op or
+    // NaN-poison state. Schema-less events remain unvalidated (declare a
+    // schema on agent-facing commands to opt in). turn()/emit stay raw.
+    const invalid = validateEventPayload(type, payload, { world })
+    if (invalid !== null) {
+      return {
+        accepted: false,
+        consumedTurn: false,
+        reason: `invalid payload for "${type.name}": ${invalid}`,
+        events: [],
+      }
+    }
+    // A typed turn() that surfaces a structured command result. Emit the
+    // action, advance one tick (the action flushes at step 1 and its handlers
+    // run during steps 3–6), then read back the events those handlers emitted
+    // — they are now buffered as "pending" for next tick, so bus.pendingEvents
+    // is exactly the command's downstream effects (the action event itself was
+    // already consumed and is not included).
+    let said: CommandVerdict | undefined
+    if (command) {
+      // Where this command lands in the deliveries: after those queued now.
+      const at = bus.pendingCount(type)
+      awaited = { type, tickIndex: at.tick, fixedIndex: at.fixed }
+    }
+    const heartbeat = opts.dt !== undefined && opts.dt <= 0
+    try {
+      emitVia = 'action'
+      try {
+        bus.emit(type, payload)
+      } finally {
+        emitVia = 'emit'
+      }
+      opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
+    } finally {
+      said = awaited?.verdict
+      awaited = null
+    }
+    // P-1: an attached recorder keeps the verdict with the act.
+    if (said !== undefined && tapListeners.size > 0) for (const l of tapListeners) l.answered(said)
+    // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
+    // is still pending — not consumed, not processed — so it must not be
+    // reported as a downstream event, the resolver has no tick to
+    // adjudicate, and the command cannot have been accepted. The action
+    // stays buffered and flushes on the next real tick.
+    const events = heartbeat ? [] : bus.pendingEvents()
+    const handlerVerdict: ActionVerdict | undefined =
+      said === undefined ? undefined : said.accepted ? { accepted: true } : { accepted: false, reason: said.reason }
+    const verdict: ActionVerdict = heartbeat
+      ? {
+          accepted: false,
+          consumedTurn: false,
+          reason: 'heartbeat (dt <= 0): action not processed; it remains pending for the next tick',
+        }
+      : opts.resolve
+        ? opts.resolve(command ? { events, world, verdict: handlerVerdict } : { events, world })
+        : !command
+          ? { accepted: true, consumedTurn: true }
+          : handlerVerdict ?? {
+              accepted: false,
+              consumedTurn: false,
+              reason: (type as CommandType<unknown>)[commandTag].fixed === true
+                ? `command "${type.name}" is handled in the fixed schedule and this tick ran no fixed step; it stays queued for the next one (pass { dt } to step one)`
+                : `command "${type.name}" was not handled: its handler system command:${type.name} is disabled or removed`,
+            }
+    const consumedTurn = verdict.consumedTurn ?? verdict.accepted
+    const result: ActionResult = {
+      accepted: verdict.accepted,
+      consumedTurn,
+      events,
+      ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+    }
+    if (opts.snapshot) {
+      result.snapshot =
+        typeof opts.snapshot === 'object' ? world.snapshot(opts.snapshot) : world.snapshot()
+    }
+    return result
+  }
 
   // The change window the query being read reports (O-42), set around each
   // read of a change-detection query and restored after — reads nest when
@@ -1494,7 +1714,7 @@ export function createWorld(options: WorldOptions = {}): World {
   const driver = createRafDriver(
     { idle, headless },
     {
-      step: (dt) => runTick(dt),
+      step: (dt) => asOuterCall(() => runTick(dt)),
       pause: () => world.pause(),
       resume: () => world.resume(),
       isPaused: () => time.scale === 0,
@@ -2584,7 +2804,10 @@ export function createWorld(options: WorldOptions = {}): World {
       //
       // For the turn-based no-arg single advance (delta=0, full tick), use
       // stepOnce() instead.
-      runTick(dt)
+      //
+      // H-25: a tick inside a tick would flush the outer tick's events away.
+      refuseInTick('step')
+      asOuterCall(() => runTick(dt))
     },
 
     stepOnce(): void {
@@ -2596,74 +2819,31 @@ export function createWorld(options: WorldOptions = {}): World {
       // only advances when dt > 0. stepOnce() therefore never fires `fixed`
       // systems — use step(fixedStep) (or stepN with a dt) for headless tests
       // of fixed-schedule sims.
-      runTick(undefined)
+      refuseInTick('stepOnce')
+      asOuterCall(() => runTick(undefined))
     },
 
     runSystems(names: readonly string[]): { readonly ran: string[]; readonly skipped: string[] } {
       if (!Array.isArray(names) || names.some((n) => typeof n !== 'string')) {
         throw new TypeError('domecs: runSystems(names) needs an array of system names (strings)')
       }
-      if (inTick) {
-        throw new Error('domecs: runSystems must be called outside a tick (not from a system, hook or handler)')
-      }
-      const wanted = new Set(names)
-      // Snapshot both phases first (copy-on-write arrays, O-43): systems a
-      // run registers are not run by this call.
-      const candidates = [
-        // A fixed event system is an event system: never run on demand (PR #30 review).
-        ...scheduler.systemsByMode('fixed').filter((s) => wanted.has(s.name) && !s.fixedEvent),
-        ...scheduler.systemsByMode('tick').filter((s) => wanted.has(s.name)),
-      ]
-      const ran: string[] = []
-      const ranNames = new Set<string>()
-      if (candidates.length > 0) {
-        const view = bus.view()
-        let noted = false
-        inTick = true
-        try {
-          for (const s of candidates) {
-            if (!isEnabled(s)) continue
-            // §6.3: out of tick, whatever the system writes (or reads from
-            // world.rand); a replay cannot reproduce it.
-            if (!noted) {
-              noted = true
-              tapMutated()
-            }
-            runSystem(s, view)
-            ran.push(s.name)
-            ranNames.add(s.name)
-          }
-        } finally {
-          inTick = false
-          // O-48 as after a restore: an idle loop repaints what ran (also
-          // when a system threw) with a heartbeat frame. A wake would make
-          // that frame a step and move tick identity, which priming must not.
-          if (ran.length > 0 || noted) driver.repaint()
-        }
-      }
-      const skipped: string[] = []
-      const listed = new Set<string>()
-      for (const n of names) {
-        if (ranNames.has(n) || listed.has(n)) continue
-        listed.add(n)
-        skipped.push(n)
-      }
-      return { ran, skipped }
+      refuseInTick('runSystems')
+      return asOuterCall(() => runNamedSystems(names))
     },
 
     render(): void {
-      if (inTick) {
-        throw new Error('domecs: render must be called outside a tick (not from a system, hook or handler)')
-      }
-      inTick = true
-      try {
-        plugins.callRender(world, HEARTBEAT)
-      } finally {
-        inTick = false
-        // As the heartbeat render (O-42): a renderer has read what it
-        // painted, even if a hook threw (O-53).
-        advanceQueryWindows()
-      }
+      refuseInTick('render')
+      asOuterCall(() => {
+        inTick = true
+        try {
+          plugins.callRender(world, HEARTBEAT)
+        } finally {
+          inTick = false
+          // As the heartbeat render (O-42): a renderer has read what it
+          // painted, even if a hook threw (O-53).
+          advanceQueryWindows()
+        }
+      })
     },
 
     stepN(n: number, dt?: number): void {
@@ -2680,113 +2860,33 @@ export function createWorld(options: WorldOptions = {}): World {
     turn<T>(type: EventType<T>, payload: T, dt?: number): void {
       // SPEC §3 turn-based mode: emit action, advance one tick.
       // Because events flush at next step's step 1, we emit first then step.
+      // H-25: refused before the emit, so nothing is left queued.
+      refuseInTick('turn')
       bus.emit(type, payload)
       dt === undefined ? world.stepOnce() : world.step(dt)
     },
 
+    afterTick(fn: () => void): void {
+      if (typeof fn !== 'function') throw new TypeError(`domecs: afterTick(fn) takes a function; got ${String(fn)}`)
+      afterTickQueue.push(fn)
+      if (!inTick && outerCalls === 0) drainAfterTick()
+    },
+
     action<T>(type: EventType<T>, payload: T, opts: ActionOptions = {}): ActionResult {
-      // The command boundary is where untyped callers (agent transports,
-      // JSON-driven tools) arrive. The bus routes on the identity symbol that
-      // only defineEvent() sets, so a name string or a look-alike object
-      // would be emitted under no type: the tick runs, no handler fires, and
-      // the command used to come back accepted. Reject it before emitting.
-      const notToken = describeNonEventToken(type)
-      if (notToken !== null) {
+      // H-25: a tick started inside a tick flushes the outer one's events
+      // away, and with them the commands and verdicts it was delivering.
+      if (inTick) {
+        const name = (type as { name?: unknown } | null)?.name
         return {
           accepted: false,
           consumedTurn: false,
-          reason: `not an event type: ${notToken}; pass the token defineEvent() returned, not its name`,
+          reason:
+            `"${typeof name === 'string' ? name : String(type)}" was not run: action() was called inside a tick ` +
+            '(from a system, hook or listener); world.afterTick(fn) runs fn once the tick has returned',
           events: [],
         }
       }
-      // P-1: a command is answered by its handler, which this world must have.
-      const command = isCommandType(type)
-      if (command && !installedCommands.has(type)) {
-        return {
-          accepted: false,
-          consumedTurn: false,
-          reason: `command "${type.name}" is not registered in this world: world.register(${type.name}) installs its handler`,
-          events: [],
-        }
-      }
-      // O-39: when the event declares a schema, the command boundary rejects
-      // malformed payloads outright — no emit, no tick, no consumed turn —
-      // instead of accepting a command whose handler will silently no-op or
-      // NaN-poison state. Schema-less events remain unvalidated (declare a
-      // schema on agent-facing commands to opt in). turn()/emit stay raw.
-      const invalid = validateEventPayload(type, payload, { world })
-      if (invalid !== null) {
-        return {
-          accepted: false,
-          consumedTurn: false,
-          reason: `invalid payload for "${type.name}": ${invalid}`,
-          events: [],
-        }
-      }
-      // A typed turn() that surfaces a structured command result. Emit the
-      // action, advance one tick (the action flushes at step 1 and its handlers
-      // run during steps 3–6), then read back the events those handlers emitted
-      // — they are now buffered as "pending" for next tick, so bus.pendingEvents
-      // is exactly the command's downstream effects (the action event itself was
-      // already consumed and is not included).
-      let said: CommandVerdict | undefined
-      if (command) {
-        // Where this command lands in the deliveries: after those queued now.
-        const at = bus.pendingCount(type)
-        awaited = { type, tickIndex: at.tick, fixedIndex: at.fixed }
-      }
-      const heartbeat = opts.dt !== undefined && opts.dt <= 0
-      try {
-        emitVia = 'action'
-        try {
-          bus.emit(type, payload)
-        } finally {
-          emitVia = 'emit'
-        }
-        opts.dt === undefined ? world.stepOnce() : world.step(opts.dt)
-      } finally {
-        said = awaited?.verdict
-        awaited = null
-      }
-      // P-1: an attached recorder keeps the verdict with the act.
-      if (said !== undefined && tapListeners.size > 0) for (const l of tapListeners) l.answered(said)
-      // A heartbeat (F-6, dt<=0) never flushes the buffer: the action event
-      // is still pending — not consumed, not processed — so it must not be
-      // reported as a downstream event, the resolver has no tick to
-      // adjudicate, and the command cannot have been accepted. The action
-      // stays buffered and flushes on the next real tick.
-      const events = heartbeat ? [] : bus.pendingEvents()
-      const handlerVerdict: ActionVerdict | undefined =
-        said === undefined ? undefined : said.accepted ? { accepted: true } : { accepted: false, reason: said.reason }
-      const verdict: ActionVerdict = heartbeat
-        ? {
-            accepted: false,
-            consumedTurn: false,
-            reason: 'heartbeat (dt <= 0): action not processed; it remains pending for the next tick',
-          }
-        : opts.resolve
-          ? opts.resolve(command ? { events, world, verdict: handlerVerdict } : { events, world })
-          : !command
-            ? { accepted: true, consumedTurn: true }
-            : handlerVerdict ?? {
-                accepted: false,
-                consumedTurn: false,
-                reason: (type as CommandType<unknown>)[commandTag].fixed === true
-                  ? `command "${type.name}" is handled in the fixed schedule and this tick ran no fixed step; it stays queued for the next one (pass { dt } to step one)`
-                  : `command "${type.name}" was not handled: its handler system command:${type.name} is disabled or removed`,
-              }
-      const consumedTurn = verdict.consumedTurn ?? verdict.accepted
-      const result: ActionResult = {
-        accepted: verdict.accepted,
-        consumedTurn,
-        events,
-        ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
-      }
-      if (opts.snapshot) {
-        result.snapshot =
-          typeof opts.snapshot === 'object' ? world.snapshot(opts.snapshot) : world.snapshot()
-      }
-      return result
+      return asOuterCall(() => runAction(type, payload, opts))
     },
 
     startLoop(options?: StartOptions): () => void {
