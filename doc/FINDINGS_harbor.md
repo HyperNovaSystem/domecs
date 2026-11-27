@@ -21,9 +21,10 @@ a major; `CHANGELOG.md` lists them under *Breaking*. [§0](#0-resolution)
 says what each fix is, where it landed, and what was left out. Harbor's 144
 tests pass on the fixed engine, and a deterministic 18,560-step career run
 with the deputy hashes the same on the engine before and after. Moving
-Harbor onto 3.0.0 turned up seven more, H-19 to H-25; they are fixed on
-`fix/harbor-3.0-findings` (unreleased), and Harbor's 154 tests and 37 e2e
-checks pass on that branch: [§7](#7-adopting-300).
+Harbor onto that first cut of 3.0.0 turned up seven more, H-19 to H-25;
+they are fixed too, and `v3.0.0` was re-cut to include them before it
+reached npm. Harbor's 154 tests and 37 e2e checks pass on the re-cut:
+[§7](#7-adopting-300).
 
 Contents:
 
@@ -34,7 +35,7 @@ Contents:
 4. [Measurements](#4-measurements) — numbers for ledger items O-4, O-5, O-9, O-15, O-29
 5. [Documentation drift](#5-documentation-drift)
 6. [What held up](#6-what-held-up)
-7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (fixed, unreleased)
+7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (fixed in the re-cut 3.0.0)
 
 At a glance:
 
@@ -58,7 +59,7 @@ At a glance:
 | H-15 | core | gap | no "restored" signal |
 | H-17 | core | gap | events leave the fixed phase once a frame: frame-rate dependence |
 | H-18 | core | gap | `runBranch` hashes the world on every call |
-| | | | *found adopting 3.0.0 (§7), fixed after 3.0.0:* |
+| | | | *found adopting the first cut of 3.0.0 (§7), fixed in the re-cut:* |
 | H-19 | persist | gap | `save()` drops events not delivered yet: fixed events (H-17) in flight are lost |
 | H-20 | core | gap | an `entity` field refuses a vanished id in the engine's words, not the app's |
 | H-21 | dom | gap | `ViewDef.parent` names one parent view; a box that changes holders cannot follow |
@@ -968,9 +969,10 @@ have returned, would be one.
 ### Resolution
 
 Each finding was reproduced as a failing test first; the commits are on
-`fix/harbor-3.0-findings`, off `main` after 3.0.0. Harbor's 154 tests and
-37 e2e checks (Chromium) pass on the branch, unchanged — its workarounds
-still work; dropping them is the app's call.
+`fix/harbor-3.0-findings`, off `main` after the first cut of 3.0.0, and
+`v3.0.0` is re-cut to include them (it had not reached npm). Harbor's 154
+tests and 37 e2e checks (Chromium) pass on the branch, unchanged — its
+workarounds still work; dropping them is the app's call.
 
 | | Commit | What changed |
 |---|---|---|
