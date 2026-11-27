@@ -14,15 +14,15 @@ Every defect below was reproduced with a small test before it was written
 down; the reproductions are quoted. Timings are from a 2-vCPU arm64 Linux
 host, Node 26 (tests) and headless Chromium (browser).
 
-**Status (2026-11-26):** every defect and gap in §1–§2 is fixed, and so
-are P-1 to P-4 and the documentation drift: merged to `main` as 3.0.0 in
-#30 (`82b656c`; not tagged or published). Several fixes change behaviour,
-so it is a major; `CHANGELOG.md` lists them under *Breaking*.
-[§0](#0-resolution) says what each fix is, where it landed, and what was
-left out. Harbor's 144 tests pass on the fixed engine, and a deterministic
-18,560-step career run with the deputy hashes the same on the engine before
-and after. Moving Harbor onto 3.0.0 turned up six more, H-19 to H-24, which
-are open: [§7](#7-adopting-300).
+**Status (2026-11-27):** every defect and gap in §1–§2 is fixed, and so
+are P-1 to P-4 and the documentation drift: merged in #30 (`82b656c`) and
+tagged `v3.0.0` (not yet on npm). Several fixes change behaviour, so it is
+a major; `CHANGELOG.md` lists them under *Breaking*. [§0](#0-resolution)
+says what each fix is, where it landed, and what was left out. Harbor's 144
+tests pass on the fixed engine, and a deterministic 18,560-step career run
+with the deputy hashes the same on the engine before and after. Moving
+Harbor onto 3.0.0 turned up seven more, H-19 to H-25, which are open:
+[§7](#7-adopting-300).
 
 Contents:
 
@@ -33,7 +33,7 @@ Contents:
 4. [Measurements](#4-measurements) — numbers for ledger items O-4, O-5, O-9, O-15, O-29
 5. [Documentation drift](#5-documentation-drift)
 6. [What held up](#6-what-held-up)
-7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and six new findings (open)
+7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (open)
 
 At a glance:
 
@@ -64,6 +64,7 @@ At a glance:
 | H-22 | dom | gap | `ViewDef.order` moves every node behind one that belongs first, dropping focus |
 | H-23 | core | gap | `checkProbes: 'once'` still costs a strict hash per probe (0.19 s each on the hub) |
 | H-24 | dom | gap | `definePanel` has no rate and cannot be asked to repaint |
+| H-25 | core | defect | `world.action()` from a listener runs a tick inside the tick, losing the commands delivered with it |
 
 Harbor works around all of them; none blocks the app. The three that shaped
 its design most are H-3 (its own step clock), H-16 (a 16 Hz step) and H-17
@@ -773,8 +774,9 @@ them gave trouble.
 ## 7. Adopting 3.0.0
 
 Harbor was moved onto 3.0.0 the same day (`../harbor_game`, branch
-`feat/harbor-authority`, `1025460` to `0d4b3f7`). What it uses now, in
-place of what it had built:
+`feat/harbor-authority`, `1025460` to `0d4b3f7`, then the fixes from a
+Codex review of that branch). What it uses now, in place of what it had
+built:
 
 - **Commands** (P-1, H-5, H-6): its twenty commands are `defineCommand`s,
   with schemas that say what the handlers used to re-check; `harbor.act` is
@@ -804,8 +806,9 @@ place of what it had built:
   outlook made of the port before the load.
 - **`defineComponent.of`** (P-3) for its twenty components.
 
-148 tests pass, and `npm run e2e` (34 checks in Chromium) passes on five
-runs in a row. What it does not use, and why, is below.
+154 tests pass, and `npm run e2e` (35 checks in Chromium) passes on five
+runs in a row. What it does not use, and why, is below, with H-25, which the
+review found.
 
 ### H-19 · `save()` drops events that have not been delivered yet
 
@@ -892,9 +895,16 @@ takes 566–625 ms the first time and 1.4–1.8 ms after (Harbor's
 first slice of each branch, three branches in a row. Harbor passes
 `checkProbes: false` — its probes are plain reads.
 
-**Suggested fix:** prove the unproven probes of a sample together — one hash
-before them all, one after — and go one by one only when the two differ, to
-name the probe that changed the world.
+**Suggested fix:** keep the per-probe proof as the default: it is what
+makes the check exact. Two hashes around a whole sample would miss a probe
+that changes a field which a later probe puts back, though the later probe
+read the changed state (a Codex review of this file's first draft, which
+proposed just that). What could be offered beside it is a weaker mode
+that says so — `checkProbes: 'sample'`: one strict hash before a sample's
+unproven probes and one after, going one by one only when the two differ,
+to name the probe that changed the world. That is two hashes in place of
+N + 1 (about 0.4 s on the hub instead of 1.5 s), for an app that accepts
+the blind spot.
 
 ### H-24 · `definePanel` has no rate and cannot be asked to repaint
 
@@ -906,6 +916,36 @@ it every eighth frame, or at once on a tab change, and calls `paint`.
 
 **Suggested fix:** a rate for panels (`everyFrames`, or a minimum interval)
 and `MountHandle.invalidate(slot)` for a repaint the world did not cause.
+
+### H-25 · `world.action()` from a listener runs a tick inside the tick
+
+A `world.on` listener is called while the bus delivers a tick's events.
+One that calls `world.action()` (Harbor's game-over sheet paused the port
+with its `SetSpeed` command) starts a second tick inside the first. The
+inner tick's flush replaces the outer tick's event view, and the verdict
+the outer `action()` is waiting for, so a command delivered alongside the
+report is never handled, and is refused for a reason that is not true:
+
+```ts
+world.on(Verdict, () => world.action(Pause, {}))   // accepted
+world.emit(Verdict, { won: false })                // a report from the step before
+world.action(Hire, {})
+// { accepted: false, reason: 'command "Hire" was not handled: its handler
+//   system command:Hire is disabled or removed' }
+// Without the listener's action(), Hire is accepted.
+```
+
+`runSystems()`, `render()` and the recorder's calls throw when they are
+called inside a tick; `action()`, `step()` and `stepOnce()` do not, and the
+rule is written only in a comment in `world.ts` ("action() cannot run
+inside a tick"). A Codex review of Harbor's branch found it; the shell now
+pauses with `world.setScale(0)`, and its e2e sends a command in the tick
+the game ends.
+
+**Suggested fix:** refuse `action()` inside a tick, as `runSystems` does
+(or answer `accepted: false`, `consumedTurn: false`, with a reason that
+names the rule), with the same guard on `step` and `stepOnce`; and say so
+in AGENTS.md, beside "Control while paused".
 
 ### Smaller
 
