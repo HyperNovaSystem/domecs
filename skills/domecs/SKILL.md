@@ -100,6 +100,9 @@ bridge.reset({ scale: 1, input: 'empty' }) // episode boundary (scale/input are 
     `hypot`/`pow`; see below)
 - **keyDelta** is one render tick — not for `fixed` systems
 - **scale 0** freezes `tick`/`fixed` — pause UI outside those schedules
+- **no tick inside a tick** — from a system, hook or `world.on` listener,
+  `action()` is refused (`accepted: false`) and `step`/`stepOnce`/`turn`
+  throw; queue the call with `world.afterTick(fn)`
 - **loadIfPresent** for first-run boot (`@domecs/persist`)
 - **pauseOnHidden** only auto-resumes driver-initiated pauses
 

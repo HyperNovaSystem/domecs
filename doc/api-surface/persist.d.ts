@@ -349,9 +349,21 @@ export interface SaveOptions {
     appVersion?: number | string;
     /** The wire format (H-11). Default {@link jsonCodec}; {@link columnarCodec} for large worlds. */
     codec?: SnapshotCodec;
+    /**
+     * Keep the events emitted and not yet delivered (H-19): `world.snapshot({
+     * pendingEvents: true })`, so a load delivers them as the saved world
+     * would have. Default `true` — an event a fixed event system will handle
+     * in the next step is simulation state, and a save between the two steps
+     * would otherwise lose it. The loading world must have every such event
+     * type registered (`world.register`), or the load fails with
+     * `persist_io`; a pending payload that is not plain data fails the save.
+     * `false` writes the snapshot without them, as 3.0 did.
+     */
+    pendingEvents?: boolean;
 }
 /**
- * The envelope {@link save} writes: `world.snapshot()` with `meta`
+ * The envelope {@link save} writes: `world.snapshot({ pendingEvents })`
+ * (`SaveOptions.pendingEvents`, default `true`) with `meta`
  * stamped — `{ savedAt, appVersion?, ...snapshot.meta, ...opts.meta }`, so a
  * caller key overrides a plugin-provided one while `savedAt` is the floor.
  * For a host that encodes in a worker: take this on the main thread and
@@ -422,8 +434,8 @@ export declare function load(world: World, storage: Storage, slot: string, opts?
 export declare function loadIfPresent(world: World, storage: Storage, slot: string, opts?: LoadOptions): Result<boolean, DomecsError>;
 /**
  * Plugin that strips entities with an empty serializable component bag from
- * every `world.snapshot()` envelope via `onSnapshot`. Because `save()` calls
- * the no-arg `world.snapshot()`, this is the declarative way to get the core
+ * every `world.snapshot()` envelope via `onSnapshot`. Because `save()` sets
+ * no `pruneEmptyEntities` of its own, this is the declarative way to get the core
  * `snapshot({ pruneEmptyEntities: true })` behavior on the persisted path:
  * transient-only entities (their components are excluded at snapshot time) and
  * bare `spawn()` entities never reach disk. Install once per world. Entities

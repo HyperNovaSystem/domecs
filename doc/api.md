@@ -68,6 +68,7 @@ interface FieldSchema {
   readonly step?:     number                      // widget step; a hint, never checked
   readonly options?:  ReadonlyArray<string | number>  // enum widget
   readonly with?:     ReadonlyArray<string>       // entity field: components it must hold
+  readonly live?:     boolean                     // entity field: false accepts a vanished id, for the handler to refuse in its own words (H-20)
   readonly label?:    string
   readonly readonly?: boolean
   readonly description?: string  // free text for humans/agents; persist round-trips it
@@ -283,7 +284,16 @@ interface World {
   // with { accepted: false, reason } before any emit and with NO tick advance.
   // Absent declared fields are optional; schema-less events are unvalidated,
   // as are turn()/emit. SPEC §3.
+  // H-25: called inside a tick (from a system, hook or listener) it runs
+  // nothing and returns { accepted: false, consumedTurn: false, events: [] }
+  // with a reason naming afterTick; step, stepOnce and turn throw there.
   action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult
+  // H-25: run fn once the tick in progress and the call that ran it (step,
+  // stepOnce, turn, action, runSystems, render, a startLoop frame) have
+  // finished — how a listener acts on what it heard. In order; ones fn
+  // queues run in the same drain; the first throw propagates after all ran;
+  // after a call that threw they wait for the next. Outside any: at once.
+  afterTick(fn: () => void): void
 
   // entities
   spawn(components?: ComponentBag): Entity
@@ -1912,7 +1922,10 @@ interface RunBranchOptions {
   // When to prove probes read-only (hash before/after): 'once' (default) = each
   // probe function the first time this world samples it; true = every probe at
   // the first sample of every call (2.x); false = never. Else TypeError (H-18).
-  readonly checkProbes?: boolean | 'once'
+  // 'sample' (H-23): one hash before and one after the first sample's probes
+  // this world has not checked — two hashes, not one per probe, but a change
+  // is not traced to one probe, and one a later probe undoes is missed.
+  readonly checkProbes?: boolean | 'once' | 'sample'
 }
 interface BranchRun {
   readonly ticks: number              // steps taken by this call
@@ -1929,7 +1942,8 @@ A strict hash snapshots the whole world, so on a large one it dominates a
 short call. To extend a branch a few steps at a time (spreading a forecast
 over frames, or cancelling it), pass `finalHash: false` and hash when needed;
 with the default `checkProbes: 'once'`, probes already proven on the branch
-are not re-hashed (H-18).
+are not re-hashed (H-18). `checkProbes: 'sample'` cuts the first sample's
+N + 1 hashes to two, for probes that are plain reads (H-23).
 
 `createBranch` runs `createWorld({ headless: true, fixedStep, seed })`,
 `setup(world)`, `restore(from)` and `setScale(scale ?? 1)`. Pass the
@@ -2123,8 +2137,8 @@ type MountError =
   | { kind: 'plugin_install_failed'; reason: string }
   | { kind: 'invalid_view_query'; slot: string; reason: string }   // temporal node in a view query (O-52)
   | { kind: 'invalid_changed_on'; slot: string; reason: string }   // update with no redraw trigger (O-55)
-  | { kind: 'invalid_parent'; slot: string; reason: string }       // parent.view not in this mount, or a cycle (H-8)
-  | { kind: 'invalid_panel'; slot: string; reason: string }        // a panel shares its slot (H-7)
+  | { kind: 'invalid_parent'; slot: string; reason: string }       // a parent view not in this mount, none named, or a cycle (H-8, H-21)
+  | { kind: 'invalid_panel'; slot: string; reason: string }        // a panel shares its slot (H-7), or a bad everyFrames (H-24)
 
 interface MountOptions {
   readonly slots: Readonly<Record<string, HTMLElement>>   // e.g. { stage: el, hud: el, portal: document.body }
@@ -2138,6 +2152,10 @@ interface MountHandle {
   // The element a view of this mount has mounted for an entity (H-8);
   // undefined when none. An element waiting for its parent is mounted but out of the page.
   elementOf(view: ViewDef, entity: Entity): HTMLElement | undefined
+  // H-24: render the panel in slot at the next commit, whatever its gate and
+  // everyFrames (a tab change). Does not wake an idle loop: world.render()
+  // repaints now. Throws for a slot with no panel of this mount.
+  invalidate(slot: string): void
   // A delegated listener on a slot: fn gets the entity whose mounted element
   // the event happened in (the innermost, for nested views) — events outside
   // this mount's elements are ignored. Returns a function that stops it (H-9).
@@ -2162,12 +2180,16 @@ function watchPresses(root: Document): () => void
 
 // A panel: render(world) to a string, painted into its own slot at the first
 // commit, then when a listed component is added/changed/removed on any entity,
-// a listed resource is set or marked, or after a restore — or every commit
-// without changedOn.
+// a listed resource is set or marked, after a restore or invalidate(slot) —
+// or every commit without changedOn.
 interface PanelDef {
   readonly slot: string
   render(world: World): string
   readonly changedOn?: { readonly types?: readonly ComponentType<any>[]; readonly resources?: readonly ResourceType<any>[] }
+  // H-24: render at most once every N commits (integer >= 1, default 1); a
+  // change in between is rendered when next due; invalidate and restore
+  // render at the next commit whatever the rate.
+  readonly everyFrames?: number
 }
 function definePanel(def: PanelDef): PanelDef
 
@@ -2181,9 +2203,9 @@ function definePanel(def: PanelDef): PanelDef
 //     not under a `Not`. A view over `[Position, Velocity]` auto-redraws
 //     when either component is marked changed. A view with `update` and no
 //     such leaf is err invalid_changed_on (O-55).
-//   - `{ mode: 'legacy' }`: "redraw every tick". Useful for time-driven
-//     animations where the view depends on `time.elapsed` rather than
-//     component identity.
+//   - `{ mode: 'always' }`: redraw every mounted node at every commit — a
+//     clock or countdown that depends on `time` rather than a component.
+//     `{ mode: 'legacy' }` is the same mode under its 2.x name.
 //   - `{ mode: 'explicit', types: [Type, ...] }`: explicit gate on exactly
 //     those component types. Overrides the auto-derive. An empty list with
 //     `update` and no resources is err invalid_changed_on.
@@ -2200,7 +2222,8 @@ function definePanel(def: PanelDef): PanelDef
 // is at the commit, with components added since it matched (O-55).
 type ChangedOn =
   | { readonly mode: 'auto'; readonly resources?: ReadonlyArray<ResourceType<any>> }
-  | { readonly mode: 'legacy' }
+  | { readonly mode: 'always' }
+  | { readonly mode: 'legacy' }    // = 'always'
   | { readonly mode: 'explicit'; readonly types: ReadonlyArray<ComponentType<unknown>>
       readonly resources?: ReadonlyArray<ResourceType<any>> }
 
@@ -2214,7 +2237,15 @@ interface ViewDef<Fields = Record<string, unknown>> {
   // H-8: mount each element inside another view's element (`at`: a selector
   // inside it), or the slot when `of` returns null. Re-evaluated on update;
   // while the parent has no element the child stays mounted, out of the page.
-  parent?: { view: ViewDef; of(entity: EntityView<Fields>): Entity | null | undefined; at?: string }
+  // H-21: a holder of several kinds lists their views in `views`, and `of`
+  // returns { view, entity, at? } — the element moves between them, never
+  // re-created. A plain id from `of` means `view`.
+  parent?: {
+    view?: ViewDef
+    views?: readonly ViewDef[]
+    of(entity: EntityView<Fields>): Entity | { view: ViewDef; entity: Entity; at?: string } | null | undefined
+    at?: string
+  }
   create(entity: EntityView<Fields>): HTMLElement
   update?(el: HTMLElement, entity: EntityView<Fields>): void
   destroy?(el: HTMLElement, entity: EntityView<Fields>): void
@@ -2250,9 +2281,9 @@ assert.equal(omitted, undefined)
 const auto: ChangedOn = { mode: 'auto' }
 assert.equal(auto.mode, 'auto')
 
-// 3. legacy — redraw every mounted entity every tick.
-const legacy: ChangedOn = { mode: 'legacy' }
-assert.equal(legacy.mode, 'legacy')
+// 3. always — redraw every mounted entity at every commit ('legacy' is its 2.x name).
+const always: ChangedOn = { mode: 'always' }
+assert.equal(always.mode, 'always')
 
 // 4. explicit — gate redraws on exactly the listed component types.
 const explicit: ChangedOn = { mode: 'explicit', types: [] }
@@ -2320,6 +2351,10 @@ interface SaveOptions {
   savedAt?:    number                    // override stamped ms-epoch timestamp; default Date.now()
   appVersion?: number | string           // the app's save format, in meta and the header (H-12)
   codec?:      SnapshotCodec             // default jsonCodec; columnarCodec for large worlds (H-11, P-2)
+  // H-19: keep the events emitted and not yet delivered (snapshot({ pendingEvents: true })),
+  // so a fixed event in flight survives the save. Default true; the loading world must
+  // register each such type. false = as 3.0.
+  pendingEvents?: boolean
 }
 interface SaveReport { codec: string; length: number }   // characters written (O-29)
 

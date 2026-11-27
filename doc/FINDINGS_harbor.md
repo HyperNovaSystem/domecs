@@ -21,8 +21,9 @@ a major; `CHANGELOG.md` lists them under *Breaking*. [§0](#0-resolution)
 says what each fix is, where it landed, and what was left out. Harbor's 144
 tests pass on the fixed engine, and a deterministic 18,560-step career run
 with the deputy hashes the same on the engine before and after. Moving
-Harbor onto 3.0.0 turned up seven more, H-19 to H-25, which are open:
-[§7](#7-adopting-300).
+Harbor onto 3.0.0 turned up seven more, H-19 to H-25; they are fixed on
+`fix/harbor-3.0-findings` (unreleased), and Harbor's 154 tests and 37 e2e
+checks pass on that branch: [§7](#7-adopting-300).
 
 Contents:
 
@@ -33,7 +34,7 @@ Contents:
 4. [Measurements](#4-measurements) — numbers for ledger items O-4, O-5, O-9, O-15, O-29
 5. [Documentation drift](#5-documentation-drift)
 6. [What held up](#6-what-held-up)
-7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (open)
+7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (fixed, unreleased)
 
 At a glance:
 
@@ -57,7 +58,7 @@ At a glance:
 | H-15 | core | gap | no "restored" signal |
 | H-17 | core | gap | events leave the fixed phase once a frame: frame-rate dependence |
 | H-18 | core | gap | `runBranch` hashes the world on every call |
-| | | | *found adopting 3.0.0 (§7), open:* |
+| | | | *found adopting 3.0.0 (§7), fixed after 3.0.0:* |
 | H-19 | persist | gap | `save()` drops events not delivered yet: fixed events (H-17) in flight are lost |
 | H-20 | core | gap | an `entity` field refuses a vanished id in the engine's words, not the app's |
 | H-21 | dom | gap | `ViewDef.parent` names one parent view; a box that changes holders cannot follow |
@@ -963,3 +964,22 @@ have returned, would be one.
   `changedOn: { mode: 'legacy' }`. It is documented as "useful for
   time-driven animations", but the name says *deprecated*; `'always'`, with
   `'legacy'` kept as an alias, would say what it does.
+
+### Resolution
+
+Each finding was reproduced as a failing test first; the commits are on
+`fix/harbor-3.0-findings`, off `main` after 3.0.0. Harbor's 154 tests and
+37 e2e checks (Chromium) pass on the branch, unchanged — its workarounds
+still work; dropping them is the app's call.
+
+| | Commit | What changed |
+|---|---|---|
+| H-25 | `acbd16c` | Inside a tick `action()` runs nothing and returns `accepted: false` with a reason naming `world.afterTick`; `step`, `stepOnce` and `turn` throw, as `runSystems` and `render` did. `world.afterTick(fn)` runs `fn` once the outermost call (`step`, `stepOnce`, `turn`, `action` after its verdict, `runSystems`, `render`, a loop frame) has finished; the reproduction now handles `Hire`. AGENTS.md has the recipe beside "Control while paused". |
+| H-20 | `f8b8560` | `live: false` on an `entity` field: a vanished id passes to the handler; a live one must still hold `with`. The field-level `refusal` text was not added: `action()` prefixes a schema refusal with the command's name, so it could not carry the player's sentence alone. |
+| H-23 | `ede2c6b` | `checkProbes: 'sample'`, as proposed: two strict hashes around a sample's unchecked probes, an error naming every probe it covered, and no proof carried over to `'once'`. `'once'` stays the default. |
+| H-19 | `1dbd2c0` | `SaveOptions.pendingEvents`, default `true` for every pending event, not only fixed ones: an event emitted in the last tick is as much the next tick's input. A non-plain pending payload makes `save()` a `persist_io` error. |
+| H-21 | `3d3cd30` | `parent.views`, and `of` returning `{ view, entity, at? }`; the element moves between holders and is never re-created. |
+| H-22 | `3d3cd30` | The reorder keeps the longest run already in order and moves the rest with `moveBefore` where it exists: one move, not ten, for Harbor's roadstead case. |
+| H-24 | `3d3cd30` | `PanelDef.everyFrames` and `MountHandle.invalidate(slot)`. `invalidate` does not wake an idle loop; `world.render()` repaints now. |
+| Smaller | `3d3cd30` | `changedOn: { mode: 'always' }`, `'legacy'` kept as an alias. |
+

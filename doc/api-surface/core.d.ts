@@ -311,10 +311,16 @@ export interface RunBranchOptions {
      *   probes costs no hash after the first call (H-18);
      * - `true`: every probe at the first sample of every call (the 2.x
      *   behaviour);
+     * - `'sample'`: weaker and cheaper (H-23) — one strict hash before the
+     *   first sample's probes this world has not checked, one after them: two
+     *   hashes in place of one per probe. A change is caught, but the error
+     *   cannot say which of them made it, and a probe that changes a field a
+     *   later probe puts back is missed. Use it when the probes are plain
+     *   reads and a strict hash is expensive;
      * - `false`: never.
      * Any other value throws `TypeError`.
      */
-    readonly checkProbes?: boolean | 'once';
+    readonly checkProbes?: boolean | 'once' | 'sample';
 }
 /** What {@link runBranch} observed. */
 export interface BranchRun {
@@ -999,7 +1005,8 @@ export interface PayloadCheckOptions {
  * - present fields must match their `kind`: `number` a finite number, within
  *   `min` / `max` (inclusive) and an integer when `integer`; `enum` a member
  *   of `options`; `entity` an integer >= 0 and, given `options.world`, a
- *   live entity holding every `with` component; `unknown` accepts anything
+ *   live entity (any id when `live: false`, H-20) holding every `with`
+ *   component; `unknown` accepts anything
  *
  * @returns `null` when valid, else a human-readable reason fragment.
  */
@@ -2703,6 +2710,15 @@ export interface FieldSchema {
      * with liveness, when a world is at hand (`world.action()` always is).
      */
     readonly with?: ReadonlyArray<string>;
+    /**
+     * For an `entity` field: `false` accepts an id that is no longer alive,
+     * leaving that case to the handler (H-20) — for a target that can vanish
+     * between a click and the command (a ship that sails), whose refusal
+     * should be in the app's words. The id must still be an integer >= 0, and
+     * a live entity must still hold every `with` component; `describe()`
+     * still says what the field names. Default `true`.
+     */
+    readonly live?: boolean;
     readonly label?: string;
     readonly readonly?: boolean;
     /**
@@ -3345,6 +3361,22 @@ export interface World {
      * `turn()` remains the void fire-and-forget form.
      */
     action<T>(type: EventType<T>, payload: T, opts?: ActionOptions): ActionResult;
+    /**
+     * Run `fn` once the tick in progress has finished and the call that ran it
+     * — `step`, `stepOnce`, `turn`, `action`, `runSystems`, `render` or a
+     * `startLoop` frame — has its result (H-25). For a listener, hook or system
+     * that needs to act on what it saw: `action()`, `step()`, `stepOnce()` and
+     * `turn()` cannot run inside a tick, so call them from `fn`.
+     *
+     * Callbacks run in the order queued, outside any tick; one queued by a
+     * callback runs in the same drain. A callback that throws does not stop
+     * the rest: the first throw propagates from the call that ran them, once
+     * they have all run. If that call itself threw, they wait for the next
+     * one that returns. Outside a tick and any such call, `fn` runs at once.
+     * Host code, like a listener: not part of the deterministic tick, so an
+     * act-log recorder sees what `fn` does as it would any outside caller.
+     */
+    afterTick(fn: () => void): void;
     startLoop(options?: StartOptions): () => void;
     stop(): void;
     /**
