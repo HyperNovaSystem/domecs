@@ -806,7 +806,7 @@ built:
   outlook made of the port before the load.
 - **`defineComponent.of`** (P-3) for its twenty components.
 
-154 tests pass, and `npm run e2e` (36 checks in Chromium) passes on five
+154 tests pass, and `npm run e2e` (37 checks in Chromium) passes on five
 runs in a row. What it does not use, and why, is below, with H-25, which the
 review found.
 
@@ -940,11 +940,13 @@ world.action(Hire, {})
 called inside a tick; `action()`, `step()` and `stepOnce()` do not, and the
 rule is written only in a comment in `world.ts` ("action() cannot run
 inside a tick"). A Codex review of Harbor's branch found it. Pausing from
-the listener with `world.setScale(0)` instead was not enough, its second
-pass found: a `SetSpeed` delivered with the verdict runs after the listener
-and starts the clock again behind the game-over sheet. So the listener sets
-a flag, and a `tickEnd` subscriber pauses once the tick's commands have
-run. Harbor's e2e sends a command, and a speed, in the tick the game ends.
+the listener with `world.setScale(0)` instead is half the answer, its later
+passes found: it keeps the frame's fixed steps from running past the
+verdict (they run after the flush, and only at a nonzero scale), but a
+`SetSpeed` delivered with the verdict runs after the listener and starts
+the clock again behind the game-over sheet. So the listener pauses, and a
+`tickEnd` subscriber pauses again once the tick's commands have run.
+Harbor's e2e checks all three.
 
 **Suggested fix:** refuse `action()` inside a tick, as `runSystems` does
 (or answer `accepted: false`, `consumedTurn: false`, with a reason that
