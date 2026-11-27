@@ -14,13 +14,15 @@ Every defect below was reproduced with a small test before it was written
 down; the reproductions are quoted. Timings are from a 2-vCPU arm64 Linux
 host, Node 26 (tests) and headless Chromium (browser).
 
-**Status (2026-11-26, branch `fix/harbor-findings`):** every defect and gap
-below is fixed, and so are P-1 to P-4 and the documentation drift. Several
-fixes change behaviour, so the next release is a major; `CHANGELOG.md`
-lists them under *Breaking*. [§0](#0-resolution) says what each fix is,
-where it landed, and what was left out. Harbor's 144 tests pass on the
-fixed engine, and a deterministic 18,560-step career run with the deputy
-hashes the same on the engine before and after.
+**Status (2026-11-27):** every defect and gap in §1–§2 is fixed, and so
+are P-1 to P-4 and the documentation drift: merged in #30 (`82b656c`) and
+tagged `v3.0.0` (not yet on npm). Several fixes change behaviour, so it is
+a major; `CHANGELOG.md` lists them under *Breaking*. [§0](#0-resolution)
+says what each fix is, where it landed, and what was left out. Harbor's 144
+tests pass on the fixed engine, and a deterministic 18,560-step career run
+with the deputy hashes the same on the engine before and after. Moving
+Harbor onto 3.0.0 turned up seven more, H-19 to H-25, which are open:
+[§7](#7-adopting-300).
 
 Contents:
 
@@ -31,6 +33,7 @@ Contents:
 4. [Measurements](#4-measurements) — numbers for ledger items O-4, O-5, O-9, O-15, O-29
 5. [Documentation drift](#5-documentation-drift)
 6. [What held up](#6-what-held-up)
+7. [Adopting 3.0.0](#7-adopting-300) — what Harbor now uses, and seven new findings (open)
 
 At a glance:
 
@@ -54,6 +57,14 @@ At a glance:
 | H-15 | core | gap | no "restored" signal |
 | H-17 | core | gap | events leave the fixed phase once a frame: frame-rate dependence |
 | H-18 | core | gap | `runBranch` hashes the world on every call |
+| | | | *found adopting 3.0.0 (§7), open:* |
+| H-19 | persist | gap | `save()` drops events not delivered yet: fixed events (H-17) in flight are lost |
+| H-20 | core | gap | an `entity` field refuses a vanished id in the engine's words, not the app's |
+| H-21 | dom | gap | `ViewDef.parent` names one parent view; a box that changes holders cannot follow |
+| H-22 | dom | gap | `ViewDef.order` moves every node behind one that belongs first, dropping focus |
+| H-23 | core | gap | `checkProbes: 'once'` still costs a strict hash per probe (0.19 s each on the hub) |
+| H-24 | dom | gap | `definePanel` has no rate and cannot be asked to repaint |
+| H-25 | core | defect | `world.action()` from a listener runs a tick inside the tick, losing the commands delivered with it |
 
 Harbor works around all of them; none blocks the app. The three that shaped
 its design most are H-3 (its own step clock), H-16 (a 16 Hz step) and H-17
@@ -757,3 +768,198 @@ them gave trouble.
   entity record is refused and the running port is untouched.
 - **Typed tuple queries and views** (`world.query([Ship] as const)`,
   `e.Ship.hold`) removed nearly every `getComponent(...)!` from the hot loops.
+
+---
+
+## 7. Adopting 3.0.0
+
+Harbor was moved onto 3.0.0 the same day (`../harbor_game`, branch
+`feat/harbor-authority`, `1025460` to `0d4b3f7`, then the fixes from a
+Codex review of that branch). What it uses now, in place of what it had
+built:
+
+- **Commands** (P-1, H-5, H-6): its twenty commands are `defineCommand`s,
+  with schemas that say what the handlers used to re-check; `harbor.act` is
+  plain `world.action`, and the `Rejected` report and the resolver reading
+  it are gone.
+- **The fixed clock** (H-3, H-16, H-14): the `Clock` component and the
+  system that counted it are gone — `now()` is `START_STEP +
+  world.time.fixedTick` — and the step is the exemplar's 1/15 s again. Its
+  determinism test holds over 40 port hours (36,000 steps, past 2.x's tick
+  22,785) at one, sixteen and seventeen steps a frame. The sub-rate systems
+  each take a step of their own (`phase`); the stage interpolates with
+  `time.alpha`.
+- **Saves** (H-11, H-12, P-2): `save()` with `columnarCodec` (the hub: 950
+  KB in 122 ms), the app's format as `appVersion`, the menu summary as
+  `meta`; `peek()` reads it from the header line, and `accept` refuses
+  another format with a reason. Harbor's own packer and its `.meta` sidecar
+  slot are gone.
+- **Rules** (H-13): the standing orders look once a port minute (`rateHz`,
+  `phase`).
+- **Branches** (H-18): the forecast extends its branches with `runBranch`
+  (`finalHash: false`, `shouldStop` for the frame budget) instead of
+  stepping them by hand.
+- **DOM** (H-7, H-9, H-10, H-15): `paint` / `watchPresses` from
+  `@domecs/dom`; `data-entity` and `entityOf` instead of Harbor's
+  `data-eid`; the roadstead list kept in queue order by `ViewDef.order`;
+  on `signals.restored` the shell drops milestone sheets still waiting and an
+  outlook made of the port before the load.
+- **`defineComponent.of`** (P-3) for its twenty components.
+
+154 tests pass, and `npm run e2e` (37 checks in Chromium) passes on five
+runs in a row. What it does not use, and why, is below, with H-25, which the
+review found.
+
+### H-19 · `save()` drops events that have not been delivered yet
+
+```ts
+// Step 1 emits Order; a fixed event system handles it in step 2 (H-17).
+live.step(1 / 16)                      // emitted, not yet delivered
+save(live, storage, 's')
+load(twin, storage, 's')
+live.step(1 / 16); twin.step(1 / 16)
+// live handled it (n = 1); the twin never sees it (n = 0).
+// A restore of snapshot({ pendingEvents: true }) keeps it.
+```
+
+`prepareSave` takes `world.snapshot()`, without pending events, and
+`SaveOptions` cannot ask for them. Fixed event systems are meant for a
+fixed-step simulation's own systems to talk through, but an event emitted
+in step k waits for step k + 1 — at 1× that is a few frames, any of which
+can be the one an autosave runs in — so a sim that uses them gives up exact
+restores. Harbor's standing orders still write a component field for the
+works system rather than emit an order, for this reason
+(`src/sim/orders.ts`).
+
+**Suggested fix:** `SaveOptions.pendingEvents`, passed to `world.snapshot`
+— on by default, at least for undelivered fixed events, which are
+simulation state. The load side already resolves them by name.
+
+### H-20 · An `entity` field refuses a vanished id in the engine's words
+
+`kind: 'entity'` always checks that the id is alive when a world is at
+hand, and `world.action()` always passes one. A command whose target can
+vanish between the click and the command — a ship that sails, a charter
+offer that lapses, both ordinary at 64× — is refused with `field "ship" must
+name a live entity; entity 312 is not alive`: a sentence for an agent, not
+for the player who clicked. Harbor declares those ids `{ kind: 'number',
+integer: true, min: 0 }` and keeps its own "That ship is not waiting for a
+berth." in the handler; cranes and warehouses, which are never removed, are
+entity fields with `with`.
+
+**Suggested fix:** a field-level `refusal` text, used whichever check of
+that field fails; or `kind: 'entity'` with `live: false`, which describes
+the id (`describe()` still says it names a Ship) and leaves liveness to the
+handler.
+
+### H-21 · `ViewDef.parent` names one parent view
+
+A Harbor container rides on a ship's deck (aboard), a crane's spreader
+(lifted), the yard layer (in the yard) or a carrier's bed (hauled): three
+entity views and a plain layer. `parent: { view, of, at }` nests a view's
+elements in one other view's, so the box view would have to become one view
+per holder kind, filtered by state, and a box changing hands would be
+destroyed in one view and created in the next — a new element, and the
+animation of it landing in the yard lost. Harbor keeps re-parenting the
+box's element itself (`place` in `src/ui/stage.ts`).
+
+**Suggested fix:** let `of` return the view with the entity —
+`of: (e) => ({ view: ships, entity: e.Container.holder, at: '.deck' })`, or
+`null` for the slot — so one view's elements can hang in different views'.
+
+### H-22 · `ViewDef.order` moves every node behind one that belongs first
+
+The reorder walks the sorted list and moves each node after the one before
+it when it is not already there. A node that belongs ahead of the current
+first one is left where it is, and every other node is moved after it:
+mounting ten ranked rows, then one ranked first, takes ten `after()` calls
+where one move would do (counted with a wrapped `Element.prototype.after`).
+The order comes out right, but every move is a removal and an insertion,
+which takes the focus from a control inside the moved row. Harbor's
+roadstead (ships at anchor first, then those sailing in, each by arrival)
+redraws every frame, so it reorders every frame, and the first ship to drop
+anchor while the rest are still sailing in goes to the top: every other row
+is moved behind it.
+
+**Suggested fix:** move the fewest nodes (keep the longest run already in
+order, move the rest), and use `Element.moveBefore` where the browser has
+it, which keeps focus.
+
+### H-23 · `checkProbes: 'once'` still costs a strict hash per probe
+
+The proof hashes the world before the first probe and after each one: N + 1
+strict hashes for N probes, on a branch's first sample. On the 22,000-entity
+hub a strict hash is about 0.19 s; a one-step `runBranch` with two probes
+takes 566–625 ms the first time and 1.4–1.8 ms after (Harbor's
+`test/budget.test.ts`). The forecast has seven probes: about 1.5 s on the
+first slice of each branch, three branches in a row. Harbor passes
+`checkProbes: false` — its probes are plain reads.
+
+**Suggested fix:** keep the per-probe proof as the default: it is what
+makes the check exact. Two hashes around a whole sample would miss a probe
+that changes a field which a later probe puts back, though the later probe
+read the changed state (a Codex review of this file's first draft, which
+proposed just that). What could be offered beside it is a weaker mode
+that says so — `checkProbes: 'sample'`: one strict hash before a sample's
+unproven probes and one after. When the two differ it can say that one
+of them changed the world, but not which: by then the world has changed,
+and running them again one by one can miss a probe that writes only from
+the state before. That is two hashes in place of N + 1 (about 0.4 s on the
+hub instead of 1.5 s), for an app that accepts both limits.
+
+### H-24 · `definePanel` has no rate and cannot be asked to repaint
+
+Harbor's side panel sums the whole port into a string. At 64× its inputs
+change every frame, so a panel would be rendered at every commit; and it
+depends on UI state no change gate sees (the open tab, a forecast being
+worked out). So it stays outside `mountDOM`: a `tickEnd` subscriber renders
+it every eighth frame, or at once on a tab change, and calls `paint`.
+
+**Suggested fix:** a rate for panels (`everyFrames`, or a minimum interval)
+and `MountHandle.invalidate(slot)` for a repaint the world did not cause.
+
+### H-25 · `world.action()` from a listener runs a tick inside the tick
+
+A `world.on` listener is called while the bus delivers a tick's events.
+One that calls `world.action()` (Harbor's game-over sheet paused the port
+with its `SetSpeed` command) starts a second tick inside the first. The
+inner tick's flush replaces the outer tick's event view, and the verdict
+the outer `action()` is waiting for, so a command delivered alongside the
+report is never handled, and is refused for a reason that is not true:
+
+```ts
+world.on(Verdict, () => world.action(Pause, {}))   // accepted
+world.emit(Verdict, { won: false })                // a report from the step before
+world.action(Hire, {})
+// { accepted: false, reason: 'command "Hire" was not handled: its handler
+//   system command:Hire is disabled or removed' }
+// Without the listener's action(), Hire is accepted.
+```
+
+`runSystems()`, `render()` and the recorder's calls throw when they are
+called inside a tick; `action()`, `step()` and `stepOnce()` do not, and the
+rule is written only in a comment in `world.ts` ("action() cannot run
+inside a tick"). A Codex review of Harbor's branch found it. Pausing from
+the listener with `world.setScale(0)` instead is half the answer, its later
+passes found: it keeps the frame's fixed steps from running past the
+verdict (they run after the flush, and only at a nonzero scale), but a
+`SetSpeed` delivered with the verdict runs after the listener and starts
+the clock again behind the game-over sheet. So the listener pauses, and a
+`tickEnd` subscriber pauses again once the tick's commands have run.
+Harbor's e2e checks all three.
+
+**Suggested fix:** refuse `action()` inside a tick, as `runSystems` does
+(or answer `accepted: false`, `consumedTurn: false`, with a reason that
+names the rule), with the same guard on `step` and `stepOnce`; and say so
+in AGENTS.md, beside "Control while paused". A listener that needs to act
+on what it heard has no supported way to do it once the tick is over;
+`world.afterTick(fn)`, run when the tick and the `action()` that ran it
+have returned, would be one.
+
+### Smaller
+
+- Redrawing a view every frame — Harbor's clock and weather countdown,
+  which follow `world.time.fixedTick` rather than a component — is
+  `changedOn: { mode: 'legacy' }`. It is documented as "useful for
+  time-driven animations", but the name says *deprecated*; `'always'`, with
+  `'legacy'` kept as an alias, would say what it does.
