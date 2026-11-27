@@ -6,6 +6,15 @@ All notable changes to DOMECS are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- Infra: CI and the Pages workflow pin the Node 24 releases of their actions
+  (`actions/checkout` 7.0.1, `actions/setup-node` 7.1.0,
+  `actions/configure-pages` 6.0.0, `actions/upload-pages-artifact` 5.0.0,
+  `actions/deploy-pages` 5.0.1), since GitHub deprecated the Node 20 runtime.
+  CI also tests Node 26, the active LTS, and the Plantroom Pages build runs on
+  it (it ran on Node 20, past its end of life).
+
 ## [3.0.0] — 2026-11-27 (tagged; not yet on npm)
 
 All seven `@domecs/*` packages move to 3.0.0 together. A major release: the

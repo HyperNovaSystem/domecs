@@ -15,19 +15,22 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    # O-73 (X8): every Node line the packages claim (engines >=18 is
-    # exercised from 20, the oldest maintained LTS).
+    # O-73 (X8): every Node line the packages claim. engines >=18 is
+    # exercised from 20 (past its end of life in April 2026, but still
+    # claimed) to 26, the active LTS.
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version: [20, 22, 24, 26]
+    # Actions are pinned by commit to releases that run on Node 24 (GitHub
+    # deprecated the Node 20 runtime); each pin's comment names its release.
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Reads the "packageManager": "pnpm@10.30.2" field from package.json.
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320  # v4.4.0
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
