@@ -901,10 +901,11 @@ that changes a field which a later probe puts back, though the later probe
 read the changed state (a Codex review of this file's first draft, which
 proposed just that). What could be offered beside it is a weaker mode
 that says so — `checkProbes: 'sample'`: one strict hash before a sample's
-unproven probes and one after, going one by one only when the two differ,
-to name the probe that changed the world. That is two hashes in place of
-N + 1 (about 0.4 s on the hub instead of 1.5 s), for an app that accepts
-the blind spot.
+unproven probes and one after. When the two differ it can say that one
+of them changed the world, but not which: by then the world has changed,
+and running them again one by one can miss a probe that writes only from
+the state before. That is two hashes in place of N + 1 (about 0.4 s on the
+hub instead of 1.5 s), for an app that accepts both limits.
 
 ### H-24 · `definePanel` has no rate and cannot be asked to repaint
 
