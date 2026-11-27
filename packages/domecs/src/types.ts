@@ -75,6 +75,15 @@ export interface FieldSchema {
    * with liveness, when a world is at hand (`world.action()` always is).
    */
   readonly with?: ReadonlyArray<string>
+  /**
+   * For an `entity` field: `false` accepts an id that is no longer alive,
+   * leaving that case to the handler (H-20) — for a target that can vanish
+   * between a click and the command (a ship that sails), whose refusal
+   * should be in the app's words. The id must still be an integer >= 0, and
+   * a live entity must still hold every `with` component; `describe()`
+   * still says what the field names. Default `true`.
+   */
+  readonly live?: boolean
   readonly label?: string
   readonly readonly?: boolean
   /**
